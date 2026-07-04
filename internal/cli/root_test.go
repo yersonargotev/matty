@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,12 +422,12 @@ func TestDoctorReportsFullSetupHealthAndIsReadOnly(t *testing.T) {
 		"PASS matty-state:",
 		"PASS skill-symlinks:",
 		"PASS engram-binary:",
-		"PASS engram-setup:",
+		"WARN engram-setup:",
 		"PASS codex-config:",
 		"PASS opencode-config:",
 		"WARN codex-conflict:",
 		"WARN opencode-conflict:",
-		"run matty update if Engram setup drifted",
+		"Engram-owned setup is external",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
@@ -453,6 +454,28 @@ func TestDoctorReportsCorruptStateAsFailedCheck(t *testing.T) {
 	}
 	if !strings.Contains(out, "FAIL matty-state:") || !strings.Contains(out, "invalid JSON") {
 		t.Fatalf("doctor did not report corrupt state as failed check:\n%s", out)
+	}
+}
+
+func TestDoctorReportsOpenCodeInspectErrorsUnderConfigCheck(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
+		t.Fatalf("mkdir opencode config: %v", err)
+	}
+	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"instructions": "wrong"}`), 0o600); err != nil {
+		t.Fatalf("write invalid opencode config: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "FAIL opencode-config:") || strings.Contains(out, "FAIL opencode:") {
+		t.Fatalf("doctor did not report OpenCode inspect error under opencode-config:\n%s", out)
 	}
 }
 
@@ -737,15 +760,15 @@ func snapshotTree(t *testing.T, root string) string {
 			if err != nil {
 				return err
 			}
-			entries = append(entries, rel+" symlink "+target)
+			entries = append(entries, fmt.Sprintf("%s symlink %s mode=%s mod=%d", rel, target, info.Mode(), info.ModTime().UnixNano()))
 		case entry.IsDir():
-			entries = append(entries, rel+" dir")
+			entries = append(entries, fmt.Sprintf("%s dir mode=%s mod=%d", rel, info.Mode(), info.ModTime().UnixNano()))
 		default:
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
-			entries = append(entries, rel+" file "+string(data))
+			entries = append(entries, fmt.Sprintf("%s file mode=%s mod=%d size=%d %s", rel, info.Mode(), info.ModTime().UnixNano(), info.Size(), string(data)))
 		}
 		return nil
 	})

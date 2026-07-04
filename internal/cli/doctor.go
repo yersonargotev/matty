@@ -44,7 +44,7 @@ func RunDoctor(w io.Writer, paths Paths, runner Runner) error {
 	checks = append(checks, codexChecks(paths)...)
 	openCodeChecks, err := openCodeChecks(paths)
 	if err != nil {
-		checks = append(checks, doctorCheck{status: doctorFail, name: "opencode", detail: err.Error() + "; inspect the config or run matty install"})
+		checks = append(checks, doctorCheck{status: doctorFail, name: "opencode-config", detail: err.Error() + "; inspect the config or run matty install"})
 	} else {
 		checks = append(checks, openCodeChecks...)
 	}
@@ -76,21 +76,18 @@ func skillChecks(paths Paths, state State, stateFound bool) []doctorCheck {
 	}
 	var missing, changed []string
 	for _, skill := range state.ManagedSkills {
-		info, err := os.Lstat(skill.LinkPath)
+		link, err := inspectSkillLink(skill)
 		if err != nil {
-			if os.IsNotExist(err) {
-				missing = append(missing, skill.Name)
-				continue
-			}
 			changed = append(changed, fmt.Sprintf("%s (%v)", skill.Name, err))
 			continue
 		}
-		if info.Mode()&os.ModeSymlink == 0 {
+		switch link.status {
+		case skillLinkMissing:
+			missing = append(missing, skill.Name)
+		case skillLinkManaged:
+		case skillLinkUnmanagedPath:
 			changed = append(changed, skill.Name+" is not a symlink")
-			continue
-		}
-		target, err := os.Readlink(skill.LinkPath)
-		if err != nil || !sameSymlinkTarget(skill.LinkPath, target, skill.SourcePath) {
+		case skillLinkUnmanagedSymlink:
 			changed = append(changed, skill.Name)
 		}
 	}
@@ -119,7 +116,7 @@ func engramChecks(runner Runner, state State, stateFound bool) []doctorCheck {
 		return checks
 	}
 	if hasSurface(state, "codex") && hasSurface(state, "opencode") {
-		checks = append(checks, doctorCheck{status: doctorPass, name: "engram-setup", detail: "state records Codex and OpenCode surfaces; run matty update if Engram setup drifted"})
+		checks = append(checks, doctorCheck{status: doctorWarn, name: "engram-setup", detail: "state records Codex and OpenCode setup expectations, but Engram-owned setup is external; run matty update if setup drifted"})
 	} else {
 		checks = append(checks, doctorCheck{status: doctorWarn, name: "engram-setup", detail: "state does not record both Codex and OpenCode surfaces; run matty update"})
 	}

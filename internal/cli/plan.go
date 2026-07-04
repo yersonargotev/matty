@@ -135,24 +135,57 @@ func engramSetupActions() []PlannedAction {
 }
 
 func plannedSkillLinkAction(skill ManagedSkill) (PlannedAction, error) {
+	link, err := inspectSkillLink(skill)
+	if err != nil {
+		return PlannedAction{}, err
+	}
+	switch link.status {
+	case skillLinkMissing:
+		return PlannedAction{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}, nil
+	case skillLinkManaged:
+		return PlannedAction{}, nil
+	case skillLinkUnmanagedPath:
+		return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}, nil
+	case skillLinkUnmanagedSymlink:
+		return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: link.target, Description: "preserve unmanaged symlink for skill " + skill.Name}, nil
+	default:
+		return PlannedAction{}, fmt.Errorf("inspect skill link %s: unknown status %s", skill.LinkPath, link.status)
+	}
+}
+
+type skillLinkStatus string
+
+const (
+	skillLinkMissing          skillLinkStatus = "missing"
+	skillLinkManaged          skillLinkStatus = "managed"
+	skillLinkUnmanagedPath    skillLinkStatus = "unmanaged-path"
+	skillLinkUnmanagedSymlink skillLinkStatus = "unmanaged-symlink"
+)
+
+type skillLinkInspection struct {
+	status skillLinkStatus
+	target string
+}
+
+func inspectSkillLink(skill ManagedSkill) (skillLinkInspection, error) {
 	info, err := os.Lstat(skill.LinkPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return PlannedAction{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}, nil
+			return skillLinkInspection{status: skillLinkMissing}, nil
 		}
-		return PlannedAction{}, fmt.Errorf("inspect skill link %s: %w", skill.LinkPath, err)
+		return skillLinkInspection{}, fmt.Errorf("inspect skill link %s: %w", skill.LinkPath, err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}, nil
+		return skillLinkInspection{status: skillLinkUnmanagedPath}, nil
 	}
 	target, err := os.Readlink(skill.LinkPath)
 	if err != nil {
-		return PlannedAction{}, fmt.Errorf("read skill link %s: %w", skill.LinkPath, err)
+		return skillLinkInspection{}, fmt.Errorf("read skill link %s: %w", skill.LinkPath, err)
 	}
 	if sameSymlinkTarget(skill.LinkPath, target, skill.SourcePath) {
-		return PlannedAction{}, nil
+		return skillLinkInspection{status: skillLinkManaged, target: target}, nil
 	}
-	return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: target, Description: "preserve unmanaged symlink for skill " + skill.Name}, nil
+	return skillLinkInspection{status: skillLinkUnmanagedSymlink, target: target}, nil
 }
 
 func sameSymlinkTarget(linkPath, gotTarget, wantTarget string) bool {
@@ -170,16 +203,9 @@ func sameSymlinkTarget(linkPath, gotTarget, wantTarget string) bool {
 func BuildUninstallPlan(paths Paths, state State) Plan {
 	actions := make([]PlannedAction, 0, len(state.ManagedSkills)+1)
 	for _, skill := range state.ManagedSkills {
-		info, err := os.Lstat(skill.LinkPath)
-		if err != nil || info.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		target, err := os.Readlink(skill.LinkPath)
-		if err != nil {
-			continue
-		}
-		if sameSymlinkTarget(skill.LinkPath, target, skill.SourcePath) {
-			actions = append(actions, PlannedAction{Kind: ActionRemove, Path: skill.LinkPath, Target: skill.SourcePath, Description: "remove managed skill " + skill.Name})
+		link, err := inspectSkillLink(skill)
+		if err == nil && link.status == skillLinkManaged {
+			actions = append(actions, PlannedAction{Kind: ActionRemove, Path: skill.LinkPath, Target: link.target, Description: "remove managed skill " + skill.Name})
 		}
 	}
 	actions = append(actions, PlannedAction{Kind: ActionRemove, Path: paths.StateFile, Description: "remove Matty state metadata"})

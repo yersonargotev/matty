@@ -80,6 +80,27 @@ func TestWriteMergesOpenCodeConfigAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWriteOnlyWarnsForKnownGentleAIOverlays(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `{
+  "instructions": ["docs/gentle-ai-migration-notes.md"]
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+
+	result, err := Write(configPath, promptPath)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none for non-overlay gentle-ai text", result.Warnings)
+	}
+}
+
 func TestWriteMergesOpenCodeJSONCConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")

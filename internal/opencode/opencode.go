@@ -71,10 +71,61 @@ func Remove(configPath, promptPath string) error {
 	return nil
 }
 func detectExternalManagedConfig(content string) []string {
-	if strings.Contains(content, "gentle-ai") {
-		return []string{"OpenCode config contains gentle-ai references; Matty preserved them and only updated Matty instruction entries"}
+	if !hasKnownGentleAIOverlay(content) {
+		return nil
 	}
-	return nil
+	return []string{"OpenCode config contains gentle-ai references; Matty preserved them and only updated Matty instruction entries"}
+}
+
+func hasKnownGentleAIOverlay(content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	config := map[string]any{}
+	jsonData, err := jsoncToJSON(content)
+	if err != nil {
+		return false
+	}
+	if err := json.Unmarshal(jsonData, &config); err != nil {
+		return false
+	}
+	return stringArrayContains(config["plugin"], "gentle-ai") ||
+		objectHasKey(config["agent"], "gentle-ai") ||
+		objectHasKey(config["profile"], "gentle-ai")
+}
+
+func stringArrayContains(value any, needle string) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		text, ok := item.(string)
+		if ok && strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func objectHasKey(value any, key string) bool {
+	items, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := items[key]; ok {
+		return true
+	}
+	for _, item := range items {
+		nested, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := nested[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 func Inspect(configPath, promptPath string) (Inspection, error) {
 	existing, err := readOptionalFile(configPath)
