@@ -8,16 +8,20 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yersonargotev/matty/internal/prompt"
 )
 
 type ActionKind string
 
 const (
-	ActionWriteFile ActionKind = "write-file"
-	ActionSymlink   ActionKind = "symlink"
-	ActionRemove    ActionKind = "remove"
-	ActionRun       ActionKind = "run"
-	ActionSkip      ActionKind = "skip"
+	ActionWriteFile         ActionKind = "write-file"
+	ActionWriteCodexPrompt  ActionKind = "write-codex-prompt"
+	ActionSymlink           ActionKind = "symlink"
+	ActionRemove            ActionKind = "remove"
+	ActionRemoveCodexPrompt ActionKind = "remove-codex-prompt"
+	ActionRun               ActionKind = "run"
+	ActionSkip              ActionKind = "skip"
 )
 
 // PlannedAction is a human-reportable unit of work. Issue 02 introduced the
@@ -62,6 +66,7 @@ func BuildInstallPlan(paths Paths, checkedAt time.Time, engramInstalled bool) (P
 		actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"install", "gentleman-programming/tap/engram"}, Description: "install Engram via Homebrew"})
 	}
 	actions = append(actions, engramSetupActions()...)
+	actions = append(actions, codexPromptWriteAction(paths))
 	return Plan{Actions: actions, State: DesiredState(paths, checkedAt, managed)}, nil
 }
 
@@ -74,14 +79,19 @@ func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
 	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"update"}, Description: "refresh Homebrew formula metadata"})
 	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"upgrade", "engram"}, Description: "update Engram via Homebrew"})
 	for _, action := range plan.Actions {
-		if action.Kind == ActionRun {
+		if action.Kind == ActionRun || action.Kind == ActionWriteCodexPrompt {
 			continue
 		}
 		actions = append(actions, action)
 	}
 	actions = append(actions, engramSetupActions()...)
+	actions = append(actions, codexPromptWriteAction(paths))
 	plan.Actions = actions
 	return plan, nil
+}
+
+func codexPromptWriteAction(paths Paths) PlannedAction {
+	return PlannedAction{Kind: ActionWriteCodexPrompt, Path: paths.CodexPromptFile, Description: "write Codex Matty prompt markers"}
 }
 
 func engramSetupActions() []PlannedAction {
@@ -140,6 +150,7 @@ func BuildUninstallPlan(paths Paths, state State) Plan {
 		}
 	}
 	actions = append(actions, PlannedAction{Kind: ActionRemove, Path: paths.StateFile, Description: "remove Matty state metadata"})
+	actions = append(actions, PlannedAction{Kind: ActionRemoveCodexPrompt, Path: paths.CodexPromptFile, Description: "remove Codex Matty prompt markers"})
 	return Plan{Actions: actions, State: state}
 }
 
@@ -149,7 +160,7 @@ func PrintPlan(w io.Writer, plan Plan) error {
 			return err
 		}
 		switch action.Kind {
-		case ActionWriteFile, ActionRemove:
+		case ActionWriteFile, ActionWriteCodexPrompt, ActionRemove, ActionRemoveCodexPrompt:
 			_, err := fmt.Fprintf(w, " (%s)\n", action.Path)
 			if err != nil {
 				return err
@@ -179,26 +190,36 @@ func PrintPlan(w io.Writer, plan Plan) error {
 	return nil
 }
 
-func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner) error {
+func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner) ([]string, error) {
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		return fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
+		return nil, fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
 	}
 	if err := os.MkdirAll(paths.AgentSkillsDir, 0o700); err != nil {
-		return fmt.Errorf("create agent skills directory %s: %w", paths.AgentSkillsDir, err)
+		return nil, fmt.Errorf("create agent skills directory %s: %w", paths.AgentSkillsDir, err)
 	}
+	var warnings []string
 	for _, action := range plan.Actions {
 		switch action.Kind {
 		case ActionSymlink:
 			if err := os.Symlink(action.Target, action.Path); err != nil {
-				return fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
+				return nil, fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
 			}
+		case ActionWriteCodexPrompt:
+			result, err := prompt.WriteCodex(action.Path)
+			if err != nil {
+				return nil, err
+			}
+			warnings = append(warnings, result.Warnings...)
 		case ActionRun:
 			if err := runner.Run(ctx, action.Command, action.Args...); err != nil {
-				return actionRunError(action, err)
+				return nil, actionRunError(action, err)
 			}
 		}
 	}
-	return SaveState(paths.StateFile, plan.State)
+	if err := SaveState(paths.StateFile, plan.State); err != nil {
+		return nil, err
+	}
+	return warnings, nil
 }
 
 func actionRunError(action PlannedAction, err error) error {
@@ -217,12 +238,18 @@ func actionRunError(action PlannedAction, err error) error {
 
 func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {
 	for _, action := range plan.Actions {
-		if action.Kind != ActionRemove {
+		if action.Kind != ActionRemove && action.Kind != ActionRemoveCodexPrompt {
 			continue
 		}
 		if action.Path == paths.StateFile {
 			if err := os.Remove(action.Path); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("remove Matty state %s: %w", action.Path, err)
+			}
+			continue
+		}
+		if action.Kind == ActionRemoveCodexPrompt {
+			if err := prompt.RemoveCodex(action.Path); err != nil {
+				return err
 			}
 			continue
 		}

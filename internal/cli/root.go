@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -74,7 +75,11 @@ func newInstallCommand(opts Options) *cobra.Command {
 				}
 				return PrintPlan(cmd.OutOrStdout(), plan)
 			}
-			if err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner); err != nil {
+			warnings, err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner)
+			if err != nil {
+				return err
+			}
+			if err := printWarnings(cmd.OutOrStdout(), warnings); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
@@ -126,13 +131,26 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner); err != nil {
+			warnings, err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner)
+			if err != nil {
+				return err
+			}
+			if err := printWarnings(cmd.OutOrStdout(), warnings); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
 			return err
 		},
 	}
+}
+
+func printWarnings(out io.Writer, warnings []string) error {
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(out, "warning: %s\n", warning); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newUninstallCommand(opts Options) *cobra.Command {
