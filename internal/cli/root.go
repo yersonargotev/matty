@@ -100,16 +100,7 @@ func newDoctorCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, found, err := LoadState(paths.StateFile)
-			if err != nil {
-				return err
-			}
-			stateStatus := "missing"
-			if found {
-				stateStatus = "present"
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", paths.HomeDir, paths.ConfigHome, paths.StateFile, stateStatus, paths.AgentSkillsDir)
-			return err
+			return RunDoctor(cmd.OutOrStdout(), paths, opts.Runner)
 		},
 	}
 }

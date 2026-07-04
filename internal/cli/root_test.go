@@ -380,6 +380,82 @@ func TestDoctorReportsStateStatusWithoutCreatingState(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsFullSetupHealthAndIsReadOnly(t *testing.T) {
+	opts, runner, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.CodexPromptFile), 0o700); err != nil {
+		t.Fatalf("mkdir codex config: %v", err)
+	}
+	if err := os.WriteFile(paths.CodexPromptFile, []byte("<!-- gentle-ai:persona -->\nkeep\n<!-- /gentle-ai:persona -->\n"), 0o600); err != nil {
+		t.Fatalf("write codex conflict fixture: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
+		t.Fatalf("mkdir opencode config: %v", err)
+	}
+	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"plugin":["gentle-ai-plugin"]}`), 0o600); err != nil {
+		t.Fatalf("write opencode conflict fixture: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, paths.HomeDir)
+	runner.calls = nil
+
+	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	after := snapshotTree(t, paths.HomeDir)
+	if before != after {
+		t.Fatalf("doctor mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("doctor ran external commands: %#v", runner.calls)
+	}
+	for _, want := range []string{
+		"PASS matty-state:",
+		"PASS skill-symlinks:",
+		"PASS engram-binary:",
+		"PASS engram-setup:",
+		"PASS codex-config:",
+		"PASS opencode-config:",
+		"WARN codex-conflict:",
+		"WARN opencode-conflict:",
+		"run matty update if Engram setup drifted",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorReportsCorruptStateAsFailedCheck(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(paths.StateFile, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor should report corrupt state without command failure: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "FAIL matty-state:") || !strings.Contains(out, "invalid JSON") {
+		t.Fatalf("doctor did not report corrupt state as failed check:\n%s", out)
+	}
+}
+
 func hasManagedSkill(state State, name string) bool {
 	for _, skill := range state.ManagedSkills {
 		if skill.Name == name {
@@ -639,3 +715,42 @@ func callStrings(calls []fakeCall) []string {
 }
 
 func fixedTestTime() time.Time { return time.Unix(0, 0).UTC() }
+
+func snapshotTree(t *testing.T, root string) string {
+	t.Helper()
+	var entries []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, rel+" symlink "+target)
+		case entry.IsDir():
+			entries = append(entries, rel+" dir")
+		default:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, rel+" file "+string(data))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", root, err)
+	}
+	return strings.Join(entries, "\n")
+}

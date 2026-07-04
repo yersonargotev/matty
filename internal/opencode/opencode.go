@@ -14,6 +14,13 @@ type WriteResult struct {
 	Warnings []string
 }
 
+type Inspection struct {
+	ConfigExists        bool
+	PromptExists        bool
+	HasMattyInstruction bool
+	Warnings            []string
+}
+
 func promptContent() string {
 	return strings.TrimSpace(`## Matty global workflow
 - Global skills live in ~/.agents/skills. When a task matches a skill, read that skill's SKILL.md before acting.
@@ -68,6 +75,40 @@ func detectExternalManagedConfig(content string) []string {
 		return []string{"OpenCode config contains gentle-ai references; Matty preserved them and only updated Matty instruction entries"}
 	}
 	return nil
+}
+func Inspect(configPath, promptPath string) (Inspection, error) {
+	existing, err := readOptionalFile(configPath)
+	if err != nil {
+		return Inspection{}, err
+	}
+	inspection := Inspection{ConfigExists: strings.TrimSpace(existing) != "", Warnings: detectExternalManagedConfig(existing)}
+	if _, err := os.Stat(promptPath); err == nil {
+		inspection.PromptExists = true
+	} else if err != nil && !os.IsNotExist(err) {
+		return Inspection{}, fmt.Errorf("inspect OpenCode Matty prompt %s: %w", promptPath, err)
+	}
+	if strings.TrimSpace(existing) == "" {
+		return inspection, nil
+	}
+	config := map[string]any{}
+	jsonData, err := jsoncToJSON(existing)
+	if err != nil {
+		return Inspection{}, fmt.Errorf("read OpenCode config %s: invalid JSONC: %w", configPath, err)
+	}
+	if err := json.Unmarshal(jsonData, &config); err != nil {
+		return Inspection{}, fmt.Errorf("read OpenCode config %s: invalid JSONC: %w", configPath, err)
+	}
+	instructions, err := instructionStrings(config["instructions"])
+	if err != nil {
+		return Inspection{}, err
+	}
+	for _, instruction := range instructions {
+		if instruction == promptPath {
+			inspection.HasMattyInstruction = true
+			break
+		}
+	}
+	return inspection, nil
 }
 func mergeInstruction(existing, configPath, promptPath string) (string, error) {
 	return updateInstructions(existing, configPath, promptPath, instructionMerge)
