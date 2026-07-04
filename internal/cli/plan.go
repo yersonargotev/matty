@@ -27,6 +27,32 @@ const (
 	ActionSkip                 ActionKind = "skip"
 )
 
+func (kind ActionKind) refreshesDuringUpdate() bool {
+	return kind == ActionRun || kind == ActionWriteCodexPrompt || kind == ActionWriteOpenCodePrompt
+}
+
+func (kind ActionKind) appliesDuringUninstall() bool {
+	return kind == ActionRemove || kind == ActionRemoveCodexPrompt || kind == ActionRemoveOpenCodePrompt
+}
+
+func (action PlannedAction) printDetail(w io.Writer) error {
+	switch action.Kind {
+	case ActionWriteOpenCodePrompt, ActionRemoveOpenCodePrompt, ActionSymlink:
+		_, err := fmt.Fprintf(w, " (%s -> %s)\n", action.Path, action.Target)
+		return err
+	case ActionRun:
+		cmd := strings.Join(append([]string{action.Command}, action.Args...), " ")
+		_, err := fmt.Fprintf(w, " (%s)\n", cmd)
+		return err
+	case ActionWriteFile, ActionWriteCodexPrompt, ActionRemove, ActionRemoveCodexPrompt, ActionSkip:
+		_, err := fmt.Fprintf(w, " (%s)\n", action.Path)
+		return err
+	default:
+		_, err := fmt.Fprintln(w)
+		return err
+	}
+}
+
 // PlannedAction is a human-reportable unit of work. Issue 02 introduced the
 // planning model; later issues add concrete installers behind this seam.
 type PlannedAction struct {
@@ -82,7 +108,7 @@ func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
 	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"update"}, Description: "refresh Homebrew formula metadata"})
 	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"upgrade", "engram"}, Description: "update Engram via Homebrew"})
 	for _, action := range plan.Actions {
-		if action.Kind == ActionRun || action.Kind == ActionWriteCodexPrompt || action.Kind == ActionWriteOpenCodePrompt {
+		if action.Kind.refreshesDuringUpdate() {
 			continue
 		}
 		actions = append(actions, action)
@@ -167,37 +193,8 @@ func PrintPlan(w io.Writer, plan Plan) error {
 		if _, err := fmt.Fprintf(w, "- %s: %s", action.Kind, action.Description); err != nil {
 			return err
 		}
-		switch action.Kind {
-		case ActionWriteFile, ActionWriteCodexPrompt, ActionRemove, ActionRemoveCodexPrompt:
-			_, err := fmt.Fprintf(w, " (%s)\n", action.Path)
-			if err != nil {
-				return err
-			}
-		case ActionWriteOpenCodePrompt, ActionRemoveOpenCodePrompt:
-			_, err := fmt.Fprintf(w, " (%s -> %s)\n", action.Path, action.Target)
-			if err != nil {
-				return err
-			}
-		case ActionSymlink:
-			_, err := fmt.Fprintf(w, " (%s -> %s)\n", action.Path, action.Target)
-			if err != nil {
-				return err
-			}
-		case ActionSkip:
-			_, err := fmt.Fprintf(w, " (%s)\n", action.Path)
-			if err != nil {
-				return err
-			}
-		case ActionRun:
-			cmd := strings.Join(append([]string{action.Command}, action.Args...), " ")
-			_, err := fmt.Fprintf(w, " (%s)\n", cmd)
-			if err != nil {
-				return err
-			}
-		default:
-			if _, err := fmt.Fprintln(w); err != nil {
-				return err
-			}
+		if err := action.printDetail(w); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -257,7 +254,7 @@ func actionRunError(action PlannedAction, err error) error {
 
 func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {
 	for _, action := range plan.Actions {
-		if action.Kind != ActionRemove && action.Kind != ActionRemoveCodexPrompt && action.Kind != ActionRemoveOpenCodePrompt {
+		if !action.Kind.appliesDuringUninstall() {
 			continue
 		}
 		if action.Path == paths.StateFile {

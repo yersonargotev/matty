@@ -107,7 +107,13 @@ func TestWriteMergesOpenCodeJSONCConfig(t *testing.T) {
 	if _, err := Write(configPath, promptPath); err != nil {
 		t.Fatalf("Write failed for JSONC config: %v", err)
 	}
-	config := readJSON(t, configPath)
+	updated := readString(t, configPath)
+	for _, want := range []string{"// OpenCode accepts JSONC global config.", "// keep URL strings intact", "\"enabled\": true,"} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("JSONC merge did not preserve %q:\n%s", want, updated)
+		}
+	}
+	config := decodeJSONC(t, updated)
 	if config["model"] != "anthropic/claude-sonnet-4-5" {
 		t.Fatalf("model was not preserved: %#v", config)
 	}
@@ -117,6 +123,148 @@ func TestWriteMergesOpenCodeJSONCConfig(t *testing.T) {
 	}
 	instructions := stringSlice(t, config["instructions"])
 	if got := strings.Join(instructions, "\n"); got != strings.Join([]string{"CONTRIBUTING.md", promptPath}, "\n") {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+}
+
+func TestWritePreservesLeadingJSONCComments(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `// global OpenCode config
+{
+  "model": "anthropic/claude-sonnet-4-5"
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write jsonc config: %v", err)
+	}
+
+	if _, err := Write(configPath, promptPath); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	updated := readString(t, configPath)
+	if !strings.HasPrefix(updated, "// global OpenCode config") {
+		t.Fatalf("leading comment was not preserved:\n%s", updated)
+	}
+	instructions := stringSlice(t, decodeJSONC(t, updated)["instructions"])
+	if len(instructions) != 1 || instructions[0] != promptPath {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+}
+
+func TestWriteAndRemovePreserveInstructionComments(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `{
+  "instructions": [
+    // keep user rationale
+    "CONTRIBUTING.md", // keep inline note
+  ]
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write jsonc config: %v", err)
+	}
+
+	if _, err := Write(configPath, promptPath); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	updated := readString(t, configPath)
+	for _, want := range []string{"// keep user rationale", "// keep inline note", "\"CONTRIBUTING.md\",", promptPath} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("OpenCode merge did not preserve %q:\n%s", want, updated)
+		}
+	}
+	if err := Remove(configPath, promptPath); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+	removed := readString(t, configPath)
+	for _, want := range []string{"// keep user rationale", "// keep inline note", "\"CONTRIBUTING.md\","} {
+		if !strings.Contains(removed, want) {
+			t.Fatalf("OpenCode remove did not preserve %q:\n%s", want, removed)
+		}
+	}
+	if strings.Contains(removed, promptPath) {
+		t.Fatalf("Remove left Matty instruction reference:\n%s", removed)
+	}
+}
+
+func TestWritePreservesTrailingPropertyCommentWhenAddingInstructions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `{
+  "model": "anthropic/claude-sonnet-4-5" // keep model note
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write jsonc config: %v", err)
+	}
+
+	if _, err := Write(configPath, promptPath); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	updated := readString(t, configPath)
+	for _, want := range []string{"\"model\": \"anthropic/claude-sonnet-4-5\", // keep model note", promptPath} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("OpenCode merge did not preserve/comment-comma %q:\n%s", want, updated)
+		}
+	}
+	instructions := stringSlice(t, decodeJSONC(t, updated)["instructions"])
+	if len(instructions) != 1 || instructions[0] != promptPath {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+}
+
+func TestWritePreservesTrailingInstructionCommentWhenAppending(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `{
+  "instructions": [
+    "CONTRIBUTING.md" // keep instruction note
+  ]
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write jsonc config: %v", err)
+	}
+
+	if _, err := Write(configPath, promptPath); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	updated := readString(t, configPath)
+	for _, want := range []string{"\"CONTRIBUTING.md\", // keep instruction note", promptPath} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("OpenCode merge did not preserve/comment-comma %q:\n%s", want, updated)
+		}
+	}
+	instructions := stringSlice(t, decodeJSONC(t, updated)["instructions"])
+	if got := strings.Join(instructions, "\n"); got != strings.Join([]string{"CONTRIBUTING.md", promptPath}, "\n") {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+}
+
+func TestWriteInsertsIntoCommentOnlyJSONCConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := "{\n  // keep this comment\n}\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write jsonc config: %v", err)
+	}
+
+	if _, err := Write(configPath, promptPath); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	updated := readString(t, configPath)
+	if !strings.Contains(updated, "// keep this comment") {
+		t.Fatalf("comment was not preserved:\n%s", updated)
+	}
+	instructions := stringSlice(t, decodeJSONC(t, updated)["instructions"])
+	if len(instructions) != 1 || instructions[0] != promptPath {
 		t.Fatalf("instructions = %#v", instructions)
 	}
 }
@@ -161,9 +309,18 @@ func readString(t *testing.T, path string) string {
 
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
+	return decodeJSONC(t, readString(t, path))
+}
+
+func decodeJSONC(t *testing.T, content string) map[string]any {
+	t.Helper()
+	data, err := jsoncToJSON(content)
+	if err != nil {
+		t.Fatalf("convert JSONC: %v", err)
+	}
 	var out map[string]any
-	if err := json.Unmarshal([]byte(readString(t, path)), &out); err != nil {
-		t.Fatalf("decode %s: %v", path, err)
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("decode JSONC: %v", err)
 	}
 	return out
 }
