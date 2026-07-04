@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -58,11 +59,21 @@ func newInstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if dryRun {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install dry-run: would use state %s and skills %s\n", paths.StateFile, paths.AgentSkillsDir)
+			if _, _, err := LoadState(paths.StateFile); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install scaffold: state %s\n", paths.StateFile)
+
+			plan := BuildInstallPlan(paths, time.Now())
+			if dryRun {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty install dry-run: planned actions"); err != nil {
+					return err
+				}
+				return PrintPlan(cmd.OutOrStdout(), plan)
+			}
+			if err := ApplyStateOnlyPlan(cmd.Context(), paths, plan); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: wrote state %s\n", paths.StateFile)
 			return err
 		},
 	}
@@ -80,7 +91,15 @@ func newDoctorCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nAGENT_SKILLS=%s\n", paths.HomeDir, paths.ConfigHome, paths.StateFile, paths.AgentSkillsDir)
+			_, found, err := LoadState(paths.StateFile)
+			if err != nil {
+				return err
+			}
+			stateStatus := "missing"
+			if found {
+				stateStatus = "present"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", paths.HomeDir, paths.ConfigHome, paths.StateFile, stateStatus, paths.AgentSkillsDir)
 			return err
 		},
 	}

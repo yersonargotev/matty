@@ -35,3 +35,7 @@ func ResolvePaths(env Env) (Paths, error) {
 		AgentSkillsDir: filepath.Join(home, ".agents", "skills"),
 	}, nil
 }
+
+func (p Paths) SkillLinkPath(name string) string {
+	return filepath.Join(p.AgentSkillsDir, name)
+}
