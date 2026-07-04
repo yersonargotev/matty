@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"time"
 )
 
@@ -71,11 +70,11 @@ func SaveState(path string, state State) error {
 	return nil
 }
 
-func DesiredState(paths Paths, checkedAt time.Time) State {
+func DesiredState(paths Paths, checkedAt time.Time, managedSkills []ManagedSkill) State {
 	return State{
 		SchemaVersion:      stateSchemaVersion,
 		MattyVersion:       version,
-		ManagedSkills:      desiredManagedSkills(paths),
+		ManagedSkills:      append([]ManagedSkill(nil), managedSkills...),
 		ConfiguredSurfaces: append([]string(nil), defaultConfiguredSurfaces...),
 		Paths: StatePaths{
 			StateFile:      paths.StateFile,
@@ -83,46 +82,4 @@ func DesiredState(paths Paths, checkedAt time.Time) State {
 		},
 		LastInstallCheck: checkedAt.UTC().Format(time.RFC3339),
 	}
-}
-
-func desiredManagedSkills(paths Paths) []ManagedSkill {
-	skills := []struct {
-		name string
-		src  string
-	}{
-		{name: "ask-matt", src: "skills/engineering/ask-matt"},
-		{name: "code-review", src: "skills/engineering/code-review"},
-		{name: "codebase-design", src: "skills/engineering/codebase-design"},
-		{name: "diagnosing-bugs", src: "skills/engineering/diagnosing-bugs"},
-		{name: "domain-modeling", src: "skills/engineering/domain-modeling"},
-		{name: "grill-with-docs", src: "skills/engineering/grill-with-docs"},
-		{name: "implement", src: "skills/engineering/implement"},
-		{name: "improve-codebase-architecture", src: "skills/engineering/improve-codebase-architecture"},
-		{name: "prototype", src: "skills/engineering/prototype"},
-		{name: "research", src: "skills/engineering/research"},
-		{name: "resolving-merge-conflicts", src: "skills/engineering/resolving-merge-conflicts"},
-		{name: "setup-matt-pocock-skills", src: "skills/engineering/setup-matt-pocock-skills"},
-		{name: "tdd", src: "skills/engineering/tdd"},
-		{name: "to-issues", src: "skills/engineering/to-issues"},
-		{name: "to-prd", src: "skills/engineering/to-prd"},
-		{name: "triage", src: "skills/engineering/triage"},
-		{name: "grill-me", src: "skills/productivity/grill-me"},
-		{name: "grilling", src: "skills/productivity/grilling"},
-		{name: "handoff", src: "skills/productivity/handoff"},
-		{name: "teach", src: "skills/productivity/teach"},
-		{name: "writing-great-skills", src: "skills/productivity/writing-great-skills"},
-		{name: "loop-me", src: "skills/in-progress/loop-me"},
-		{name: "wayfinder", src: "skills/in-progress/wayfinder"},
-	}
-
-	managed := make([]ManagedSkill, 0, len(skills))
-	for _, skill := range skills {
-		managed = append(managed, ManagedSkill{
-			Name:       skill.name,
-			SourcePath: skill.src,
-			LinkPath:   paths.SkillLinkPath(skill.name),
-		})
-	}
-	sort.Slice(managed, func(i, j int) bool { return managed[i].Name < managed[j].Name })
-	return managed
 }

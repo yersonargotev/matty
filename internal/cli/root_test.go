@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -38,14 +39,38 @@ func executeCommand(t *testing.T, cmd *cobra.Command, args ...string) (string, e
 func sandboxOptions(t *testing.T) (Options, *fakeRunner, string) {
 	t.Helper()
 	home := t.TempDir()
+	sourceRoot := createSkillSource(t)
 	runner := &fakeRunner{}
 	return Options{
 		Env: MapEnv{
-			"HOME":            home,
-			"XDG_CONFIG_HOME": filepath.Join(home, "xdg-config"),
+			"HOME":                home,
+			"XDG_CONFIG_HOME":     filepath.Join(home, "xdg-config"),
+			"MATTY_SKILLS_SOURCE": sourceRoot,
 		},
 		Runner: runner,
 	}, runner, home
+}
+
+func createSkillSource(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, rel := range []string{
+		"engineering/ask-matt",
+		"engineering/codebase-design",
+		"productivity/grilling",
+		"productivity/handoff",
+		"in-progress/loop-me",
+		"in-progress/wayfinder",
+	} {
+		dir := filepath.Join(root, rel)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir skill source: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+filepath.Base(dir)+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("write skill source: %v", err)
+		}
+	}
+	return root
 }
 
 func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
@@ -117,7 +142,7 @@ func TestCommandsAcceptFakeRunnerWithoutExecutingExternalCommands(t *testing.T) 
 				t.Fatalf("command failed: %v\n%s", err, out)
 			}
 			if len(runner.calls) != 0 {
-				t.Fatalf("expected scaffold command not to execute external tools, got %#v", runner.calls)
+				t.Fatalf("expected command not to execute external tools, got %#v", runner.calls)
 			}
 		})
 	}
@@ -127,7 +152,6 @@ func TestReadOnlyOrScaffoldCommandsDoNotCreateFilesInSandboxHome(t *testing.T) {
 	tests := [][]string{
 		{"install", "--dry-run"},
 		{"doctor"},
-		{"update"},
 		{"uninstall"},
 	}
 
@@ -222,7 +246,7 @@ func TestInstallWritesSmallStateWithoutRunningExternalCommands(t *testing.T) {
 		t.Fatalf("install failed: %v\n%s", err, out)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("install issue 02 should not execute external commands yet, got %#v", runner.calls)
+		t.Fatalf("install should not execute external commands in issue 03, got %#v", runner.calls)
 	}
 
 	paths, err := ResolvePaths(opts.Env)
@@ -258,8 +282,15 @@ func TestInstallWritesSmallStateWithoutRunningExternalCommands(t *testing.T) {
 	if strings.Contains(string(data), "You are") || strings.Contains(string(data), "## Instructions") {
 		t.Fatalf("state appears to contain prompt content:\n%s", data)
 	}
-	if exists(filepath.Join(home, ".agents")) {
-		t.Fatalf("issue 02 install should not create skill symlinks yet")
+	for _, name := range []string{"ask-matt", "codebase-design", "grilling", "handoff", "loop-me", "wayfinder"} {
+		link := filepath.Join(home, ".agents", "skills", name)
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatalf("expected managed skill link %s: %v", link, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is not a symlink", link)
+		}
 	}
 }
 
@@ -319,3 +350,206 @@ func hasManagedSkill(state State, name string) bool {
 	}
 	return false
 }
+
+func TestInstallFailsWhenRequiredSourceSkillMissing(t *testing.T) {
+	home := t.TempDir()
+	sourceRoot := createSkillSource(t)
+	if err := os.RemoveAll(filepath.Join(sourceRoot, "in-progress", "wayfinder")); err != nil {
+		t.Fatalf("remove source skill: %v", err)
+	}
+	opts := Options{Env: MapEnv{"HOME": home, "MATTY_SKILLS_SOURCE": sourceRoot}, Runner: &fakeRunner{}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err == nil {
+		t.Fatalf("expected missing source skill error, got output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "wayfinder") {
+		t.Fatalf("error = %v, want wayfinder", err)
+	}
+	if exists(filepath.Join(home, ".agents")) || exists(filepath.Join(home, ".matty")) {
+		t.Fatalf("install mutated sandbox despite missing source skill")
+	}
+}
+
+func TestInstallPreservesUnmanagedPaths(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(paths.AgentSkillsDir, 0o700); err != nil {
+		t.Fatalf("mkdir agent skills: %v", err)
+	}
+	unmanagedFile := filepath.Join(paths.AgentSkillsDir, "ask-matt")
+	if err := os.WriteFile(unmanagedFile, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write unmanaged file: %v", err)
+	}
+	otherTarget := filepath.Join(home, "elsewhere")
+	if err := os.MkdirAll(otherTarget, 0o700); err != nil {
+		t.Fatalf("mkdir unmanaged target: %v", err)
+	}
+	unmanagedSymlink := filepath.Join(paths.AgentSkillsDir, "handoff")
+	if err := os.Symlink(otherTarget, unmanagedSymlink); err != nil {
+		t.Fatalf("write unmanaged symlink: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(unmanagedFile)
+	if err != nil || string(data) != "keep me" {
+		t.Fatalf("unmanaged file was not preserved: data=%q err=%v", data, err)
+	}
+	gotTarget, err := os.Readlink(unmanagedSymlink)
+	if err != nil || gotTarget != otherTarget {
+		t.Fatalf("unmanaged symlink target = %q, %v; want %q", gotTarget, err, otherTarget)
+	}
+
+	state, found, err := LoadState(paths.StateFile)
+	if err != nil || !found {
+		t.Fatalf("LoadState = found %v err %v", found, err)
+	}
+	if hasManagedSkill(state, "ask-matt") || hasManagedSkill(state, "handoff") {
+		t.Fatalf("unmanaged collisions should not be recorded as managed: %#v", state.ManagedSkills)
+	}
+	if !hasManagedSkill(state, "wayfinder") {
+		t.Fatalf("non-conflicting skills should still be managed: %#v", state.ManagedSkills)
+	}
+}
+
+func TestInstallAndUpdateAreIdempotent(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	before := readSkillLinks(t, paths)
+
+	plan, err := BuildInstallPlan(paths, fixedTestTime())
+	if err != nil {
+		t.Fatalf("BuildInstallPlan failed: %v", err)
+	}
+	for _, action := range plan.Actions {
+		if action.Kind == ActionSymlink {
+			t.Fatalf("idempotent plan should not recreate symlink: %#v", action)
+		}
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	after := readSkillLinks(t, paths)
+	if strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Fatalf("skill links changed after update:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestUninstallRemovesOnlyManagedSymlinks(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+
+	unmanagedFile := filepath.Join(paths.AgentSkillsDir, "personal-note")
+	if err := os.WriteFile(unmanagedFile, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write unmanaged file: %v", err)
+	}
+	unmanagedTarget := filepath.Join(home, "unmanaged-target")
+	if err := os.MkdirAll(unmanagedTarget, 0o700); err != nil {
+		t.Fatalf("mkdir unmanaged target: %v", err)
+	}
+	unmanagedLink := filepath.Join(paths.AgentSkillsDir, "external-skill")
+	if err := os.Symlink(unmanagedTarget, unmanagedLink); err != nil {
+		t.Fatalf("write unmanaged symlink: %v", err)
+	}
+	changedManaged := filepath.Join(paths.AgentSkillsDir, "ask-matt")
+	if err := os.Remove(changedManaged); err != nil {
+		t.Fatalf("remove managed link for replacement: %v", err)
+	}
+	if err := os.Symlink(unmanagedTarget, changedManaged); err != nil {
+		t.Fatalf("replace managed link with unmanaged target: %v", err)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "uninstall")
+	if err != nil {
+		t.Fatalf("uninstall failed: %v\n%s", err, out)
+	}
+	if exists(paths.StateFile) {
+		t.Fatalf("state file still exists after uninstall")
+	}
+	if exists(filepath.Join(paths.AgentSkillsDir, "wayfinder")) {
+		t.Fatalf("managed wayfinder link still exists after uninstall")
+	}
+	if !exists(unmanagedFile) || !exists(unmanagedLink) || !exists(changedManaged) {
+		t.Fatalf("uninstall removed unmanaged paths")
+	}
+}
+
+func TestInstallDryRunReportsUnmanagedSkipsWithoutMutating(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(paths.AgentSkillsDir, 0o700); err != nil {
+		t.Fatalf("mkdir agent skills: %v", err)
+	}
+	unmanaged := filepath.Join(paths.AgentSkillsDir, "ask-matt")
+	if err := os.WriteFile(unmanaged, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write unmanaged file: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "install", "--dry-run")
+	if err != nil {
+		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "skip: preserve unmanaged path for skill ask-matt") {
+		t.Fatalf("dry-run did not report unmanaged skip:\n%s", out)
+	}
+	data, err := os.ReadFile(unmanaged)
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("dry-run mutated unmanaged file: data=%q err=%v", data, err)
+	}
+	if exists(paths.StateFile) {
+		t.Fatalf("dry-run wrote state")
+	}
+}
+
+func readSkillLinks(t *testing.T, paths Paths) []string {
+	t.Helper()
+	entries, err := os.ReadDir(paths.AgentSkillsDir)
+	if err != nil {
+		t.Fatalf("read agent skills dir: %v", err)
+	}
+	var links []string
+	for _, entry := range entries {
+		path := filepath.Join(paths.AgentSkillsDir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", path, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			t.Fatalf("readlink %s: %v", path, err)
+		}
+		links = append(links, entry.Name()+"->"+target)
+	}
+	return links
+}
+
+func fixedTestTime() time.Time { return time.Unix(0, 0).UTC() }

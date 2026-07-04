@@ -63,17 +63,20 @@ func newInstallCommand(opts Options) *cobra.Command {
 				return err
 			}
 
-			plan := BuildInstallPlan(paths, time.Now())
+			plan, err := BuildInstallPlan(paths, time.Now())
+			if err != nil {
+				return err
+			}
 			if dryRun {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty install dry-run: planned actions"); err != nil {
 					return err
 				}
 				return PrintPlan(cmd.OutOrStdout(), plan)
 			}
-			if err := ApplyStateOnlyPlan(cmd.Context(), paths, plan); err != nil {
+			if err := ApplyInstallPlan(cmd.Context(), paths, plan); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: wrote state %s\n", paths.StateFile)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
 			return err
 		},
 	}
@@ -115,7 +118,17 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update scaffold: state %s\n", paths.StateFile)
+			if _, _, err := LoadState(paths.StateFile); err != nil {
+				return err
+			}
+			plan, err := BuildInstallPlan(paths, time.Now())
+			if err != nil {
+				return err
+			}
+			if err := ApplyInstallPlan(cmd.Context(), paths, plan); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
 			return err
 		},
 	}
@@ -131,7 +144,19 @@ func newUninstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall scaffold: state %s\n", paths.StateFile)
+			state, found, err := LoadState(paths.StateFile)
+			if err != nil {
+				return err
+			}
+			if !found {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: no Matty state found at %s\n", paths.StateFile)
+				return err
+			}
+			plan := BuildUninstallPlan(paths, state)
+			if err := ApplyUninstallPlan(cmd.Context(), paths, plan); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: removed managed skill symlinks and state %s\n", paths.StateFile)
 			return err
 		},
 	}
