@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ import (
 
 type fakeRunner struct {
 	calls []fakeCall
+	path  map[string]string
+	fail  map[string]error
 }
 
 type fakeCall struct {
@@ -21,8 +24,23 @@ type fakeCall struct {
 	args []string
 }
 
+func (f *fakeRunner) LookPath(name string) (string, error) {
+	if f.path != nil {
+		if path, ok := f.path[name]; ok {
+			return path, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) error {
 	f.calls = append(f.calls, fakeCall{name: name, args: append([]string(nil), args...)})
+	key := strings.Join(append([]string{name}, args...), " ")
+	if f.fail != nil {
+		if err, ok := f.fail[key]; ok {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -40,7 +58,7 @@ func sandboxOptions(t *testing.T) (Options, *fakeRunner, string) {
 	t.Helper()
 	home := t.TempDir()
 	sourceRoot := createSkillSource(t)
-	runner := &fakeRunner{}
+	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
 	return Options{
 		Env: MapEnv{
 			"HOME":                home,
@@ -105,7 +123,7 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 func TestCommandsResolvePathsFromInjectedEnvironment(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(home, "custom-xdg")
-	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": xdg}, Runner: &fakeRunner{}}
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": xdg}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
 	if err != nil {
@@ -125,24 +143,28 @@ func TestCommandsResolvePathsFromInjectedEnvironment(t *testing.T) {
 	}
 }
 
-func TestCommandsAcceptFakeRunnerWithoutExecutingExternalCommands(t *testing.T) {
-	tests := [][]string{
-		{"install", "--dry-run"},
-		{"install"},
-		{"doctor"},
-		{"update"},
-		{"uninstall"},
+func TestCommandsUseFakeRunnerForExternalCommands(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantCalls []string
+	}{
+		{name: "install dry-run", args: []string{"install", "--dry-run"}},
+		{name: "install", args: []string{"install"}, wantCalls: []string{"engram setup codex", "engram setup opencode"}},
+		{name: "doctor", args: []string{"doctor"}},
+		{name: "update", args: []string{"update"}, wantCalls: []string{"brew update", "brew upgrade engram", "engram setup codex", "engram setup opencode"}},
+		{name: "uninstall", args: []string{"uninstall"}},
 	}
 
-	for _, args := range tests {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			opts, runner, _ := sandboxOptions(t)
-			out, err := executeCommand(t, NewRootCommand(opts), args...)
+			out, err := executeCommand(t, NewRootCommand(opts), tt.args...)
 			if err != nil {
 				t.Fatalf("command failed: %v\n%s", err, out)
 			}
-			if len(runner.calls) != 0 {
-				t.Fatalf("expected command not to execute external tools, got %#v", runner.calls)
+			if got := callStrings(runner.calls); strings.Join(got, "\n") != strings.Join(tt.wantCalls, "\n") {
+				t.Fatalf("runner calls = %#v, want %#v", got, tt.wantCalls)
 			}
 		})
 	}
@@ -215,6 +237,7 @@ func exists(path string) bool {
 
 func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	opts, runner, home := sandboxOptions(t)
+	runner.path = nil
 	cmd := NewRootCommand(opts)
 
 	out, err := executeCommand(t, cmd, "install", "--dry-run")
@@ -235,7 +258,7 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 		"write-file: persist Matty state metadata",
 		filepath.Join(home, ".matty", "config.json"),
 		"symlink: link managed skill ask-matt",
-		"run: install or verify Engram (brew install engram)",
+		"run: install Engram via Homebrew (brew install gentleman-programming/tap/engram)",
 		"run: delegate Codex Engram setup (engram setup codex)",
 		"run: delegate OpenCode Engram setup (engram setup opencode)",
 	}
@@ -254,14 +277,14 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	}
 }
 
-func TestInstallWritesSmallStateWithoutRunningExternalCommands(t *testing.T) {
+func TestInstallWritesSmallStateAndRunsEngramSetup(t *testing.T) {
 	opts, runner, home := sandboxOptions(t)
 	out, err := executeCommand(t, NewRootCommand(opts), "install")
 	if err != nil {
 		t.Fatalf("install failed: %v\n%s", err, out)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("install should not execute external commands in issue 03, got %#v", runner.calls)
+	if got, want := callStrings(runner.calls), []string{"engram setup codex", "engram setup opencode"}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("runner calls = %#v, want %#v", got, want)
 	}
 
 	paths, err := ResolvePaths(opts.Env)
@@ -372,7 +395,7 @@ func TestInstallFailsWhenRequiredSourceSkillMissing(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(sourceRoot, "in-progress", "wayfinder")); err != nil {
 		t.Fatalf("remove source skill: %v", err)
 	}
-	opts := Options{Env: MapEnv{"HOME": home, "MATTY_SKILLS_SOURCE": sourceRoot}, Runner: &fakeRunner{}}
+	opts := Options{Env: MapEnv{"HOME": home, "MATTY_SKILLS_SOURCE": sourceRoot}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "install")
 	if err == nil {
@@ -446,7 +469,7 @@ func TestInstallAndUpdateAreIdempotent(t *testing.T) {
 	}
 	before := readSkillLinks(t, paths)
 
-	plan, err := BuildInstallPlan(paths, fixedTestTime())
+	plan, err := BuildInstallPlan(paths, fixedTestTime(), true)
 	if err != nil {
 		t.Fatalf("BuildInstallPlan failed: %v", err)
 	}
@@ -565,6 +588,54 @@ func readSkillLinks(t *testing.T, paths Paths) []string {
 		links = append(links, entry.Name()+"->"+target)
 	}
 	return links
+}
+
+func TestInstallInstallsEngramViaHomebrewWhenMissing(t *testing.T) {
+	opts, runner, _ := sandboxOptions(t)
+	runner.path = nil
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	want := []string{"brew install gentleman-programming/tap/engram", "engram setup codex", "engram setup opencode"}
+	if got := callStrings(runner.calls); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("runner calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestUpdateRunsEngramHomebrewUpdateAndSetup(t *testing.T) {
+	opts, runner, _ := sandboxOptions(t)
+	out, err := executeCommand(t, NewRootCommand(opts), "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	want := []string{"brew update", "brew upgrade engram", "engram setup codex", "engram setup opencode"}
+	if got := callStrings(runner.calls); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("runner calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestExternalCommandFailureIsActionable(t *testing.T) {
+	opts, runner, _ := sandboxOptions(t)
+	runner.path = nil
+	runner.fail = map[string]error{"brew install gentleman-programming/tap/engram": errors.New("brew missing")}
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err == nil {
+		t.Fatalf("expected install failure, got output:\n%s", out)
+	}
+	for _, want := range []string{"failed to install Engram via Homebrew", "ensure Homebrew is installed", "brew missing"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+	}
+}
+
+func callStrings(calls []fakeCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, strings.Join(append([]string{call.name}, call.args...), " "))
+	}
+	return out
 }
 
 func fixedTestTime() time.Time { return time.Unix(0, 0).UTC() }

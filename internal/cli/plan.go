@@ -36,7 +36,7 @@ type Plan struct {
 	State   State
 }
 
-func BuildInstallPlan(paths Paths, checkedAt time.Time) (Plan, error) {
+func BuildInstallPlan(paths Paths, checkedAt time.Time, engramInstalled bool) (Plan, error) {
 	discovered, err := DiscoverManagedSkills(paths)
 	if err != nil {
 		return Plan{}, err
@@ -58,12 +58,37 @@ func BuildInstallPlan(paths Paths, checkedAt time.Time) (Plan, error) {
 			managed = append(managed, skill)
 		}
 	}
-	actions = append(actions,
-		PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"install", "engram"}, Description: "install or verify Engram"},
-		PlannedAction{Kind: ActionRun, Command: "engram", Args: []string{"setup", "codex"}, Description: "delegate Codex Engram setup"},
-		PlannedAction{Kind: ActionRun, Command: "engram", Args: []string{"setup", "opencode"}, Description: "delegate OpenCode Engram setup"},
-	)
+	if !engramInstalled {
+		actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"install", "gentleman-programming/tap/engram"}, Description: "install Engram via Homebrew"})
+	}
+	actions = append(actions, engramSetupActions()...)
 	return Plan{Actions: actions, State: DesiredState(paths, checkedAt, managed)}, nil
+}
+
+func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
+	plan, err := BuildInstallPlan(paths, checkedAt, true)
+	if err != nil {
+		return Plan{}, err
+	}
+	actions := make([]PlannedAction, 0, len(plan.Actions)+2)
+	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"update"}, Description: "refresh Homebrew formula metadata"})
+	actions = append(actions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"upgrade", "engram"}, Description: "update Engram via Homebrew"})
+	for _, action := range plan.Actions {
+		if action.Kind == ActionRun {
+			continue
+		}
+		actions = append(actions, action)
+	}
+	actions = append(actions, engramSetupActions()...)
+	plan.Actions = actions
+	return plan, nil
+}
+
+func engramSetupActions() []PlannedAction {
+	return []PlannedAction{
+		{Kind: ActionRun, Command: "engram", Args: []string{"setup", "codex"}, Description: "delegate Codex Engram setup"},
+		{Kind: ActionRun, Command: "engram", Args: []string{"setup", "opencode"}, Description: "delegate OpenCode Engram setup"},
+	}
 }
 
 func plannedSkillLinkAction(skill ManagedSkill) (PlannedAction, error) {
@@ -154,7 +179,7 @@ func PrintPlan(w io.Writer, plan Plan) error {
 	return nil
 }
 
-func ApplyInstallPlan(_ context.Context, paths Paths, plan Plan) error {
+func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner) error {
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		return fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
 	}
@@ -162,14 +187,32 @@ func ApplyInstallPlan(_ context.Context, paths Paths, plan Plan) error {
 		return fmt.Errorf("create agent skills directory %s: %w", paths.AgentSkillsDir, err)
 	}
 	for _, action := range plan.Actions {
-		if action.Kind != ActionSymlink {
-			continue
-		}
-		if err := os.Symlink(action.Target, action.Path); err != nil {
-			return fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
+		switch action.Kind {
+		case ActionSymlink:
+			if err := os.Symlink(action.Target, action.Path); err != nil {
+				return fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
+			}
+		case ActionRun:
+			if err := runner.Run(ctx, action.Command, action.Args...); err != nil {
+				return actionRunError(action, err)
+			}
 		}
 	}
 	return SaveState(paths.StateFile, plan.State)
+}
+
+func actionRunError(action PlannedAction, err error) error {
+	cmd := strings.Join(append([]string{action.Command}, action.Args...), " ")
+	switch {
+	case action.Command == "brew" && len(action.Args) > 0 && action.Args[0] == "install":
+		return fmt.Errorf("run %s: failed to install Engram via Homebrew; ensure Homebrew is installed and retry: %w", cmd, err)
+	case action.Command == "brew" && len(action.Args) > 0 && (action.Args[0] == "update" || action.Args[0] == "upgrade"):
+		return fmt.Errorf("run %s: failed to update Engram via Homebrew; ensure Homebrew is installed and retry: %w", cmd, err)
+	case action.Command == "engram" && len(action.Args) >= 2 && action.Args[0] == "setup":
+		return fmt.Errorf("run %s: failed to configure Engram for %s; install Engram and retry matty install or matty update: %w", cmd, action.Args[1], err)
+	default:
+		return fmt.Errorf("run %s: %w", cmd, err)
+	}
 }
 
 func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {

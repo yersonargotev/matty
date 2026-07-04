@@ -63,7 +63,8 @@ func newInstallCommand(opts Options) *cobra.Command {
 				return err
 			}
 
-			plan, err := BuildInstallPlan(paths, time.Now())
+			engramInstalled := EngramInstalled(opts.Runner)
+			plan, err := BuildInstallPlan(paths, time.Now(), engramInstalled)
 			if err != nil {
 				return err
 			}
@@ -73,7 +74,7 @@ func newInstallCommand(opts Options) *cobra.Command {
 				}
 				return PrintPlan(cmd.OutOrStdout(), plan)
 			}
-			if err := ApplyInstallPlan(cmd.Context(), paths, plan); err != nil {
+			if err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
@@ -121,11 +122,11 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if _, _, err := LoadState(paths.StateFile); err != nil {
 				return err
 			}
-			plan, err := BuildInstallPlan(paths, time.Now())
+			plan, err := BuildUpdatePlan(paths, time.Now())
 			if err != nil {
 				return err
 			}
-			if err := ApplyInstallPlan(cmd.Context(), paths, plan); err != nil {
+			if err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
