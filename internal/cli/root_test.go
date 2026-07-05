@@ -269,19 +269,7 @@ func TestResolvePathsDefaultsToMattyOwnedSkillBundle(t *testing.T) {
 
 func TestResolvePathsFallsBackToInstalledSourceOutsideRepo(t *testing.T) {
 	home := t.TempDir()
-	cwd := t.TempDir()
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previous); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
+	chdirTempOutsideRepo(t)
 
 	paths, err := ResolvePaths(MapEnv{"HOME": home})
 	if err != nil {
@@ -296,19 +284,7 @@ func TestResolvePathsFallsBackToInstalledSourceOutsideRepo(t *testing.T) {
 func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 	home := t.TempDir()
 	repo := createMattySourceRepo(t)
-	cwd := t.TempDir()
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previous); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
+	chdirTempOutsideRepo(t)
 
 	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
@@ -371,19 +347,7 @@ func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 
 func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing.T) {
 	home := t.TempDir()
-	cwd := t.TempDir()
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previous); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
+	chdirTempOutsideRepo(t)
 
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
 	missing := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
@@ -403,6 +367,24 @@ func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing
 			}
 		})
 	}
+}
+
+func chdirTempOutsideRepo(t *testing.T) string {
+	t.Helper()
+	cwd := t.TempDir()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	return cwd
 }
 
 func exists(path string) bool {
