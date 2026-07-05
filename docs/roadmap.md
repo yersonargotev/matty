@@ -6,21 +6,15 @@ the product.
 
 ## Next checkpoint
 
-Run a manual smoke test in a sandboxed HOME/config environment:
+Make Matty installable from a GitHub Release and Homebrew tap. Active planning
+lives in the local Wayfinder map at `.scratch/matty-installable/map.md`; start
+with `.scratch/matty-installable/issues/01-decide-package-installed-source-model.md`
+because a package-installed binary cannot rely on finding `bundle/skills` by
+walking upward from the caller's current working directory.
 
-```bash
-go test ./...
-matty install --dry-run
-matty install
-matty doctor
-matty update --dry-run
-matty update
-matty uninstall --dry-run
-matty uninstall
-matty doctor
-```
-
-Do not validate by writing to the operator's real HOME/config paths.
+The prior sandbox lifecycle smoke test has passed; keep using that command
+sequence as the acceptance baseline for installable/package smoke tests, always
+with sandboxed `HOME` and `XDG_CONFIG_HOME`.
 
 ## Near-term follow-ups
 
