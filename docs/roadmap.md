@@ -7,10 +7,14 @@ the product.
 ## Next checkpoint
 
 Make Matty installable from a GitHub Release and Homebrew tap. Active planning
-lives in the local Wayfinder map at `.scratch/matty-installable/map.md`; start
-with `.scratch/matty-installable/issues/01-decide-package-installed-source-model.md`
-because a package-installed binary cannot rely on finding `bundle/skills` by
-walking upward from the caller's current working directory.
+lives in the local Wayfinder map at `.scratch/matty-installable/map.md`.
+ADR 0002 chooses the package-installed source model: users run `matty init` to
+clone the Matty Source of Truth to `~/.local/share/matty`, then package-installed
+commands read `~/.local/share/matty/bundle/skills` by default.
+
+The next issue frontier starts with
+`.scratch/matty-installable/issues/02-add-version-package.md`; it unblocks
+version-pinned `matty init` and release artifact generation.
 
 The prior sandbox lifecycle smoke test has passed; keep using that command
 sequence as the acceptance baseline for installable/package smoke tests, always
