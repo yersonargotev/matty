@@ -293,6 +293,118 @@ func TestResolvePathsFallsBackToInstalledSourceOutsideRepo(t *testing.T) {
 	}
 }
 
+func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	cwd := t.TempDir()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("init failed outside repo: %v\n%s", err, out)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed outside repo after init: %v\n%s", err, out)
+	}
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if got, want := paths.SkillSourceRoot, filepath.Join(home, ".local", "share", "matty", "bundle", "skills"); got != want {
+		t.Fatalf("SkillSourceRoot = %q, want installed source %q", got, want)
+	}
+	if !exists(paths.StateFile) || !exists(filepath.Join(paths.AgentSkillsDir, "wayfinder")) {
+		t.Fatalf("install did not create Matty-managed artifacts from installed source")
+	}
+
+	beforeDoctor := snapshotTree(t, home)
+	runner.calls = nil
+	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor failed outside repo after init: %v\n%s", err, out)
+	}
+	if afterDoctor := snapshotTree(t, home); afterDoctor != beforeDoctor {
+		t.Fatalf("doctor mutated sandbox outside repo:\nbefore:\n%s\nafter:\n%s", beforeDoctor, afterDoctor)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("doctor ran external commands: %#v", runner.calls)
+	}
+	if !strings.Contains(out, "PASS skill-symlinks:") {
+		t.Fatalf("doctor did not report installed-source skill links healthy:\n%s", out)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "update")
+	if err != nil {
+		t.Fatalf("update failed outside repo after init: %v\n%s", err, out)
+	}
+	if got, want := callStrings(runner.calls), []string{"brew update", "brew upgrade engram", "engram setup codex", "engram setup opencode"}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("update runner calls = %#v, want %#v", got, want)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "uninstall")
+	if err != nil {
+		t.Fatalf("uninstall failed outside repo after init: %v\n%s", err, out)
+	}
+	if exists(paths.StateFile) || exists(filepath.Join(paths.AgentSkillsDir, "wayfinder")) {
+		t.Fatalf("uninstall left Matty-managed artifacts in sandbox")
+	}
+	if !exists(paths.SkillSourceRoot) {
+		t.Fatalf("uninstall should not remove Installed Source at %s", paths.SkillSourceRoot)
+	}
+}
+
+func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
+	missing := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
+	for _, args := range [][]string{{"install", "--dry-run"}, {"update", "--dry-run"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), args...)
+			if err == nil {
+				t.Fatalf("expected missing Installed Source error, got output:\n%s", out)
+			}
+			for _, want := range []string{"run matty init", missing} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error missing %q: %v", want, err)
+				}
+			}
+			if exists(filepath.Join(home, ".matty")) || exists(filepath.Join(home, ".agents")) {
+				t.Fatalf("missing source command mutated sandbox")
+			}
+		})
+	}
+}
+
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -1176,7 +1288,10 @@ func createMattySourceRepo(t *testing.T) string {
 	repo := t.TempDir()
 	for _, rel := range []string{
 		"bundle/skills/engineering/ask-matt/SKILL.md",
+		"bundle/skills/engineering/codebase-design/SKILL.md",
 		"bundle/skills/productivity/grilling/SKILL.md",
+		"bundle/skills/productivity/handoff/SKILL.md",
+		"bundle/skills/in-progress/loop-me/SKILL.md",
 		"bundle/skills/in-progress/wayfinder/SKILL.md",
 	} {
 		path := filepath.Join(repo, rel)
