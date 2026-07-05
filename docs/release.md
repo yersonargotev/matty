@@ -105,16 +105,46 @@ matty init
 matty install --dry-run
 matty install
 matty doctor
+matty update --dry-run
+matty update
+matty uninstall --dry-run
+matty uninstall
+matty doctor
 ```
 
 For Homebrew-specific verification, install the released formula in a disposable
 or explicitly controlled test environment, then run the Matty commands above
 with sandboxed `HOME` and `XDG_CONFIG_HOME`. The smoke test should prove that a
 package-installed binary can initialize its Installed Source, read
-`bundle/skills` from that source, preview installation, and apply the golden-path
-setup without touching the maintainer's real home config. If external tools such
-as Homebrew or Engram are not intentionally exercised against real accounts,
+`bundle/skills` from that source, preview installation, apply the golden-path
+setup, refresh it, remove Matty-managed artifacts, and finish with a read-only
+`doctor` without touching the maintainer's real home config. If external tools
+such as Homebrew or Engram are not intentionally exercised against real accounts,
 stub or otherwise control those calls.
+
+The automated local-release smoke test is:
+
+```bash
+go test ./internal/release -run TestPackageInstallSmokeLifecycleWithLocalReleaseBinary -count=1
+```
+
+That test builds a temporary release-like `./cmd/matty` binary with an injected
+version, runs it from a temporary directory outside the repo checkout, clones a
+local Matty Source fixture, and places stubbed `brew` and `engram` executables
+ahead of the real `PATH` to verify the expected external calls without reaching
+real accounts. Its exact Matty command sequence is:
+
+```bash
+matty init --repository-url <local-fixture-repo>
+matty install --dry-run
+matty install
+matty doctor
+matty update --dry-run
+matty update
+matty uninstall --dry-run
+matty uninstall
+matty doctor
+```
 
 ## First v0.x checklist
 
@@ -130,6 +160,8 @@ stub or otherwise control those calls.
       and checksums.
 - [ ] `brew install yersonargotev/tap/matty` installs the released binary.
 - [ ] A sandboxed package install can run `matty init`, `matty install --dry-run`,
-      `matty install`, and `matty doctor` without writing to real home config.
+      `matty install`, `matty doctor`, `matty update --dry-run`, `matty update`,
+      `matty uninstall --dry-run`, `matty uninstall`, and final `matty doctor`
+      without writing to real home config.
 - [ ] Release notes call out that v0 is macOS-first and that Linux artifacts are
       published for future support, not the current golden path.
