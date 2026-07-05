@@ -40,10 +40,11 @@ Standing constraints:
 - Installable release docs added — `docs/release.md` documents maintainer publishing, `HOMEBREW_TAP_TOKEN`, first-release checklist, sandboxed package-install smoke expectations, and Linux artifact support boundaries; README quickstart documents the user Homebrew path through `matty init` and `matty install`. See [09](issues/09-document-installable-release.md).
 - Package-install smoke implemented — `internal/release/package_install_smoke_test.go` builds a local release-like binary, runs it outside the repo with temp `HOME`/`XDG_CONFIG_HOME`, initializes a local Source fixture, verifies install/update/uninstall dry-run and apply paths plus doctor, and stubs `brew`/`engram` calls. See [10](issues/10-package-install-smoke-test.md).
 - Update vs upgrade semantics decided — `matty update` remains a managed workflow/Engram refresh and never upgrades the Matty binary or mutates the Installed Source; package users upgrade via Homebrew or GitHub Release artifact replacement, then rerun `matty init` to align the Installed Source. No `matty upgrade` command is needed for v0; follow-up [12](issues/12-validate-stale-installed-source-before-update.md) should add explicit stale-source validation before update planning. See [11](issues/11-decide-update-vs-upgrade-semantics.md).
+- Stale default Installed Source validation implemented — release-version `matty update` and `matty update --dry-run` now fail before planning/applying when the default package-installed checkout is stale for the running release tag, with `matty init` guidance and without mutating the Installed Source; `MATTY_SKILLS_SOURCE` remains an unvalidated dev/test seam. See [12](issues/12-validate-stale-installed-source-before-update.md).
 
 ## Frontier
 
-Tickets 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, and 11 are resolved. The next frontier is [12](issues/12-validate-stale-installed-source-before-update.md).
+Tickets 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, and 12 are resolved.
 
 ## Fog
 

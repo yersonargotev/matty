@@ -369,6 +369,74 @@ func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing
 	}
 }
 
+func TestPackageInstalledUpdateRejectsStaleDefaultInstalledSource(t *testing.T) {
+	withVersion(t, "v0.2.0")
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	runGitCommand(t, repo, "tag", "v0.1.0")
+	if err := os.WriteFile(filepath.Join(repo, "bundle", "skills", "engineering", "ask-matt", "CHANGELOG.md"), []byte("v0.2.0 only"), 0o600); err != nil {
+		t.Fatalf("write newer source fixture: %v", err)
+	}
+	runGitCommand(t, repo, "add", ".")
+	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "v0.2.0")
+	runGitCommand(t, repo, "tag", "v0.2.0")
+	chdirTempOutsideRepo(t)
+
+	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo, "--repository-ref", "v0.1.0")
+	if err != nil {
+		t.Fatalf("init old source failed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, home)
+
+	for _, args := range [][]string{{"update", "--dry-run"}, {"update"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			runner.calls = nil
+			out, err := executeCommand(t, NewRootCommand(opts), args...)
+			if err == nil {
+				t.Fatalf("expected stale Installed Source error, got output:\n%s", out)
+			}
+			for _, want := range []string{"stale", "v0.2.0", "run matty init"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error missing %q: %v", want, err)
+				}
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("stale update ran external commands: %#v", runner.calls)
+			}
+			if after := snapshotTree(t, home); after != before {
+				t.Fatalf("stale update mutated sandbox home\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+		})
+	}
+}
+
+func TestUpdateSkipsReleaseRefValidationForConfiguredSkillSource(t *testing.T) {
+	withVersion(t, "v0.2.0")
+	opts, runner, home := sandboxOptions(t)
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, home)
+	runner.calls = nil
+
+	out, err = executeCommand(t, NewRootCommand(opts), "update", "--dry-run")
+	if err != nil {
+		t.Fatalf("update --dry-run with MATTY_SKILLS_SOURCE failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "matty update dry-run: planned actions") {
+		t.Fatalf("update --dry-run did not report plan:\n%s", out)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("update --dry-run executed external commands: %#v", runner.calls)
+	}
+	if after := snapshotTree(t, home); after != before {
+		t.Fatalf("update --dry-run mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 func chdirTempOutsideRepo(t *testing.T) string {
 	t.Helper()
 	cwd := t.TempDir()

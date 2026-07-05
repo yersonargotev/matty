@@ -27,7 +27,8 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	}
 
 	binary := buildLocalReleaseBinary(t, root, sandbox, "v0.99.0")
-	sourceRepo := createSmokeSourceRepo(t, sandbox, "v0.99.0")
+	sourceRepo := createSmokeSourceRepo(t, sandbox, "v0.98.0")
+	appendSmokeSourceTag(t, sourceRepo, sandbox, "v0.99.0")
 	writeSmokeStub(t, stubBin, "engram", externalLog)
 	writeSmokeStub(t, stubBin, "brew", externalLog)
 
@@ -37,6 +38,22 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 		"PATH="+stubBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GIT_CONFIG_NOSYSTEM=1",
 	)
+
+	runSmokeCommand(t, binary, outsideCheckout, env, "init", "--repository-url", sourceRepo, "--repository-ref", "v0.98.0")
+	beforeStaleUpdateDryRun := snapshotSmokeTree(t, home)
+	out, err := runSmokeCommandAllowError(t, binary, outsideCheckout, env, "update", "--dry-run")
+	if err == nil {
+		t.Fatalf("stale update --dry-run unexpectedly succeeded:\n%s", out)
+	}
+	for _, want := range []string{"stale", "v0.99.0", "run matty init"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stale update --dry-run output missing %q:\n%s", want, out)
+		}
+	}
+	if after := snapshotSmokeTree(t, home); after != beforeStaleUpdateDryRun {
+		t.Fatalf("stale update --dry-run mutated sandbox home\nbefore:\n%s\nafter:\n%s", beforeStaleUpdateDryRun, after)
+	}
+	assertSmokeExternalCalls(t, externalLog, nil)
 
 	runSmokeCommand(t, binary, outsideCheckout, env, "init", "--repository-url", sourceRepo)
 
@@ -122,6 +139,17 @@ func createSmokeSourceRepo(t *testing.T, sandbox, version string) string {
 	return repo
 }
 
+func appendSmokeSourceTag(t *testing.T, repo, sandbox, version string) {
+	t.Helper()
+	path := filepath.Join(repo, "bundle", "skills", "engineering", "ask-matt", "CHANGELOG.md")
+	if err := os.WriteFile(path, []byte(version+" fixture\n"), 0o600); err != nil {
+		t.Fatalf("write newer smoke source fixture: %v", err)
+	}
+	runSmokeGit(t, repo, sandbox, "add", ".")
+	runSmokeGit(t, repo, sandbox, "-c", "user.name=Matty Smoke", "-c", "user.email=matty-smoke@example.test", "commit", "-m", "fixture source "+version)
+	runSmokeGit(t, repo, sandbox, "tag", version)
+}
+
 func runSmokeGit(t *testing.T, repo, sandbox string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
@@ -151,14 +179,20 @@ func shellQuote(s string) string {
 
 func runSmokeCommand(t *testing.T, binary, dir string, env []string, args ...string) string {
 	t.Helper()
+	output, err := runSmokeCommandAllowError(t, binary, dir, env, args...)
+	if err != nil {
+		t.Fatalf("matty %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return output
+}
+
+func runSmokeCommandAllowError(t *testing.T, binary, dir string, env []string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("matty %s failed: %v\n%s", strings.Join(args, " "), err, output)
-	}
-	return string(output)
+	return string(output), err
 }
 
 func assertSmokeExternalCalls(t *testing.T, logPath string, want []string) {

@@ -104,6 +104,27 @@ func ensureInstalledSourceRef(opts BootstrapOptions) (bool, error) {
 	return true, nil
 }
 
+func ValidateInstalledSourceRef(opts BootstrapOptions) error {
+	ref := strings.TrimSpace(opts.RepositoryRef)
+	if ref == "" {
+		return nil
+	}
+	if strings.TrimSpace(opts.SourceRoot) == "" {
+		return errors.New("installed source root is required")
+	}
+	if !validInstalledSource(opts.SourceRoot) {
+		return fmt.Errorf("default Installed Source is missing or invalid at %s; run matty init to initialize it", filepath.Join(opts.SourceRoot, "bundle", "skills"))
+	}
+	matches, err := repositoryRefMatches(opts, fmt.Sprintf("run matty init to align it with %s", ref))
+	if err != nil {
+		return err
+	}
+	if !matches {
+		return fmt.Errorf("default Installed Source at %s is stale for Matty %s; run matty init to align it before matty update", opts.SourceRoot, ref)
+	}
+	return nil
+}
+
 func repositoryRefMatches(opts BootstrapOptions, missingGitReason string) (bool, error) {
 	if _, err := os.Stat(filepath.Join(opts.SourceRoot, ".git")); err != nil {
 		if os.IsNotExist(err) {

@@ -192,6 +192,9 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateUpdateInstalledSource(paths); err != nil {
+				return err
+			}
 			if _, _, err := LoadState(paths.StateFile); err != nil {
 				return err
 			}
@@ -215,6 +218,18 @@ func newUpdateCommand(opts Options) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed update changes without writing files or running commands")
 	return cmd
+}
+
+func validateUpdateInstalledSource(paths Paths) error {
+	if !paths.SkillSourceIsDefault {
+		return nil
+	}
+	return bootstrap.ValidateInstalledSourceRef(bootstrap.BootstrapOptions{
+		SourceRoot:    paths.InstalledSourceRoot,
+		RepositoryRef: defaultInitRepositoryRef("", mattyversion.Value),
+		HomeDir:       paths.HomeDir,
+		ConfigHome:    paths.ConfigHome,
+	})
 }
 
 func printDryRunPlan(out io.Writer, command string, plan Plan) error {
