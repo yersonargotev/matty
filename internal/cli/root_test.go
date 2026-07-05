@@ -131,29 +131,28 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 	}
 }
 
-func TestVersionReportsDevByDefault(t *testing.T) {
-	withVersion(t, "dev")
-	opts, _, _ := sandboxOptions(t)
-
-	out, err := executeCommand(t, NewRootCommand(opts), "--version")
-	if err != nil {
-		t.Fatalf("version command failed: %v\n%s", err, out)
+func TestVersionOutput(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{name: "default dev", version: "dev"},
+		{name: "injected release", version: "v0.2.3"},
 	}
-	if !strings.Contains(out, "dev") {
-		t.Fatalf("version output missing dev:\n%s", out)
-	}
-}
 
-func TestVersionCanBeInjected(t *testing.T) {
-	withVersion(t, "v0.2.3")
-	opts, _, _ := sandboxOptions(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVersion(t, tt.version)
+			opts, _, _ := sandboxOptions(t)
 
-	out, err := executeCommand(t, NewRootCommand(opts), "--version")
-	if err != nil {
-		t.Fatalf("version command failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "v0.2.3") {
-		t.Fatalf("version output missing injected version:\n%s", out)
+			out, err := executeCommand(t, NewRootCommand(opts), "--version")
+			if err != nil {
+				t.Fatalf("version command failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, tt.version) {
+				t.Fatalf("version output missing %q:\n%s", tt.version, out)
+			}
+		})
 	}
 }
 
