@@ -14,3 +14,7 @@ Matty-owned behavior must live in Matty-owned folders/packages. For the v0 skill
 - Tests and manual checks must sandbox `HOME`/`XDG_CONFIG_HOME`; never validate by writing to the operator's real home config.
 - Prefer small, deep modules with narrow interfaces over CLI packages that know every detail.
 - Run `go test ./...` before reporting success or committing.
+
+## Delegation approval
+
+This repo pre-approves safe Codex subagent delegation for non-trivial implementation, exploration, test/log triage, and review work. Use the dots delegation policy from the session instructions: keep requirements, decisions, integration, and final verification with the main agent; assign bounded non-overlapping slices; and report delegated work, accepted/rejected findings, and main-agent verification.
