@@ -8,24 +8,19 @@ default Installed Source at `~/.local/share/matty`.
 
 ## User install path
 
-Homebrew is the supported v0 package-install path for users:
-
-```bash
-brew install yersonargotev/tap/matty
-matty init
-matty install --dry-run
-matty install
-```
+The README quickstart is the canonical user-facing Homebrew path: install the
+fully qualified tap formula, initialize the package-installed source checkout,
+preview the setup with `matty install --dry-run`, then apply it with
+`matty install`.
 
 `matty init` is required for package-installed binaries because the Homebrew
 formula installs only the executable, not `bundle/skills`. After initialization,
-`matty install --dry-run` should show the planned Matty-managed symlinks,
-prompt blocks, Engram setup calls, and state writes before `matty install` makes
-changes.
+the dry run should show the planned Matty-managed symlinks, prompt blocks,
+Engram setup calls, and state writes before the apply step makes changes.
 
 Direct GitHub Release users may download the matching `matty_<version>_<goos>_<goarch>`
-asset, verify it against `checksums.txt`, put it on `PATH`, then run the same
-`matty init` and install commands.
+asset, verify it against `checksums.txt`, put it on `PATH`, then follow the same
+init, dry-run, and apply sequence from the README.
 
 ## Maintainer quick path
 
