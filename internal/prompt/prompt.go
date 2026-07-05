@@ -13,6 +13,10 @@ type WriteResult struct {
 	Warnings []string
 }
 
+type Inspection struct {
+	HasMattySection bool
+}
+
 func CodexContent() string {
 	return strings.TrimSpace(`## Matty global workflow
 
@@ -39,6 +43,14 @@ func WriteCodex(path string) (WriteResult, error) {
 		return WriteResult{}, fmt.Errorf("write Codex Matty prompt %s: %w", path, err)
 	}
 	return result, nil
+}
+
+func InspectCodex(path string) (Inspection, error) {
+	existing, err := readOptionalFile(path)
+	if err != nil {
+		return Inspection{}, err
+	}
+	return Inspection{HasMattySection: strings.Contains(existing, openMarker(codexMattySectionID))}, nil
 }
 
 func RemoveCodex(path string) error {

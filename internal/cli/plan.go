@@ -260,23 +260,17 @@ func UninstallPlanHasWork(paths Paths, state State) bool {
 			return true
 		}
 	}
-	if fileContains(paths.CodexPromptFile, "<!-- matty:skills-router -->") {
+	codex, _ := prompt.InspectCodex(paths.CodexPromptFile)
+	if codex.HasMattySection {
 		return true
 	}
-	if pathExists(paths.OpenCodePromptFile) || fileContains(paths.OpenCodeConfigFile, paths.OpenCodePromptFile) {
-		return true
-	}
-	return false
+	opencodeConfig, _ := opencode.Inspect(paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
+	return opencodeConfig.PromptExists || opencodeConfig.HasMattyInstruction
 }
 
 func pathExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
-}
-
-func fileContains(path, needle string) bool {
-	data, err := os.ReadFile(path)
-	return err == nil && strings.Contains(string(data), needle)
 }
 
 func PrintPlan(w io.Writer, plan Plan) error {

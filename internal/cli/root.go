@@ -70,10 +70,7 @@ func newInstallCommand(opts Options) *cobra.Command {
 				return err
 			}
 			if dryRun {
-				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty install dry-run: planned actions"); err != nil {
-					return err
-				}
-				return PrintPlan(cmd.OutOrStdout(), plan)
+				return printDryRunPlan(cmd.OutOrStdout(), "matty install", plan)
 			}
 			warnings, err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner)
 			if err != nil {
@@ -124,10 +121,7 @@ func newUpdateCommand(opts Options) *cobra.Command {
 				return err
 			}
 			if dryRun {
-				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty update dry-run: planned actions"); err != nil {
-					return err
-				}
-				return PrintPlan(cmd.OutOrStdout(), plan)
+				return printDryRunPlan(cmd.OutOrStdout(), "matty update", plan)
 			}
 			warnings, err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner)
 			if err != nil {
@@ -142,6 +136,13 @@ func newUpdateCommand(opts Options) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed update changes without writing files or running commands")
 	return cmd
+}
+
+func printDryRunPlan(out io.Writer, command string, plan Plan) error {
+	if _, err := fmt.Fprintf(out, "%s dry-run: planned actions\n", command); err != nil {
+		return err
+	}
+	return PrintPlan(out, plan)
 }
 
 func printWarnings(out io.Writer, warnings []string) error {
@@ -171,10 +172,7 @@ func newUninstallCommand(opts Options) *cobra.Command {
 			plan := BuildUninstallPlan(paths, state)
 			hasWork := UninstallPlanHasWork(paths, state)
 			if dryRun {
-				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty uninstall dry-run: planned actions"); err != nil {
-					return err
-				}
-				return PrintPlan(cmd.OutOrStdout(), plan)
+				return printDryRunPlan(cmd.OutOrStdout(), "matty uninstall", plan)
 			}
 			if !hasWork {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "matty uninstall: no Matty-managed artifacts found")
