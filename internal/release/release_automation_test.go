@@ -29,7 +29,8 @@ func TestReleaseWorkflowPublishesMattyArtifactsAndTapFormula(t *testing.T) {
 		"workflow_dispatch:",
 		"tag:",
 		"push:",
-		"- 'v0.*'",
+		"- 'v0.*.*'",
+		"required: true",
 		"actions/checkout@v5",
 		"fetch-depth: 0",
 		"actions/setup-go@v6",
@@ -54,46 +55,53 @@ func TestReleaseWorkflowPublishesMattyArtifactsAndTapFormula(t *testing.T) {
 
 func TestReleaseWorkflowCreatesReleaseWithGeneratedNotes(t *testing.T) {
 	root := repoRoot(t)
-	step := releaseWorkflowStep(t, readReleaseWorkflow(t, root), "Create GitHub Release if needed")
+	step := releaseWorkflowStep(t, parseReleaseWorkflow(t, readReleaseWorkflow(t, root)), "Create GitHub Release if needed")
 
-	if !strings.Contains(step, "gh release view") {
-		t.Fatalf("release creation step should be idempotent by checking whether the release exists; step:\n%s", step)
+	if !strings.Contains(step.Text, "gh release view") {
+		t.Fatalf("release creation step should be idempotent by checking whether the release exists; step:\n%s", step.Text)
 	}
-	if !strings.Contains(step, "gh release create") {
-		t.Fatalf("release creation step should create the GitHub Release; step:\n%s", step)
+	if !strings.Contains(step.Text, "gh release create") {
+		t.Fatalf("release creation step should create the GitHub Release; step:\n%s", step.Text)
 	}
-	if !strings.Contains(step, "--generate-notes") {
-		t.Fatalf("release creation should ask GitHub to generate per-tag notes; step:\n%s", step)
+	if !strings.Contains(step.Text, "--generate-notes") {
+		t.Fatalf("release creation should ask GitHub to generate per-tag notes; step:\n%s", step.Text)
 	}
-	if strings.Contains(step, "--notes") {
-		t.Fatalf("release creation should not pass static release notes; step:\n%s", step)
+	if strings.Contains(step.Text, "--notes") {
+		t.Fatalf("release creation should not pass static release notes; step:\n%s", step.Text)
 	}
 }
 
 func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.T) {
 	root := repoRoot(t)
-	text := readReleaseWorkflow(t, root)
+	workflow := parseReleaseWorkflow(t, readReleaseWorkflow(t, root))
 
-	buildIndex := releaseWorkflowStepIndex(t, text, "Build release artifacts and checksums.txt", []string{
+	resolveTagIndex := releaseWorkflowStepIndex(t, workflow, "Resolve release tag", []string{
+		"git checkout --detach \"$tag\"",
+	})
+	setupGoIndex := releaseWorkflowStepIndex(t, workflow, "Set up Go", []string{
+		"uses: actions/setup-go@v6",
+		"go-version-file: go.mod",
+	})
+	buildIndex := releaseWorkflowStepIndex(t, workflow, "Build release artifacts and checksums.txt", []string{
 		"scripts/build-release-artifacts.sh", "--out-dir dist",
 	})
-	requireTapTokenIndex := releaseWorkflowStepIndex(t, text, "Require Homebrew tap token", []string{
+	requireTapTokenIndex := releaseWorkflowStepIndex(t, workflow, "Require Homebrew tap token", []string{
 		"HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
 		"HOMEBREW_TAP_TOKEN is required",
 		"yersonargotev/homebrew-tap",
 	})
-	tapCheckoutIndex := releaseWorkflowStepIndex(t, text, "Check out Homebrew tap", []string{
+	tapCheckoutIndex := releaseWorkflowStepIndex(t, workflow, "Check out Homebrew tap", []string{
 		"uses: actions/checkout@v5",
 		"repository: yersonargotev/homebrew-tap",
 		"path: homebrew-tap",
 		"token: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
 	})
-	formulaIndex := releaseWorkflowStepIndex(t, text, "Generate Homebrew formula from release checksums", []string{
+	formulaIndex := releaseWorkflowStepIndex(t, workflow, "Generate Homebrew formula from release checksums", []string{
 		"scripts/generate-homebrew-formula.sh",
 		"--checksums dist/checksums.txt",
 		"--out homebrew-tap/Formula/matty.rb",
 	})
-	prepareTapIndex := releaseWorkflowStepIndex(t, text, "Prepare Homebrew tap formula update", []string{
+	prepareTapIndex := releaseWorkflowStepIndex(t, workflow, "Prepare Homebrew tap formula update", []string{
 		"id: prepare_tap",
 		"working-directory: homebrew-tap",
 		`git config user.name "github-actions[bot]"`,
@@ -104,34 +112,36 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		`echo "changed=true" >> "$GITHUB_OUTPUT"`,
 		`git commit -m "feat: update matty formula to ${RELEASE_TAG}"`,
 	})
-	tapPushAccessProofIndex := releaseWorkflowStepIndex(t, text, "Prove Homebrew tap push permission", []string{
+	tapPushAccessProofIndex := releaseWorkflowStepIndex(t, workflow, "Prove Homebrew tap push permission", []string{
 		"working-directory: homebrew-tap",
 		"git push --dry-run origin HEAD:main",
 	})
-	createReleaseIndex := releaseWorkflowStepIndex(t, text, "Create GitHub Release if needed", []string{
+	createReleaseIndex := releaseWorkflowStepIndex(t, workflow, "Create GitHub Release if needed", []string{
 		"GH_TOKEN: ${{ github.token }}",
 		"gh release create",
 		"--generate-notes",
 	})
-	uploadIndex := releaseWorkflowStepIndex(t, text, "Upload release assets", []string{
+	uploadIndex := releaseWorkflowStepIndex(t, workflow, "Upload release assets", []string{
 		"GH_TOKEN: ${{ github.token }}",
 		"gh release upload",
 		"dist/* --clobber",
 	})
-	pushTapIndex := releaseWorkflowStepIndex(t, text, "Push prepared Homebrew tap formula update", []string{
+	pushTapIndex := releaseWorkflowStepIndex(t, workflow, "Push prepared Homebrew tap formula update", []string{
 		"working-directory: homebrew-tap",
 		"TAP_UPDATE_CHANGED: ${{ steps.prepare_tap.outputs.changed }}",
 		`[[ "$TAP_UPDATE_CHANGED" != "true" ]]`,
 		"git push origin HEAD:main",
 	})
 
-	if strings.Contains(releaseWorkflowStep(t, text, "Prove Homebrew tap push permission"), "git commit") {
+	if strings.Contains(releaseWorkflowStep(t, workflow, "Prove Homebrew tap push permission").Text, "git commit") {
 		t.Fatalf("tap push proof must dry-run the prepared local commit without creating another commit")
 	}
-	if strings.Contains(releaseWorkflowStep(t, text, "Push prepared Homebrew tap formula update"), "git push --dry-run") {
+	if strings.Contains(releaseWorkflowStep(t, workflow, "Push prepared Homebrew tap formula update").Text, "git push --dry-run") {
 		t.Fatalf("final tap push must be mutating, not another dry run")
 	}
 
+	assertReleaseWorkflowStepBefore(t, resolveTagIndex, setupGoIndex, "Go must be set up from the checked-out release tag, not the workflow dispatch ref")
+	assertReleaseWorkflowStepBefore(t, setupGoIndex, buildIndex, "release artifacts should build after the release tag checkout and Go setup")
 	assertReleaseWorkflowStepBefore(t, buildIndex, formulaIndex, "formula generation must consume freshly built artifacts and dist/checksums.txt")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, tapCheckoutIndex, "the workflow must reject a missing HOMEBREW_TAP_TOKEN before falling back to anonymous tap checkout")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, createReleaseIndex, "a missing HOMEBREW_TAP_TOKEN must fail before creating a GitHub Release")
@@ -389,29 +399,67 @@ func readReleaseWorkflow(t *testing.T, root string) string {
 	return string(workflow)
 }
 
-func releaseWorkflowStepIndex(t *testing.T, workflow, name string, requiredFragments []string) int {
+type workflowStep struct {
+	Name  string
+	Index int
+	Text  string
+}
+
+func parseReleaseWorkflow(t *testing.T, workflow string) []workflowStep {
+	t.Helper()
+	const stepMarker = "\n      - name: "
+	var steps []workflowStep
+	searchFrom := 0
+	for {
+		markerIndex := strings.Index(workflow[searchFrom:], stepMarker)
+		if markerIndex < 0 {
+			break
+		}
+		stepStart := searchFrom + markerIndex + 1
+		nameStart := stepStart + len("      - name: ")
+		nameEnd := strings.IndexByte(workflow[nameStart:], '\n')
+		if nameEnd < 0 {
+			t.Fatalf("release workflow step at byte %d is missing a newline after its name", stepStart)
+		}
+		nameEnd += nameStart
+		nextMarker := strings.Index(workflow[nameEnd:], stepMarker)
+		stepEnd := len(workflow)
+		if nextMarker >= 0 {
+			stepEnd = nameEnd + nextMarker
+		}
+		steps = append(steps, workflowStep{
+			Name:  strings.TrimSpace(workflow[nameStart:nameEnd]),
+			Index: stepStart,
+			Text:  workflow[stepStart:stepEnd],
+		})
+		searchFrom = stepEnd
+	}
+	if len(steps) == 0 {
+		t.Fatal("release workflow contains no job steps")
+	}
+	return steps
+}
+
+func releaseWorkflowStepIndex(t *testing.T, workflow []workflowStep, name string, requiredFragments []string) int {
 	t.Helper()
 	step := releaseWorkflowStep(t, workflow, name)
 	for _, fragment := range requiredFragments {
-		if !strings.Contains(step, fragment) {
-			t.Fatalf("release workflow step %q should contain %q\nstep:\n%s", name, fragment, step)
+		if !strings.Contains(step.Text, fragment) {
+			t.Fatalf("release workflow step %q should contain %q\nstep:\n%s", name, fragment, step.Text)
 		}
 	}
-	return strings.Index(workflow, "- name: "+name)
+	return step.Index
 }
 
-func releaseWorkflowStep(t *testing.T, workflow, name string) string {
+func releaseWorkflowStep(t *testing.T, workflow []workflowStep, name string) workflowStep {
 	t.Helper()
-	start := strings.Index(workflow, "- name: "+name)
-	if start < 0 {
-		t.Fatalf("release workflow missing step %q", name)
+	for _, step := range workflow {
+		if step.Name == name {
+			return step
+		}
 	}
-	rest := workflow[start+len("- name: "+name):]
-	end := strings.Index(rest, "\n      - name: ")
-	if end < 0 {
-		return workflow[start:]
-	}
-	return workflow[start : start+len("- name: "+name)+end]
+	t.Fatalf("release workflow missing step %q", name)
+	return workflowStep{}
 }
 
 func assertReleaseWorkflowStepBefore(t *testing.T, earlier, later int, reason string) {
