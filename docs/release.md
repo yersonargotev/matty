@@ -8,19 +8,13 @@ default Installed Source at `~/.local/share/matty`.
 
 ## User install path
 
-The README quickstart is the canonical user-facing Homebrew path: install the
-fully qualified tap formula, initialize the package-installed source checkout,
-preview the setup with `matty install --dry-run`, then apply it with
-`matty install`.
-
-`matty init` is required for package-installed binaries because the Homebrew
-formula installs only the executable, not `bundle/skills`. After initialization,
-the dry run should show the planned Matty-managed symlinks, prompt blocks,
-Engram setup calls, and state writes before the apply step makes changes.
+The [README quickstart](../README.md#quickstart) is the canonical user-facing
+Homebrew path. Keep the exact install/init/dry-run/apply command sequence there
+so release docs do not drift from the first-run instructions users see first.
 
 Direct GitHub Release users may download the matching `matty_<version>_<goos>_<goarch>`
 asset, verify it against `checksums.txt`, put it on `PATH`, then follow the same
-init, dry-run, and apply sequence from the README.
+first-run sequence from the README quickstart.
 
 ## Maintainer quick path
 
