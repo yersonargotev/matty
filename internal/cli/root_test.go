@@ -101,8 +101,8 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "install", "doctor", "update", "uninstall"}},
 		{name: "install", args: []string{"install", "--help"}, want: []string{"Install Matty-managed", "--dry-run"}},
 		{name: "doctor", args: []string{"doctor", "--help"}, want: []string{"Check Matty setup"}},
-		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Matty-managed"}},
-		{name: "uninstall", args: []string{"uninstall", "--help"}, want: []string{"Remove only Matty-managed"}},
+		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Matty-managed", "--dry-run"}},
+		{name: "uninstall", args: []string{"uninstall", "--help"}, want: []string{"Remove only Matty-managed", "--dry-run"}},
 	}
 
 	for _, tt := range tests {
@@ -234,6 +234,59 @@ func TestResolvePathsDefaultsToMattyOwnedSkillBundle(t *testing.T) {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func TestUpdateDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
+	opts, runner, home := sandboxOptions(t)
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, home)
+	runner.calls = nil
+
+	out, err = executeCommand(t, NewRootCommand(opts), "update", "--dry-run")
+	if err != nil {
+		t.Fatalf("update --dry-run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "matty update dry-run: planned actions") || !strings.Contains(out, "run: update Engram via Homebrew") {
+		t.Fatalf("update --dry-run did not report expected plan:\n%s", out)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("update --dry-run executed external commands: %#v", runner.calls)
+	}
+	after := snapshotTree(t, home)
+	if after != before {
+		t.Fatalf("update --dry-run mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestUninstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, home)
+
+	out, err = executeCommand(t, NewRootCommand(opts), "uninstall", "--dry-run")
+	if err != nil {
+		t.Fatalf("uninstall --dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"matty uninstall dry-run: planned actions",
+		"remove: remove managed skill ask-matt",
+		"remove-codex-prompt: remove Codex Matty prompt markers",
+		"remove-opencode-prompt: remove OpenCode Matty prompt reference",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("uninstall --dry-run output missing %q:\n%s", want, out)
+		}
+	}
+	after := snapshotTree(t, home)
+	if after != before {
+		t.Fatalf("uninstall --dry-run mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
 }
 
 func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
@@ -609,6 +662,47 @@ func TestInstallAndUpdateAreIdempotent(t *testing.T) {
 	after := readSkillLinks(t, paths)
 	if strings.Join(before, "\n") != strings.Join(after, "\n") {
 		t.Fatalf("skill links changed after update:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestUninstallWithoutStateRemovesOnlyMarkerOwnedPrompts(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	if err := os.Remove(paths.StateFile); err != nil {
+		t.Fatalf("remove state fixture: %v", err)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "uninstall")
+	if err != nil {
+		t.Fatalf("uninstall without state failed: %v\n%s", err, out)
+	}
+	if strings.Contains(readFileString(t, paths.CodexPromptFile), "<!-- matty:skills-router -->") {
+		t.Fatalf("uninstall without state left Codex Matty marker")
+	}
+	config := readFileString(t, paths.OpenCodeConfigFile)
+	if strings.Contains(config, paths.OpenCodePromptFile) {
+		t.Fatalf("uninstall without state left OpenCode Matty instruction:\n%s", config)
+	}
+	if exists(paths.OpenCodePromptFile) {
+		t.Fatalf("uninstall without state left OpenCode Matty prompt file")
+	}
+	if !exists(filepath.Join(paths.AgentSkillsDir, "wayfinder")) {
+		t.Fatalf("uninstall without state should not infer/remove managed skill symlinks")
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "uninstall")
+	if err != nil {
+		t.Fatalf("second uninstall without state should be safe: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no Matty-managed artifacts found") {
+		t.Fatalf("second uninstall should report no-op:\n%s", out)
 	}
 }
 

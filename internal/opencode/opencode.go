@@ -191,11 +191,10 @@ func updateInstructions(existing, configPath, promptPath string, operation instr
 		return "", err
 	}
 	if strings.TrimSpace(existing) == "" {
-		if operation == instructionMerge {
-			instructions = append(removeString(instructions, promptPath), promptPath)
-		} else {
-			instructions = removeString(instructions, promptPath)
+		if operation == instructionRemove {
+			return existing, nil
 		}
+		instructions = append(removeString(instructions, promptPath), promptPath)
 		return marshalConfigWithInstructions(config, instructions)
 	}
 	if operation == instructionMerge {

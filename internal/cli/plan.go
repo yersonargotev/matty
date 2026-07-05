@@ -250,6 +250,35 @@ func BuildUninstallPlan(paths Paths, state State) Plan {
 	return Plan{Actions: actions, State: state}
 }
 
+func UninstallPlanHasWork(paths Paths, state State) bool {
+	if pathExists(paths.StateFile) {
+		return true
+	}
+	for _, skill := range state.ManagedSkills {
+		link, err := inspectSkillLink(skill)
+		if err == nil && link.status == skillLinkManaged {
+			return true
+		}
+	}
+	if fileContains(paths.CodexPromptFile, "<!-- matty:skills-router -->") {
+		return true
+	}
+	if pathExists(paths.OpenCodePromptFile) || fileContains(paths.OpenCodeConfigFile, paths.OpenCodePromptFile) {
+		return true
+	}
+	return false
+}
+
+func pathExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+func fileContains(path, needle string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(data), needle)
+}
+
 func PrintPlan(w io.Writer, plan Plan) error {
 	for _, action := range plan.Actions {
 		if _, err := fmt.Fprintf(w, "- %s: %s", action.Kind, action.Description); err != nil {

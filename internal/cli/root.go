@@ -106,7 +106,8 @@ func newDoctorCommand(opts Options) *cobra.Command {
 }
 
 func newUpdateCommand(opts Options) *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Refresh Matty-managed tools and configuration",
 		Args:  cobra.NoArgs,
@@ -122,6 +123,12 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if dryRun {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty update dry-run: planned actions"); err != nil {
+					return err
+				}
+				return PrintPlan(cmd.OutOrStdout(), plan)
+			}
 			warnings, err := ApplyInstallPlan(cmd.Context(), paths, plan, opts.Runner)
 			if err != nil {
 				return err
@@ -133,6 +140,8 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed update changes without writing files or running commands")
+	return cmd
 }
 
 func printWarnings(out io.Writer, warnings []string) error {
@@ -145,7 +154,8 @@ func printWarnings(out io.Writer, warnings []string) error {
 }
 
 func newUninstallCommand(opts Options) *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove only Matty-managed artifacts",
 		Args:  cobra.NoArgs,
@@ -154,20 +164,29 @@ func newUninstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, found, err := LoadState(paths.StateFile)
+			state, _, err := LoadState(paths.StateFile)
 			if err != nil {
 				return err
 			}
-			if !found {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: no Matty state found at %s\n", paths.StateFile)
+			plan := BuildUninstallPlan(paths, state)
+			hasWork := UninstallPlanHasWork(paths, state)
+			if dryRun {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "matty uninstall dry-run: planned actions"); err != nil {
+					return err
+				}
+				return PrintPlan(cmd.OutOrStdout(), plan)
+			}
+			if !hasWork {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "matty uninstall: no Matty-managed artifacts found")
 				return err
 			}
-			plan := BuildUninstallPlan(paths, state)
 			if err := ApplyUninstallPlan(cmd.Context(), paths, plan); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: removed managed skill symlinks and state %s\n", paths.StateFile)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: removed Matty-managed artifacts and state %s\n", paths.StateFile)
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed removals without deleting files")
+	return cmd
 }
