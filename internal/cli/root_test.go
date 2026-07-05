@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,7 +109,7 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "install", "doctor", "update", "uninstall"}},
+		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "init", "install", "doctor", "update", "uninstall"}},
 		{name: "install", args: []string{"install", "--help"}, want: []string{"Install Matty-managed", "--dry-run"}},
 		{name: "doctor", args: []string{"doctor", "--help"}, want: []string{"Check Matty setup"}},
 		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Matty-managed", "--dry-run"}},
@@ -263,6 +264,32 @@ func TestResolvePathsDefaultsToMattyOwnedSkillBundle(t *testing.T) {
 	}
 	if strings.Contains(paths.SkillSourceRoot, filepath.Join("skills", "skills")) {
 		t.Fatalf("SkillSourceRoot should not default to external skills clone: %q", paths.SkillSourceRoot)
+	}
+}
+
+func TestResolvePathsFallsBackToInstalledSourceOutsideRepo(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	paths, err := ResolvePaths(MapEnv{"HOME": home})
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	want := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
+	if paths.SkillSourceRoot != want {
+		t.Fatalf("SkillSourceRoot = %q, want %q", paths.SkillSourceRoot, want)
 	}
 }
 
@@ -1026,4 +1053,154 @@ func snapshotTree(t *testing.T, root string) string {
 		t.Fatalf("snapshot %s: %v", root, err)
 	}
 	return strings.Join(entries, "\n")
+}
+
+func TestInitClonesDefaultInstalledSourceAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("init failed: %v\n%s", err, out)
+	}
+	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	if !exists(filepath.Join(sourceRoot, "bundle", "skills")) {
+		t.Fatalf("init did not clone bundle/skills into %s", sourceRoot)
+	}
+	if !strings.Contains(out, "initialized Installed Source") || !strings.Contains(out, sourceRoot) {
+		t.Fatalf("init output did not report initialized source:\n%s", out)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("second init failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "already initialized") {
+		t.Fatalf("second init did not report idempotent state:\n%s", out)
+	}
+}
+
+func TestInitSupportsHomeFlag(t *testing.T) {
+	envHome := t.TempDir()
+	flagHome := t.TempDir()
+	repo := createMattySourceRepo(t)
+	opts := Options{Env: MapEnv{"HOME": envHome, "XDG_CONFIG_HOME": filepath.Join(flagHome, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--home", flagHome, "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("init failed: %v\n%s", err, out)
+	}
+	if !exists(filepath.Join(flagHome, ".local", "share", "matty", "bundle", "skills")) {
+		t.Fatalf("init did not use --home for default Installed Source")
+	}
+	if exists(filepath.Join(envHome, ".local", "share", "matty")) {
+		t.Fatalf("init --home unexpectedly wrote Env HOME")
+	}
+}
+
+func TestInitSupportsExplicitSourceRoot(t *testing.T) {
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	sourceRoot := filepath.Join(t.TempDir(), "custom-source")
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--source-root", sourceRoot, "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("init failed: %v\n%s", err, out)
+	}
+	if !exists(filepath.Join(sourceRoot, "bundle", "skills")) {
+		t.Fatalf("init did not clone into explicit source root")
+	}
+	if exists(filepath.Join(home, ".local", "share", "matty")) {
+		t.Fatalf("init with --source-root unexpectedly wrote default Installed Source")
+	}
+}
+
+func TestInitRejectsInvalidNonEmptyDestination(t *testing.T) {
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+		t.Fatalf("mkdir source root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("not matty"), 0o600); err != nil {
+		t.Fatalf("write invalid destination: %v", err)
+	}
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
+	if err == nil {
+		t.Fatalf("expected invalid destination error, got output:\n%s", out)
+	}
+	for _, want := range []string{"not a valid Matty checkout", "Move it aside", "--source-root"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+	if !exists(filepath.Join(sourceRoot, "README.md")) {
+		t.Fatalf("init removed user data from invalid destination")
+	}
+}
+
+func TestInitDefaultsReleaseVersionAsRepositoryRef(t *testing.T) {
+	withVersion(t, "v0.2.3")
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	runGitCommand(t, repo, "tag", "v0.2.3")
+	runGitCommand(t, repo, "checkout", "-b", "next")
+	if err := os.WriteFile(filepath.Join(repo, "UNRELEASED"), []byte("main only"), 0o600); err != nil {
+		t.Fatalf("write unreleased file: %v", err)
+	}
+	runGitCommand(t, repo, "add", "UNRELEASED")
+	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "unreleased")
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
+	if err != nil {
+		t.Fatalf("init failed: %v\n%s", err, out)
+	}
+	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	if exists(filepath.Join(sourceRoot, "UNRELEASED")) {
+		t.Fatalf("release init cloned repository HEAD instead of release tag")
+	}
+	got := strings.TrimSpace(runGitCommand(t, sourceRoot, "rev-parse", "HEAD"))
+	want := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "v0.2.3^{commit}"))
+	if got != want {
+		t.Fatalf("cloned HEAD = %s, want release tag commit %s", got, want)
+	}
+}
+
+func createMattySourceRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, rel := range []string{
+		"bundle/skills/engineering/ask-matt/SKILL.md",
+		"bundle/skills/productivity/grilling/SKILL.md",
+		"bundle/skills/in-progress/wayfinder/SKILL.md",
+	} {
+		path := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("mkdir repo fixture: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: fixture\n---\n"), 0o600); err != nil {
+			t.Fatalf("write repo fixture: %v", err)
+		}
+	}
+	runGitCommand(t, repo, "init")
+	runGitCommand(t, repo, "add", ".")
+	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "initial")
+	return repo
+}
+
+func runGitCommand(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	home := t.TempDir()
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "xdg-config"), "GIT_CONFIG_NOSYSTEM=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }

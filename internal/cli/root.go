@@ -3,9 +3,12 @@ package cli
 import (
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yersonargotev/matty/internal/bootstrap"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
 
@@ -39,6 +42,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 	}
 
 	root.AddCommand(
+		newInitCommand(opts),
 		newInstallCommand(opts),
 		newDoctorCommand(opts),
 		newUpdateCommand(opts),
@@ -46,6 +50,82 @@ func NewRootCommand(opts Options) *cobra.Command {
 	)
 
 	return root
+}
+
+func newInitCommand(opts Options) *cobra.Command {
+	var (
+		homeFlag      string
+		sourceRoot    string
+		repositoryURL string
+		repositoryRef string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize Matty's package-installed source checkout",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home := strings.TrimSpace(homeFlag)
+			if home == "" {
+				home = opts.Env.Getenv("HOME")
+			}
+			if home == "" {
+				return fmt.Errorf("HOME is required")
+			}
+			configHome := ""
+			if strings.TrimSpace(homeFlag) == "" {
+				configHome = opts.Env.Getenv("XDG_CONFIG_HOME")
+			}
+			if configHome == "" || !filepath.IsAbs(configHome) {
+				configHome = filepath.Join(home, ".config")
+			}
+
+			root := strings.TrimSpace(sourceRoot)
+			if root == "" {
+				root = DefaultInstalledSourceRoot(home)
+			}
+			root, err := filepath.Abs(root)
+			if err != nil {
+				return fmt.Errorf("resolve installed source root: %w", err)
+			}
+
+			result, err := bootstrap.EnsureInstalledSource(bootstrap.BootstrapOptions{
+				SourceRoot:    root,
+				RepositoryURL: repositoryURL,
+				RepositoryRef: defaultInitRepositoryRef(repositoryRef, mattyversion.Value),
+				HomeDir:       home,
+				ConfigHome:    configHome,
+			})
+			if err != nil {
+				return err
+			}
+			switch {
+			case result.Cloned:
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: initialized Installed Source at %s\n", result.SourceRoot)
+			case result.Updated:
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: updated Installed Source at %s\n", result.SourceRoot)
+			default:
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: Installed Source already initialized at %s\n", result.SourceRoot)
+			}
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&homeFlag, "home", "", "home directory used to resolve the default Installed Source")
+	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "Installed Source root (default ~/.local/share/matty)")
+	cmd.Flags().StringVar(&repositoryURL, "repository-url", bootstrap.DefaultRepositoryURL, "Matty Source of Truth Git URL")
+	cmd.Flags().StringVar(&repositoryRef, "repository-ref", "", "optional Matty Source of Truth Git ref to clone or check out")
+	return cmd
+}
+
+func defaultInitRepositoryRef(explicitRef, currentVersion string) string {
+	if strings.TrimSpace(explicitRef) != "" {
+		return explicitRef
+	}
+	if strings.HasPrefix(currentVersion, "v") {
+		return currentVersion
+	}
+	return ""
 }
 
 func newInstallCommand(opts Options) *cobra.Command {

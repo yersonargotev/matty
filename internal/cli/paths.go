@@ -9,15 +9,16 @@ import (
 // Paths contains every global path Matty v0 will manage or inspect. Keeping
 // this derived from injected Env makes command tests independent from real HOME.
 type Paths struct {
-	HomeDir            string
-	ConfigHome         string
-	MattyDir           string
-	StateFile          string
-	AgentSkillsDir     string
-	SkillSourceRoot    string
-	CodexPromptFile    string
-	OpenCodeConfigFile string
-	OpenCodePromptFile string
+	HomeDir             string
+	ConfigHome          string
+	MattyDir            string
+	StateFile           string
+	AgentSkillsDir      string
+	InstalledSourceRoot string
+	SkillSourceRoot     string
+	CodexPromptFile     string
+	OpenCodeConfigFile  string
+	OpenCodePromptFile  string
 }
 
 func ResolvePaths(env Env) (Paths, error) {
@@ -32,20 +33,22 @@ func ResolvePaths(env Env) (Paths, error) {
 	}
 
 	mattyDir := filepath.Join(home, ".matty")
-	skillSourceRoot, err := resolveSkillSourceRoot(env)
+	installedSourceRoot := DefaultInstalledSourceRoot(home)
+	skillSourceRoot, err := resolveSkillSourceRoot(env, installedSourceRoot)
 	if err != nil {
 		return Paths{}, err
 	}
 	return Paths{
-		HomeDir:            home,
-		ConfigHome:         configHome,
-		MattyDir:           mattyDir,
-		StateFile:          filepath.Join(mattyDir, "config.json"),
-		AgentSkillsDir:     filepath.Join(home, ".agents", "skills"),
-		SkillSourceRoot:    skillSourceRoot,
-		CodexPromptFile:    filepath.Join(home, ".codex", "AGENTS.md"),
-		OpenCodeConfigFile: filepath.Join(configHome, "opencode", "opencode.json"),
-		OpenCodePromptFile: filepath.Join(configHome, "opencode", "matty.md"),
+		HomeDir:             home,
+		ConfigHome:          configHome,
+		MattyDir:            mattyDir,
+		StateFile:           filepath.Join(mattyDir, "config.json"),
+		AgentSkillsDir:      filepath.Join(home, ".agents", "skills"),
+		InstalledSourceRoot: installedSourceRoot,
+		SkillSourceRoot:     skillSourceRoot,
+		CodexPromptFile:     filepath.Join(home, ".codex", "AGENTS.md"),
+		OpenCodeConfigFile:  filepath.Join(configHome, "opencode", "opencode.json"),
+		OpenCodePromptFile:  filepath.Join(configHome, "opencode", "matty.md"),
 	}, nil
 }
 
@@ -53,7 +56,7 @@ func (p Paths) SkillLinkPath(name string) string {
 	return filepath.Join(p.AgentSkillsDir, name)
 }
 
-func resolveSkillSourceRoot(env Env) (string, error) {
+func resolveSkillSourceRoot(env Env, installedSourceRoot string) (string, error) {
 	configured := env.Getenv("MATTY_SKILLS_SOURCE")
 	if configured != "" {
 		return filepath.Abs(configured)
@@ -73,5 +76,9 @@ func resolveSkillSourceRoot(env Env) (string, error) {
 			break
 		}
 	}
-	return filepath.Abs(filepath.Join(cwd, "bundle", "skills"))
+	return filepath.Abs(filepath.Join(installedSourceRoot, "bundle", "skills"))
+}
+
+func DefaultInstalledSourceRoot(home string) string {
+	return filepath.Join(home, ".local", "share", "matty")
 }

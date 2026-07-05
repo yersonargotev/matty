@@ -31,10 +31,11 @@ Standing constraints:
 - Dots reference pattern — build raw cross-platform binaries, publish `checksums.txt`, generate a Homebrew formula from that manifest, prepare/dry-run tap update before GitHub Release mutation, then push the tap after release assets exist.
 - Package-installed source model — use `matty init` to clone the Matty Source of Truth into `~/.local/share/matty`, then resolve the default skill bundle from `~/.local/share/matty/bundle/skills`; `MATTY_SKILLS_SOURCE` stays a direct dev/test override. See `docs/adr/0002-package-installed-source-model.md`.
 - Release-injectable version package — `internal/version.Value` defaults to `dev` and can be overridden with `go build -ldflags "-X github.com/yersonargotev/matty/internal/version.Value=v0.x.y"`; `internal/cli` consumes that value for `matty --version` and state metadata. See [02](issues/02-add-version-package.md).
+- `matty init` implemented — package-installed users can clone/update the Matty Source of Truth into `~/.local/share/matty`; source resolution now falls back to `~/.local/share/matty/bundle/skills` outside repo checkouts while preserving `MATTY_SKILLS_SOURCE` and local repo discovery. See [03](issues/03-implement-matty-init.md).
 
 ## Frontier
 
-Tickets 01 and 02 are resolved. The next frontier is ticket 03 for package-installed source resolution because version injection is now available for version-pinned `matty init`. Ticket 07 is also unblocked, but lower priority by issue order.
+Tickets 01, 02, and 03 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
 
 ## Fog
 
