@@ -33,10 +33,11 @@ Standing constraints:
 - Release-injectable version package — `internal/version.Value` defaults to `dev` and can be overridden with `go build -ldflags "-X github.com/yersonargotev/matty/internal/version.Value=v0.x.y"`; `internal/cli` consumes that value for `matty --version` and state metadata. See [02](issues/02-add-version-package.md).
 - `matty init` implemented — package-installed users can clone/update the Matty Source of Truth into `~/.local/share/matty`; source resolution now falls back to `~/.local/share/matty/bundle/skills` outside repo checkouts while preserving `MATTY_SKILLS_SOURCE` and local repo discovery. See [03](issues/03-implement-matty-init.md).
 - Package-installed command resolution hardened — outside repo checkouts, `matty init` plus `install`/`doctor`/`update`/`uninstall` now uses `~/.local/share/matty/bundle/skills`; missing default Installed Source errors name the missing path and suggest `matty init`. See [04](issues/04-resolve-skill-source-for-package-installs.md).
+- Release artifact builder implemented — `scripts/build-release-artifacts.sh` accepts exact `v0.x.y` tags, builds raw `matty_<version>_<goos>_<goarch>` binaries for supported Darwin/Linux architectures, injects `internal/version.Value` via ldflags, and writes `checksums.txt`. See [05](issues/05-add-release-artifact-builder.md).
 
 ## Frontier
 
-Tickets 01, 02, 03, and 04 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
+Tickets 01, 02, 03, 04, and 05 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
 
 ## Fog
 
