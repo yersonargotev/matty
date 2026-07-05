@@ -101,7 +101,7 @@ func stringArrayContains(value any, needle string) bool {
 	}
 	for _, item := range items {
 		text, ok := item.(string)
-		if ok && strings.Contains(text, needle) {
+		if ok && text == needle {
 			return true
 		}
 	}

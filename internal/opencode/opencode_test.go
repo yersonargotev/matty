@@ -42,7 +42,7 @@ func TestWriteMergesOpenCodeConfigAndIsIdempotent(t *testing.T) {
   "model": "anthropic/claude-sonnet-4-5",
   "mcp": {"jira": {"type": "remote", "enabled": true}},
   "provider": {"openai": {"npm": "@ai-sdk/openai"}},
-  "plugin": ["gentle-ai-plugin"],
+  "plugin": ["gentle-ai"],
   "agent": {"gentle-ai": {"prompt": "keep"}},
   "profile": {"gentle-ai": {"agent": "gentle-ai"}},
   "instructions": ["CONTRIBUTING.md"]
@@ -98,6 +98,27 @@ func TestWriteOnlyWarnsForKnownGentleAIOverlays(t *testing.T) {
 	}
 	if len(result.Warnings) != 0 {
 		t.Fatalf("warnings = %#v, want none for non-overlay gentle-ai text", result.Warnings)
+	}
+}
+
+func TestWriteDoesNotWarnForPluginNamesThatOnlyContainGentleAI(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "opencode.json")
+	promptPath := filepath.Join(dir, "matty.md")
+	existing := `{
+  "plugin": ["my-gentle-ai-helper"]
+}
+`
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+
+	result, err := Write(configPath, promptPath)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none for plugin value that only contains gentle-ai", result.Warnings)
 	}
 }
 

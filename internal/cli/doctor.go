@@ -81,14 +81,19 @@ func skillChecks(paths Paths, state State, stateFound bool) []doctorCheck {
 			changed = append(changed, fmt.Sprintf("%s (%v)", skill.Name, err))
 			continue
 		}
-		switch link.status {
-		case skillLinkMissing:
-			missing = append(missing, skill.Name)
-		case skillLinkManaged:
-		case skillLinkUnmanagedPath:
-			changed = append(changed, skill.Name+" is not a symlink")
-		case skillLinkUnmanagedSymlink:
-			changed = append(changed, skill.Name)
+		behavior, ok := skillLinkBehaviors[link.status]
+		if !ok {
+			changed = append(changed, fmt.Sprintf("%s (unknown link status %s)", skill.Name, link.status))
+			continue
+		}
+		problem, hasProblem := behavior.doctorProblem(skill, link)
+		if !hasProblem {
+			continue
+		}
+		if problem.missing {
+			missing = append(missing, problem.detail)
+		} else {
+			changed = append(changed, problem.detail)
 		}
 	}
 	if len(missing) == 0 && len(changed) == 0 {
@@ -116,9 +121,9 @@ func engramChecks(runner Runner, state State, stateFound bool) []doctorCheck {
 		return checks
 	}
 	if hasSurface(state, "codex") && hasSurface(state, "opencode") {
-		checks = append(checks, doctorCheck{status: doctorWarn, name: "engram-setup", detail: "state records Codex and OpenCode setup expectations, but Engram-owned setup is external; run matty update if setup drifted"})
+		checks = append(checks, doctorCheck{status: doctorPass, name: "engram-setup", detail: "state records Codex and OpenCode setup expectations; run matty update if Engram setup drifted"})
 	} else {
-		checks = append(checks, doctorCheck{status: doctorWarn, name: "engram-setup", detail: "state does not record both Codex and OpenCode surfaces; run matty update"})
+		checks = append(checks, doctorCheck{status: doctorFail, name: "engram-setup", detail: "state does not record both Codex and OpenCode setup expectations; run matty update"})
 	}
 	return checks
 }

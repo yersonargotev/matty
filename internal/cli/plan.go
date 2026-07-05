@@ -139,18 +139,11 @@ func plannedSkillLinkAction(skill ManagedSkill) (PlannedAction, error) {
 	if err != nil {
 		return PlannedAction{}, err
 	}
-	switch link.status {
-	case skillLinkMissing:
-		return PlannedAction{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}, nil
-	case skillLinkManaged:
-		return PlannedAction{}, nil
-	case skillLinkUnmanagedPath:
-		return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}, nil
-	case skillLinkUnmanagedSymlink:
-		return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: link.target, Description: "preserve unmanaged symlink for skill " + skill.Name}, nil
-	default:
+	behavior, ok := skillLinkBehaviors[link.status]
+	if !ok {
 		return PlannedAction{}, fmt.Errorf("inspect skill link %s: unknown status %s", skill.LinkPath, link.status)
 	}
+	return behavior.plannedAction(skill, link), nil
 }
 
 type skillLinkStatus string
@@ -165,6 +158,49 @@ const (
 type skillLinkInspection struct {
 	status skillLinkStatus
 	target string
+}
+
+type skillLinkDoctorProblem struct {
+	missing bool
+	detail  string
+}
+
+type skillLinkBehavior struct {
+	plannedAction func(ManagedSkill, skillLinkInspection) PlannedAction
+	doctorProblem func(ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool)
+}
+
+var skillLinkBehaviors = map[skillLinkStatus]skillLinkBehavior{
+	skillLinkMissing: {
+		plannedAction: func(skill ManagedSkill, _ skillLinkInspection) PlannedAction {
+			return PlannedAction{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}
+		},
+		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+			return skillLinkDoctorProblem{missing: true, detail: skill.Name}, true
+		},
+	},
+	skillLinkManaged: {
+		plannedAction: func(ManagedSkill, skillLinkInspection) PlannedAction { return PlannedAction{} },
+		doctorProblem: func(ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool) {
+			return skillLinkDoctorProblem{}, false
+		},
+	},
+	skillLinkUnmanagedPath: {
+		plannedAction: func(skill ManagedSkill, _ skillLinkInspection) PlannedAction {
+			return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}
+		},
+		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+			return skillLinkDoctorProblem{detail: skill.Name + " is not a symlink"}, true
+		},
+	},
+	skillLinkUnmanagedSymlink: {
+		plannedAction: func(skill ManagedSkill, link skillLinkInspection) PlannedAction {
+			return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: link.target, Description: "preserve unmanaged symlink for skill " + skill.Name}
+		},
+		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+			return skillLinkDoctorProblem{detail: skill.Name}, true
+		},
+	},
 }
 
 func inspectSkillLink(skill ManagedSkill) (skillLinkInspection, error) {

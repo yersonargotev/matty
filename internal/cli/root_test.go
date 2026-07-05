@@ -396,7 +396,7 @@ func TestDoctorReportsFullSetupHealthAndIsReadOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
 		t.Fatalf("mkdir opencode config: %v", err)
 	}
-	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"plugin":["gentle-ai-plugin"]}`), 0o600); err != nil {
+	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"plugin":["gentle-ai"]}`), 0o600); err != nil {
 		t.Fatalf("write opencode conflict fixture: %v", err)
 	}
 
@@ -422,12 +422,12 @@ func TestDoctorReportsFullSetupHealthAndIsReadOnly(t *testing.T) {
 		"PASS matty-state:",
 		"PASS skill-symlinks:",
 		"PASS engram-binary:",
-		"WARN engram-setup:",
+		"PASS engram-setup:",
 		"PASS codex-config:",
 		"PASS opencode-config:",
 		"WARN codex-conflict:",
 		"WARN opencode-conflict:",
-		"Engram-owned setup is external",
+		"state records Codex and OpenCode setup expectations",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
@@ -454,6 +454,30 @@ func TestDoctorReportsCorruptStateAsFailedCheck(t *testing.T) {
 	}
 	if !strings.Contains(out, "FAIL matty-state:") || !strings.Contains(out, "invalid JSON") {
 		t.Fatalf("doctor did not report corrupt state as failed check:\n%s", out)
+	}
+}
+
+func TestDoctorReportsIncompleteEngramSetupExpectationsAsFailedCheck(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	state := DesiredState(paths, fixedTestTime(), nil)
+	state.ConfiguredSurfaces = []string{"codex"}
+	if err := SaveState(paths.StateFile, state); err != nil {
+		t.Fatalf("SaveState failed: %v", err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "FAIL engram-setup:") || !strings.Contains(out, "Codex and OpenCode setup expectations") {
+		t.Fatalf("doctor did not fail incomplete Engram setup expectations:\n%s", out)
 	}
 }
 
