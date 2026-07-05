@@ -37,14 +37,14 @@ Standing constraints:
 - Homebrew formula generator implemented — `scripts/generate-homebrew-formula.sh` emits the Matty formula from `checksums.txt`, validates supported release artifacts and checksums, installs the raw binary as `matty`, and includes a `matty --version` brew test. See [06](issues/06-add-homebrew-formula-generator.md).
 - CI workflow implemented — `.github/workflows/ci.yml` runs on pull requests and pushes to `main`, uses Go from `go.mod`, verifies Matty-owned Go formatting, runs `go vet ./...`, builds, and runs `go test ./...`. See [07](issues/07-add-ci-workflow.md).
 - Release workflow implemented — `.github/workflows/release.yml` publishes `v0.*` tags or manually selected existing tags by building `dist/*`, proving token-backed Homebrew tap update access, creating the GitHub Release with generated notes if needed, uploading assets, then pushing the prepared tap commit. See [08](issues/08-add-release-workflow-and-tap-update.md).
+- Installable release docs added — `docs/release.md` documents maintainer publishing, `HOMEBREW_TAP_TOKEN`, first-release checklist, sandboxed package-install smoke expectations, and Linux artifact support boundaries; README quickstart documents the user Homebrew path through `matty init` and `matty install`. See [09](issues/09-document-installable-release.md).
 
 ## Frontier
 
-Tickets 01, 02, 03, 04, 05, 06, 07, and 08 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
+Tickets 01, 02, 03, 04, 05, 06, 07, 08, and 09 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
 
 ## Fog
 
-- Whether Matty should support Linux release artifacts immediately or stay macOS-only for package install while keeping scripts structurally ready for Linux.
 - Whether `matty update` should keep meaning “refresh managed workflow” only, or whether a package-installed Matty needs a separate `matty upgrade` for the binary/source bundle.
 - Whether generated GitHub release notes are enough, or whether Matty needs a changelog/release-note convention before first public tag.
 - Whether the Homebrew formula should live only in `yersonargotev/homebrew-tap` or whether this repo also keeps a generated snapshot for review.

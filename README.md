@@ -4,6 +4,19 @@ Matty is a lightweight macOS-first installer/configurator for a global AI coding
 
 Matty is not a runtime orchestrator and does not copy workflow files into every project.
 
+## Quickstart
+
+Install Matty from the Homebrew tap, initialize the package-installed source checkout, preview the setup, then apply it:
+
+```sh
+brew install yersonargotev/tap/matty
+matty init
+matty install --dry-run
+matty install
+```
+
+`matty init` is required for Homebrew/GitHub Release installs because package managers install the binary only; Matty reads its default skill bundle from the initialized source at `~/.local/share/matty/bundle/skills`. Maintainer release docs live in [docs/release.md](docs/release.md).
+
 ## v0 scope
 
 Matty v0 manages:
@@ -19,6 +32,7 @@ Matty v0 is macOS-first. Linux and other agent adapters may be added later, but 
 ## Commands
 
 ```sh
+matty init             # initialize the package-installed source checkout
 matty install          # apply the golden-path setup
 matty install --dry-run
 matty doctor           # read-only setup health checks
