@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test, vet and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          go_files="$(git ls-files '*.go' ':!:engram/**' ':!:gentle-ai/**' ':!:skills/**' ':!:.scratch/**')"
+          unformatted="$(gofmt -l $go_files)"
+          if [[ -n "$unformatted" ]]; then
+            echo "These files are not gofmt-clean:" >&2
+            echo "$unformatted" >&2
+            echo "Run 'gofmt -w' on these files and commit the result." >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build CLI
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...

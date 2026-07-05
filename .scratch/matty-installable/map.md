@@ -34,10 +34,12 @@ Standing constraints:
 - `matty init` implemented — package-installed users can clone/update the Matty Source of Truth into `~/.local/share/matty`; source resolution now falls back to `~/.local/share/matty/bundle/skills` outside repo checkouts while preserving `MATTY_SKILLS_SOURCE` and local repo discovery. See [03](issues/03-implement-matty-init.md).
 - Package-installed command resolution hardened — outside repo checkouts, `matty init` plus `install`/`doctor`/`update`/`uninstall` now uses `~/.local/share/matty/bundle/skills`; missing default Installed Source errors name the missing path and suggest `matty init`. See [04](issues/04-resolve-skill-source-for-package-installs.md).
 - Release artifact builder implemented — `scripts/build-release-artifacts.sh` accepts exact `v0.x.y` tags, builds raw `matty_<version>_<goos>_<goarch>` binaries for supported Darwin/Linux architectures, injects `internal/version.Value` via ldflags, and writes `checksums.txt`. See [05](issues/05-add-release-artifact-builder.md).
+- Homebrew formula generator implemented — `scripts/generate-homebrew-formula.sh` emits the Matty formula from `checksums.txt`, validates supported release artifacts and checksums, installs the raw binary as `matty`, and includes a `matty --version` brew test. See [06](issues/06-add-homebrew-formula-generator.md).
+- CI workflow implemented — `.github/workflows/ci.yml` runs on pull requests and pushes to `main`, uses Go from `go.mod`, verifies Matty-owned Go formatting, runs `go vet ./...`, builds, and runs `go test ./...`. See [07](issues/07-add-ci-workflow.md).
 
 ## Frontier
 
-Tickets 01, 02, 03, 04, and 05 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
+Tickets 01, 02, 03, 04, 05, 06, and 07 are resolved. The next frontier is the lowest-numbered remaining open, unblocked installable-roadmap ticket.
 
 ## Fog
 
