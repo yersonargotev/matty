@@ -15,7 +15,7 @@ matty install --dry-run
 matty install
 ```
 
-`matty init` is required for Homebrew/GitHub Release installs because package managers install the binary only; Matty reads its default skill bundle from the initialized source at `~/.local/share/matty/bundle/skills`. Maintainer release docs live in [docs/release.md](docs/release.md).
+`matty init` is required for Homebrew/GitHub Release installs because package managers install the binary only; Matty reads its default skill bundle from the initialized source at `~/.local/share/matty/bundle/skills`. To upgrade Matty itself later, use `brew upgrade matty` (or replace the GitHub Release binary), then rerun `matty init` before `matty update --dry-run`. Maintainer release docs live in [docs/release.md](docs/release.md).
 
 ## v0 scope
 
@@ -36,7 +36,7 @@ matty init             # initialize the package-installed source checkout
 matty install          # apply the golden-path setup
 matty install --dry-run
 matty doctor           # read-only setup health checks
-matty update           # refresh Engram, skill links, prompts, and state
+matty update           # refresh Engram, skill links, prompts, and state; does not upgrade the binary
 matty update --dry-run
 matty uninstall        # remove only Matty-managed artifacts
 matty uninstall --dry-run

@@ -16,6 +16,25 @@ Direct GitHub Release users may download the matching `matty_<version>_<goos>_<g
 asset, verify it against `checksums.txt`, put it on `PATH`, then follow the same
 first-run sequence from the README quickstart.
 
+## User upgrade path
+
+`matty update` is not a binary upgrade command. It refreshes Matty-managed
+workflow artifacts and Engram setup from the currently resolved skill bundle.
+Homebrew users upgrade Matty itself with:
+
+```bash
+brew upgrade matty
+matty init
+matty update --dry-run
+matty update
+```
+
+Direct GitHub Release users replace the `matty` binary with the newer release
+artifact, then run the same `matty init` and update dry-run/apply sequence.
+`matty init` is the command that aligns the Installed Source checkout to the
+running release. `matty update --dry-run` must not mutate that checkout; if the
+Installed Source is missing or stale, run `matty init` first.
+
 ## Maintainer quick path
 
 1. Confirm the release candidate passes validation:

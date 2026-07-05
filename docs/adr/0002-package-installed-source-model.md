@@ -76,10 +76,15 @@ resolve the same default checkout.
   Truth, fail with guidance to move it aside or pass an explicit source root.
 
 `matty update` keeps its v0 meaning: refresh Matty-managed workflow artifacts
-from the resolved skill bundle. It should not upgrade the binary. For
-package-installed Matty, users upgrade the binary with Homebrew or by installing
-a newer GitHub Release artifact, then run `matty init` again to align the
-Installed Source before running `matty update` or `matty install --dry-run`.
+from the resolved skill bundle and rerun the delegated Engram refresh/setup
+path. It should not upgrade the binary and it should not mutate the Installed
+Source. For package-installed Matty, users upgrade the binary with Homebrew
+(`brew upgrade matty`) or by installing a newer GitHub Release artifact, then
+run `matty init` again to align the Installed Source before running
+`matty update` or `matty install --dry-run`.
+
+Matty does not need a separate `matty upgrade` command for v0. The package
+manager owns binary upgrades, and `matty init` owns Source checkout alignment.
 
 Dry-run commands must not mutate the Installed Source. If a dry-run detects that
 the default Installed Source is missing or stale relative to the running release,
