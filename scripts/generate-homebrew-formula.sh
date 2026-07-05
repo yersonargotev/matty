@@ -99,11 +99,6 @@ fi
 formula_version="${version#v}"
 asset_base="https://github.com/${repo}/releases/download/${version}"
 
-checksum_for() {
-  local artifact="$1"
-  awk -v artifact="$artifact" '$2 == artifact { print $1; exit }' "$checksums_path"
-}
-
 is_expected_artifact() {
   local artifact="$1"
   local expected
@@ -142,6 +137,21 @@ validate_checksum_manifest() {
       fail "duplicate checksum entry for $artifact"
     fi
     seen_artifacts="${seen_artifacts} ${artifact}"
+
+    case "$artifact" in
+      "$darwin_amd64_artifact")
+        darwin_amd64_sha="$checksum"
+        ;;
+      "$darwin_arm64_artifact")
+        darwin_arm64_sha="$checksum"
+        ;;
+      "$linux_amd64_artifact")
+        linux_amd64_sha="$checksum"
+        ;;
+      "$linux_arm64_artifact")
+        linux_arm64_sha="$checksum"
+        ;;
+    esac
   done < "$checksums_path"
 
   for expected in "${expected_artifacts[@]}"; do
@@ -149,19 +159,6 @@ validate_checksum_manifest() {
       fail "missing checksum entry for $expected"
     fi
   done
-}
-
-require_checksum() {
-  local artifact="$1"
-  local checksum
-  checksum="$(checksum_for "$artifact")"
-  if [[ -z "$checksum" ]]; then
-    fail "missing checksum entry for $artifact"
-  fi
-  if [[ ! "$checksum" =~ ^[0-9A-Fa-f]{64}$ ]]; then
-    fail "checksum entry for $artifact is not a SHA-256 hex digest"
-  fi
-  printf '%s' "$checksum"
 }
 
 darwin_amd64_artifact="matty_${version}_darwin_amd64"
@@ -176,12 +173,11 @@ expected_artifacts=(
   "$linux_arm64_artifact"
 )
 
+darwin_amd64_sha=""
+darwin_arm64_sha=""
+linux_amd64_sha=""
+linux_arm64_sha=""
 validate_checksum_manifest
-
-darwin_amd64_sha="$(require_checksum "$darwin_amd64_artifact")"
-darwin_arm64_sha="$(require_checksum "$darwin_arm64_artifact")"
-linux_amd64_sha="$(require_checksum "$linux_amd64_artifact")"
-linux_arm64_sha="$(require_checksum "$linux_arm64_artifact")"
 
 mkdir -p "$(dirname "$out_path")"
 cat > "$out_path" <<FORMULA
@@ -210,13 +206,9 @@ class Matty < Formula
     end
   end
 
-  def downloaded_binary
-    os = OS.mac? ? "darwin" : "linux"
-    arch = Hardware::CPU.arm? ? "arm64" : "amd64"
-    "matty_v#{version}_#{os}_#{arch}"
-  end
-
   def install
+    downloaded_binary = Dir["matty_*"].first
+    odie "downloaded matty binary not found" if downloaded_binary.nil?
     bin.install downloaded_binary => "matty"
   end
 

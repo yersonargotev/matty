@@ -127,16 +127,7 @@ func TestBuildReleaseArtifactsValidatesReleaseVersionBeforeBuilding(t *testing.T
 
 func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 	root := repoRoot(t)
-	checksumsPath := filepath.Join(t.TempDir(), "checksums.txt")
-	checksums := strings.Join([]string{
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  matty_v0.99.0_darwin_amd64",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  matty_v0.99.0_darwin_arm64",
-		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  matty_v0.99.0_linux_amd64",
-		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  matty_v0.99.0_linux_arm64",
-	}, "\n") + "\n"
-	if err := os.WriteFile(checksumsPath, []byte(checksums), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	checksumsPath := writeChecksumManifest(t, validFormulaChecksumLines("v0.99.0"))
 	outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
 
 	cmd := exec.Command(
@@ -174,6 +165,8 @@ func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 		`sha256 "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"`,
 		`url "https://github.com/yersonargotev/matty/releases/download/v0.99.0/matty_v0.99.0_linux_arm64", using: :nounzip`,
 		`sha256 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"`,
+		`downloaded_binary = Dir["matty_*"].first`,
+		`odie "downloaded matty binary not found" if downloaded_binary.nil?`,
 		`bin.install downloaded_binary => "matty"`,
 		`system "#{bin}/matty", "--version"`,
 	} {
@@ -188,15 +181,7 @@ func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 
 func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumEntryIsMissing(t *testing.T) {
 	root := repoRoot(t)
-	checksumsPath := filepath.Join(t.TempDir(), "checksums.txt")
-	checksums := strings.Join([]string{
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  matty_v0.99.0_darwin_amd64",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  matty_v0.99.0_darwin_arm64",
-		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  matty_v0.99.0_linux_amd64",
-	}, "\n") + "\n"
-	if err := os.WriteFile(checksumsPath, []byte(checksums), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	checksumsPath := writeChecksumManifest(t, validFormulaChecksumLines("v0.99.0")[:3])
 	outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
 
 	cmd := exec.Command(
@@ -222,13 +207,7 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumEntryIsMissing(t *testin
 
 func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumManifestIsNotExact(t *testing.T) {
 	root := repoRoot(t)
-
-	baseChecksums := []string{
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  matty_v0.99.0_darwin_amd64",
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  matty_v0.99.0_darwin_arm64",
-		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  matty_v0.99.0_linux_amd64",
-		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  matty_v0.99.0_linux_arm64",
-	}
+	baseChecksums := validFormulaChecksumLines("v0.99.0")
 
 	tests := []struct {
 		name      string
@@ -249,11 +228,8 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumManifestIsNotExact(t *te
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checksumsPath := filepath.Join(t.TempDir(), "checksums.txt")
-			checksums := strings.Join(append(baseChecksums, tt.extraLine), "\n") + "\n"
-			if err := os.WriteFile(checksumsPath, []byte(checksums), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			checksums := append(append([]string{}, baseChecksums...), tt.extraLine)
+			checksumsPath := writeChecksumManifest(t, checksums)
 			outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
 
 			cmd := exec.Command(
@@ -277,6 +253,25 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumManifestIsNotExact(t *te
 			}
 		})
 	}
+}
+
+func validFormulaChecksumLines(version string) []string {
+	return []string{
+		fmt.Sprintf("%s  matty_%s_darwin_amd64", strings.Repeat("a", sha256.Size*2), version),
+		fmt.Sprintf("%s  matty_%s_darwin_arm64", strings.Repeat("b", sha256.Size*2), version),
+		fmt.Sprintf("%s  matty_%s_linux_amd64", strings.Repeat("c", sha256.Size*2), version),
+		fmt.Sprintf("%s  matty_%s_linux_arm64", strings.Repeat("d", sha256.Size*2), version),
+	}
+}
+
+func writeChecksumManifest(t *testing.T, lines []string) string {
+	t.Helper()
+	checksumsPath := filepath.Join(t.TempDir(), "checksums.txt")
+	checksums := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(checksumsPath, []byte(checksums), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return checksumsPath
 }
 
 func fakeGoBuild(t *testing.T) (string, string) {
