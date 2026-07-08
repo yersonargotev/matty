@@ -4,8 +4,8 @@
     "wayfinder": {
       "source": "mattpocock/skills",
       "sourceType": "github",
-      "skillPath": "skills/in-progress/wayfinder/SKILL.md",
-      "computedHash": "195d37713ebe223a45b497d8a652c2209ee80286b68888d98fcfac460cf368b1"
+      "skillPath": "skills/engineering/wayfinder/SKILL.md",
+      "computedHash": "bef437de697fb6984a8a90b7fd82f128609148d6e02f635ce419d03555b351e1"
     }
   }
 }

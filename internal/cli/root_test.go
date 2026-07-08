@@ -81,7 +81,7 @@ func createSkillSource(t *testing.T) string {
 		"productivity/grilling",
 		"productivity/handoff",
 		"in-progress/loop-me",
-		"in-progress/wayfinder",
+		"engineering/wayfinder",
 	} {
 		dir := filepath.Join(root, rel)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -789,10 +789,10 @@ func hasManagedSkill(state State, name string) bool {
 	return false
 }
 
-func TestInstallFailsWhenRequiredSourceSkillMissing(t *testing.T) {
+func TestInstallFailsWhenSelectedInProgressSkillMissing(t *testing.T) {
 	home := t.TempDir()
 	sourceRoot := createSkillSource(t)
-	if err := os.RemoveAll(filepath.Join(sourceRoot, "in-progress", "wayfinder")); err != nil {
+	if err := os.RemoveAll(filepath.Join(sourceRoot, "in-progress", "loop-me")); err != nil {
 		t.Fatalf("remove source skill: %v", err)
 	}
 	opts := Options{Env: MapEnv{"HOME": home, "MATTY_SKILLS_SOURCE": sourceRoot}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
@@ -801,8 +801,8 @@ func TestInstallFailsWhenRequiredSourceSkillMissing(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected missing source skill error, got output:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "wayfinder") {
-		t.Fatalf("error = %v, want wayfinder", err)
+	if !strings.Contains(err.Error(), "loop-me") {
+		t.Fatalf("error = %v, want loop-me", err)
 	}
 	if exists(filepath.Join(home, ".agents")) || exists(filepath.Join(home, ".matty")) {
 		t.Fatalf("install mutated sandbox despite missing source skill")
@@ -1342,7 +1342,7 @@ func createMattySourceRepo(t *testing.T) string {
 		"bundle/skills/productivity/grilling/SKILL.md",
 		"bundle/skills/productivity/handoff/SKILL.md",
 		"bundle/skills/in-progress/loop-me/SKILL.md",
-		"bundle/skills/in-progress/wayfinder/SKILL.md",
+		"bundle/skills/engineering/wayfinder/SKILL.md",
 	} {
 		path := filepath.Join(repo, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
