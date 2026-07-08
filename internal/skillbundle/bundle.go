@@ -8,7 +8,7 @@ import (
 )
 
 var defaultGroups = []string{"engineering", "productivity"}
-var selectedInProgress = []string{"loop-me", "wayfinder"}
+var selectedInProgress = []string{"loop-me"}
 
 // Skill is the installer's ownership metadata for one bundled skill.
 type Skill struct {

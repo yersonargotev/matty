@@ -122,7 +122,7 @@ func createSmokeSourceRepo(t *testing.T, sandbox, version string) string {
 		"bundle/skills/productivity/grilling/SKILL.md",
 		"bundle/skills/productivity/handoff/SKILL.md",
 		"bundle/skills/in-progress/loop-me/SKILL.md",
-		"bundle/skills/in-progress/wayfinder/SKILL.md",
+		"bundle/skills/engineering/wayfinder/SKILL.md",
 	} {
 		path := filepath.Join(repo, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
