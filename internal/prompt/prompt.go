@@ -46,6 +46,10 @@ func RulesContent() string {
 For non-trivial work, load the delegation skill when available. Use it for Delegation Preflight, safe slice selection, skip reasons, and final reporting. Keep external project state in the main agent.`) + "\n"
 }
 
+func RulesSectionContent() string {
+	return sectionBlock(openMarker(mattyRulesSectionID), closeMarker(mattyRulesSectionID), RulesContent())
+}
+
 func WriteCodex(path string) (WriteResult, error) {
 	existing, err := readOptionalFile(path)
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	mattyprompt "github.com/yersonargotev/matty/internal/prompt"
 )
 
 func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
@@ -21,7 +23,7 @@ func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
 		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 	prompt := readString(t, promptPath)
-	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", "<!-- matty:rules -->", "Keep diffs surgical"} {
+	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", mattyprompt.RulesSectionContent()} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

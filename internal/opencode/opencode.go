@@ -29,7 +29,7 @@ func promptContent() string {
 - Use ask-matt at ~/.agents/skills/ask-matt as the router when you are unsure which skill or workflow applies.
 - Use Engram memory tools when available: search before past-work or project-sensitive tasks; save decisions, discoveries, bug fixes, and conventions; summarize sessions before finishing.
 - Apply host delegation rules when this OpenCode session exposes subagent/delegation tools. If unavailable, proceed inline and mention that delegation was unavailable.`)
-	return workflow + "\n\n<!-- matty:rules -->\n" + prompt.RulesContent() + "<!-- /matty:rules -->\n"
+	return workflow + "\n\n" + prompt.RulesSectionContent() + "\n"
 }
 func Write(configPath, promptPath string) (WriteResult, error) {
 	existing, err := readOptionalFile(configPath)

@@ -60,11 +60,7 @@ func TestWriteCodexAddsAndRemovesRulesSection(t *testing.T) {
 	updated := string(updatedBytes)
 	for _, want := range []string{
 		"<!-- matty:skills-router -->",
-		"<!-- matty:rules -->",
-		"## Dots Agent Rules",
-		"Keep diffs surgical",
-		"load the delegation skill",
-		"<!-- /matty:rules -->",
+		RulesSectionContent(),
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("updated prompt missing %q:\n%s", want, updated)

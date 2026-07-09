@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	mattyprompt "github.com/yersonargotev/matty/internal/prompt"
 )
 
 func TestInstallUpdateAndUninstallManageCodexPromptIdempotently(t *testing.T) {
@@ -32,7 +34,7 @@ func TestInstallUpdateAndUninstallManageCodexPromptIdempotently(t *testing.T) {
 	if strings.Count(installed, "<!-- matty:skills-router -->") != 1 {
 		t.Fatalf("install should write one Matty skills-router block:\n%s", installed)
 	}
-	if strings.Count(installed, "<!-- matty:rules -->") != 1 || !strings.Contains(installed, "Keep diffs surgical") {
+	if strings.Count(installed, mattyprompt.RulesSectionContent()) != 1 {
 		t.Fatalf("install should write one Matty rules block:\n%s", installed)
 	}
 	if !strings.Contains(installed, original) {
@@ -119,7 +121,7 @@ func TestInstallUpdateAndUninstallManageOpenCodePromptIdempotently(t *testing.T)
 	}
 	installedConfig := readFileString(t, paths.OpenCodeConfigFile)
 	installedPrompt := readFileString(t, paths.OpenCodePromptFile)
-	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", "<!-- matty:rules -->", "Keep diffs surgical"} {
+	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", mattyprompt.RulesSectionContent()} {
 		if !strings.Contains(installedPrompt, want) {
 			t.Fatalf("OpenCode prompt missing %q:\n%s", want, installedPrompt)
 		}
