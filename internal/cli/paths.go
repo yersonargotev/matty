@@ -27,6 +27,8 @@ const (
 // this derived from injected Env makes command tests independent from real HOME.
 type Paths struct {
 	HomeDir                string
+	PathEnv                string
+	HomebrewPrefixEnv      string
 	ConfigHome             string
 	MattyDir               string
 	StateFile              string
@@ -60,6 +62,8 @@ func ResolvePaths(env Env) (Paths, error) {
 	}
 	return Paths{
 		HomeDir:                home,
+		PathEnv:                env.Getenv("PATH"),
+		HomebrewPrefixEnv:      env.Getenv("HOMEBREW_PREFIX"),
 		ConfigHome:             configHome,
 		MattyDir:               mattyDir,
 		StateFile:              filepath.Join(mattyDir, "config.json"),
