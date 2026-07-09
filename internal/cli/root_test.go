@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
 
@@ -75,6 +76,12 @@ func sandboxOptions(t *testing.T) (Options, *fakeRunner, string) {
 func createSkillSource(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	createSkillSourceAt(t, root)
+	return root
+}
+
+func createSkillSourceAt(t *testing.T, root string) {
+	t.Helper()
 	for _, rel := range []string{
 		"engineering/ask-matt",
 		"engineering/codebase-design",
@@ -91,7 +98,18 @@ func createSkillSource(t *testing.T) string {
 			t.Fatalf("write skill source: %v", err)
 		}
 	}
-	return root
+}
+
+func installedSkillSourceRoot(home string) string {
+	return skillbundle.SourceRoot(DefaultInstalledSourceRoot(home))
+}
+
+func createRepoCheckoutSkillSource(t *testing.T) (string, string) {
+	t.Helper()
+	repoRoot := t.TempDir()
+	skillSource := skillbundle.SourceRoot(repoRoot)
+	createSkillSourceAt(t, skillSource)
+	return repoRoot, skillSource
 }
 
 func withVersion(t *testing.T, value string) {
@@ -275,9 +293,87 @@ func TestResolvePathsFallsBackToInstalledSourceOutsideRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePaths failed: %v", err)
 	}
-	want := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
+	want := installedSkillSourceRoot(home)
 	if paths.SkillSourceRoot != want {
 		t.Fatalf("SkillSourceRoot = %q, want %q", paths.SkillSourceRoot, want)
+	}
+}
+
+func TestInstallDryRunReportsRepoSourceAndInstalledSourceWarning(t *testing.T) {
+	home := t.TempDir()
+	repoRoot, _ := createRepoCheckoutSkillSource(t)
+	createSkillSourceAt(t, installedSkillSourceRoot(home))
+
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("chdir repo fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	out, err := executeCommand(t, NewRootCommand(opts), "install", "--dry-run")
+	if err != nil {
+		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"Skill source: repo checkout (" + paths.SkillSourceRoot + ")",
+		"warning: installed source also exists at " + installedSkillSourceRoot(home),
+		"repo checkout source may create a development-mode install",
+		"For package-installed setup, run matty install outside the repo or set MATTY_SKILLS_SOURCE explicitly.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("install --dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInstallAndUpdateReportInstalledSourceOutsideRepo(t *testing.T) {
+	home := t.TempDir()
+	createSkillSourceAt(t, installedSkillSourceRoot(home))
+	chdirTempOutsideRepo(t)
+
+	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
+	installedSkillSource := installedSkillSourceRoot(home)
+
+	for _, args := range [][]string{{"install", "--dry-run"}, {"install"}, {"update", "--dry-run"}, {"update"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), args...)
+			if err != nil {
+				t.Fatalf("command failed: %v\n%s", err, out)
+			}
+			want := "Skill source: installed source (" + installedSkillSource + ")"
+			if !strings.Contains(out, want) {
+				t.Fatalf("output missing %q:\n%s", want, out)
+			}
+			if strings.Contains(out, "development-mode install") || strings.Contains(out, "installed source also exists") {
+				t.Fatalf("installed-source flow should not warn about repo source:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestInstallDryRunReportsExplicitOverrideSource(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	sourceRoot := opts.Env.Getenv("MATTY_SKILLS_SOURCE")
+	out, err := executeCommand(t, NewRootCommand(opts), "install", "--dry-run")
+	if err != nil {
+		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
+	}
+	want := "Skill source: explicit override (MATTY_SKILLS_SOURCE=" + sourceRoot + ")"
+	if !strings.Contains(out, want) {
+		t.Fatalf("install --dry-run output missing %q:\n%s", want, out)
 	}
 }
 

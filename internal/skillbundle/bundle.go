@@ -10,6 +10,15 @@ import (
 var defaultGroups = []string{"engineering", "productivity"}
 var selectedInProgress = []string{"loop-me"}
 
+func SourceRoot(mattyRoot string) string {
+	return filepath.Join(mattyRoot, "bundle", "skills")
+}
+
+func SourceRootExists(sourceRoot string) bool {
+	info, err := os.Stat(sourceRoot)
+	return err == nil && info.IsDir()
+}
+
 // Skill is the installer's ownership metadata for one bundled skill.
 type Skill struct {
 	Name       string
