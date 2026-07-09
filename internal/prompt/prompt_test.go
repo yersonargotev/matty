@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,46 @@ func TestSectionInsertUpdateRemove(t *testing.T) {
 	}
 	if removed != existing {
 		t.Fatalf("remove should preserve original content exactly:\ngot:  %q\nwant: %q", removed, existing)
+	}
+}
+
+func TestWriteCodexAddsAndRemovesRulesSection(t *testing.T) {
+	path := t.TempDir() + "/AGENTS.md"
+	original := "# User notes\n\nKeep this.\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("write original prompt: %v", err)
+	}
+
+	if _, err := WriteCodex(path); err != nil {
+		t.Fatalf("WriteCodex failed: %v", err)
+	}
+	updatedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated prompt: %v", err)
+	}
+	updated := string(updatedBytes)
+	for _, want := range []string{
+		"<!-- matty:skills-router -->",
+		"<!-- matty:rules -->",
+		"## Dots Agent Rules",
+		"Keep diffs surgical",
+		"load the delegation skill",
+		"<!-- /matty:rules -->",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated prompt missing %q:\n%s", want, updated)
+		}
+	}
+
+	if err := RemoveCodex(path); err != nil {
+		t.Fatalf("RemoveCodex failed: %v", err)
+	}
+	removedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read removed prompt: %v", err)
+	}
+	if removed := string(removedBytes); removed != original {
+		t.Fatalf("RemoveCodex should remove all Matty sections:\ngot:  %q\nwant: %q", removed, original)
 	}
 }
 

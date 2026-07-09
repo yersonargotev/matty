@@ -21,7 +21,7 @@ func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
 		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 	prompt := readString(t, promptPath)
-	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules"} {
+	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", "<!-- matty:rules -->", "Keep diffs surgical"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

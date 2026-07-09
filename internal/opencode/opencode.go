@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/yersonargotev/matty/internal/prompt"
 )
 
 // WriteResult reports non-fatal conditions Matty noticed while preserving user
@@ -22,11 +24,12 @@ type Inspection struct {
 }
 
 func promptContent() string {
-	return strings.TrimSpace(`## Matty global workflow
+	workflow := strings.TrimSpace(`## Matty global workflow
 - Global skills live in ~/.agents/skills. When a task matches a skill, read that skill's SKILL.md before acting.
 - Use ask-matt at ~/.agents/skills/ask-matt as the router when you are unsure which skill or workflow applies.
 - Use Engram memory tools when available: search before past-work or project-sensitive tasks; save decisions, discoveries, bug fixes, and conventions; summarize sessions before finishing.
-- Apply host delegation rules when this OpenCode session exposes subagent/delegation tools. If unavailable, proceed inline and mention that delegation was unavailable.`) + "\n"
+- Apply host delegation rules when this OpenCode session exposes subagent/delegation tools. If unavailable, proceed inline and mention that delegation was unavailable.`)
+	return workflow + "\n\n<!-- matty:rules -->\n" + prompt.RulesContent() + "<!-- /matty:rules -->\n"
 }
 func Write(configPath, promptPath string) (WriteResult, error) {
 	existing, err := readOptionalFile(configPath)

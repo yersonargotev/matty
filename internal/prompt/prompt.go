@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const codexMattySectionID = "skills-router"
+const (
+	codexMattySectionID = "skills-router"
+	mattyRulesSectionID = "rules"
+)
 
 type WriteResult struct {
 	Warnings []string
@@ -26,6 +29,23 @@ func CodexContent() string {
 - Apply host delegation rules when this Codex session exposes subagent/delegation tools. If unavailable, proceed inline and mention that delegation was unavailable.`) + "\n"
 }
 
+func RulesContent() string {
+	return strings.TrimSpace(`## Dots Agent Rules
+
+| Boundary | Rule |
+| --- | --- |
+| Always | Keep diffs surgical: every changed line must trace to the user request; mention unrelated issues instead of fixing them silently. |
+| Always | Choose the simplest change that satisfies the request; avoid speculative abstractions, configurability, or features not explicitly needed. |
+| Always | Plan before editing: think through the target behavior, inspect existing patterns, and state the smallest intended change before coding. |
+| Always | Verify before declaring success: use focused checks while iterating, then run the repo-required checks when the task is complete. |
+| Always | Use sandboxed HOME/config paths for dotfiles behavior; never validate by writing to the operator's real home config. |
+| Ask first | Stop when the safe path is unclear, the scope would broaden, or an action could mutate real user configuration. |
+
+## Delegation
+
+For non-trivial work, load the delegation skill when available. Use it for Delegation Preflight, safe slice selection, skip reasons, and final reporting. Keep external project state in the main agent.`) + "\n"
+}
+
 func WriteCodex(path string) (WriteResult, error) {
 	existing, err := readOptionalFile(path)
 	if err != nil {
@@ -33,6 +53,7 @@ func WriteCodex(path string) (WriteResult, error) {
 	}
 	result := WriteResult{Warnings: DetectExternalManagedBlocks(existing)}
 	updated := upsertSection(existing, codexMattySectionID, CodexContent())
+	updated = upsertSection(updated, mattyRulesSectionID, RulesContent())
 	if updated == existing {
 		return result, nil
 	}
@@ -50,7 +71,7 @@ func InspectCodex(path string) (Inspection, error) {
 	if err != nil {
 		return Inspection{}, err
 	}
-	return Inspection{HasMattySection: strings.Contains(existing, openMarker(codexMattySectionID))}, nil
+	return Inspection{HasMattySection: strings.Contains(existing, openMarker(codexMattySectionID)) || strings.Contains(existing, openMarker(mattyRulesSectionID))}, nil
 }
 
 func RemoveCodex(path string) error {
@@ -59,6 +80,7 @@ func RemoveCodex(path string) error {
 		return err
 	}
 	updated := removeSection(existing, codexMattySectionID)
+	updated = removeSection(updated, mattyRulesSectionID)
 	if updated == existing {
 		return nil
 	}
