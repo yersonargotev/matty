@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/bootstrap"
+	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
 
@@ -148,6 +149,9 @@ func newInstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := printSkillSourceReport(cmd.OutOrStdout(), paths); err != nil {
+				return err
+			}
 			if dryRun {
 				return printDryRunPlan(cmd.OutOrStdout(), "matty install", plan)
 			}
@@ -202,6 +206,9 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := printSkillSourceReport(cmd.OutOrStdout(), paths); err != nil {
+				return err
+			}
 			if dryRun {
 				return printDryRunPlan(cmd.OutOrStdout(), "matty update", plan)
 			}
@@ -230,6 +237,34 @@ func validateUpdateInstalledSource(paths Paths) error {
 		HomeDir:       paths.HomeDir,
 		ConfigHome:    paths.ConfigHome,
 	})
+}
+
+func printSkillSourceReport(out io.Writer, paths Paths) error {
+	switch paths.SkillSourceOrigin {
+	case SkillSourceOriginOverride:
+		if _, err := fmt.Fprintf(out, "Skill source: explicit override (MATTY_SKILLS_SOURCE=%s)\n", paths.SkillSourceRoot); err != nil {
+			return err
+		}
+	case SkillSourceOriginRepo:
+		if _, err := fmt.Fprintf(out, "Skill source: repo checkout (%s)\n", paths.SkillSourceRoot); err != nil {
+			return err
+		}
+		installedSkillSource := skillbundle.SourceRoot(paths.InstalledSourceRoot)
+		if skillbundle.SourceRootExists(installedSkillSource) {
+			if _, err := fmt.Fprintf(out, "warning: installed source also exists at %s; repo checkout source may create a development-mode install. For package-installed setup, run matty install outside the repo or set MATTY_SKILLS_SOURCE explicitly.\n", installedSkillSource); err != nil {
+				return err
+			}
+		}
+	case SkillSourceOriginInstalled:
+		if _, err := fmt.Fprintf(out, "Skill source: installed source (%s)\n", paths.SkillSourceRoot); err != nil {
+			return err
+		}
+	default:
+		if _, err := fmt.Fprintf(out, "Skill source: %s\n", paths.SkillSourceRoot); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printDryRunPlan(out io.Writer, command string, plan Plan) error {
