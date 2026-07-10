@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deliver Matty Issue"
+  short_description: "Deliver a Matty issue through merge and cleanup."
+  default_prompt: "Use $deliver-matty-issue to deliver the specified Matty GitHub issue completely."
