@@ -17,6 +17,15 @@ The curated set of agent skills Matty installs or exposes for a workflow. The cu
 ### Capability pack
 A named, composable set of AI workflow capabilities that can remain available while being activated or deactivated as a unit. A capability pack may contribute skills, memory, tools, agents, rules, or other host-supported behavior; it is not a runtime configuration profile.
 
+### Pack resource
+One host-independent intent contributed by a capability pack. A CLI-surface adapter may realize one pack resource as multiple host-specific artifacts; host-native schemas, paths, and package formats are projections rather than pack resources.
+
+### Pack requirement
+A global prerequisite a capability pack consumes but does not contribute to a CLI surface. External tools such as the Engram executable are requirements; platform-specific acquisition remains Matty core behavior rather than part of the portable pack manifest.
+
+### Lifecycle resource
+A pack resource that declares behavior triggered at CLI lifecycle points. It names the portable intent while each CLI-surface adapter owns its event names, handlers, trust model, and rendered artifacts; it is not a universal hook schema.
+
 ### Memory layer
 The Engram-backed persistence and recall behaviour Matty provides across supported CLI surfaces.
 
