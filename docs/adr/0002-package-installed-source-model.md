@@ -30,7 +30,9 @@ Matty then reads the default skill bundle from:
 This mirrors the `dots init` model: package managers install the executable,
 while the first-run init command clones the repository Source of Truth into a
 stable user-data path that the executable can read from any current working
-directory.
+directory. The repository intentionally contains only Matty-owned runtime
+material; historical external reference trees are not part of the Installed
+Source.
 
 ## Why this model
 

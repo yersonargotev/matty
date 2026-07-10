@@ -17,9 +17,9 @@ The target workflow combines Matt Pocock-style skills, Engram memory, and
 explicit delegation conventions. Gentle AI has useful ideas, but its always-on
 prompt and broader SDD-first shape are heavier than desired for Matty v0.
 
-Matty also lives in a repo that contains external reference clones (`./skills`,
-`./engram`, and `./gentle-ai`). Those projects can inform design, but Matty
-runtime behavior must stay in Matty-owned folders/packages.
+Matty previously carried external reference clones (`./skills`, `./engram`, and
+`./gentle-ai`), but they were removed because they are not runtime material.
+Matty runtime behavior stays in Matty-owned folders/packages.
 
 ## Decisions
 
@@ -50,4 +50,4 @@ runtime behavior must stay in Matty-owned folders/packages.
 - Managing or migrating Gentle AI installations automatically.
 - Replacing Engram setup internals.
 - Supporting all AI coding CLIs in v0.
-- Using `./skills`, `./engram`, or `./gentle-ai` as runtime dependencies or production source roots.
+- Reintroducing external project trees as runtime dependencies or production source roots.

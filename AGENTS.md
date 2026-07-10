@@ -2,7 +2,7 @@
 
 ## Project-specific architecture rule
 
-`./skills`, `./engram`, and `./gentle-ai` are external reference projects only. Do not use them as Matty runtime/source dependencies, default install targets, or production source roots.
+The formerly vendored `./skills`, `./engram`, and `./gentle-ai` reference trees are intentionally absent. Do not reintroduce external projects as Matty runtime/source dependencies, default install targets, or production source roots.
 
 Matty-owned behavior must live in Matty-owned folders/packages. For the v0 skill bundle, use `bundle/skills` as the default source tree and keep bundle discovery behind `internal/skillbundle`; `internal/cli` should only adapt that behavior to commands/state.
 
