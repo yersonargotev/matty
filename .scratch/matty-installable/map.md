@@ -20,7 +20,7 @@ Current Matty gotcha: `ResolvePaths` defaults `SkillSourceRoot` by walking upwar
 Standing constraints:
 
 - Keep Matty-owned runtime behavior in Matty-owned folders/packages.
-- `./skills`, `./engram`, and `./gentle-ai` remain external reference projects only.
+- Do not reintroduce external reference project trees as Matty runtime/source dependencies.
 - Tests and manual checks must sandbox `HOME`, `XDG_CONFIG_HOME`, and any default installed source path.
 - Prefer small deep modules: release, bootstrap/init, and source-resolution behavior should not accumulate inside `internal/cli`.
 - `go test ./...` remains required before reporting implementation success.

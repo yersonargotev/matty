@@ -14,6 +14,7 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+	assertSourceRepositoryExcludesExternalReferenceTrees(t, root)
 	sandbox := t.TempDir()
 	home := filepath.Join(sandbox, "home")
 	xdgConfigHome := filepath.Join(sandbox, "xdg")
@@ -198,6 +199,18 @@ func runSmokeCommandAllowError(t *testing.T, binary, dir string, env []string, a
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	return string(output), err
+}
+
+func assertSourceRepositoryExcludesExternalReferenceTrees(t *testing.T, root string) {
+	t.Helper()
+	for _, name := range []string{"engram", "gentle-ai", "skills"} {
+		path := filepath.Join(root, name)
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("Matty source must not track external reference tree %s", name)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("inspect external reference tree %s: %v", name, err)
+		}
+	}
 }
 
 func assertInitializedSourceExcludesExternalReferenceTrees(t *testing.T, home string) {
