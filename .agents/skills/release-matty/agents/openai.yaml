@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Matty"
+  short_description: "Publish and verify Matty releases safely."
+  default_prompt: "Publish a verified Matty release from the latest main commit."
