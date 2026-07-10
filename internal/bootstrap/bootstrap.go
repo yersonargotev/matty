@@ -15,11 +15,12 @@ const DefaultRepositoryURL = "https://github.com/yersonargotev/matty.git"
 // Source of Truth checkout. It lives outside command construction so the CLI
 // remains an adapter around source bootstrapping behavior.
 type BootstrapOptions struct {
-	SourceRoot    string
-	RepositoryURL string
-	RepositoryRef string
-	HomeDir       string
-	ConfigHome    string
+	SourceRoot     string
+	RepositoryURL  string
+	RepositoryRef  string
+	HomeDir        string
+	ConfigHome     string
+	ReportProgress func(string) error
 }
 
 type BootstrapResult struct {
@@ -91,6 +92,9 @@ func ensureInstalledSourceRef(opts BootstrapOptions) (bool, error) {
 		return false, err
 	} else if dirty {
 		return false, fmt.Errorf("Installed Source at %s has local changes; refusing to update to %s. Commit/stash them, move it aside, or pass --source-root", opts.SourceRoot, ref)
+	}
+	if err := reportProgress(opts, fmt.Sprintf("updating Installed Source at %s to %s", opts.SourceRoot, ref)); err != nil {
+		return false, err
 	}
 	if _, err := gitOutput(opts, "fetch", "--depth", "1", "origin", ref); err != nil {
 		return false, fmt.Errorf("update Installed Source to %s: %w", ref, err)
@@ -171,6 +175,9 @@ func cloneInstalledSource(opts BootstrapOptions) error {
 		args = append(args, "--branch", opts.RepositoryRef)
 	}
 	args = append(args, opts.RepositoryURL, tmp)
+	if err := reportProgress(opts, fmt.Sprintf("cloning Installed Source into %s", opts.SourceRoot)); err != nil {
+		return err
+	}
 	if _, err := runGit(opts, args...); err != nil {
 		return fmt.Errorf("clone Matty Source of Truth: %w", err)
 	}
@@ -179,6 +186,16 @@ func cloneInstalledSource(opts BootstrapOptions) error {
 	}
 	if err := os.Rename(tmp, opts.SourceRoot); err != nil {
 		return fmt.Errorf("install cloned Matty Source of Truth: %w", err)
+	}
+	return nil
+}
+
+func reportProgress(opts BootstrapOptions, message string) error {
+	if opts.ReportProgress == nil {
+		return nil
+	}
+	if err := opts.ReportProgress(message); err != nil {
+		return fmt.Errorf("report initialization progress: %w", err)
 	}
 	return nil
 }

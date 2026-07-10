@@ -1517,7 +1517,12 @@ func TestInitClonesDefaultInstalledSourceAndIsIdempotent(t *testing.T) {
 	if !exists(filepath.Join(sourceRoot, "bundle", "skills")) {
 		t.Fatalf("init did not clone bundle/skills into %s", sourceRoot)
 	}
-	if !strings.Contains(out, "initialized Installed Source") || !strings.Contains(out, sourceRoot) {
+	for _, want := range []string{"cloning Installed Source into " + sourceRoot, "initialized Installed Source"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("init output missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, sourceRoot) {
 		t.Fatalf("init output did not report initialized source:\n%s", out)
 	}
 
@@ -1527,6 +1532,53 @@ func TestInitClonesDefaultInstalledSourceAndIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(out, "already initialized") {
 		t.Fatalf("second init did not report idempotent state:\n%s", out)
+	}
+}
+
+func TestInitReportsUpdateProgress(t *testing.T) {
+	home := t.TempDir()
+	repo := createMattySourceRepo(t)
+	runGitCommand(t, repo, "tag", "v0.1.0")
+	if err := os.WriteFile(filepath.Join(repo, "UPDATED"), []byte("updated"), 0o600); err != nil {
+		t.Fatalf("write update fixture: %v", err)
+	}
+	runGitCommand(t, repo, "add", "UPDATED")
+	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "updated")
+	runGitCommand(t, repo, "tag", "v0.2.0")
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	if out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo, "--repository-ref", "v0.1.0"); err != nil {
+		t.Fatalf("initial init failed: %v\n%s", err, out)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo, "--repository-ref", "v0.2.0")
+	if err != nil {
+		t.Fatalf("update init failed: %v\n%s", err, out)
+	}
+	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	for _, want := range []string{"updating Installed Source at " + sourceRoot + " to v0.2.0", "updated Installed Source"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("update output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInitReportsProgressAndGitContextWhenCloneFails(t *testing.T) {
+	home := t.TempDir()
+	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", filepath.Join(t.TempDir(), "missing-repository"))
+	if err == nil {
+		t.Fatalf("expected clone failure, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "cloning Installed Source into "+sourceRoot) {
+		t.Fatalf("clone failure output did not include progress:\n%s", out)
+	}
+	for _, want := range []string{"clone Matty Source of Truth", "git clone", "failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("clone failure missing %q: %v", want, err)
+		}
 	}
 }
 

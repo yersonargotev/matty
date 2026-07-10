@@ -96,6 +96,10 @@ func newInitCommand(opts Options) *cobra.Command {
 				RepositoryRef: defaultInitRepositoryRef(repositoryRef, mattyversion.Value),
 				HomeDir:       home,
 				ConfigHome:    configHome,
+				ReportProgress: func(message string) error {
+					_, err := fmt.Fprintf(cmd.OutOrStdout(), "matty init: %s\n", message)
+					return err
+				},
 			})
 			if err != nil {
 				return err
