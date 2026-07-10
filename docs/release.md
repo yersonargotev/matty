@@ -177,7 +177,8 @@ matty doctor
 - [ ] `checksums.txt` contains one SHA-256 entry for each artifact.
 - [ ] `Formula/matty.rb` in `yersonargotev/homebrew-tap` points at the same tag
       and checksums.
-- [ ] `brew install yersonargotev/tap/matty` installs the released binary.
+- [ ] When explicitly requested, a real `brew install yersonargotev/tap/matty`
+      in a controlled environment installs the released binary.
 - [ ] A sandboxed package install can run `matty init`, `matty install --dry-run`,
       `matty install`, `matty doctor`, `matty update --dry-run`, `matty update`,
       `matty uninstall --dry-run`, `matty uninstall`, and final `matty doctor`
