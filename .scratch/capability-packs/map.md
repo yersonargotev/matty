@@ -17,6 +17,8 @@ Reach an implementation-ready product and architecture specification for opt-in,
 
 <!-- Resolved ticket pointers are appended here. -->
 
+- [Map host capability surfaces](tickets/01-map-host-capability-surfaces.md) — Verified the shared skill/MCP concepts and the host-specific adapters required for every lifecycle and non-portable surface.
+
 ## Not yet specified
 
 - The exact manifest schema and resource vocabulary depend on the verified Codex/OpenCode capability matrix.
