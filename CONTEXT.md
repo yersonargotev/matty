@@ -38,6 +38,12 @@ The complete logical outcome Matty computes from the active capability packs on 
 ### Pack ownership
 Matty's recorded authority over a projected resource or config fragment. Ownership determines whether Matty may update or remove it and is distinct from the host's trust, authentication, and runtime authorization.
 
+### Reconciliation plan
+An immutable preview of the exact ordered changes needed to move one approved pack operation from freshly observed state toward pack desired state. Its identity covers the activation intent revision, relied-on observations, actions, and human-consent phases; changed inputs require a new plan and approval.
+
+### Reconciliation attempt
+One application of an approved reconciliation plan. An attempt ends verified when its outcome matches desired state, stale when its preconditions changed before any action, or recovery-required when completed and remaining effects must be reconciled from a fresh observation.
+
 ### Memory layer
 The Engram-backed persistence and recall behaviour Matty provides across supported CLI surfaces.
 

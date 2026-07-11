@@ -21,10 +21,10 @@ Reach an implementation-ready product and architecture specification for opt-in,
 - [Define pack manifest contract](tickets/02-define-pack-manifest-contract.md) — Fixed the strict portable manifest, four-resource vocabulary, and complete `matty`/`engram` proof cases.
 - [Define trust and consent boundaries](tickets/03-define-trust-and-consent-boundaries.md) — Separated previewed reconciliation from host trust, authentication, executable-code consent, and destructive human checkpoints.
 - [Place pack domain and surface seams](tickets/04-place-pack-domain-and-surface-seams.md) — Placed portable planning and ownership behind one deep capability-pack facade with sibling host adapters and narrow bundle/tool seams.
+- [Prototype reconciliation state machine](tickets/05-prototype-reconciliation-state-machine.md) — Fixed exact-plan approval, stale rejection, bounded atomicity, recovery, readiness, and shared ownership semantics.
 
 ## Not yet specified
 
-- The exact atomicity, rollback, and recovery guarantees depend on prototyping desired-state reconciliation across file writes and external setup commands.
 - The final implementation slices and blocking graph depend on the resolved module, state, lifecycle, and verification contracts.
 
 ## Out of scope
