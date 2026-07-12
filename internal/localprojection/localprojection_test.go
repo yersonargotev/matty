@@ -23,3 +23,25 @@ func TestStagingFailureRemovesOnlyTransactionCreatedDirectories(t *testing.T) {
 		t.Fatalf("transaction removed pre-existing parent: %v", err)
 	}
 }
+
+func TestExecutorDeletesOnlyExplicitTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "managed")
+	keep := filepath.Join(root, "keep")
+	if err := os.WriteFile(target, []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("unmanaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := Executor{Host: "test", FileKinds: map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionInstructionFile: true}}
+	if err := executor.Apply([]capabilitypack.ProjectionAction{{ID: "instruction:managed", Kind: capabilitypack.ActionInstructionFile, Target: target, Mode: capabilitypack.ProjectionDeleteTarget}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target remains: %v", err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "unmanaged" {
+		t.Fatalf("unmanaged file changed: %q %v", data, err)
+	}
+}

@@ -137,16 +137,83 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
+func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
+	current, err := a.InspectActivationWithResolution(ctx, active, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	retained := map[string]bool{}
+	for _, projection := range result.Projections {
+		retained[projection.ID] = true
+	}
+	configContent, err := readOptionalActivationFile(a.configFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	for _, projection := range current.Projections {
+		if retained[projection.ID] {
+			continue
+		}
+		mode := capabilitypack.ProjectionRemoveContent
+		projection.Action.Content = ""
+		switch projection.Action.Kind {
+		case capabilitypack.ActionOpenCodeSkillLink, capabilitypack.ActionOpenCodeInstructionFile:
+			mode = capabilitypack.ProjectionDeleteTarget
+		case capabilitypack.ActionOpenCodeConfigReference:
+			id := strings.TrimPrefix(projection.ID, "opencode-instruction-reference:")
+			configContent, err = opencode.RemoveInstructionProjection(configContent, a.configFile, a.instructionPath(id))
+			if err != nil {
+				return capabilitypack.ActivationObservation{}, err
+			}
+			projection.Action.Content = configContent
+		case capabilitypack.ActionOpenCodeMCPConfig:
+			id := strings.TrimPrefix(projection.ID, "mcp_server:")
+			configContent, err = opencode.RemoveMCPProjection(configContent, a.configFile, id)
+			if err != nil {
+				return capabilitypack.ActivationObservation{}, err
+			}
+			projection.Action.Content = configContent
+		}
+		projection = capabilitypack.RemovalCandidate(projection, mode, projection.Action.Content, fmt.Sprintf("remove OpenCode projection %s", projection.ID))
+		result.RemovalCandidates = append(result.RemovalCandidates, projection)
+	}
+	for i := range result.RemovalCandidates {
+		if result.RemovalCandidates[i].Action.Target == a.configFile {
+			result.RemovalCandidates[i].Action.Content = configContent
+		}
+	}
+	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	result.Revision = localprojection.FingerprintBytes([]byte(current.Revision + "\n" + result.Revision))
+	return result, nil
+}
+
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
 	for _, action := range actions {
 		switch action.Kind {
 		case capabilitypack.ActionOpenCodeConfigReference:
 			resourceID := strings.TrimPrefix(action.ID, "opencode-instruction-reference:")
+			if action.Mode == capabilitypack.ProjectionRemoveContent {
+				if err := opencode.ValidateInstructionRemoval(action.Content, a.configFile, a.instructionPath(resourceID)); err != nil {
+					return fmt.Errorf("validate staged OpenCode config removal: %w", err)
+				}
+				continue
+			}
 			if err := opencode.ValidateInstructionProjection(action.Content, a.instructionPath(resourceID)); err != nil {
 				return fmt.Errorf("validate staged OpenCode config: %w", err)
 			}
 		case capabilitypack.ActionOpenCodeMCPConfig:
 			resourceID := strings.TrimPrefix(action.ID, "mcp_server:")
+			if action.Mode == capabilitypack.ProjectionRemoveContent {
+				inspection, err := opencode.InspectMCPContent(action.Content, a.configFile, resourceID, action.Command, action.Args)
+				if err != nil || inspection.Exists {
+					return fmt.Errorf("validate staged OpenCode MCP removal: %v", err)
+				}
+				continue
+			}
 			if err := opencode.ValidateMCPProjection(action.Content, a.configFile, resourceID, action.Command, action.Args); err != nil {
 				return fmt.Errorf("validate staged OpenCode MCP config: %w", err)
 			}

@@ -17,11 +17,17 @@ const (
 	BlockerIncompatibleContribution BlockerKind    = "incompatible-contribution"
 	BlockerOwnership                BlockerKind    = "ownership"
 	BlockerGlobalRequirement        BlockerKind    = "global-requirement"
+	BlockerActiveDependent          BlockerKind    = "active-dependent"
 )
 
 type PlannedActivation struct {
 	Pack Pack
 	Role ActivationRole
+}
+
+type ActiveDependent struct {
+	PackID     string
+	Dependency string
 }
 
 type PlanBlocker struct {
@@ -200,6 +206,54 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface) 
 	}
 	sortBlockers(result.blockers)
 	return result
+}
+
+// composeWithout builds the complete desired state for a surface after one
+// active pack is removed. The requested pack is never reintroduced through a
+// dependency: callers must reject the sealed dependent facts instead.
+func (f Facade) composeWithout(requested Pack, state ActivationState, surface Surface) (composition, []ActiveDependent) {
+	targetState := cloneActivationState(state)
+	active := activeIntents(state)
+	remaining := make([]ActivationIntent, 0, len(active))
+	provided := map[string]bool{}
+	for _, capability := range requested.Provides {
+		provided[capability] = true
+	}
+	var dependents []ActiveDependent
+	for _, intent := range active {
+		if intent.Surface != surface || !intent.Active {
+			continue
+		}
+		if intent.PackID == requested.ID {
+			continue
+		}
+		remaining = append(remaining, intent)
+		if pack, err := f.catalog.Show(intent.PackID); err == nil {
+			for _, dependency := range pack.Requires.Capabilities {
+				if provided[dependency] {
+					dependents = append(dependents, ActiveDependent{PackID: pack.ID, Dependency: dependency})
+				}
+			}
+		}
+	}
+	sort.Slice(dependents, func(i, j int) bool {
+		if dependents[i].PackID == dependents[j].PackID {
+			return dependents[i].Dependency < dependents[j].Dependency
+		}
+		return dependents[i].PackID < dependents[j].PackID
+	})
+	targetState.Intents = remaining
+	targetState.Intent = ActivationIntent{Surface: surface, Revision: state.Intent.Revision}
+	if len(remaining) == 0 {
+		return composition{requested: Pack{ID: requested.ID, Surfaces: []Surface{surface}}, contributors: map[string][]string{}}, dependents
+	}
+	root, err := f.catalog.Show(remaining[0].PackID)
+	if err != nil {
+		return composition{requested: requested, contributors: map[string][]string{}, blockers: []PlanBlocker{{Kind: BlockerDependency, Subject: remaining[0].PackID, Detail: err.Error()}}}, dependents
+	}
+	result := f.compose(root, targetState, surface)
+	result.activations = nil
+	return result, dependents
 }
 
 func (c composition) identityDigest() string {

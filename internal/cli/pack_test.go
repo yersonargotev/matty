@@ -841,3 +841,141 @@ func writeCompositionBundle(t *testing.T, blocked bool) string {
 	}
 	return root
 }
+
+func TestPackDeactivateDryRunApplyAndInactiveNoOpOnBothSurfaces(t *testing.T) {
+	for _, surface := range []string{"codex", "opencode"} {
+		t.Run(surface, func(t *testing.T) {
+			terminal := &fakeTerminal{interactive: true, approve: true}
+			opts, home, _ := packActivationOptions(t, terminal)
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
+				t.Fatalf("seed: %v\n%s", err, out)
+			}
+			before := snapshotTree(t, home)
+			prompts := terminal.calls
+			out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", surface, "--dry-run")
+			if err != nil {
+				t.Fatalf("dry-run: %v\n%s", err, out)
+			}
+			for _, want := range []string{"Deactivation dry-run plan plan-", "Active version: 1.0.0", "Intent revision:", "Contributor removed:", "Phase: destructive-cleanup"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("missing %q:\n%s", want, out)
+				}
+			}
+			if terminal.calls != prompts || snapshotTree(t, home) != before {
+				t.Fatal("deactivation dry-run prompted or mutated HOME")
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", surface)
+			if err != nil || !strings.Contains(out, "Verified plan") {
+				t.Fatalf("apply: %v\n%s", err, out)
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", surface)
+			if err != nil || !strings.Contains(out, "Already converged") {
+				t.Fatalf("no-op: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestPackDeactivateRequiredPackIsBlockedWithoutPromptOrCascade(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	bundle := writeCompositionBundle(t, false)
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	for _, pack := range []string{"engram", "matty"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {
+			t.Fatalf("seed %s: %v\n%s", pack, err, out)
+		}
+	}
+	before := snapshotTree(t, home)
+	prompts := terminal.calls
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "engram", "--surface", "codex")
+	if err != nil {
+		t.Fatalf("blocked preview: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Cannot apply deactivation", "active-dependent", "matty", "cap:dep", "no automatic cascade"} {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("blocked deactivation prompted, mutated, or cascaded")
+	}
+}
+
+func TestPackDeactivateCancellationAndNonTTYHaveZeroEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal *fakeTerminal
+	}{{"cancel", &fakeTerminal{interactive: true, approve: false}}, {"non-tty", &fakeTerminal{interactive: false, approve: true}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			seed := &fakeTerminal{interactive: true, approve: true}
+			opts, home, _ := packActivationOptions(t, seed)
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
+				t.Fatalf("seed: %v\n%s", err, out)
+			}
+			opts.Terminal = tc.terminal
+			before := snapshotTree(t, home)
+			_, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", "codex")
+			if err == nil {
+				t.Fatal("unsafe deactivation succeeded")
+			}
+			if snapshotTree(t, home) != before {
+				t.Fatal("cancel/non-TTY deactivation caused effects")
+			}
+			if tc.name == "cancel" && (len(tc.terminal.prompts) != 1 || !strings.Contains(tc.terminal.prompts[0], "destructive-cleanup")) {
+				t.Fatalf("prompts=%v", tc.terminal.prompts)
+			}
+		})
+	}
+}
+
+func TestPackDeactivateRendersRemovedAndRetainedSharedContributors(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	bundle := writeUpdateBundle(t, "1.0.0")
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	for _, pack := range []string{"engram", "matty"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {
+			t.Fatalf("seed %s: %v\n%s", pack, err, out)
+		}
+	}
+	before := snapshotTree(t, home)
+	prompts := terminal.calls
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", "codex", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Contributor removed: instruction:shared <- matty", "Retained shared projection: instruction:shared <- engram (no rewrite)", "Contributors: instruction:shared <- engram"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("shared dry-run prompted or mutated")
+	}
+}
+
+func TestPackDeactivateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	for _, surface := range []string{"codex", "opencode"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
+			t.Fatalf("seed %s: %v\n%s", surface, err, out)
+		}
+	}
+	statePath := filepath.Join(home, ".matty", "packs.json")
+	beforeOwnership := ownershipForSurface(t, statePath, "opencode")
+	beforeConfig := readFileString(t, filepath.Join(home, "xdg", "opencode", "opencode.json"))
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", "codex"); err != nil {
+		t.Fatalf("deactivate: %v\n%s", err, out)
+	}
+	if got := ownershipForSurface(t, statePath, "opencode"); got != beforeOwnership {
+		t.Fatal("Codex deactivation mutated OpenCode ownership")
+	}
+	if got := readFileString(t, filepath.Join(home, "xdg", "opencode", "opencode.json")); got != beforeConfig {
+		t.Fatal("Codex deactivation mutated OpenCode config")
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", "opencode", "--dry-run"); err != nil || strings.Contains(out, "Already converged") {
+		t.Fatalf("OpenCode intent changed: %v\n%s", err, out)
+	}
+}

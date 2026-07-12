@@ -83,6 +83,57 @@ func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *tes
 	}
 }
 
+func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "bundle")
+	source := filepath.Join(bundle, "guide.md")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("guide\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "opencode.json")
+	prompt := filepath.Join(root, "guide.md")
+	if err := os.WriteFile(config, []byte("// keep\n{\n  \"model\": \"test\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
+	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
+	observed, err := adapter.InspectActivation(context.Background(), active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []capabilitypack.ProjectionAction
+	for _, projection := range observed.Projections {
+		actions = append(actions, projection.Action)
+	}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions = nil
+	for _, projection := range removal.RemovalCandidates {
+		actions = append(actions, projection.Action)
+	}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "// keep") || !strings.Contains(string(data), `"model": "test"`) || strings.Contains(string(data), prompt) {
+		t.Fatalf("config = %s", data)
+	}
+	if _, err := os.Stat(prompt); !os.IsNotExist(err) {
+		t.Fatalf("instruction remains: %v", err)
+	}
+}
+
 func TestActivationAdapterInspectDoesNotWrite(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")

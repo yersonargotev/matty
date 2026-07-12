@@ -72,3 +72,72 @@ func TestEngramProjectionIsCodexSpecificAndPreservesUnmanagedFiles(t *testing.T)
 		t.Fatalf("Engram readiness = %+v pending=%v", verified.Readiness, verified.PendingHumanActions)
 	}
 }
+
+func TestInspectDeactivationRemovesManagedBlocksAndPreservesUnmanagedCodexConfig(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "guide.md")
+	prompt := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(source, []byte("guide\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prompt, []byte("unmanaged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
+	observed, err := adapter.InspectActivation(context.Background(), active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{observed.Projections[0].Action}); err != nil {
+		t.Fatal(err)
+	}
+	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removal.RemovalCandidates) != 1 || removal.RemovalCandidates[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
+		t.Fatalf("removals = %+v", removal.RemovalCandidates)
+	}
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.RemovalCandidates[0].Action}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(prompt)
+	if err != nil || strings.TrimSpace(string(data)) != "unmanaged" {
+		t.Fatalf("prompt = %q err=%v", data, err)
+	}
+}
+
+func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.T) {
+	root := t.TempDir()
+	prompt := filepath.Join(root, "AGENTS.md")
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	content := "unmanaged\n"
+	for _, id := range []string{"one", "two"} {
+		start, end := instructionMarkers(id)
+		content = mergeBlock(content, start+"\n"+id+"\n"+end, start, end)
+	}
+	if err := os.WriteFile(prompt, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
+	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removal.RemovalCandidates) != 2 {
+		t.Fatalf("removals=%+v", removal.RemovalCandidates)
+	}
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.RemovalCandidates[0].Action, removal.RemovalCandidates[1].Action}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(prompt)
+	if strings.TrimSpace(string(got)) != "unmanaged" {
+		t.Fatalf("prompt=%q", got)
+	}
+}

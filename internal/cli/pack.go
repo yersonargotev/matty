@@ -16,7 +16,30 @@ import (
 
 func newPackCommand(opts Options) *cobra.Command {
 	cmd := &cobra.Command{Use: "pack", Short: "Discover and manage capability packs"}
-	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts))
+	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts), newPackDeactivateCommand(opts))
+	return cmd
+}
+
+func newPackDeactivateCommand(opts Options) *cobra.Command {
+	var surface string
+	var dryRun bool
+	cmd := &cobra.Command{Use: "deactivate <pack>", Short: "Deactivate a capability pack on one CLI surface", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		facade, err := activationFacade(opts)
+		if err != nil {
+			return err
+		}
+		plan, err := facade.PreviewDeactivate(cmd.Context(), capabilitypack.DeactivationRequest{PackID: args[0], Surface: capabilitypack.Surface(surface)})
+		if err != nil {
+			return err
+		}
+		if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
+			return err
+		}
+		return applyPackPlan(cmd, opts, facade, plan, dryRun)
+	}}
+	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	_ = cmd.MarkFlagRequired("surface")
 	return cmd
 }
 
@@ -154,12 +177,14 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	prefix := "Activation plan"
 	if plan.Operation() == capabilitypack.OperationUpdate {
 		prefix = "Update plan"
+	} else if plan.Operation() == capabilitypack.OperationDeactivate {
+		prefix = "Deactivation plan"
 	}
 	if dryRun {
 		prefix = strings.TrimSuffix(prefix, " plan") + " dry-run plan"
 	}
 	packLabel := plan.Pack().ID
-	if plan.Operation() != capabilitypack.OperationUpdate {
+	if plan.Operation() != capabilitypack.OperationUpdate && plan.Operation() != capabilitypack.OperationDeactivate {
 		packLabel += " " + plan.Pack().Version
 	}
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDigest: %s\nPack: %s\nSurface: %s\n", prefix, plan.ID(), plan.Digest(), packLabel, plan.Surface()); err != nil {
@@ -167,6 +192,10 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	}
 	if plan.Operation() == capabilitypack.OperationUpdate {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s -> %s (catalog-current)\nIntent revision: %d\n", plan.OldVersion(), plan.Pack().Version, plan.IntentRevision()); err != nil {
+			return err
+		}
+	} else if plan.Operation() == capabilitypack.OperationDeactivate {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Active version: %s\nIntent revision: %d\n", plan.OldVersion(), plan.IntentRevision()); err != nil {
 			return err
 		}
 	} else if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s\nIntent revision: %d\n", plan.Pack().Version, plan.IntentRevision()); err != nil {
@@ -181,6 +210,8 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		operation := "activation"
 		if plan.Operation() == capabilitypack.OperationUpdate {
 			operation = "update"
+		} else if plan.Operation() == capabilitypack.OperationDeactivate {
+			operation = "deactivation"
 		}
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply %s: %d blockers\n", operation, len(plan.Blockers())); err != nil {
 			return err
@@ -197,6 +228,17 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		return err
 	}
 	contributors := plan.Contributors()
+	removed := plan.RemovedContributors()
+	removedKeys := make([]string, 0, len(removed))
+	for id := range removed {
+		removedKeys = append(removedKeys, id)
+	}
+	sort.Strings(removedKeys)
+	for _, id := range removedKeys {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Contributor removed: %s <- %s\n", id, removed[id]); err != nil {
+			return err
+		}
+	}
 	keys := make([]string, 0, len(contributors))
 	for id := range contributors {
 		keys = append(keys, id)
@@ -227,6 +269,16 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 				description = "run: " + strings.Join(append([]string{action.Command}, action.Args...), " ") + " (" + action.Description + ")"
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", description); err != nil {
+				return err
+			}
+		}
+	}
+	if pending := plan.PendingHumanActions(); len(pending) > 0 {
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Pending human actions:"); err != nil {
+			return err
+		}
+		for _, action := range pending {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action); err != nil {
 				return err
 			}
 		}

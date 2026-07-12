@@ -99,6 +99,63 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
+func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
+	current, err := a.InspectActivationWithResolution(ctx, active, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	retained := map[string]bool{}
+	for _, projection := range result.Projections {
+		retained[projection.ID] = true
+	}
+	promptContent, err := readOptionalFile(a.promptFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	configContent, err := readOptionalFile(a.configFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	for _, projection := range current.Projections {
+		if retained[projection.ID] {
+			continue
+		}
+		mode := capabilitypack.ProjectionRemoveContent
+		content := ""
+		switch projection.Action.Kind {
+		case capabilitypack.ActionSkillLink:
+			mode = capabilitypack.ProjectionDeleteTarget
+		case capabilitypack.ActionInstructionFile:
+			id := strings.TrimPrefix(projection.ID, "instruction:")
+			start, end := instructionMarkers(id)
+			promptContent = removeBlock(promptContent, start, end)
+			content = promptContent
+		case capabilitypack.ActionCodexMCPConfig:
+			id := strings.TrimPrefix(projection.ID, "mcp_server:")
+			start, end := mcpMarkers(id)
+			configContent = removeBlock(configContent, start, end)
+			content = configContent
+		}
+		projection = capabilitypack.RemovalCandidate(projection, mode, content, fmt.Sprintf("remove Codex projection %s", projection.ID))
+		result.RemovalCandidates = append(result.RemovalCandidates, projection)
+	}
+	for i := range result.RemovalCandidates {
+		switch result.RemovalCandidates[i].Action.Target {
+		case a.promptFile:
+			result.RemovalCandidates[i].Action.Content = promptContent
+		case a.configFile:
+			result.RemovalCandidates[i].Action.Content = configContent
+		}
+	}
+	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	result.Revision = localprojection.FingerprintBytes([]byte(current.Revision + "\n" + result.Revision))
+	return result, nil
+}
+
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
 	executor := localprojection.Executor{
 		Host:         "Codex",
@@ -151,6 +208,18 @@ func mergeBlock(content, block, startMarker, endMarker string) string {
 		return block + "\n"
 	}
 	return trimmed + "\n\n" + block + "\n"
+}
+
+func removeBlock(content, startMarker, endMarker string) string {
+	existing, ok := extractBlock(content, startMarker, endMarker)
+	if !ok {
+		return content
+	}
+	updated := strings.Replace(content, existing, "", 1)
+	for strings.Contains(updated, "\n\n\n") {
+		updated = strings.ReplaceAll(updated, "\n\n\n", "\n\n")
+	}
+	return updated
 }
 
 func codexMCPTableExists(content, id string) bool {

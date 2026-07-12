@@ -21,13 +21,16 @@ var (
 type ConsentKind string
 type Operation string
 type ProjectionActionKind string
+type ProjectionActionMode string
 
 const (
 	ConsentReversibleLocal        ConsentKind          = "reversible-local"
 	ConsentExecutableExternal     ConsentKind          = "executable-external"
 	ConsentHostFollowUp           ConsentKind          = "host-follow-up"
+	ConsentDestructiveCleanup     ConsentKind          = "destructive-cleanup"
 	OperationActivate             Operation            = "activate"
 	OperationUpdate               Operation            = "update"
+	OperationDeactivate           Operation            = "deactivate"
 	ActionSkillLink               ProjectionActionKind = "skill-link"
 	ActionInstructionFile         ProjectionActionKind = "instruction-file"
 	ActionOpenCodeSkillLink       ProjectionActionKind = "opencode-skill-link"
@@ -37,6 +40,8 @@ const (
 	ActionOpenCodeMCPConfig       ProjectionActionKind = "opencode-mcp-config"
 	ActionExternalCommand         ProjectionActionKind = "external-command"
 	ActionHostFollowUp            ProjectionActionKind = "host-follow-up"
+	ProjectionRemoveContent       ProjectionActionMode = "remove-content"
+	ProjectionDeleteTarget        ProjectionActionMode = "delete-target"
 )
 
 type StalePlanError struct{ Precondition string }
@@ -50,6 +55,11 @@ type ActivationRequest struct {
 }
 
 type UpdateRequest struct {
+	PackID  string
+	Surface Surface
+}
+
+type DeactivationRequest struct {
 	PackID  string
 	Surface Surface
 }
@@ -93,6 +103,16 @@ type ProjectionAction struct {
 	Content     string               `json:"content,omitempty"`
 	Command     string               `json:"command,omitempty"`
 	Args        []string             `json:"args,omitempty"`
+	Mode        ProjectionActionMode `json:"mode,omitempty"`
+}
+
+func RemovalCandidate(projection ObservedProjection, mode ProjectionActionMode, content, description string) ObservedProjection {
+	projection.DesiredFingerprint = "missing"
+	projection.Action.Source = ""
+	projection.Action.Content = content
+	projection.Action.Mode = mode
+	projection.Action.Description = description
+	return projection
 }
 
 type ObservedProjection struct {
@@ -108,6 +128,7 @@ type ActivationObservation struct {
 	Projections         []ObservedProjection
 	Readiness           ReadinessStatus
 	PendingHumanActions []string
+	RemovalCandidates   []ObservedProjection
 }
 
 type ActivationAdapter interface {
@@ -121,6 +142,26 @@ type ActivationAdapter interface {
 // production Codex/OpenCode adapters use the exact sealed executable.
 type ResolutionAwareActivationAdapter interface {
 	InspectActivationWithResolution(context.Context, Pack, []ExecutableResolution) (ActivationObservation, error)
+}
+
+type DeactivationAwareActivationAdapter interface {
+	InspectDeactivation(context.Context, Pack, Pack, []ExecutableResolution) (ActivationObservation, error)
+}
+
+func inspectDeactivation(ctx context.Context, adapter ActivationAdapter, active, desired Pack, resolutions []ExecutableResolution) (ActivationObservation, error) {
+	if aware, ok := adapter.(DeactivationAwareActivationAdapter); ok {
+		observation, err := aware.InspectDeactivation(ctx, active, desired, resolutions)
+		if err != nil {
+			return ActivationObservation{}, err
+		}
+		for i := range observation.RemovalCandidates {
+			observation.RemovalCandidates[i].DesiredFingerprint = ""
+		}
+		observation.Projections = append(observation.Projections, observation.RemovalCandidates...)
+		observation.RemovalCandidates = nil
+		return observation, nil
+	}
+	return inspectActivation(ctx, adapter, desired, resolutions)
 }
 
 type ActivationIntent struct {
@@ -225,6 +266,9 @@ type ReconciliationPlan struct {
 	compositionFacts       []Pack
 	intentFacts            []ActivationIntent
 	ownershipFacts         []ProjectionOwnership
+	activeDependents       []ActiveDependent
+	beforeCompositionFacts []Pack
+	removedContributors    map[string]string
 }
 
 type RetainedProjection struct {
@@ -265,6 +309,13 @@ func (p ReconciliationPlan) Contributors() map[string][]string {
 	result := make(map[string][]string, len(p.contributors))
 	for id, contributors := range p.contributors {
 		result[id] = append([]string(nil), contributors...)
+	}
+	return result
+}
+func (p ReconciliationPlan) RemovedContributors() map[string]string {
+	result := make(map[string]string, len(p.removedContributors))
+	for id, contributor := range p.removedContributors {
+		result[id] = contributor
 	}
 	return result
 }
@@ -331,6 +382,94 @@ func (f Facade) PreviewUpdate(ctx context.Context, request UpdateRequest) (Recon
 		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is not active on %s", request.PackID, request.Surface)
 	}
 	return f.preview(ctx, activation, OperationUpdate, intent.Version)
+}
+
+func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationRequest) (ReconciliationPlan, error) {
+	activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface}
+	requested, adapter, state, err := f.activationInputs(ctx, activation)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	intent, active := intentForPack(state, request.PackID, request.Surface)
+	oldVersion := requested.Version
+	if active && intent.Version != "" {
+		oldVersion = intent.Version
+	}
+	before := f.compose(requested, state, request.Surface)
+	target, dependents := f.composeWithout(requested, state, request.Surface)
+	combined := target.combinedPack()
+	resolutions, err := f.resolveExecutables(ctx, before.combinedPack())
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	observation, err := inspectDeactivation(ctx, adapter, before.combinedPack(), combined, resolutions)
+	if err != nil {
+		return ReconciliationPlan{}, fmt.Errorf("inspect deactivation of pack %q on %s: %w", requested.ID, request.Surface, err)
+	}
+	plan := ReconciliationPlan{pack: requested, operation: OperationDeactivate, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, contributors: target.contributors, compositionFacts: target.packs, beforeCompositionFacts: before.packs, intentFacts: target.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), activeDependents: dependents, removedContributors: map[string]string{}}
+	for id, contributors := range before.contributors {
+		for _, contributor := range contributors {
+			if contributor == requested.ID {
+				plan.removedContributors[id] = contributor
+			}
+		}
+	}
+	for _, dependent := range dependents {
+		plan.blockers = append(plan.blockers, PlanBlocker{Kind: BlockerActiveDependent, Subject: requested.ID, Detail: fmt.Sprintf("cannot deactivate requested pack %s: active pack %s still requires capability/dependency %s; no automatic cascade will occur", requested.ID, dependent.PackID, dependent.Dependency)})
+	}
+	plan.blockers = append(plan.blockers, target.blockers...)
+	sortBlockers(plan.blockers)
+	for _, resource := range combined.Resources {
+		plan.portable = append(plan.portable, PortableOutcome{Kind: resource.Kind, ID: resource.ID})
+	}
+	for _, projection := range observation.Projections {
+		contributors := target.contributorSet(projection.ID)
+		if projection.DesiredFingerprint != "" {
+			plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint})
+			if projection.Exists && projection.ObservedFingerprint == projection.DesiredFingerprint {
+				plan.retained = append(plan.retained, RetainedProjection{ID: projection.ID, Contributors: contributors})
+			} else {
+				detail := fmt.Sprintf("preserved shared projection %s because it is missing, drifted, ambiguous, unmanaged, or ownership no longer matches", projection.ID)
+				plan.pendingHumanActions = append(plan.pendingHumanActions, detail)
+				plan.blockers = append(plan.blockers, PlanBlocker{Kind: BlockerOwnership, Subject: projection.ID, Detail: detail})
+			}
+			continue
+		}
+		owner, owned := ownershipByID(state.Ownership, projection.ID)
+		if active && intent.Active && projection.Exists && owned && len(owner.Contributors) == 1 && owner.Contributors[0] == requested.ID && owner.Fingerprint == projection.ObservedFingerprint {
+			plan.phases = appendPhaseAction(plan.phases, ConsentDestructiveCleanup, projection.Action)
+			continue
+		}
+		if projection.Exists {
+			plan.pendingHumanActions = append(plan.pendingHumanActions, fmt.Sprintf("preserved %s because it is drifted, ambiguous, unmanaged, or ownership no longer matches", projection.ID))
+		}
+	}
+	if !active || !intent.Active {
+		plan.noOp = len(plan.phases) == 0 && len(plan.pendingHumanActions) == 0 && !hasContributor(state.Ownership, requested.ID)
+		if !plan.noOp {
+			plan.blockers = append(plan.blockers, PlanBlocker{Kind: BlockerOwnership, Subject: requested.ID, Detail: fmt.Sprintf("inactive pack %s has partial, drifted, or residual state; preserved it without starting general reconcile", requested.ID)})
+		}
+	}
+	sortBlockers(plan.blockers)
+	if len(plan.blockers) > 0 {
+		plan.phases = nil
+		plan.noOp = false
+	}
+	sort.Slice(plan.retained, func(i, j int) bool { return plan.retained[i].ID < plan.retained[j].ID })
+	sort.Strings(plan.pendingHumanActions)
+	plan.seal()
+	return plan, nil
+}
+
+func hasContributor(values []ProjectionOwnership, packID string) bool {
+	for _, value := range values {
+		for _, contributor := range value.Contributors {
+			if contributor == packID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (f Facade) preview(ctx context.Context, request ActivationRequest, operation Operation, oldVersion string) (ReconciliationPlan, error) {
@@ -470,13 +609,17 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	actions := flattenActions(request.Plan.phases)
 	state.SchemaVersion = 1
 	previousIntents := activeIntents(state)
-	state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: pack.Version, Active: true, Revision: state.Intent.Revision + 1}
+	activeTarget := request.Plan.operation != OperationDeactivate
+	state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: pack.Version, Active: activeTarget, Revision: state.Intent.Revision + 1}
 	byID := map[string]ActivationIntent{}
 	for _, intent := range previousIntents {
 		byID[intent.PackID] = intent
 	}
 	for _, activation := range request.Plan.activations {
 		byID[activation.Pack.ID] = ActivationIntent{PackID: activation.Pack.ID, Surface: request.Plan.surface, Version: activation.Pack.Version, Active: true, Revision: state.Intent.Revision}
+	}
+	if request.Plan.operation == OperationDeactivate {
+		byID[pack.ID] = state.Intent
 	}
 	state.Intents = nil
 	for _, intent := range byID {
@@ -503,11 +646,24 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 			return ApplyResult{}, err
 		}
 	}
+	destructiveActions := phaseActions(request.Plan.phases, ConsentDestructiveCleanup)
+	if len(destructiveActions) > 0 {
+		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
+			state.Journal.FailedAction = "destructive-cleanup"
+			state.Journal.FailureDetail = err.Error()
+			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
+			return ApplyResult{}, err
+		}
+	}
 	verified, err := inspectActivation(ctx, adapter, combined, resolutions)
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	if !verificationMatches(request.Plan.desired, verified.Projections) {
+	verifiedMatches := verificationMatches(request.Plan.desired, verified.Projections)
+	if request.Plan.operation == OperationDeactivate {
+		verifiedMatches = verificationMatchesDeactivation(request.Plan.desired, verified.Projections)
+	}
+	if !verifiedMatches {
 		state.Journal.FailedAction = "verify-reversible-local"
 		state.Journal.FailureDetail = verificationMismatch(request.Plan.desired, verified.Projections)
 		if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
@@ -556,6 +712,9 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	state.Journal = nil
 	state.Ownership = make([]ProjectionOwnership, 0, len(verified.Projections))
 	for _, projection := range verified.Projections {
+		if projection.DesiredFingerprint == "" {
+			continue
+		}
 		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: currentComposition.contributorSet(projection.ID), Fingerprint: projection.DesiredFingerprint})
 	}
 	sort.Slice(state.Ownership, func(i, j int) bool { return state.Ownership[i].ID < state.Ownership[j].ID })
@@ -590,6 +749,14 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 		return planPreflight{}, err
 	}
 	current := f.compose(pack, state, plan.surface)
+	if plan.operation == OperationDeactivate {
+		before := current
+		target, dependents := f.composeWithout(pack, state, plan.surface)
+		if digestJSON(before.packs) != digestJSON(plan.beforeCompositionFacts) || digestJSON(dependents) != digestJSON(plan.activeDependents) {
+			return planPreflight{}, StalePlanError{Precondition: "dependency closure or active dependents changed after Preview; rerun deactivate to preview a fresh plan"}
+		}
+		current = target
+	}
 	planned := composition{packs: plan.compositionFacts, activations: plan.activations, contributors: plan.contributors, blockers: plan.blockers, intentFacts: plan.intentFacts}
 	if current.identityDigest() != planned.identityDigest() {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("dependency or catalog composition changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
@@ -598,14 +765,24 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("projection ownership changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 	}
 	combined := current.combinedPack()
-	resolutions, err := f.resolveExecutables(ctx, combined)
+	resolutionPack := combined
+	if plan.operation == OperationDeactivate {
+		resolutionPack = composition{requested: pack, packs: plan.beforeCompositionFacts}.combinedPack()
+	}
+	resolutions, err := f.resolveExecutables(ctx, resolutionPack)
 	if err != nil {
 		return planPreflight{}, err
 	}
 	if !sameResolutions(plan.resolutions, resolutions) {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("executable resolution changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 	}
-	observation, err := inspectActivation(ctx, adapter, combined, resolutions)
+	var observation ActivationObservation
+	if plan.operation == OperationDeactivate {
+		before := composition{requested: pack, packs: plan.beforeCompositionFacts}.combinedPack()
+		observation, err = inspectDeactivation(ctx, adapter, before, combined, resolutions)
+	} else {
+		observation, err = inspectActivation(ctx, adapter, combined, resolutions)
+	}
 	if err != nil {
 		return planPreflight{}, err
 	}
@@ -684,7 +861,29 @@ func (p ReconciliationPlan) sealPayload() any {
 		Composition     []Pack
 		IntentFacts     []ActivationIntent
 		OwnershipFacts  []ProjectionOwnership
-	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.oldVersion, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.retained, p.blockers, p.compositionFacts, p.intentFacts, p.ownershipFacts}
+		Dependents      []ActiveDependent
+		Before          []Pack
+		Removed         map[string]string
+	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.oldVersion, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.retained, p.blockers, p.compositionFacts, p.intentFacts, p.ownershipFacts, p.activeDependents, p.beforeCompositionFacts, p.removedContributors}
+}
+
+func ownershipByID(values []ProjectionOwnership, id string) (ProjectionOwnership, bool) {
+	for _, value := range values {
+		if value.ID == id {
+			return value, true
+		}
+	}
+	return ProjectionOwnership{}, false
+}
+
+func appendPhaseAction(phases []PlanPhase, kind ConsentKind, action ProjectionAction) []PlanPhase {
+	for i := range phases {
+		if phases[i].Kind == kind {
+			phases[i].Actions = append(phases[i].Actions, action)
+			return phases
+		}
+	}
+	return append(phases, PlanPhase{Kind: kind, ApprovalRequired: true, Actions: []ProjectionAction{action}})
 }
 
 func cloneOwnership(values []ProjectionOwnership) []ProjectionOwnership {
@@ -764,6 +963,26 @@ func verificationMatches(expected []projectionExpectation, values []ObservedProj
 	for _, want := range expected {
 		value, ok := byID[want.ID]
 		if !ok || value.DesiredFingerprint != want.Fingerprint || value.ObservedFingerprint != want.Fingerprint {
+			return false
+		}
+	}
+	return true
+}
+
+func verificationMatchesDeactivation(expected []projectionExpectation, values []ObservedProjection) bool {
+	byID := map[string]ObservedProjection{}
+	for _, value := range values {
+		byID[value.ID] = value
+	}
+	for _, want := range expected {
+		value, ok := byID[want.ID]
+		if !ok || value.ObservedFingerprint != want.Fingerprint || value.DesiredFingerprint != want.Fingerprint {
+			return false
+		}
+		delete(byID, want.ID)
+	}
+	for _, value := range byID {
+		if value.Exists {
 			return false
 		}
 	}

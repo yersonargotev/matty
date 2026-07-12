@@ -60,6 +60,14 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 		temp := filepath.Join(filepath.Dir(action.Target), ".matty-stage-"+FingerprintBytes([]byte(string(action.Kind) + ":" + action.ID))[:12])
 		_ = os.RemoveAll(temp)
 		items = append(items, stagedAction{action: action, temp: temp, backup: temp + ".backup"})
+		if action.Mode == capabilitypack.ProjectionDeleteTarget {
+			_, err := os.Lstat(action.Target)
+			items[len(items)-1].hadTarget = err == nil
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
 		switch {
 		case e.SymlinkKinds[action.Kind]:
 			if err := os.Symlink(action.Source, temp); err != nil {
@@ -96,6 +104,10 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 				}
 				return err
 			}
+		}
+		if item.action.Mode == capabilitypack.ProjectionDeleteTarget {
+			committed++
+			continue
 		}
 		if err := os.Rename(item.temp, item.action.Target); err != nil {
 			if item.hadTarget {

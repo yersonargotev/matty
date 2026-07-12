@@ -868,6 +868,12 @@ func MergeInstructionProjection(existing, configPath, promptPath string) (string
 	return mergeInstruction(existing, configPath, promptPath)
 }
 
+// RemoveInstructionProjection removes only the requested Matty instruction
+// reference while preserving unrelated JSONC content and comments.
+func RemoveInstructionProjection(existing, configPath, promptPath string) (string, error) {
+	return removeInstruction(existing, configPath, promptPath)
+}
+
 // ValidateInstructionProjection checks the staged host syntax and required
 // instruction reference before the adapter commits any local projection.
 func ValidateInstructionProjection(content, promptPath string) error {
@@ -889,4 +895,29 @@ func ValidateInstructionProjection(content, promptPath string) error {
 		}
 	}
 	return fmt.Errorf("OpenCode config projection is missing instruction reference %q", promptPath)
+}
+
+// ValidateInstructionRemoval checks that the staged config no longer refers
+// to the removed instruction while leaving other instructions unconstrained.
+func ValidateInstructionRemoval(content, configPath, promptPath string) error {
+	jsonData, err := jsoncToJSON(content)
+	if err != nil {
+		return err
+	}
+	config := map[string]any{}
+	if strings.TrimSpace(content) != "" {
+		if err := json.Unmarshal(jsonData, &config); err != nil {
+			return fmt.Errorf("read OpenCode config %s: invalid JSONC: %w", configPath, err)
+		}
+	}
+	instructions, err := instructionStrings(config["instructions"])
+	if err != nil {
+		return err
+	}
+	for _, instruction := range instructions {
+		if instruction == promptPath {
+			return fmt.Errorf("OpenCode config projection still contains instruction reference %q", promptPath)
+		}
+	}
+	return nil
 }

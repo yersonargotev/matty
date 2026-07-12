@@ -93,6 +93,48 @@ func MergeMCPProjection(existing, configPath, id, command string, args []string)
 	return insertObjectProperty(existing, close, inferPropertyIndent(existing, close), "mcp", "{\n    \""+id+"\": "+compactJSON(server)+"\n  }", len(config) > 0), nil
 }
 
+// RemoveMCPProjection removes one server member while preserving the
+// surrounding JSONC text, comments, and unrelated host configuration.
+func RemoveMCPProjection(existing, configPath, id string) (string, error) {
+	if strings.TrimSpace(existing) == "" {
+		return existing, nil
+	}
+	config, err := decodeConfig(existing, configPath)
+	if err != nil {
+		return "", err
+	}
+	value, ok := config["mcp"]
+	if !ok {
+		return existing, nil
+	}
+	servers, ok := value.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("read OpenCode config %s: mcp must be an object", configPath)
+	}
+	if _, ok := servers[id]; !ok {
+		return existing, nil
+	}
+	mcp, found, err := findTopLevelProperty(existing, "mcp")
+	if err != nil || !found {
+		return "", err
+	}
+	objectStart := skipWhitespaceAndComments(existing, mcp.valueStart)
+	objectEnd, err := endJSONValue(existing, objectStart)
+	if err != nil {
+		return "", err
+	}
+	object := existing[objectStart:objectEnd]
+	member, found, err := findTopLevelProperty(object, id)
+	if err != nil || !found {
+		return "", err
+	}
+	member.propertyStart += objectStart
+	member.propertyEnd += objectStart
+	member.valueStart += objectStart
+	member.valueEnd += objectStart
+	return removeProperty(existing, member), nil
+}
+
 func ValidateMCPProjection(content, configPath, id, command string, args []string) error {
 	inspection, err := InspectMCPContent(content, configPath, id, command, args)
 	if err != nil {
