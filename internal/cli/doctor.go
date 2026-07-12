@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,18 @@ import (
 	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/prompt"
 )
+
+// ErrDoctorUnhealthy identifies a completed diagnostic report containing one
+// or more failed health checks. Warnings alone do not make a report unhealthy.
+var ErrDoctorUnhealthy = errors.New("doctor found failed health checks")
+
+type doctorHealthError struct{ failedChecks int }
+
+func (err doctorHealthError) Error() string {
+	return fmt.Sprintf("%s: %d", ErrDoctorUnhealthy, err.failedChecks)
+}
+
+func (err doctorHealthError) Unwrap() error { return ErrDoctorUnhealthy }
 
 type doctorStatus string
 
@@ -51,10 +64,17 @@ func RunDoctor(w io.Writer, paths Paths, runner Runner) error {
 		checks = append(checks, openCodeChecks...)
 	}
 
+	failedChecks := 0
 	for _, check := range checks {
 		if _, err := fmt.Fprintf(w, "%s %s: %s\n", check.status, check.name, check.detail); err != nil {
 			return err
 		}
+		if check.status == doctorFail {
+			failedChecks++
+		}
+	}
+	if failedChecks > 0 {
+		return doctorHealthError{failedChecks: failedChecks}
 	}
 	return nil
 }

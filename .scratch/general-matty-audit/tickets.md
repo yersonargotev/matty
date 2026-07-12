@@ -22,11 +22,11 @@ Work the **frontier**: any ticket whose blockers are all done. Several tickets c
 
 **Blocked by:** None — can start immediately.
 
-- [ ] A doctor report containing at least one `FAIL` returns a documented non-success result.
-- [ ] A report containing only `PASS` and `WARN` checks follows an explicit, tested success policy.
-- [ ] Corrupt configuration and missing required executable cases are covered at the public command boundary.
-- [ ] The command remains inspection-only and does not mutate user configuration.
-- [ ] Compatibility implications of changing the default exit status are resolved explicitly; if a separate health gate is chosen, its name and behavior are stable and documented.
+- [x] A doctor report containing at least one `FAIL` returns a documented non-success result.
+- [x] A report containing only `PASS` and `WARN` checks follows an explicit, tested success policy.
+- [x] Corrupt configuration and missing required executable cases are covered at the public command boundary.
+- [x] The command remains inspection-only and does not mutate user configuration.
+- [x] Compatibility implications of changing the default exit status are resolved explicitly; if a separate health gate is chosen, its name and behavior are stable and documented.
 
 ## Persist classic lifecycle state atomically
 

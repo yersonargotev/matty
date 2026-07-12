@@ -856,7 +856,7 @@ func TestDoctorReportsStateStatusWithoutCreatingState(t *testing.T) {
 	opts, _, home := sandboxOptions(t)
 	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
 	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
+		t.Fatalf("doctor with only PASS and WARN checks failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "MATTY_STATE_STATUS=missing") {
 		t.Fatalf("doctor did not report missing state:\n%s", out)
@@ -987,11 +987,27 @@ func TestDoctorReportsCorruptStateAsFailedCheck(t *testing.T) {
 	}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor should report corrupt state without command failure: %v\n%s", err, out)
+	if !errors.Is(err, ErrDoctorUnhealthy) {
+		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
 	}
 	if !strings.Contains(out, "FAIL matty-state:") || !strings.Contains(out, "invalid JSON") {
 		t.Fatalf("doctor did not report corrupt state as failed check:\n%s", out)
+	}
+}
+
+func TestDoctorReportsMissingRequiredExecutableAndFailsHealthGate(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	opts.Runner = &fakeRunner{}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
+	if !errors.Is(err, ErrDoctorUnhealthy) {
+		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
+	}
+	if !strings.Contains(out, "FAIL engram-binary: engram is not available on PATH") {
+		t.Fatalf("doctor did not preserve the missing executable report:\n%s", out)
+	}
+	if !strings.Contains(out, "WARN opencode-config:") {
+		t.Fatalf("doctor stopped rendering after the failed check:\n%s", out)
 	}
 }
 
@@ -1011,8 +1027,8 @@ func TestDoctorReportsIncompleteEngramSetupExpectationsAsFailedCheck(t *testing.
 	}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
+	if !errors.Is(err, ErrDoctorUnhealthy) {
+		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
 	}
 	if !strings.Contains(out, "FAIL engram-setup:") || !strings.Contains(out, "Codex and OpenCode setup expectations") {
 		t.Fatalf("doctor did not fail incomplete Engram setup expectations:\n%s", out)
@@ -1033,8 +1049,8 @@ func TestDoctorReportsOpenCodeInspectErrorsUnderConfigCheck(t *testing.T) {
 	}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
+	if !errors.Is(err, ErrDoctorUnhealthy) {
+		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
 	}
 	if !strings.Contains(out, "FAIL opencode-config:") || strings.Contains(out, "FAIL opencode:") {
 		t.Fatalf("doctor did not report OpenCode inspect error under opencode-config:\n%s", out)
