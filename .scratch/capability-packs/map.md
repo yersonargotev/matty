@@ -23,10 +23,14 @@ Reach an implementation-ready product and architecture specification for opt-in,
 - [Place pack domain and surface seams](tickets/04-place-pack-domain-and-surface-seams.md) — Placed portable planning and ownership behind one deep capability-pack facade with sibling host adapters and narrow bundle/tool seams.
 - [Prototype reconciliation state machine](tickets/05-prototype-reconciliation-state-machine.md) — Fixed exact-plan approval, stale rejection, bounded atomicity, recovery, readiness, and shared ownership semantics.
 - [Prototype pack lifecycle UX](tickets/06-prototype-pack-lifecycle-ux.md) — Fixed the grouped interactive lifecycle, typed approvals, status/readiness, blocker, stale, no-op, and recovery experience.
+- [Specify Matty and Engram packs](tickets/07-specify-matty-and-engram-packs.md) — Assigned the initial portable resources and kept acquisition, inspection, and lifecycle management in Matty core.
+- [Define verification and cutover](tickets/08-define-verification-and-cutover.md) — Fixed the sandboxed lifecycle matrix and explicit, migration-free manual transition.
+- [Finalize implementation contract](tickets/09-finalize-implementation-contract.md) — Published the ready-for-agent specification and tracer-bullet implementation graph.
 
-## Not yet specified
+## Completion
 
-- The final implementation slices and blocking graph depend on the resolved module, state, lifecycle, and verification contracts.
+- The specification and all tracer-bullet implementation slices are complete.
+- Final rollout validation was committed as `2691613 docs: validate capability pack rollout`.
 
 ## Out of scope
 

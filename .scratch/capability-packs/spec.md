@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: implemented
 
 # Capability packs specification
 
