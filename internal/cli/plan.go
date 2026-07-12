@@ -11,6 +11,7 @@ import (
 
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencode"
+	"github.com/yersonargotev/matty/internal/ownedcontainer"
 	"github.com/yersonargotev/matty/internal/prompt"
 )
 
@@ -26,6 +27,7 @@ const (
 	ActionRemoveOpenCodePrompt ActionKind = "remove-opencode-prompt"
 	ActionRun                  ActionKind = "run"
 	ActionSkip                 ActionKind = "skip"
+	ActionCleanup              ActionKind = "cleanup"
 )
 
 func (kind ActionKind) refreshesDuringUpdate() bool {
@@ -45,7 +47,7 @@ func (action PlannedAction) printDetail(w io.Writer) error {
 		cmd := strings.Join(append([]string{action.Command}, action.Args...), " ")
 		_, err := fmt.Fprintf(w, " (%s)\n", cmd)
 		return err
-	case ActionWriteFile, ActionWriteCodexPrompt, ActionRemove, ActionRemoveCodexPrompt, ActionSkip:
+	case ActionWriteFile, ActionWriteCodexPrompt, ActionRemove, ActionRemoveCodexPrompt, ActionSkip, ActionCleanup:
 		_, err := fmt.Fprintf(w, " (%s)\n", action.Path)
 		return err
 	default:
@@ -69,6 +71,7 @@ type PlannedAction struct {
 type Plan struct {
 	Actions []PlannedAction
 	State   State
+	cleanup ownedcontainer.Plan
 }
 
 func BuildInstallPlan(paths Paths, checkedAt time.Time, engramInstalled bool) (Plan, error) {
@@ -250,7 +253,11 @@ func BuildUninstallPlan(paths Paths, state State) Plan {
 	actions = append(actions, PlannedAction{Kind: ActionRemove, Path: paths.StateFile, Description: "remove Matty state metadata"})
 	actions = append(actions, PlannedAction{Kind: ActionRemoveCodexPrompt, Path: paths.CodexPromptFile, Description: "remove Codex Matty prompt markers"})
 	actions = append(actions, PlannedAction{Kind: ActionRemoveOpenCodePrompt, Path: paths.OpenCodeConfigFile, Target: paths.OpenCodePromptFile, Description: "remove OpenCode Matty prompt reference"})
-	return Plan{Actions: actions, State: state}
+	cleanup, _ := ownedcontainer.Preview(authorizedContainers(paths, state.CreatedContainers))
+	for _, record := range cleanup.Records() {
+		actions = append(actions, PlannedAction{Kind: ActionCleanup, Path: record.Path, Description: "remove Matty-created container if empty; preserve if non-empty, unmanaged, contributor-owned, or changed after preview"})
+	}
+	return Plan{Actions: actions, State: state, cleanup: cleanup}
 }
 
 func UninstallPlanHasWork(paths Paths, state State) bool {
@@ -335,6 +342,18 @@ func unmanagedSymlinkRecoveryAdvice() string {
 }
 
 func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner) ([]string, error) {
+	previous, _, err := LoadState(paths.StateFile)
+	if err != nil {
+		return nil, err
+	}
+	created, err := ownedcontainer.Provision(containerRecords(paths))
+	if err != nil {
+		return nil, err
+	}
+	plan.State.CreatedContainers = ownedcontainer.Merge(previous.CreatedContainers, created)
+	if err := SaveState(paths.StateFile, plan.State); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
 	}
@@ -402,6 +421,9 @@ func actionRunError(action PlannedAction, err error) error {
 }
 
 func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {
+	if err := plan.cleanup.Verify(); err != nil {
+		return err
+	}
 	for _, action := range plan.Actions {
 		if !action.Kind.appliesDuringUninstall() {
 			continue
@@ -428,5 +450,37 @@ func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {
 			return fmt.Errorf("remove skill symlink %s: %w", action.Path, err)
 		}
 	}
+	if _, err := plan.cleanup.Cleanup(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func containerRecords(paths Paths) []ownedcontainer.Record {
+	return []ownedcontainer.Record{
+		{Path: paths.MattyDir, Kind: ownedcontainer.Directory},
+		{Path: filepath.Dir(paths.AgentSkillsDir), Kind: ownedcontainer.Directory},
+		{Path: paths.AgentSkillsDir, Kind: ownedcontainer.Directory},
+		{Path: filepath.Dir(paths.CodexPromptFile), Kind: ownedcontainer.Directory},
+		{Path: paths.ConfigHome, Kind: ownedcontainer.Directory},
+		{Path: filepath.Dir(paths.OpenCodeConfigFile), Kind: ownedcontainer.Directory},
+		{Path: paths.StateFile, Kind: ownedcontainer.File},
+		{Path: paths.CodexPromptFile, Kind: ownedcontainer.File},
+		{Path: paths.OpenCodeConfigFile, Kind: ownedcontainer.File},
+		{Path: paths.OpenCodePromptFile, Kind: ownedcontainer.File},
+	}
+}
+
+func authorizedContainers(paths Paths, records []ownedcontainer.Record) []ownedcontainer.Record {
+	allowed := make(map[string]struct{})
+	for _, record := range containerRecords(paths) {
+		allowed[filepath.Clean(record.Path)] = struct{}{}
+	}
+	authorized := make([]ownedcontainer.Record, 0, len(records))
+	for _, record := range records {
+		if _, ok := allowed[filepath.Clean(record.Path)]; ok {
+			authorized = append(authorized, record)
+		}
+	}
+	return authorized
 }

@@ -57,8 +57,8 @@ Work the **frontier**: any ticket whose blockers are all done. Four tickets can 
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Matty records or otherwise proves which empty container files and directories it created before removing them.
-- [ ] Uninstall removes newly-created empty Matty state, skill, Codex, and OpenCode containers when they contain no unmanaged content.
-- [ ] Pre-existing containers, non-empty files, and contributor-owned content are preserved byte-for-byte.
-- [ ] Dry-run reports cleanup candidates without mutating the filesystem.
-- [ ] A sandboxed install/uninstall lifecycle verifies both pristine cleanup and preservation cases.
+- [x] Matty records or otherwise proves which empty container files and directories it created before removing them.
+- [x] Uninstall removes newly-created empty Matty state, skill, Codex, and OpenCode containers when they contain no unmanaged content.
+- [x] Pre-existing containers, non-empty files, and contributor-owned content are preserved byte-for-byte.
+- [x] Dry-run reports cleanup candidates without mutating the filesystem.
+- [x] A sandboxed install/uninstall lifecycle verifies both pristine cleanup and preservation cases.

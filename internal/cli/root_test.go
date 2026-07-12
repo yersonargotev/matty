@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/engrambin"
+	"github.com/yersonargotev/matty/internal/ownedcontainer"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
@@ -78,6 +79,8 @@ func sandboxOptions(t *testing.T) (Options, *fakeRunner, string) {
 		Env: MapEnv{
 			"HOME":                home,
 			"XDG_CONFIG_HOME":     filepath.Join(home, "xdg-config"),
+			"XDG_CACHE_HOME":      filepath.Join(home, "xdg-cache"),
+			"CODEX_HOME":          filepath.Join(home, ".codex"),
 			"PATH":                homebrewBin,
 			"HOMEBREW_PREFIX":     homebrewPrefix,
 			"MATTY_SKILLS_SOURCE": sourceRoot,
@@ -1272,6 +1275,110 @@ func TestUninstallRemovesOnlyManagedSymlinks(t *testing.T) {
 	}
 	if !exists(unmanagedFile) || !exists(unmanagedLink) || !exists(changedManaged) {
 		t.Fatalf("uninstall removed unmanaged paths")
+	}
+}
+
+func TestPristineInstallUninstallRemovesOnlyMattyCreatedContainers(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+
+	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "uninstall"); err != nil {
+		t.Fatalf("uninstall failed: %v\n%s", err, out)
+	}
+
+	for _, path := range []string{paths.MattyDir, filepath.Dir(paths.AgentSkillsDir), filepath.Dir(paths.CodexPromptFile), filepath.Dir(paths.OpenCodeConfigFile)} {
+		if exists(path) {
+			t.Fatalf("uninstall left Matty-created container %s under pristine HOME %s", path, home)
+		}
+	}
+}
+
+func TestUninstallPreservesPreexistingContainersAndUnmanagedBytes(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths.MattyDir, filepath.Dir(paths.AgentSkillsDir), filepath.Dir(paths.CodexPromptFile), filepath.Dir(paths.OpenCodeConfigFile)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unmanaged := filepath.Join(filepath.Dir(paths.CodexPromptFile), "user.txt")
+	want := []byte{0, 1, 2, '\n'}
+	if err := os.WriteFile(unmanaged, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "uninstall"); err != nil {
+		t.Fatalf("uninstall failed: %v\n%s", err, out)
+	}
+	for _, path := range []string{paths.MattyDir, filepath.Dir(paths.AgentSkillsDir), filepath.Dir(paths.CodexPromptFile), filepath.Dir(paths.OpenCodeConfigFile)} {
+		if !exists(path) {
+			t.Fatalf("uninstall removed preexisting container %s", path)
+		}
+	}
+	got, err := os.ReadFile(unmanaged)
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("unmanaged bytes changed: %v %v", got, err)
+	}
+}
+
+func TestApplyUninstallRejectsContainerChangeAfterPreviewWithoutRemovingArtifacts(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	state, _, err := LoadState(paths.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := BuildUninstallPlan(paths, state)
+	concurrent := filepath.Join(filepath.Dir(paths.CodexPromptFile), "concurrent.txt")
+	if err := os.WriteFile(concurrent, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyUninstallPlan(context.Background(), paths, plan); !errors.Is(err, ownedcontainer.ErrStalePlan) {
+		t.Fatalf("ApplyUninstallPlan() error = %v, want ErrStalePlan", err)
+	}
+	if !exists(paths.StateFile) || !exists(filepath.Join(paths.AgentSkillsDir, "ask-matt")) {
+		t.Fatal("stale uninstall removed Matty artifacts before rejecting the plan")
+	}
+	if got := readFileString(t, concurrent); got != "keep" {
+		t.Fatalf("stale uninstall changed concurrent content: %q", got)
+	}
+}
+
+func TestUninstallDoesNotTrustContainerPathsOutsideCurrentMattyAllowlist(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "unmanaged-empty")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := DesiredState(paths, time.Now(), nil)
+	state.CreatedContainers = []ownedcontainer.Record{{Path: outside, Kind: ownedcontainer.Directory}}
+	plan := BuildUninstallPlan(paths, state)
+	if err := ApplyUninstallPlan(context.Background(), paths, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(outside) {
+		t.Fatal("uninstall trusted forged provenance outside its exact path allowlist")
 	}
 }
 

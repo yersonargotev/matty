@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/yersonargotev/matty/internal/ownedcontainer"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
 
@@ -25,12 +26,13 @@ type ManagedSkill struct {
 // State is Matty's small global state file. It tracks ownership metadata only;
 // prompt contents and skill bodies stay on disk outside this JSON file.
 type State struct {
-	SchemaVersion      int            `json:"schema_version"`
-	MattyVersion       string         `json:"matty_version"`
-	ManagedSkills      []ManagedSkill `json:"managed_skills"`
-	ConfiguredSurfaces []string       `json:"configured_surfaces"`
-	Paths              StatePaths     `json:"paths"`
-	LastInstallCheck   string         `json:"last_install_check,omitempty"`
+	SchemaVersion      int                     `json:"schema_version"`
+	MattyVersion       string                  `json:"matty_version"`
+	ManagedSkills      []ManagedSkill          `json:"managed_skills"`
+	ConfiguredSurfaces []string                `json:"configured_surfaces"`
+	Paths              StatePaths              `json:"paths"`
+	LastInstallCheck   string                  `json:"last_install_check,omitempty"`
+	CreatedContainers  []ownedcontainer.Record `json:"created_containers,omitempty"`
 }
 
 type StatePaths struct {
