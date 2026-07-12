@@ -1415,6 +1415,83 @@ func TestPackReconcileDriftFreeIsApprovalFreeNoOp(t *testing.T) {
 	}
 }
 
+func TestPackReconcileRepairsOwnedInstructionDriftOnBothSurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		surface string
+		target  func(string) string
+	}{
+		{surface: "codex", target: func(home string) string { return filepath.Join(home, ".codex", "AGENTS.md") }},
+		{surface: "opencode", target: func(home string) string { return filepath.Join(home, "xdg", "opencode", "matty.md") }},
+	} {
+		t.Run(tc.surface, func(t *testing.T) {
+			terminal := &fakeTerminal{interactive: true, approve: true}
+			opts, home, _ := packActivationOptions(t, terminal)
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", tc.surface); err != nil {
+				t.Fatalf("seed: %v\n%s", err, out)
+			}
+			target := tc.target(home)
+			desired := readFileString(t, target)
+			drifted := strings.Replace(desired, "Matty", "Drifted-Matty", 1)
+			if drifted == desired {
+				t.Fatal("fixture projection did not contain mutable catalog content")
+			}
+			if err := os.WriteFile(target, []byte(drifted), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotTree(t, home)
+			prompts := terminal.calls
+			out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "matty", "--surface", tc.surface, "--dry-run")
+			if err != nil || !strings.Contains(out, "restore drifted Matty-managed projection") || !strings.Contains(out, "Phase: reversible-local") {
+				t.Fatalf("repair dry-run: %v\n%s", err, out)
+			}
+			if terminal.calls != prompts || snapshotTree(t, home) != before {
+				t.Fatal("repair dry-run prompted or mutated files/state/config")
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "matty", "--surface", tc.surface)
+			if err != nil {
+				t.Fatalf("apply repair: %v\n%s", err, out)
+			}
+			if got := readFileString(t, target); got != desired {
+				t.Fatalf("repaired content differs from catalog-current projection")
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", tc.surface)
+			if err != nil || !strings.Contains(out, "configured=yes") {
+				t.Fatalf("configured readiness after repair: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestPackReconcileRepairRestoresOnlyTargetedReadinessPair(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _, _ := engramActivationOptions(t, terminal)
+	for _, packID := range []string{"engram", "matty"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", packID, "--surface", "codex"); err != nil {
+			t.Fatalf("seed %s: %v\n%s", packID, err, out)
+		}
+	}
+	mattyProjection := filepath.Join(home, ".codex", "AGENTS.md")
+	desired := readFileString(t, mattyProjection)
+	if err := os.WriteFile(mattyProjection, []byte(strings.Replace(desired, "Matty", "Drifted-Matty", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(home, ".codex", "engram-compact-prompt.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "matty", "--surface", "codex"); err != nil {
+		t.Fatalf("repair matty: %v\n%s", err, out)
+	}
+	mattyStatus, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex")
+	if err != nil || !strings.Contains(mattyStatus, "configured=yes") {
+		t.Fatalf("matty readiness: %v\n%s", err, mattyStatus)
+	}
+	engramStatus, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "engram", "--surface", "codex")
+	if err != nil || !strings.Contains(engramStatus, "configured=no") {
+		t.Fatalf("unrelated Engram readiness was not isolated: %v\n%s", err, engramStatus)
+	}
+}
+
 func TestPackReconcileExternalConsentStopsOnCancellation(t *testing.T) {
 	seed := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _, runner := engramActivationOptions(t, seed)

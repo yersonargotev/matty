@@ -610,13 +610,17 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 				continue
 			}
 			owned := ownedAtComposition(state.Ownership, projection.ID, projection.ObservedFingerprint, composition)
+			managedDrift := operation == OperationReconcile && projection.Exists && repairEligible(state.Ownership, projection, composition)
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				owner, ok := ownershipByID(state.Ownership, projection.ID)
 				owned = ok && owner.Fingerprint == projection.ObservedFingerprint
 			}
-			if projection.Exists && !owned {
+			if projection.Exists && !owned && !managedDrift {
 				composition.blockers = append(composition.blockers, PlanBlocker{BlockerOwnership, projection.ID, fmt.Sprintf("projection is unmanaged or drifted; preserving existing %s content", request.Surface)})
 				continue
+			}
+			if managedDrift {
+				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to catalog-current content: " + projection.Action.Description
 			}
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				destructiveActions = append(destructiveActions, projection.Action)
@@ -1389,6 +1393,23 @@ func ownedAtComposition(owners []ProjectionOwnership, id, fingerprint string, c 
 		}
 	}
 	return false
+}
+
+func repairEligible(owners []ProjectionOwnership, projection ObservedProjection, c composition) bool {
+	if projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent {
+		return false
+	}
+	var matched []ProjectionOwnership
+	for _, owner := range owners {
+		if owner.ID == projection.ID {
+			matched = append(matched, owner)
+		}
+	}
+	if len(matched) != 1 {
+		return false
+	}
+	owner := matched[0]
+	return owner.Fingerprint == projection.DesiredFingerprint && digestJSON(owner.Contributors) == digestJSON(c.contributorSet(projection.ID))
 }
 func cloneActivationState(state ActivationState) ActivationState {
 	state.Ownership = append([]ProjectionOwnership(nil), state.Ownership...)

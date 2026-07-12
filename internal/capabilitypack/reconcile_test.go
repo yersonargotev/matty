@@ -31,12 +31,13 @@ func TestTargetedReconcileRepairsActivePackInsideCompleteSurfaceDesiredStateWith
 		{ID: "instruction:other", Contributors: []string{"other"}, Fingerprint: "other"},
 	}}
 	preview := ActivationObservation{Revision: "host", Projections: []ObservedProjection{
-		{ID: "instruction:shared", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}},
+		{ID: "instruction:shared", Exists: true, ObservedFingerprint: "shared-drift", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared", Description: "write shared instruction"}},
 		{ID: "instruction:app", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:app", Description: "repair app"}},
 		{ID: "instruction:other", Exists: true, ObservedFingerprint: "other", DesiredFingerprint: "other", Action: ProjectionAction{ID: "instruction:other"}},
 	}}
 	verified := preview
 	verified.Projections = append([]ObservedProjection(nil), preview.Projections...)
+	verified.Projections[0].ObservedFingerprint = "same"
 	verified.Projections[1].ObservedFingerprint = "new"
 	facade, adapter, store := reconcileFixture(packs, state, preview, preview, verified)
 
@@ -47,7 +48,7 @@ func TestTargetedReconcileRepairsActivePackInsideCompleteSurfaceDesiredStateWith
 	if plan.Operation() != OperationReconcile || plan.ReconcileScope() != ReconcileTargeted || !reflect.DeepEqual(plan.Contributors()["instruction:shared"], []string{"app", "other"}) {
 		t.Fatalf("plan operation/contributors = %s %+v", plan.Operation(), plan.Contributors())
 	}
-	if phases := plan.Phases(); len(phases) != 1 || phases[0].Kind != ConsentReversibleLocal || len(phases[0].Actions) != 1 || phases[0].Actions[0].ID != "instruction:app" {
+	if phases := plan.Phases(); len(phases) != 1 || phases[0].Kind != ConsentReversibleLocal || len(phases[0].Actions) != 2 || phases[0].Actions[0].ID != "instruction:app" || phases[0].Actions[1].ID != "instruction:shared" {
 		t.Fatalf("targeted phases = %+v", phases)
 	}
 	before := cloneActivationState(store.state)
@@ -58,8 +59,45 @@ func TestTargetedReconcileRepairsActivePackInsideCompleteSurfaceDesiredStateWith
 	if !reflect.DeepEqual(store.state.Intent, before.Intent) || !reflect.DeepEqual(store.state.Intents, before.Intents) {
 		t.Fatalf("reconcile changed intent: before=%+v after=%+v", before, store.state)
 	}
-	if len(adapter.actions) != 1 || adapter.actions[0].ID != "instruction:app" {
+	if len(adapter.actions) != 2 || adapter.actions[0].ID != "instruction:app" || adapter.actions[1].ID != "instruction:shared" {
 		t.Fatalf("actions = %+v", adapter.actions)
+	}
+	owner, ok := ownershipByID(store.state.Ownership, "instruction:shared")
+	if !ok || !reflect.DeepEqual(owner.Contributors, []string{"app", "other"}) || owner.Fingerprint != "same" {
+		t.Fatalf("shared ownership after repair = %+v", owner)
+	}
+}
+
+func TestTargetedReconcileRepairsDriftWhenCatalogCurrentOwnershipIsUnambiguous(t *testing.T) {
+	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "guide"}}}
+	state := ActivationState{
+		Intent:    activeIntent("app", "1", 4),
+		Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "catalog-current"}},
+	}
+	drifted := ActivationObservation{Revision: "host-drifted", Projections: []ObservedProjection{{
+		ID: "instruction:guide", Exists: true, ObservedFingerprint: "operator-edit", DesiredFingerprint: "catalog-current",
+		Action: ProjectionAction{ID: "instruction:guide", Description: "write instruction guide"},
+	}}}
+	verified := ActivationObservation{Revision: "host-repaired", Projections: []ObservedProjection{{
+		ID: "instruction:guide", Exists: true, ObservedFingerprint: "catalog-current", DesiredFingerprint: "catalog-current",
+		Action: ProjectionAction{ID: "instruction:guide", Description: "write instruction guide"},
+	}}}
+	facade, adapter, _ := reconcileFixture([]Pack{pack}, state, drifted, drifted, verified)
+
+	plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Applicable() {
+		t.Fatalf("managed drift remained blocked: %+v", plan.Blockers())
+	}
+	phases := plan.Phases()
+	if len(phases) != 1 || phases[0].Kind != ConsentReversibleLocal || len(phases[0].Actions) != 1 || !strings.Contains(phases[0].Actions[0].Description, "restore drifted Matty-managed projection") {
+		t.Fatalf("repair preview was not explicit: %+v", phases)
+	}
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
+	if err != nil || !result.Verified || len(adapter.actions) != 1 {
+		t.Fatalf("repair result=%+v actions=%+v err=%v", result, adapter.actions, err)
 	}
 }
 
@@ -148,7 +186,9 @@ func TestReconcilePreservesAmbiguousOrUnmanagedDriftAsHumanAction(t *testing.T) 
 		name      string
 		ownership []ProjectionOwnership
 	}{
-		{name: "ambiguous ownership", ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "owned"}}},
+		{name: "fingerprint does not prove catalog-current ownership", ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "owned"}}},
+		{name: "contributors do not match composition", ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app", "other"}, Fingerprint: "desired"}}},
+		{name: "duplicate ownership is ambiguous", ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "desired"}, {ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "desired"}}},
 		{name: "unmanaged"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -33,11 +33,11 @@ Work the **frontier**: any ticket whose blockers are all done. Four tickets can 
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Editing a Matty-owned projection produces a reconcile preview that explicitly proposes restoring the catalog-current desired content.
-- [ ] Applying the approved repair restores the projection and returns the affected pack/surface pair to configured readiness.
-- [ ] Content without valid Matty ownership remains protected and is never silently overwritten or deleted.
-- [ ] Shared projections retain contributor-safe behavior when one pack is repaired.
-- [ ] Coverage includes Codex and OpenCode drift plus dry-run non-mutation.
+- [x] Editing a Matty-owned projection produces a reconcile preview that explicitly proposes restoring the catalog-current desired content.
+- [x] Applying the approved repair restores the projection and returns the affected pack/surface pair to configured readiness.
+- [x] Content without valid Matty ownership remains protected and is never silently overwritten or deleted.
+- [x] Shared projections retain contributor-safe behavior when one pack is repaired.
+- [x] Coverage includes Codex and OpenCode drift plus dry-run non-mutation.
 
 ## Expose blocked lifecycle plans to automation
 
