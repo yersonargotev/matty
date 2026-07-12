@@ -235,3 +235,59 @@ func TestActivationAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) 
 		t.Fatalf("validation failure wrote prompt: %v", err)
 	}
 }
+
+func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUnmanagedConfig(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "guide.md"), []byte("managed guide\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "opencode.json")
+	prompt := filepath.Join(root, "guide.md")
+	if err := os.WriteFile(config, []byte("// keep comment\n{\n  \"model\": \"test\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
+	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
+	observed, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []capabilitypack.ProjectionAction
+	for _, projection := range observed.Projections {
+		actions = append(actions, projection.Action)
+	}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := make([]capabilitypack.ProjectionOwnership, 0, len(verified.Projections))
+	for _, projection := range verified.Projections {
+		owners = append(owners, capabilitypack.ProjectionOwnership{ID: projection.ID, Fingerprint: projection.ObservedFingerprint, Contributors: []string{"app"}})
+	}
+	reconcile, err := adapter.InspectReconcile(context.Background(), capabilitypack.Pack{ID: "desired"}, owners, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconcile.RemovalCandidates) != 2 {
+		t.Fatalf("removal candidates = %+v", reconcile.RemovalCandidates)
+	}
+	for _, projection := range reconcile.RemovalCandidates {
+		if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{projection.Action}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(config)
+	if err != nil || !strings.Contains(string(got), "// keep comment") || !strings.Contains(string(got), `"model": "test"`) || strings.Contains(string(got), prompt) {
+		t.Fatalf("config = %q err=%v", got, err)
+	}
+	if _, err := os.Stat(prompt); !os.IsNotExist(err) {
+		t.Fatalf("obsolete instruction remains: %v", err)
+	}
+}

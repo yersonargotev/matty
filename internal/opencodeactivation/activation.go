@@ -191,6 +191,88 @@ func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, des
 	return result, nil
 }
 
+func (a *ActivationAdapter) InspectReconcile(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
+	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	retained := make(map[string]bool, len(result.Projections))
+	for _, projection := range result.Projections {
+		retained[projection.ID] = true
+	}
+	configContent, err := readOptionalActivationFile(a.configFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	for _, owner := range ownership {
+		if retained[owner.ID] {
+			continue
+		}
+		projection, ok, inspectErr := a.inspectOwnedProjection(owner.ID, configContent)
+		if inspectErr != nil {
+			return capabilitypack.ActivationObservation{}, inspectErr
+		}
+		if ok {
+			result.RemovalCandidates = append(result.RemovalCandidates, projection)
+			if projection.Action.Target == a.configFile {
+				configContent = projection.Action.Content
+			}
+		}
+	}
+	for i := range result.RemovalCandidates {
+		if result.RemovalCandidates[i].Action.Target == a.configFile {
+			result.RemovalCandidates[i].Action.Content = configContent
+		}
+	}
+	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	return result, nil
+}
+
+func (a *ActivationAdapter) inspectOwnedProjection(id, configContent string) (capabilitypack.ObservedProjection, bool, error) {
+	projection := capabilitypack.ObservedProjection{ID: id, DesiredFingerprint: "missing", ObservedFingerprint: "missing"}
+	switch {
+	case strings.HasPrefix(id, "skill:"):
+		target := filepath.Join(a.skillsDir, strings.TrimPrefix(id, "skill:"))
+		observed, exists, err := localprojection.FingerprintPath(target)
+		projection.Exists, projection.ObservedFingerprint = exists, observed
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeSkillLink, Target: target}
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove OpenCode projection %s", id)), true, err
+	case strings.HasPrefix(id, "instruction:"):
+		resourceID := strings.TrimPrefix(id, "instruction:")
+		target := a.instructionPath(resourceID)
+		observed, exists, err := localprojection.FingerprintPath(target)
+		projection.Exists, projection.ObservedFingerprint = exists, observed
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeInstructionFile, Target: target}
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove OpenCode projection %s", id)), true, err
+	case strings.HasPrefix(id, "opencode-instruction-reference:"):
+		resourceID := strings.TrimPrefix(id, "opencode-instruction-reference:")
+		target := a.instructionPath(resourceID)
+		inspection, err := opencode.Inspect(a.configFile, target)
+		if err != nil {
+			return capabilitypack.ObservedProjection{}, false, err
+		}
+		projection.Exists = inspection.HasMattyInstruction
+		if projection.Exists {
+			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte(target))
+		}
+		content, err := opencode.RemoveInstructionProjection(configContent, a.configFile, target)
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeConfigReference, Target: a.configFile}
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove OpenCode projection %s", id)), true, err
+	case strings.HasPrefix(id, "mcp_server:"):
+		resourceID := strings.TrimPrefix(id, "mcp_server:")
+		inspection, err := opencode.InspectMCPContent(configContent, a.configFile, resourceID, "", nil)
+		if err != nil {
+			return capabilitypack.ObservedProjection{}, false, err
+		}
+		projection.Exists, projection.ObservedFingerprint = inspection.Exists, inspection.ObservedFingerprint
+		content, err := opencode.RemoveMCPProjection(configContent, a.configFile, resourceID)
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile}
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove OpenCode projection %s", id)), true, err
+	default:
+		return capabilitypack.ObservedProjection{}, false, nil
+	}
+}
+
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
 	for _, action := range actions {
 		switch action.Kind {

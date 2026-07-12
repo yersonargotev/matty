@@ -979,3 +979,137 @@ func TestPackDeactivateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *t
 		t.Fatalf("OpenCode intent changed: %v\n%s", err, out)
 	}
 }
+
+func TestPackReconcileTargetedAndSurfaceWideRenderSealedDesiredState(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	bundle := writeUpdateBundle(t, "1.0.0")
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	for _, pack := range []string{"engram", "matty"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {
+			t.Fatalf("seed %s: %v\n%s", pack, err, out)
+		}
+	}
+	if err := os.Remove(filepath.Join(home, ".codex", "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	before := snapshotTree(t, home)
+	prompts := terminal.calls
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"targeted", []string{"pack", "reconcile", "matty", "--surface", "codex", "--dry-run"}, []string{"Reconcile dry-run plan plan-", "Scope: targeted", "Intent revision:", "Contributors: instruction:shared <- engram, matty", "Phase: reversible-local", "write instruction shared"}},
+		{"surface-wide", []string{"pack", "reconcile", "--surface", "codex", "--dry-run"}, []string{"Reconcile dry-run plan plan-", "Scope: surface-wide", "Activation:", "Contributors: instruction:shared <- engram, matty", "Phase: reversible-local", "write instruction shared"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), tc.args...)
+			if err != nil {
+				t.Fatalf("reconcile preview: %v\n%s", err, out)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("missing %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("reconcile dry-run prompted or caused effects")
+	}
+}
+
+func TestPackReconcileCancellationNonTTYAndStaleHaveZeroEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal *fakeTerminal
+		stale    bool
+	}{
+		{"cancel", &fakeTerminal{interactive: true, approve: false}, false},
+		{"non-tty", &fakeTerminal{interactive: false, approve: true}, false},
+		{"stale", &fakeTerminal{interactive: true, approve: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seed := &fakeTerminal{interactive: true, approve: true}
+			opts, home, _ := packActivationOptions(t, seed)
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
+				t.Fatalf("seed: %v\n%s", err, out)
+			}
+			target := filepath.Join(home, ".agents", "skills", "ask-matt")
+			if err := os.Remove(target); err != nil {
+				t.Fatal(err)
+			}
+			opts.Terminal = tc.terminal
+			if tc.stale {
+				tc.terminal.onApprove = func() {
+					_ = os.WriteFile(filepath.Join(home, ".codex", "AGENTS.md"), []byte("concurrent unmanaged edit\n"), 0o600)
+				}
+			}
+			beforeState := readFileString(t, filepath.Join(home, ".matty", "packs.json"))
+			out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "matty", "--surface", "codex")
+			if err == nil {
+				t.Fatalf("unsafe reconcile succeeded:\n%s", out)
+			}
+			if tc.stale {
+				message := strings.ToLower(err.Error())
+				if !strings.Contains(message, "stale") || !strings.Contains(message, "rerun") {
+					t.Fatalf("stale error must direct an explicit rerun: %v", err)
+				}
+				if strings.Contains(out, "replacement preview") {
+					t.Fatalf("stale reconcile silently previewed a replacement:\n%s", out)
+				}
+			}
+			if exists(target) || readFileString(t, filepath.Join(home, ".matty", "packs.json")) != beforeState {
+				t.Fatal("cancel/non-TTY/stale reconcile repaired projection or changed intent state")
+			}
+		})
+	}
+}
+
+func TestPackReconcileDriftFreeIsApprovalFreeNoOp(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "opencode"); err != nil {
+		t.Fatalf("seed: %v\n%s", err, out)
+	}
+	before := snapshotTree(t, home)
+	prompts := terminal.calls
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "matty", "--surface", "opencode")
+	if err != nil || !strings.Contains(out, "Scope: targeted") || !strings.Contains(out, "Already converged") {
+		t.Fatalf("drift-free reconcile: %v\n%s", err, out)
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("drift-free reconcile prompted or mutated state")
+	}
+}
+
+func TestPackReconcilePromptsEachConsentKindSeparatelyAndStopsOnCancellation(t *testing.T) {
+	seed := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _, runner := engramActivationOptions(t, seed)
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err != nil {
+		t.Fatalf("seed: %v\n%s", err, out)
+	}
+	if err := os.Remove(filepath.Join(home, ".codex", "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(runner.path["engram"]); err != nil {
+		t.Fatal(err)
+	}
+	runner.path = map[string]string{}
+	terminal := &fakeTerminal{interactive: true, answers: []bool{true, false}}
+	opts.Terminal = terminal
+	beforeState := readFileString(t, filepath.Join(home, ".matty", "packs.json"))
+	beforeCalls := len(runner.calls)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", "engram", "--surface", "codex")
+	if err == nil {
+		t.Fatalf("cancelled reconcile succeeded:\n%s", out)
+	}
+	if len(terminal.prompts) != 2 || !strings.Contains(terminal.prompts[0], "reversible-local") || !strings.Contains(terminal.prompts[1], "executable-external") {
+		t.Fatalf("consent prompts were not separate: %v\n%s", terminal.prompts, out)
+	}
+	if exists(filepath.Join(home, ".codex", "config.toml")) || len(runner.calls) != beforeCalls || readFileString(t, filepath.Join(home, ".matty", "packs.json")) != beforeState {
+		t.Fatal("cancellation before Apply caused local, external, or state effects")
+	}
+}

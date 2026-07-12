@@ -141,3 +141,43 @@ func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.
 		t.Fatalf("prompt=%q", got)
 	}
 }
+
+func TestInspectReconcileDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmanagedContent(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "guide.md")
+	prompt := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(source, []byte("managed guide\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prompt, []byte("unmanaged guidance\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
+	observed, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{observed.Projections[0].Action}); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := capabilitypack.ProjectionOwnership{ID: verified.Projections[0].ID, Fingerprint: verified.Projections[0].ObservedFingerprint, Contributors: []string{"app"}}
+	reconcile, err := adapter.InspectReconcile(context.Background(), capabilitypack.Pack{ID: "desired"}, []capabilitypack.ProjectionOwnership{owner}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconcile.RemovalCandidates) != 1 || reconcile.RemovalCandidates[0].ObservedFingerprint != owner.Fingerprint || reconcile.RemovalCandidates[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
+		t.Fatalf("removal candidates = %+v", reconcile.RemovalCandidates)
+	}
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{reconcile.RemovalCandidates[0].Action}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(prompt)
+	if err != nil || strings.TrimSpace(string(got)) != "unmanaged guidance" {
+		t.Fatalf("prompt = %q err=%v", got, err)
+	}
+}

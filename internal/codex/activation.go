@@ -156,6 +156,94 @@ func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, des
 	return result, nil
 }
 
+func (a *ActivationAdapter) InspectReconcile(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
+	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	retained := make(map[string]bool, len(result.Projections))
+	for _, projection := range result.Projections {
+		retained[projection.ID] = true
+	}
+	promptContent, err := readOptionalFile(a.promptFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	configContent, err := readOptionalFile(a.configFile)
+	if err != nil {
+		return capabilitypack.ActivationObservation{}, err
+	}
+	for _, owner := range ownership {
+		if retained[owner.ID] {
+			continue
+		}
+		projection, ok, inspectErr := a.inspectOwnedProjection(owner.ID, promptContent, configContent)
+		if inspectErr != nil {
+			return capabilitypack.ActivationObservation{}, inspectErr
+		}
+		if ok {
+			result.RemovalCandidates = append(result.RemovalCandidates, projection)
+			switch projection.Action.Target {
+			case a.promptFile:
+				promptContent = projection.Action.Content
+			case a.configFile:
+				configContent = projection.Action.Content
+			}
+		}
+	}
+	for i := range result.RemovalCandidates {
+		switch result.RemovalCandidates[i].Action.Target {
+		case a.promptFile:
+			result.RemovalCandidates[i].Action.Content = promptContent
+		case a.configFile:
+			result.RemovalCandidates[i].Action.Content = configContent
+		}
+	}
+	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	return result, nil
+}
+
+func (a *ActivationAdapter) inspectOwnedProjection(id, promptContent, configContent string) (capabilitypack.ObservedProjection, bool, error) {
+	projection := capabilitypack.ObservedProjection{ID: id, DesiredFingerprint: "missing"}
+	switch {
+	case strings.HasPrefix(id, "skill:"):
+		target := filepath.Join(a.skillsDir, strings.TrimPrefix(id, "skill:"))
+		observed, exists, err := localprojection.FingerprintPath(target)
+		projection.Exists, projection.ObservedFingerprint = exists, observed
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionSkillLink, Target: target}
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove Codex projection %s", id)), true, err
+	case strings.HasPrefix(id, "instruction:"):
+		resourceID := strings.TrimPrefix(id, "instruction:")
+		start, end := instructionMarkers(resourceID)
+		fragment, exists := extractBlock(promptContent, start, end)
+		projection.Exists = exists
+		projection.ObservedFingerprint = "missing"
+		if exists {
+			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte(fragment))
+		}
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionInstructionFile, Target: a.promptFile}
+		content := removeBlock(promptContent, start, end)
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove Codex projection %s", id)), true, nil
+	case strings.HasPrefix(id, "mcp_server:"):
+		resourceID := strings.TrimPrefix(id, "mcp_server:")
+		start, end := mcpMarkers(resourceID)
+		fragment, exists := extractBlock(configContent, start, end)
+		projection.Exists = exists
+		projection.ObservedFingerprint = "missing"
+		if exists {
+			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte(fragment))
+		} else if codexMCPTableExists(configContent, resourceID) {
+			projection.Exists = true
+			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte("unmanaged:" + resourceID))
+		}
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexMCPConfig, Target: a.configFile}
+		content := removeBlock(configContent, start, end)
+		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove Codex projection %s", id)), true, nil
+	default:
+		return capabilitypack.ObservedProjection{}, false, nil
+	}
+}
+
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
 	executor := localprojection.Executor{
 		Host:         "Codex",

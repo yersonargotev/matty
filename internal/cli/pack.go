@@ -16,7 +16,37 @@ import (
 
 func newPackCommand(opts Options) *cobra.Command {
 	cmd := &cobra.Command{Use: "pack", Short: "Discover and manage capability packs"}
-	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts), newPackDeactivateCommand(opts))
+	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts), newPackDeactivateCommand(opts), newPackReconcileCommand(opts))
+	return cmd
+}
+
+func newPackReconcileCommand(opts Options) *cobra.Command {
+	var surface string
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use: "reconcile [pack]", Short: "Repair active capability packs on one CLI surface", Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			facade, err := activationFacade(opts)
+			if err != nil {
+				return err
+			}
+			packID := ""
+			if len(args) == 1 {
+				packID = args[0]
+			}
+			plan, err := facade.PreviewReconcile(cmd.Context(), capabilitypack.ReconcileRequest{PackID: packID, Surface: capabilitypack.Surface(surface)})
+			if err != nil {
+				return err
+			}
+			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
+				return err
+			}
+			return applyPackPlan(cmd, opts, facade, plan, dryRun)
+		},
+	}
+	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	_ = cmd.MarkFlagRequired("surface")
 	return cmd
 }
 
@@ -179,12 +209,14 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		prefix = "Update plan"
 	} else if plan.Operation() == capabilitypack.OperationDeactivate {
 		prefix = "Deactivation plan"
+	} else if plan.Operation() == capabilitypack.OperationReconcile {
+		prefix = "Reconcile plan"
 	}
 	if dryRun {
 		prefix = strings.TrimSuffix(prefix, " plan") + " dry-run plan"
 	}
 	packLabel := plan.Pack().ID
-	if plan.Operation() != capabilitypack.OperationUpdate && plan.Operation() != capabilitypack.OperationDeactivate {
+	if plan.Operation() != capabilitypack.OperationUpdate && plan.Operation() != capabilitypack.OperationDeactivate && plan.Operation() != capabilitypack.OperationReconcile {
 		packLabel += " " + plan.Pack().Version
 	}
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDigest: %s\nPack: %s\nSurface: %s\n", prefix, plan.ID(), plan.Digest(), packLabel, plan.Surface()); err != nil {
@@ -196,6 +228,10 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		}
 	} else if plan.Operation() == capabilitypack.OperationDeactivate {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Active version: %s\nIntent revision: %d\n", plan.OldVersion(), plan.IntentRevision()); err != nil {
+			return err
+		}
+	} else if plan.Operation() == capabilitypack.OperationReconcile {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Scope: %s\nIntent revision: %d (unchanged)\n", plan.ReconcileScope(), plan.IntentRevision()); err != nil {
 			return err
 		}
 	} else if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s\nIntent revision: %d\n", plan.Pack().Version, plan.IntentRevision()); err != nil {
@@ -212,6 +248,8 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 			operation = "update"
 		} else if plan.Operation() == capabilitypack.OperationDeactivate {
 			operation = "deactivation"
+		} else if plan.Operation() == capabilitypack.OperationReconcile {
+			operation = "reconcile"
 		}
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply %s: %d blockers\n", operation, len(plan.Blockers())); err != nil {
 			return err
