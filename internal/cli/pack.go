@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -390,6 +391,7 @@ func (e runnerExternalExecutor) Execute(ctx context.Context, action capabilitypa
 func newPackStatusCommand(opts Options) *cobra.Command {
 	var surface string
 	var require string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use: "status [pack]", Short: "Inspect capability pack status", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -408,10 +410,13 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if packID == "" {
+			if jsonOutput {
+				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(report.JSONReport(packID != "")); err != nil {
+					return err
+				}
+			} else if packID == "" {
 				return renderPackStatusOverview(cmd, report)
-			}
-			if err := renderPackStatusDetail(cmd, report.Entries[0]); err != nil {
+			} else if err := renderPackStatusDetail(cmd, report.Entries[0]); err != nil {
 				return err
 			}
 			if require == "usable" && !report.Entries[0].Readiness.Usable {
@@ -422,6 +427,7 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().StringVar(&require, "require", "", "Require a readiness dimension (usable)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
 	return cmd
 }
 

@@ -588,6 +588,63 @@ func TestPackStatusRendersBaselineWithoutSideEffects(t *testing.T) {
 	}
 }
 
+func TestPackStatusJSONOverviewAndTargetedAbsenceAreStable(t *testing.T) {
+	repoRoot, _ := filepath.Abs(filepath.Join("..", ".."))
+	home := t.TempDir()
+	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg"), "PATH": "", "MATTY_SKILLS_SOURCE": filepath.Join(repoRoot, "bundle", "skills")}}
+	overview, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report capabilitypack.JSONStatusReport
+	if err := json.Unmarshal([]byte(overview), &report); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, overview)
+	}
+	if report.SchemaVersion != 1 || report.Report != "pack-status-overview" || len(report.Entries) != 4 {
+		t.Fatalf("report=%#v", report)
+	}
+	for i, entry := range report.Entries {
+		if i > 0 && (report.Entries[i-1].Pack > entry.Pack || report.Entries[i-1].Pack == entry.Pack && report.Entries[i-1].Surface > entry.Surface) {
+			t.Fatalf("entries not sorted: %#v", report.Entries)
+		}
+	}
+	detail, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "engram", "--surface", "codex", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(detail), &report); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	entry := report.Entries[0]
+	if report.Report != "pack-status" || entry.Intent.State != "absent" || entry.Intent.Active != nil || entry.LatestAttempt != nil || entry.Readiness.Authorized.State != "known" || entry.Readiness.Authorized.Value == nil || *entry.Readiness.Authorized.Value || entry.Readiness.Usable.State != "unknown" || entry.Readiness.Usable.Value != nil || entry.Blockers == nil || entry.Evidence == nil || entry.PendingHumanActions == nil {
+		t.Fatalf("absence contract: %#v", entry)
+	}
+	if strings.Contains(detail, "Intent:") {
+		t.Fatalf("human output mixed into JSON: %s", detail)
+	}
+}
+
+func TestPackStatusJSONRequireEmitsDocumentBeforeGateError(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, _, _ := packActivationOptions(t, terminal)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex", "--require", "usable", "--json")
+	if err == nil || !strings.Contains(err.Error(), "not freshly observed usable") {
+		t.Fatalf("gate error=%v", err)
+	}
+	var report capabilitypack.JSONStatusReport
+	if json.Unmarshal([]byte(out), &report) != nil || len(report.Entries) != 1 {
+		t.Fatalf("missing JSON before gate: %s", out)
+	}
+	opts.ReadinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{capabilitypack.SurfaceCodex: alwaysUsableInspector{}}
+	if activation, activateErr := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); activateErr != nil {
+		t.Fatalf("activate: %v\n%s", activateErr, activation)
+	}
+	out, err = executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex", "--require", "usable", "--json")
+	if err != nil || json.Unmarshal([]byte(out), &report) != nil || report.Entries[0].Readiness.Usable.Value == nil || !*report.Entries[0].Readiness.Usable.Value {
+		t.Fatalf("successful JSON gate: err=%v\n%s", err, out)
+	}
+}
+
 func TestPackStatusRequiresCompleteTarget(t *testing.T) {
 	repoRoot, _ := filepath.Abs(filepath.Join("..", ".."))
 	home := t.TempDir()

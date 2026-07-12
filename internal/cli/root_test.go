@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -19,6 +20,62 @@ import (
 	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
+
+func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
+	t.Run("healthy", func(t *testing.T) {
+		opts, _, _ := sandboxOptions(t)
+		opts.DoctorReportBuilder = func(Paths, Runner) DoctorReport {
+			return DoctorReport{SchemaVersion: 1, Report: "doctor", Checks: []doctorCheck{{status: doctorPass, name: "fixture", detail: "healthy"}}, Summary: DoctorSummary{Status: "healthy", Passes: 1}}
+		}
+		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
+		if err != nil {
+			t.Fatalf("doctor: %v\n%s", err, out)
+		}
+		var doc struct {
+			SchemaVersion int    `json:"schema_version"`
+			Report        string `json:"report"`
+			Checks        []struct{ Name, Severity, Detail string }
+			Summary       DoctorSummary `json:"summary"`
+		}
+		if err := json.Unmarshal([]byte(out), &doc); err != nil {
+			t.Fatalf("invalid JSON: %v\n%s", err, out)
+		}
+		if doc.SchemaVersion != 1 || doc.Report != "doctor" || doc.Summary.Status != "healthy" || len(doc.Checks) == 0 {
+			t.Fatalf("unexpected report: %#v", doc)
+		}
+		if strings.Contains(out, "HOME=") || strings.Contains(out, "PASS ") {
+			t.Fatalf("human output mixed into JSON: %s", out)
+		}
+	})
+	t.Run("warnings", func(t *testing.T) {
+		opts, _, _ := sandboxOptions(t)
+		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
+		if err != nil {
+			t.Fatalf("doctor: %v\n%s", err, out)
+		}
+		var doc struct {
+			Summary DoctorSummary `json:"summary"`
+		}
+		if err := json.Unmarshal([]byte(out), &doc); err != nil || doc.Summary.Status != "warnings" || doc.Summary.Warnings == 0 {
+			t.Fatalf("warning report: %#v err=%v", doc, err)
+		}
+	})
+	t.Run("failures emit full report before error", func(t *testing.T) {
+		opts, _, _ := sandboxOptions(t)
+		opts.Runner = &fakeRunner{}
+		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
+		if !errors.Is(err, ErrDoctorUnhealthy) {
+			t.Fatalf("error=%v", err)
+		}
+		var doc struct {
+			Checks  []struct{ Name, Severity string }
+			Summary DoctorSummary `json:"summary"`
+		}
+		if json.Unmarshal([]byte(out), &doc) != nil || doc.Summary.Failures == 0 || len(doc.Checks) < 2 {
+			t.Fatalf("incomplete report: %s", out)
+		}
+	})
+}
 
 type fakeRunner struct {
 	calls []fakeCall

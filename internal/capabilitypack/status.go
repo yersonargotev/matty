@@ -68,14 +68,22 @@ type StatusEntry struct {
 	Pack                Pack
 	Surface             Surface
 	Intent              IntentStatus
+	IntentPresent       bool
 	LatestAttempt       *AttemptStatus
 	Readiness           ReadinessStatus
+	ReadinessObserved   ReadinessObservationStatus
 	Projections         ProjectionSummary
 	ProjectionDetails   []ProjectionStatus
 	Blockers            []string
 	PendingHumanActions []string
 	Evidence            []string
 	Observation         SurfaceObservation
+}
+
+type ReadinessObservationStatus struct {
+	Configured    bool
+	Authorization bool
+	Usability     bool
 }
 
 type StatusReport struct{ Entries []StatusEntry }
@@ -161,6 +169,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	entry := StatusEntry{Pack: pack, Surface: surface, Observation: SurfaceObservation{Inspected: true}}
 	if intent, ok := intentForPack(state, pack.ID, surface); ok {
 		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
+		entry.IntentPresent = true
 	}
 	entry.LatestAttempt = latestAttemptStatus(state, pack.ID, surface)
 	surfaceComposition := f.compose(pack, state, surface)
@@ -184,6 +193,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	}
 	entry.ProjectionDetails, entry.Projections = deriveProjectionStatus(pack.ID, observation.Projections, state.Ownership, surfaceComposition)
 	entry.Readiness.Configured = entry.Projections.Verified == len(observation.Projections) && len(observation.Projections) > 0
+	entry.ReadinessObserved.Configured = true
 	for _, detail := range entry.ProjectionDetails {
 		entry.Evidence = append(entry.Evidence, fmt.Sprintf("%s: %s observed=%s desired=%s target=%s", detail.ID, detail.Health, detail.ObservedFingerprint, detail.DesiredFingerprint, detail.Target))
 		if detail.Health != ProjectionVerified {
@@ -199,6 +209,8 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 			entry.PendingHumanActions = append(entry.PendingHumanActions, fresh.PendingHumanActions...)
 		}
 		entry.Evidence = append(entry.Evidence, fresh.Evidence...)
+		entry.ReadinessObserved.Authorization = fresh.AuthorizationObserved
+		entry.ReadinessObserved.Usability = fresh.UsabilityObserved
 		entry.Readiness.Authorized = entry.Readiness.Configured && fresh.AuthorizationObserved && fresh.Authorized
 		entry.Readiness.Usable = entry.Readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
 	} else {

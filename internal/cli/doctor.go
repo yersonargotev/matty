@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,44 +40,111 @@ type doctorCheck struct {
 	detail string
 }
 
-func RunDoctor(w io.Writer, paths Paths, runner Runner) error {
+type DoctorSummary struct {
+	Status   string `json:"status"`
+	Passes   int    `json:"passes"`
+	Warnings int    `json:"warnings"`
+	Failures int    `json:"failures"`
+}
+
+type DoctorReport struct {
+	SchemaVersion int           `json:"schema_version"`
+	Report        string        `json:"report"`
+	Checks        []doctorCheck `json:"-"`
+	Summary       DoctorSummary `json:"summary"`
+	header        doctorHeader
+}
+
+type doctorHeader struct {
+	home, configHome, stateFile, stateStatus, agentSkills string
+}
+
+type doctorJSONCheck struct {
+	Name     string       `json:"name"`
+	Severity doctorStatus `json:"severity"`
+	Detail   string       `json:"detail"`
+}
+
+type doctorJSONReport struct {
+	SchemaVersion int               `json:"schema_version"`
+	Report        string            `json:"report"`
+	Checks        []doctorJSONCheck `json:"checks"`
+	Summary       DoctorSummary     `json:"summary"`
+}
+
+func BuildDoctorReport(paths Paths, runner Runner) DoctorReport {
 	state, stateFound, err := LoadState(paths.StateFile)
 	if err != nil {
 		state = State{}
 		stateFound = false
 	}
-	stateStatus := "missing"
-	if stateFound {
-		stateStatus = "present"
-	}
-	if _, writeErr := fmt.Fprintf(w, "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", paths.HomeDir, paths.ConfigHome, paths.StateFile, stateStatus, paths.AgentSkillsDir); writeErr != nil {
-		return writeErr
-	}
-
 	checks := []doctorCheck{stateCheck(paths, state, stateFound, err)}
 	checks = append(checks, skillChecks(paths, state, stateFound)...)
 	checks = append(checks, engramChecks(runner, paths, state, stateFound)...)
 	checks = append(checks, codexChecks(paths)...)
-	openCodeChecks, err := openCodeChecks(paths)
-	if err != nil {
-		checks = append(checks, doctorCheck{status: doctorFail, name: "opencode-config", detail: err.Error() + "; inspect the config or run matty install"})
+	openCodeChecks, openCodeErr := openCodeChecks(paths)
+	if openCodeErr != nil {
+		checks = append(checks, doctorCheck{status: doctorFail, name: "opencode-config", detail: openCodeErr.Error() + "; inspect the config or run matty install"})
 	} else {
 		checks = append(checks, openCodeChecks...)
 	}
-
-	failedChecks := 0
+	summary := DoctorSummary{Status: "healthy"}
 	for _, check := range checks {
+		switch check.status {
+		case doctorPass:
+			summary.Passes++
+		case doctorWarn:
+			summary.Warnings++
+		case doctorFail:
+			summary.Failures++
+		}
+	}
+	if summary.Failures > 0 {
+		summary.Status = "failures"
+	} else if summary.Warnings > 0 {
+		summary.Status = "warnings"
+	}
+	stateStatus := "missing"
+	if stateFound {
+		stateStatus = "present"
+	}
+	return DoctorReport{SchemaVersion: 1, Report: "doctor", Checks: checks, Summary: summary, header: doctorHeader{paths.HomeDir, paths.ConfigHome, paths.StateFile, stateStatus, paths.AgentSkillsDir}}
+}
+
+func (report DoctorReport) HealthError() error {
+	if report.Summary.Failures > 0 {
+		return doctorHealthError{failedChecks: report.Summary.Failures}
+	}
+	return nil
+}
+
+func RenderDoctorHuman(w io.Writer, report DoctorReport) error {
+	h := report.header
+	if _, err := fmt.Fprintf(w, "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", h.home, h.configHome, h.stateFile, h.stateStatus, h.agentSkills); err != nil {
+		return err
+	}
+	for _, check := range report.Checks {
 		if _, err := fmt.Fprintf(w, "%s %s: %s\n", check.status, check.name, check.detail); err != nil {
 			return err
 		}
-		if check.status == doctorFail {
-			failedChecks++
-		}
-	}
-	if failedChecks > 0 {
-		return doctorHealthError{failedChecks: failedChecks}
 	}
 	return nil
+}
+
+func RenderDoctorJSON(w io.Writer, report DoctorReport) error {
+	checks := make([]doctorJSONCheck, 0, len(report.Checks))
+	for _, check := range report.Checks {
+		checks = append(checks, doctorJSONCheck{Name: check.name, Severity: check.status, Detail: check.detail})
+	}
+	return json.NewEncoder(w).Encode(doctorJSONReport{SchemaVersion: report.SchemaVersion, Report: report.Report, Checks: checks, Summary: report.Summary})
+}
+
+func RunDoctor(w io.Writer, paths Paths, runner Runner) error {
+	report := BuildDoctorReport(paths, runner)
+	if err := RenderDoctorHuman(w, report); err != nil {
+		return err
+	}
+	return report.HealthError()
 }
 
 func stateCheck(paths Paths, state State, found bool, loadErr error) doctorCheck {

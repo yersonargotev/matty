@@ -21,6 +21,7 @@ type Options struct {
 	Runner              Runner
 	Terminal            Terminal
 	ReadinessInspectors map[capabilitypack.Surface]capabilitypack.ReadinessInspector
+	DoctorReportBuilder func(Paths, Runner) DoctorReport
 }
 
 func (o Options) withDefaults() Options {
@@ -29,6 +30,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Runner == nil {
 		o.Runner = execRunner{}
+	}
+	if o.DoctorReportBuilder == nil {
+		o.DoctorReportBuilder = BuildDoctorReport
 	}
 	if o.Terminal == nil {
 		o.Terminal = processTerminal{}
@@ -183,7 +187,8 @@ func newInstallCommand(opts Options) *cobra.Command {
 }
 
 func newDoctorCommand(opts Options) *cobra.Command {
-	return &cobra.Command{
+	var jsonOutput bool
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check Matty setup without changing files",
 		Args:  cobra.NoArgs,
@@ -192,9 +197,19 @@ func newDoctorCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return RunDoctor(cmd.OutOrStdout(), paths, opts.Runner)
+			report := opts.DoctorReportBuilder(paths, opts.Runner)
+			if jsonOutput {
+				if err := RenderDoctorJSON(cmd.OutOrStdout(), report); err != nil {
+					return err
+				}
+			} else if err := RenderDoctorHuman(cmd.OutOrStdout(), report); err != nil {
+				return err
+			}
+			return report.HealthError()
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
+	return cmd
 }
 
 func newUpdateCommand(opts Options) *cobra.Command {

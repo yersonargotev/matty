@@ -59,11 +59,11 @@ Work the **frontier**: any ticket whose blockers are all done. Several tickets c
 
 **Blocked by:** Report truthful Matty pack readiness after Apply; Expose doctor failures to automation.
 
-- [ ] Doctor exposes a documented versioned structured representation of every check and its severity.
-- [ ] Pack overview and targeted status expose versioned structured representations of intent, latest attempt, projection summary, readiness, blockers, evidence, and pending human actions.
-- [ ] Structured output preserves the same exit semantics as human-readable output and readiness gates.
-- [ ] Human-readable output remains the default and does not regress.
-- [ ] Output ordering and absent/unknown values are deterministic enough for automation and covered by command-level tests.
+- [x] Doctor exposes a documented versioned structured representation of every check and its severity.
+- [x] Pack overview and targeted status expose versioned structured representations of intent, latest attempt, projection summary, readiness, blockers, evidence, and pending human actions.
+- [x] Structured output preserves the same exit semantics as human-readable output and readiness gates.
+- [x] Human-readable output remains the default and does not regress.
+- [x] Output ordering and absent/unknown values are deterministic enough for automation and covered by command-level tests.
 
 ## Make the test suite race-safe and enable race CI
 
