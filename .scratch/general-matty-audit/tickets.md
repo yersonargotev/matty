@@ -34,11 +34,11 @@ Work the **frontier**: any ticket whose blockers are all done. Several tickets c
 
 **Blocked by:** None — can start immediately.
 
-- [ ] State replacement uses an atomic same-filesystem publication strategy rather than truncating the live file in place.
-- [ ] Failed writes or publication leave the previous valid state intact and return an actionable error.
-- [ ] File permissions and parent-directory behavior remain compatible with existing installations.
-- [ ] Tests inject failures at relevant persistence boundaries and prove that no corrupt live state is published.
-- [ ] Classic lifecycle smoke tests continue to pass with fully sandboxed configuration paths.
+- [x] State replacement uses an atomic same-filesystem publication strategy rather than truncating the live file in place.
+- [x] Failed writes or publication leave the previous valid state intact and return an actionable error.
+- [x] File permissions and parent-directory behavior remain compatible with existing installations.
+- [x] Tests inject failures at relevant persistence boundaries and prove that no corrupt live state is published.
+- [x] Classic lifecycle smoke tests continue to pass with fully sandboxed configuration paths.
 
 ## Recover truthfully from interrupted classic installs
 

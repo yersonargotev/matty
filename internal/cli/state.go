@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yersonargotev/matty/internal/ownedcontainer"
@@ -13,6 +14,14 @@ import (
 const stateSchemaVersion = 1
 
 var defaultConfiguredSurfaces = []string{"codex", "opencode"}
+
+var (
+	writeStateTemp = func(file *os.File, data []byte) error {
+		_, err := file.Write(data)
+		return err
+	}
+	publishStateTemp = os.Rename
+)
 
 // ManagedSkill records the small amount of metadata Matty needs to know which
 // global skill symlinks it owns. It intentionally stores paths, not skill
@@ -68,8 +77,29 @@ func SaveState(path string, state State) error {
 		return fmt.Errorf("encode Matty state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write Matty state %s: %w", path, err)
+	temp, err := os.CreateTemp(filepath.Dir(path), ".matty-state-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create Matty state temporary file for %s: %w", path, err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return fmt.Errorf("set permissions on Matty state temporary file for %s: %w", path, err)
+	}
+	if err := writeStateTemp(temp, data); err != nil {
+		temp.Close()
+		return fmt.Errorf("write Matty state temporary file for %s: %w", path, err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("sync Matty state temporary file for %s: %w", path, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close Matty state temporary file for %s: %w", path, err)
+	}
+	if err := publishStateTemp(tempPath, path); err != nil {
+		return fmt.Errorf("publish Matty state %s: %w", path, err)
 	}
 	return nil
 }
