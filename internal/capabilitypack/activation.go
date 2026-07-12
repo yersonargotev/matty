@@ -146,7 +146,7 @@ type ActivationObservation struct {
 
 type ActivationAdapter interface {
 	InspectActivation(context.Context, Pack) (ActivationObservation, error)
-	ApplyProjections(context.Context, []ProjectionAction) error
+	ApplyProjections(context.Context, []ProjectionAction) *ProjectionActionError
 }
 
 // ResolutionAwareActivationAdapter receives the already-resolved executable
@@ -212,11 +212,61 @@ type ProjectionOwnership struct {
 }
 
 type ApplyingJournal struct {
-	PlanID        string   `json:"plan_id"`
-	Actions       []string `json:"actions"`
-	Completed     []string `json:"completed,omitempty"`
-	FailedAction  string   `json:"failed_action,omitempty"`
-	FailureDetail string   `json:"failure_detail,omitempty"`
+	PlanID        string         `json:"plan_id"`
+	PlanDigest    string         `json:"plan_digest,omitempty"`
+	Operation     Operation      `json:"operation,omitempty"`
+	Surface       Surface        `json:"surface,omitempty"`
+	PackID        string         `json:"pack_id,omitempty"`
+	Outcome       AttemptOutcome `json:"outcome,omitempty"`
+	Actions       []string       `json:"actions"`
+	Completed     []string       `json:"completed,omitempty"`
+	FailedAction  string         `json:"failed_action,omitempty"`
+	FailureDetail string         `json:"failure_detail,omitempty"`
+}
+
+type AttemptOutcome string
+
+const (
+	AttemptApplying         AttemptOutcome = "applying"
+	AttemptRecoveryRequired AttemptOutcome = "recovery-required"
+)
+
+type ProjectionActionError struct {
+	ID  string
+	Err error
+}
+
+func (e ProjectionActionError) Error() string {
+	return fmt.Sprintf("apply projection %s: %v", e.ID, e.Err)
+}
+func (e ProjectionActionError) Unwrap() error { return e.Err }
+
+func (j ApplyingJournal) NotStarted() []string {
+	completed := map[string]bool{}
+	for _, id := range j.Completed {
+		completed[id] = true
+	}
+	result := make([]string, 0, len(j.Actions))
+	for _, id := range j.Actions {
+		if !completed[id] && id != j.FailedAction {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func (j *ApplyingJournal) recordFailure(action string, err error) {
+	j.FailedAction = action
+	j.Outcome = AttemptRecoveryRequired
+	j.FailureDetail = err.Error()
+}
+
+func requiredFailedActionID(err error, phase string) string {
+	var actionErr *ProjectionActionError
+	if errors.As(err, &actionErr) && actionErr.ID != "" {
+		return actionErr.ID
+	}
+	panic("activation adapter violated its action-specific error contract: " + phase)
 }
 
 type ExternalEffect struct {
@@ -229,6 +279,7 @@ type ActivationState struct {
 	Intent        ActivationIntent      `json:"intent"`
 	Intents       []ActivationIntent    `json:"intents,omitempty"`
 	Journal       *ApplyingJournal      `json:"applying_journal,omitempty"`
+	History       []ApplyingJournal     `json:"attempt_history,omitempty"`
 	Ownership     []ProjectionOwnership `json:"ownership,omitempty"`
 	External      []ExternalEffect      `json:"external_effects,omitempty"`
 }
@@ -303,6 +354,8 @@ type ReconciliationPlan struct {
 	beforeCompositionFacts []Pack
 	removedContributors    map[string]string
 	reconcileScope         ReconcileScope
+	recovery               bool
+	historicalAttempt      *ApplyingJournal
 }
 
 type RetainedProjection struct {
@@ -382,6 +435,14 @@ func (p ReconciliationPlan) PendingHumanActions() []string {
 }
 
 func (p ReconciliationPlan) Readiness() ReadinessStatus { return p.readiness }
+func (p ReconciliationPlan) Recovery() bool             { return p.recovery }
+func (p ReconciliationPlan) HistoricalAttempt() *ApplyingJournal {
+	if p.historicalAttempt == nil {
+		return nil
+	}
+	copy := cloneJournal(*p.historicalAttempt)
+	return &copy
+}
 
 type ApprovalReceipt struct {
 	planDigest, phaseDigest string
@@ -426,6 +487,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 		return ReconciliationPlan{}, err
 	}
 	intent, active := intentForPack(state, request.PackID, request.Surface)
+	recovery := recoveryAttempt(state, OperationDeactivate, request.PackID, request.Surface)
 	oldVersion := requested.Version
 	if active && intent.Version != "" {
 		oldVersion = intent.Version
@@ -471,7 +533,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 			continue
 		}
 		owner, owned := ownershipByID(state.Ownership, projection.ID)
-		if active && intent.Active && projection.Exists && owned && len(owner.Contributors) == 1 && owner.Contributors[0] == requested.ID && owner.Fingerprint == projection.ObservedFingerprint {
+		if (active && intent.Active || recovery) && projection.Exists && owned && len(owner.Contributors) == 1 && owner.Contributors[0] == requested.ID && owner.Fingerprint == projection.ObservedFingerprint {
 			plan.phases = appendPhaseAction(plan.phases, ConsentDestructiveCleanup, projection.Action)
 			continue
 		}
@@ -479,7 +541,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 			plan.pendingHumanActions = append(plan.pendingHumanActions, fmt.Sprintf("preserved %s because it is drifted, ambiguous, unmanaged, or ownership no longer matches", projection.ID))
 		}
 	}
-	if !active || !intent.Active {
+	if (!active || !intent.Active) && !recovery {
 		plan.noOp = len(plan.phases) == 0 && len(plan.pendingHumanActions) == 0 && !hasContributor(state.Ownership, requested.ID)
 		if !plan.noOp {
 			plan.blockers = append(plan.blockers, PlanBlocker{Kind: BlockerOwnership, Subject: requested.ID, Detail: fmt.Sprintf("inactive pack %s has partial, drifted, or residual state; preserved it without starting general reconcile", requested.ID)})
@@ -492,6 +554,8 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	}
 	sort.Slice(plan.retained, func(i, j int) bool { return plan.retained[i].ID < plan.retained[j].ID })
 	sort.Strings(plan.pendingHumanActions)
+	plan.attachRecovery(state, recovery)
+	plan.requireRecoveryApproval()
 	plan.seal()
 	return plan, nil
 }
@@ -568,6 +632,8 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	pendingHumanActions := append([]string(nil), observation.PendingHumanActions...)
 	sort.Strings(pendingHumanActions)
 	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership)}
+	recovery := recoveryAttempt(state, operation, request.PackID, request.Surface)
+	plan.attachRecovery(state, recovery)
 	for _, resource := range pack.Resources {
 		plan.portable = append(plan.portable, PortableOutcome{Kind: resource.Kind, ID: resource.ID})
 	}
@@ -606,6 +672,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 		plan.phases = nil
 		plan.noOp = false
 	}
+	plan.requireRecoveryApproval()
 	plan.seal()
 	return plan, nil
 }
@@ -662,7 +729,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 
 	actions := flattenActions(request.Plan.phases)
 	state.SchemaVersion = 1
-	if request.Plan.operation != OperationReconcile {
+	if request.Plan.operation != OperationReconcile && !request.Plan.recovery {
 		previousIntents := activeIntents(state)
 		activeTarget := request.Plan.operation != OperationDeactivate
 		state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: pack.Version, Active: activeTarget, Revision: state.Intent.Revision + 1}
@@ -682,7 +749,10 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 		sort.Slice(state.Intents, func(i, j int) bool { return state.Intents[i].PackID < state.Intents[j].PackID })
 	}
-	state.Journal = &ApplyingJournal{PlanID: request.Plan.id}
+	if request.Plan.recovery && state.Journal != nil {
+		state.History = append(state.History, cloneJournal(*request.Plan.historicalAttempt))
+	}
+	state.Journal = &ApplyingJournal{PlanID: request.Plan.id, PlanDigest: request.Plan.digest, Operation: request.Plan.operation, Surface: request.Plan.surface, PackID: request.Plan.pack.ID, Outcome: AttemptApplying}
 	for _, action := range actions {
 		if action.Kind != ActionHostFollowUp {
 			state.Journal.Actions = append(state.Journal.Actions, action.ID)
@@ -694,8 +764,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	localActions := phaseActions(request.Plan.phases, ConsentReversibleLocal)
 	if len(localActions) > 0 {
 		if err := adapter.ApplyProjections(ctx, localActions); err != nil {
-			state.Journal.FailedAction = "reversible-local"
-			state.Journal.FailureDetail = err.Error()
+			state.Journal.recordFailure(requiredFailedActionID(err, "reversible-local"), err)
 			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
 				return ApplyResult{}, fmt.Errorf("apply reversible local projections: %v; could not persist recovery facts: %w", err, saveErr)
 			}
@@ -703,14 +772,6 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 	}
 	destructiveActions := phaseActions(request.Plan.phases, ConsentDestructiveCleanup)
-	if len(destructiveActions) > 0 && len(phaseActions(request.Plan.phases, ConsentExecutableExternal)) == 0 {
-		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
-			state.Journal.FailedAction = "destructive-cleanup"
-			state.Journal.FailureDetail = err.Error()
-			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
-			return ApplyResult{}, err
-		}
-	}
 	var verified ActivationObservation
 	if request.Plan.operation == OperationReconcile {
 		verified, err = inspectReconcile(ctx, adapter, combined, state.Ownership, resolutions)
@@ -718,40 +779,57 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		verified, err = inspectActivation(ctx, adapter, combined, resolutions)
 	}
 	if err != nil {
+		state.Journal.recordFailure("verify-reversible-local", err)
+		if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
+			return ApplyResult{}, fmt.Errorf("verify reversible local projections: %v; could not persist recovery facts: %w", err, saveErr)
+		}
 		return ApplyResult{}, err
 	}
 	verificationDesired := request.Plan.desired
-	if len(destructiveActions) > 0 && len(phaseActions(request.Plan.phases, ConsentExecutableExternal)) > 0 {
+	if len(destructiveActions) > 0 {
 		verificationDesired = withoutActionExpectations(verificationDesired, destructiveActions)
 	}
 	verifiedMatches := verificationMatches(verificationDesired, verified.Projections)
 	if request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted {
 		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
 	}
-	if request.Plan.operation == OperationDeactivate {
+	if request.Plan.operation == OperationDeactivate && len(destructiveActions) > 0 {
+		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
+	} else if request.Plan.operation == OperationDeactivate {
 		verifiedMatches = verificationMatchesDeactivation(request.Plan.desired, verified.Projections)
 	}
 	if !verifiedMatches {
-		state.Journal.FailedAction = "verify-reversible-local"
-		state.Journal.FailureDetail = verificationMismatch(request.Plan.desired, verified.Projections)
+		state.Journal.recordFailure("verify-reversible-local", errors.New(verificationMismatch(request.Plan.desired, verified.Projections)))
 		if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
 			return ApplyResult{}, fmt.Errorf("%w: %s; could not persist recovery facts: %v", ErrVerificationFailed, state.Journal.FailureDetail, saveErr)
 		}
 		return ApplyResult{}, fmt.Errorf("%w: %s", ErrVerificationFailed, verificationMismatch(request.Plan.desired, verified.Projections))
 	}
 	externalActions := phaseActions(request.Plan.phases, ConsentExecutableExternal)
+	for _, action := range localActions {
+		state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
+	}
 	if len(externalActions) > 0 {
-		for _, action := range localActions {
-			state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
-		}
 		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
 			return ApplyResult{}, fmt.Errorf("persist verified local recovery facts: %w", err)
 		}
 	}
+	if len(externalActions) == 0 && len(destructiveActions) > 0 {
+		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
+			state.Journal.recordFailure(requiredFailedActionID(err, "destructive-cleanup"), err)
+			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
+			return ApplyResult{}, err
+		}
+		for _, action := range destructiveActions {
+			state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
+		}
+		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
+			return ApplyResult{}, fmt.Errorf("destructive actions completed but recovery facts could not be persisted: %w", err)
+		}
+	}
 	for _, action := range externalActions {
 		if err := f.activation.executor.Execute(ctx, action); err != nil {
-			state.Journal.FailedAction = action.ID
-			state.Journal.FailureDetail = err.Error()
+			state.Journal.recordFailure(action.ID, err)
 			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
 				return ApplyResult{}, fmt.Errorf("external action %s failed: %v; could not persist recovery facts: %w", action.ID, err, saveErr)
 			}
@@ -765,28 +843,39 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	}
 	if len(externalActions) > 0 && len(destructiveActions) > 0 {
 		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
-			state.Journal.FailedAction = "destructive-cleanup"
-			state.Journal.FailureDetail = err.Error()
+			state.Journal.recordFailure(requiredFailedActionID(err, "destructive-cleanup"), err)
 			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
 			return ApplyResult{}, err
 		}
+		for _, action := range destructiveActions {
+			state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
+		}
+		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
+			return ApplyResult{}, fmt.Errorf("destructive actions completed but recovery facts could not be persisted: %w", err)
+		}
 	}
-	if len(externalActions) > 0 {
+	if len(externalActions) > 0 || len(destructiveActions) > 0 {
 		if request.Plan.operation == OperationReconcile {
 			verified, err = inspectReconcile(ctx, adapter, combined, state.Ownership, resolutions)
 		} else {
 			verified, err = inspectActivation(ctx, adapter, combined, resolutions)
 		}
 		if err != nil {
+			state.Journal.recordFailure("verify-after-external", err)
+			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
+				return ApplyResult{}, fmt.Errorf("verify after external effects: %v; could not persist recovery facts: %w", err, saveErr)
+			}
 			return ApplyResult{}, err
 		}
 		matches := verificationMatches(request.Plan.desired, verified.Projections)
 		if request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted {
 			matches = verificationMatchesSubset(request.Plan.desired, verified.Projections)
 		}
+		if request.Plan.operation == OperationDeactivate {
+			matches = verificationMatchesDeactivation(request.Plan.desired, verified.Projections)
+		}
 		if !matches {
-			state.Journal.FailedAction = "verify-after-external"
-			state.Journal.FailureDetail = verificationMismatch(request.Plan.desired, verified.Projections)
+			state.Journal.recordFailure("verify-after-external", errors.New(verificationMismatch(request.Plan.desired, verified.Projections)))
 			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
 				return ApplyResult{}, fmt.Errorf("%w: %s; could not persist recovery facts: %v", ErrVerificationFailed, state.Journal.FailureDetail, saveErr)
 			}
@@ -893,6 +982,12 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 	if plan.operation == OperationReconcile && state.Intent.Revision != plan.intentRevision {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d; rerun %s to preview a fresh plan", plan.intentRevision, state.Intent.Revision, plan.operation)}
 	}
+	if plan.recovery {
+		currentHistory := normalizedRecoveryJournal(state.Journal)
+		if currentHistory == nil || digestJSON(currentHistory) != digestJSON(plan.historicalAttempt) {
+			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("recovery attempt history changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
+		}
+	}
 	current := f.compose(pack, state, plan.surface)
 	if plan.operation == OperationDeactivate {
 		before := current
@@ -984,6 +1079,60 @@ func (p *ReconciliationPlan) seal() {
 	p.digest = digestJSON(p.sealPayload())
 	p.id = "plan-" + p.digest[:12]
 }
+
+func recoveryAttempt(state ActivationState, operation Operation, packID string, surface Surface) bool {
+	journal := state.Journal
+	if journal == nil || (journal.Outcome != AttemptRecoveryRequired && journal.Outcome != AttemptApplying) || journal.Operation != operation || journal.PackID != packID || journal.Surface != surface {
+		return false
+	}
+	intent, ok := intentForPack(state, packID, surface)
+	switch operation {
+	case OperationActivate, OperationUpdate:
+		return ok && intent.Active
+	case OperationDeactivate:
+		return !ok || !intent.Active
+	default:
+		return false
+	}
+}
+
+func (p *ReconciliationPlan) attachRecovery(state ActivationState, recovery bool) {
+	if !recovery || state.Journal == nil {
+		return
+	}
+	p.recovery = true
+	p.historicalAttempt = normalizedRecoveryJournal(state.Journal)
+}
+
+func normalizedRecoveryJournal(value *ApplyingJournal) *ApplyingJournal {
+	if value == nil {
+		return nil
+	}
+	journal := cloneJournal(*value)
+	if journal.Outcome == AttemptApplying {
+		journal.Outcome = AttemptRecoveryRequired
+		if journal.FailedAction == "" {
+			journal.FailedAction = "interrupted"
+		}
+		if journal.FailureDetail == "" {
+			journal.FailureDetail = "attempt was interrupted before a terminal outcome was durably recorded"
+		}
+	}
+	return &journal
+}
+
+func (p *ReconciliationPlan) requireRecoveryApproval() {
+	if !p.recovery || len(p.blockers) > 0 {
+		return
+	}
+	p.noOp = false
+	for _, phase := range p.phases {
+		if phase.ApprovalRequired {
+			return
+		}
+	}
+	p.phases = append([]PlanPhase{{Kind: ConsentReversibleLocal, ApprovalRequired: true}}, p.phases...)
+}
 func (p ReconciliationPlan) validSeal() bool {
 	copy := p
 	copy.seal()
@@ -1015,7 +1164,9 @@ func (p ReconciliationPlan) sealPayload() any {
 		Before          []Pack
 		Removed         map[string]string
 		ReconcileScope  ReconcileScope
-	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.oldVersion, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.retained, p.blockers, p.compositionFacts, p.intentFacts, p.ownershipFacts, p.activeDependents, p.beforeCompositionFacts, p.removedContributors, p.reconcileScope}
+		Recovery        bool
+		Historical      *ApplyingJournal
+	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.oldVersion, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.retained, p.blockers, p.compositionFacts, p.intentFacts, p.ownershipFacts, p.activeDependents, p.beforeCompositionFacts, p.removedContributors, p.reconcileScope, p.recovery, p.historicalAttempt}
 }
 
 func ownershipByID(values []ProjectionOwnership, id string) (ProjectionOwnership, bool) {
@@ -1208,13 +1359,21 @@ func cloneActivationState(state ActivationState) ActivationState {
 		state.Ownership[i].Contributors = append([]string(nil), state.Ownership[i].Contributors...)
 	}
 	if state.Journal != nil {
-		journal := *state.Journal
-		journal.Actions = append([]string(nil), journal.Actions...)
-		journal.Completed = append([]string(nil), journal.Completed...)
+		journal := cloneJournal(*state.Journal)
 		state.Journal = &journal
+	}
+	state.History = append([]ApplyingJournal(nil), state.History...)
+	for i := range state.History {
+		state.History[i] = cloneJournal(state.History[i])
 	}
 	state.External = append([]ExternalEffect(nil), state.External...)
 	return state
+}
+
+func cloneJournal(journal ApplyingJournal) ApplyingJournal {
+	journal.Actions = append([]string(nil), journal.Actions...)
+	journal.Completed = append([]string(nil), journal.Completed...)
+	return journal
 }
 
 func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, resolutions []ExecutableResolution) ([]ProjectionAction, []PlanBlocker) {

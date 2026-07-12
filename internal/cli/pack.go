@@ -222,6 +222,11 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDigest: %s\nPack: %s\nSurface: %s\n", prefix, plan.ID(), plan.Digest(), packLabel, plan.Surface()); err != nil {
 		return err
 	}
+	if history := plan.HistoricalAttempt(); history != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Recovery: fresh %s Preview toward the already-approved intent; historical plan %s is not replayed.\nHistorical outcome: %s\nHistorical digest: %s\nCompleted: %s\nFailed: %s — %s\nNot started: %s\nTo recover, repeat `matty pack %s %s --surface %s`; a new Preview and approvals are required.\n", plan.Operation(), history.PlanID, history.Outcome, history.PlanDigest, joinFacts(history.Completed), history.FailedAction, history.FailureDetail, joinFacts(history.NotStarted()), plan.Operation(), plan.Pack().ID, plan.Surface()); err != nil {
+			return err
+		}
+	}
 	if plan.Operation() == capabilitypack.OperationUpdate {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s -> %s (catalog-current)\nIntent revision: %d\n", plan.OldVersion(), plan.Pack().Version, plan.IntentRevision()); err != nil {
 			return err
@@ -322,6 +327,13 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		}
 	}
 	return nil
+}
+
+func joinFacts(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ", ")
 }
 
 type runnerExternalExecutor struct{ runner Runner }

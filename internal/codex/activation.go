@@ -244,7 +244,7 @@ func (a *ActivationAdapter) inspectOwnedProjection(id, promptContent, configCont
 	}
 }
 
-func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
+func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
 	executor := localprojection.Executor{
 		Host:         "Codex",
 		SymlinkKinds: map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionSkillLink: true},
@@ -253,7 +253,14 @@ func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabi
 			capabilitypack.ActionCodexMCPConfig:  true,
 		},
 	}
-	return executor.Apply(actions)
+	err := executor.Apply(actions)
+	if err == nil {
+		return nil
+	}
+	if actionErr, ok := err.(capabilitypack.ProjectionActionError); ok {
+		return &actionErr
+	}
+	return &capabilitypack.ProjectionActionError{ID: actions[0].ID, Err: err}
 }
 
 func instructionMarkers(id string) (string, string) {

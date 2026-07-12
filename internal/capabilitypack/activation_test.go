@@ -23,12 +23,19 @@ func (f *fakeActivationAdapter) InspectActivation(context.Context, Pack) (Activa
 	return f.observations[f.inspectCalls-1], nil
 }
 
-func (f *fakeActivationAdapter) ApplyProjections(_ context.Context, actions []ProjectionAction) error {
+func (f *fakeActivationAdapter) ApplyProjections(_ context.Context, actions []ProjectionAction) *ProjectionActionError {
 	if f.events != nil {
 		*f.events = append(*f.events, "effects")
 	}
 	f.actions = append(f.actions, actions...)
-	return f.applyErr
+	if f.applyErr == nil {
+		return nil
+	}
+	var actionErr ProjectionActionError
+	if errors.As(f.applyErr, &actionErr) {
+		return &actionErr
+	}
+	return &ProjectionActionError{ID: actions[0].ID, Err: f.applyErr}
 }
 
 type fakeActivationStore struct {

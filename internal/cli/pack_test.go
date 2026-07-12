@@ -2,12 +2,54 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPackRecoveryDryRunRendersTruthfulHistoryWithoutPromptsOrEffects(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _, runner := engramActivationOptions(t, terminal)
+	setup := runner.path["engram"] + " setup codex"
+	runner.fail = map[string]error{setup: errors.New("setup interrupted")}
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err == nil || !strings.Contains(err.Error(), "recovery is required") {
+		t.Fatalf("initial failure = %v", err)
+	}
+	before := snapshotTree(t, home)
+	previousCalls := len(runner.calls)
+	terminal.calls, terminal.prompts = 0, nil
+	delete(runner.fail, setup)
+
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex", "--dry-run")
+	if err != nil {
+		t.Fatalf("recovery dry-run: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Recovery: fresh activate Preview", "Historical outcome: recovery-required", "Completed:", "Failed: external:engram:setup:codex", "Not started: none", "historical plan", "is not replayed", "repeat `matty pack activate engram --surface codex`", "new Preview and approvals are required"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if terminal.calls != 0 || len(runner.calls) != previousCalls || snapshotTree(t, home) != before {
+		t.Fatalf("dry-run caused effects: prompts=%d calls=%v", terminal.calls, runner.calls[previousCalls:])
+	}
+	terminal.interactive = false
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("non-TTY recovery = %v", err)
+	}
+	if len(runner.calls) != previousCalls || snapshotTree(t, home) != before {
+		t.Fatal("non-TTY recovery caused effects")
+	}
+	terminal.interactive, terminal.approve, terminal.calls = true, false, 0
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("cancelled recovery = %v", err)
+	}
+	if terminal.calls != 1 || len(runner.calls) != previousCalls || snapshotTree(t, home) != before {
+		t.Fatal("cancelled recovery caused effects")
+	}
+}
 
 type fakeTerminal struct {
 	interactive bool

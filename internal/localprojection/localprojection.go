@@ -49,7 +49,7 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 	for _, action := range actions {
 		dirs, err := ensureDir(filepath.Dir(action.Target))
 		if err != nil {
-			return err
+			return capabilitypack.ProjectionActionError{ID: action.ID, Err: err}
 		}
 		for _, dir := range dirs {
 			if !createdSet[dir] {
@@ -64,31 +64,31 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 			_, err := os.Lstat(action.Target)
 			items[len(items)-1].hadTarget = err == nil
 			if err != nil && !os.IsNotExist(err) {
-				return err
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: err}
 			}
 			continue
 		}
 		switch {
 		case e.SymlinkKinds[action.Kind]:
 			if err := os.Symlink(action.Source, temp); err != nil {
-				return fmt.Errorf("stage %s: %w", action.ID, err)
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("stage: %w", err)}
 			}
 			if _, err := filepath.EvalSymlinks(temp); err != nil {
-				return fmt.Errorf("validate staged %s: %w", action.ID, err)
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged: %w", err)}
 			}
 		case e.FileKinds[action.Kind]:
 			if err := os.WriteFile(temp, []byte(action.Content), 0o600); err != nil {
-				return fmt.Errorf("stage %s: %w", action.ID, err)
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("stage: %w", err)}
 			}
 			staged, err := os.ReadFile(temp)
 			if err != nil {
-				return fmt.Errorf("validate staged %s: %w", action.ID, err)
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged: %w", err)}
 			}
 			if string(staged) != action.Content {
-				return fmt.Errorf("validate staged %s: content mismatch", action.ID)
+				return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged: content mismatch")}
 			}
 		default:
-			return fmt.Errorf("unsupported %s projection action %q", e.Host, action.Kind)
+			return capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("unsupported %s projection action %q", e.Host, action.Kind)}
 		}
 		_, err = os.Lstat(action.Target)
 		items[len(items)-1].hadTarget = err == nil
@@ -100,9 +100,9 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 			if err := os.Rename(item.action.Target, item.backup); err != nil {
 				if rollbackErr := rollback(items[:committed]); rollbackErr != nil {
 					cleanupCreatedDirs = false
-					return fmt.Errorf("commit %s: %v; rollback failed: %w", item.action.ID, err, rollbackErr)
+					return capabilitypack.ProjectionActionError{ID: item.action.ID, Err: fmt.Errorf("commit: %v; rollback failed: %w", err, rollbackErr)}
 				}
-				return err
+				return capabilitypack.ProjectionActionError{ID: items[i].action.ID, Err: err}
 			}
 		}
 		if item.action.Mode == capabilitypack.ProjectionDeleteTarget {
@@ -114,14 +114,14 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 				if restoreErr := os.Rename(item.backup, item.action.Target); restoreErr != nil {
 					cleanupCreatedDirs = false
 					if rollbackErr := rollback(items[:committed]); rollbackErr != nil {
-						return fmt.Errorf("commit %s: %v; restore current target failed: %v; rollback failed: %w", item.action.ID, err, restoreErr, rollbackErr)
+						return capabilitypack.ProjectionActionError{ID: item.action.ID, Err: fmt.Errorf("commit: %v; restore current target failed: %v; rollback failed: %w", err, restoreErr, rollbackErr)}
 					}
-					return fmt.Errorf("commit %s: %v; restore current target failed: %w", item.action.ID, err, restoreErr)
+					return capabilitypack.ProjectionActionError{ID: item.action.ID, Err: fmt.Errorf("commit: %v; restore current target failed: %w", err, restoreErr)}
 				}
 			}
 			if rollbackErr := rollback(items[:committed]); rollbackErr != nil {
 				cleanupCreatedDirs = false
-				return fmt.Errorf("commit %s: %v; rollback failed: %w", item.action.ID, err, rollbackErr)
+				return capabilitypack.ProjectionActionError{ID: item.action.ID, Err: fmt.Errorf("commit: %v; rollback failed: %w", err, rollbackErr)}
 			}
 			return err
 		}
@@ -161,7 +161,7 @@ func rollback(items []stagedAction) error {
 		}
 		if items[i].hadTarget {
 			if err := os.Rename(items[i].backup, items[i].action.Target); err != nil {
-				return err
+				return capabilitypack.ProjectionActionError{ID: items[i].action.ID, Err: err}
 			}
 		}
 	}

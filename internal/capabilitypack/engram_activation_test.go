@@ -239,13 +239,13 @@ func TestEngramLocalFailureRunsNoExternalEffect(t *testing.T) {
 	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{availableEngramResolution("/opt/homebrew/bin/engram")}}
 	executor := &fakeExternalExecutor{}
 	facade, adapter, store := engramFacadeForTest(resolver, executor, engramObservation("missing"), engramObservation("missing"))
-	adapter.applyErr = errors.New("local projection failed")
+	adapter.applyErr = ProjectionActionError{ID: "instruction:engram-memory", Err: errors.New("local projection failed and transaction restored")}
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal), facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
-	if err == nil || len(executor.actions) != 0 || len(store.saves) != 2 || store.state.Journal == nil || store.state.Journal.FailedAction != "reversible-local" {
+	if err == nil || len(executor.actions) != 0 || len(store.saves) != 2 || store.state.Journal == nil || store.state.Journal.FailedAction != "instruction:engram-memory" || !reflect.DeepEqual(store.state.Journal.NotStarted(), []string{"mcp_server:engram", "external:engram:setup:codex"}) {
 		t.Fatalf("local failure facts/effects: err=%v external=%d saves=%d", err, len(executor.actions), len(store.saves))
 	}
 }
@@ -269,6 +269,8 @@ func TestEngramExternalFailureStopsLaterActionsAndKeepsRecoveryFacts(t *testing.
 	if state.Journal == nil || state.Journal.FailedAction != "external:engram:setup:opencode" || !reflect.DeepEqual(state.Journal.Completed, []string{"instruction:engram-memory", "mcp_server:engram", "external:engram:acquire"}) || len(state.Ownership) != 0 {
 		t.Fatalf("recovery state = %+v", state)
 	}
+	historical := cloneJournal(*state.Journal)
+	revision := state.Intent.Revision
 
 	executor.failID = ""
 	recovery, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceOpenCode})
@@ -278,10 +280,16 @@ func TestEngramExternalFailureStopsLaterActionsAndKeepsRecoveryFacts(t *testing.
 	if len(phaseActions(recovery.phases, ConsentReversibleLocal)) != 0 || len(phaseActions(recovery.phases, ConsentExecutableExternal)) != 1 {
 		t.Fatalf("recovery phases = %#v", recovery.phases)
 	}
+	if !recovery.Recovery() || recovery.ID() == historical.PlanID || !reflect.DeepEqual(*recovery.HistoricalAttempt(), historical) {
+		t.Fatalf("fresh recovery/history = recovery:%t id:%s history:%+v", recovery.Recovery(), recovery.ID(), recovery.HistoricalAttempt())
+	}
+	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: recovery, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true}); !errors.Is(err, ErrApprovalMismatch) {
+		t.Fatalf("old approval accepted by recovery: %v", err)
+	}
 	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: recovery, Approvals: []ApprovalReceipt{facade.Approve(recovery, ConsentExecutableExternal)}, Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
-	if store.state.Journal != nil || len(store.state.Ownership) != 2 {
+	if store.state.Journal != nil || len(store.state.Ownership) != 2 || store.state.Intent.Revision != revision || len(store.state.History) != 1 || !reflect.DeepEqual(store.state.History[0], historical) {
 		t.Fatalf("verified recovery state = %+v", store.state)
 	}
 }
