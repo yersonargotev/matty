@@ -27,6 +27,7 @@ const (
 	ConsentExecutableExternal     ConsentKind          = "executable-external"
 	ConsentHostFollowUp           ConsentKind          = "host-follow-up"
 	OperationActivate             Operation            = "activate"
+	OperationUpdate               Operation            = "update"
 	ActionSkillLink               ProjectionActionKind = "skill-link"
 	ActionInstructionFile         ProjectionActionKind = "instruction-file"
 	ActionOpenCodeSkillLink       ProjectionActionKind = "opencode-skill-link"
@@ -44,6 +45,11 @@ func (e StalePlanError) Error() string { return fmt.Sprintf("%s: %s", ErrStalePl
 func (e StalePlanError) Unwrap() error { return ErrStalePlan }
 
 type ActivationRequest struct {
+	PackID  string
+	Surface Surface
+}
+
+type UpdateRequest struct {
 	PackID  string
 	Surface Surface
 }
@@ -203,6 +209,7 @@ type ReconciliationPlan struct {
 	operation              Operation
 	surface                Surface
 	intentRevision         int
+	oldVersion             string
 	observationFingerprint string
 	phases                 []PlanPhase
 	desired                []projectionExpectation
@@ -213,20 +220,30 @@ type ReconciliationPlan struct {
 	noOp                   bool
 	activations            []PlannedActivation
 	contributors           map[string][]string
+	retained               []RetainedProjection
 	blockers               []PlanBlocker
 	compositionFacts       []Pack
 	intentFacts            []ActivationIntent
+	ownershipFacts         []ProjectionOwnership
+}
+
+type RetainedProjection struct {
+	ID           string
+	Contributors []string
 }
 
 type projectionExpectation struct{ ID, Fingerprint string }
 type PortableOutcome struct{ Kind, ID string }
 
-func (p ReconciliationPlan) ID() string       { return p.id }
-func (p ReconciliationPlan) Digest() string   { return p.digest }
-func (p ReconciliationPlan) Pack() Pack       { return clonePack(p.pack) }
-func (p ReconciliationPlan) Surface() Surface { return p.surface }
-func (p ReconciliationPlan) NoOp() bool       { return p.noOp }
-func (p ReconciliationPlan) Applicable() bool { return len(p.blockers) == 0 }
+func (p ReconciliationPlan) ID() string           { return p.id }
+func (p ReconciliationPlan) Digest() string       { return p.digest }
+func (p ReconciliationPlan) Pack() Pack           { return clonePack(p.pack) }
+func (p ReconciliationPlan) Surface() Surface     { return p.surface }
+func (p ReconciliationPlan) Operation() Operation { return p.operation }
+func (p ReconciliationPlan) OldVersion() string   { return p.oldVersion }
+func (p ReconciliationPlan) IntentRevision() int  { return p.intentRevision }
+func (p ReconciliationPlan) NoOp() bool           { return p.noOp }
+func (p ReconciliationPlan) Applicable() bool     { return len(p.blockers) == 0 }
 func (p ReconciliationPlan) Activations() []PlannedActivation {
 	result := append([]PlannedActivation(nil), p.activations...)
 	for i := range result {
@@ -236,6 +253,20 @@ func (p ReconciliationPlan) Activations() []PlannedActivation {
 }
 func (p ReconciliationPlan) Blockers() []PlanBlocker {
 	return append([]PlanBlocker(nil), p.blockers...)
+}
+func (p ReconciliationPlan) RetainedProjections() []RetainedProjection {
+	result := append([]RetainedProjection(nil), p.retained...)
+	for i := range result {
+		result[i].Contributors = append([]string(nil), result[i].Contributors...)
+	}
+	return result
+}
+func (p ReconciliationPlan) Contributors() map[string][]string {
+	result := make(map[string][]string, len(p.contributors))
+	for id, contributors := range p.contributors {
+		result[id] = append([]string(nil), contributors...)
+	}
+	return result
 }
 func (p ReconciliationPlan) PortableOutcomes() []PortableOutcome {
 	return append([]PortableOutcome(nil), p.portable...)
@@ -286,6 +317,23 @@ type ApplyResult struct {
 }
 
 func (f Facade) Preview(ctx context.Context, request ActivationRequest) (ReconciliationPlan, error) {
+	return f.preview(ctx, request, OperationActivate, "")
+}
+
+func (f Facade) PreviewUpdate(ctx context.Context, request UpdateRequest) (ReconciliationPlan, error) {
+	activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface}
+	_, _, state, err := f.activationInputs(ctx, activation)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	intent, ok := intentForPack(state, request.PackID, request.Surface)
+	if !ok || !intent.Active {
+		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is not active on %s", request.PackID, request.Surface)
+	}
+	return f.preview(ctx, activation, OperationUpdate, intent.Version)
+}
+
+func (f Facade) preview(ctx context.Context, request ActivationRequest, operation Operation, oldVersion string) (ReconciliationPlan, error) {
 	requested, adapter, state, err := f.activationInputs(ctx, request)
 	if err != nil {
 		return ReconciliationPlan{}, err
@@ -329,7 +377,7 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 	}
 	pendingHumanActions := append([]string(nil), observation.PendingHumanActions...)
 	sort.Strings(pendingHumanActions)
-	plan := ReconciliationPlan{pack: requested, operation: OperationActivate, surface: request.Surface, intentRevision: state.Intent.Revision, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts}
+	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership)}
 	for _, resource := range pack.Resources {
 		plan.portable = append(plan.portable, PortableOutcome{Kind: resource.Kind, ID: resource.ID})
 	}
@@ -341,8 +389,13 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 	})
 	for _, projection := range observation.Projections {
 		plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint})
+		contributors := composition.contributorSet(projection.ID)
+		if projection.ObservedFingerprint == projection.DesiredFingerprint && len(contributors) > 1 {
+			plan.retained = append(plan.retained, RetainedProjection{ID: projection.ID, Contributors: contributors})
+		}
 	}
 	sort.Slice(plan.desired, func(i, j int) bool { return plan.desired[i].ID < plan.desired[j].ID })
+	sort.Slice(plan.retained, func(i, j int) bool { return plan.retained[i].ID < plan.retained[j].ID })
 	if len(actions) > 0 {
 		plan.phases = append(plan.phases, PlanPhase{Kind: ConsentReversibleLocal, ApprovalRequired: true, Actions: append([]ProjectionAction(nil), actions...)})
 	}
@@ -436,7 +489,6 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 			state.Journal.Actions = append(state.Journal.Actions, action.ID)
 		}
 	}
-	state.Ownership = nil
 	if err := f.activation.store.Save(ctx, request.Plan.surface, request.Plan.intentRevision, state); err != nil {
 		return ApplyResult{}, err
 	}
@@ -528,6 +580,11 @@ type planPreflight struct {
 }
 
 func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (planPreflight, error) {
+	freshCatalog, err := f.catalog.refreshed()
+	if err != nil {
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or manifest changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
+	}
+	f.catalog = freshCatalog
 	pack, adapter, state, err := f.activationInputs(ctx, ActivationRequest{PackID: plan.pack.ID, Surface: plan.surface})
 	if err != nil {
 		return planPreflight{}, err
@@ -535,7 +592,10 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 	current := f.compose(pack, state, plan.surface)
 	planned := composition{packs: plan.compositionFacts, activations: plan.activations, contributors: plan.contributors, blockers: plan.blockers, intentFacts: plan.intentFacts}
 	if current.identityDigest() != planned.identityDigest() {
-		return planPreflight{}, StalePlanError{Precondition: "dependency or catalog composition changed after Preview; rerun activation to preview a fresh plan"}
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("dependency or catalog composition changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
+	}
+	if digestJSON(cloneOwnership(state.Ownership)) != digestJSON(plan.ownershipFacts) {
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("projection ownership changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 	}
 	combined := current.combinedPack()
 	resolutions, err := f.resolveExecutables(ctx, combined)
@@ -543,17 +603,17 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 		return planPreflight{}, err
 	}
 	if !sameResolutions(plan.resolutions, resolutions) {
-		return planPreflight{}, StalePlanError{Precondition: "executable resolution changed after Preview; rerun activation to preview a fresh plan"}
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("executable resolution changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 	}
 	observation, err := inspectActivation(ctx, adapter, combined, resolutions)
 	if err != nil {
 		return planPreflight{}, err
 	}
 	if state.Intent.Revision != plan.intentRevision {
-		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d; rerun activation to preview a fresh plan", plan.intentRevision, state.Intent.Revision)}
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d; rerun %s to preview a fresh plan", plan.intentRevision, state.Intent.Revision, plan.operation)}
 	}
 	if observationDigest(observation) != plan.observationFingerprint {
-		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("%s projections changed after Preview; rerun activation to preview a fresh plan", plan.surface)}
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("%s projections changed after Preview; rerun %s to preview a fresh plan", plan.surface, plan.operation)}
 	}
 	return planPreflight{pack: pack, adapter: adapter, state: state, composition: current, combined: combined, resolutions: resolutions}, nil
 }
@@ -608,6 +668,7 @@ func (p ReconciliationPlan) sealPayload() any {
 		Operation       Operation
 		Surface         Surface
 		IntentRevision  int
+		OldVersion      string
 		Observation     string
 		Phases          []PlanPhase
 		Desired         []projectionExpectation
@@ -618,10 +679,30 @@ func (p ReconciliationPlan) sealPayload() any {
 		NoOp            bool
 		Activations     []PlannedActivation
 		Contributors    map[string][]string
+		Retained        []RetainedProjection
 		Blockers        []PlanBlocker
 		Composition     []Pack
 		IntentFacts     []ActivationIntent
-	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.blockers, p.compositionFacts, p.intentFacts}
+		OwnershipFacts  []ProjectionOwnership
+	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.oldVersion, p.observationFingerprint, p.phases, p.desired, p.portable, p.resolutions, p.readiness, p.pendingHumanActions, p.noOp, p.activations, p.contributors, p.retained, p.blockers, p.compositionFacts, p.intentFacts, p.ownershipFacts}
+}
+
+func cloneOwnership(values []ProjectionOwnership) []ProjectionOwnership {
+	result := append([]ProjectionOwnership(nil), values...)
+	for i := range result {
+		result[i].Contributors = append([]string(nil), result[i].Contributors...)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+func intentForPack(state ActivationState, packID string, surface Surface) (ActivationIntent, bool) {
+	for _, intent := range activeIntents(state) {
+		if intent.PackID == packID && intent.Surface == surface {
+			return intent, true
+		}
+	}
+	return ActivationIntent{}, false
 }
 
 func compositionActive(state ActivationState, packs []Pack, surface Surface) bool {

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -15,8 +16,84 @@ import (
 
 func newPackCommand(opts Options) *cobra.Command {
 	cmd := &cobra.Command{Use: "pack", Short: "Discover and manage capability packs"}
-	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts))
+	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts))
 	return cmd
+}
+
+func newPackUpdateCommand(opts Options) *cobra.Command {
+	var surface string
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use: "update <pack>", Short: "Update an active capability pack to the catalog-current version", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			facade, err := activationFacade(opts)
+			if err != nil {
+				return err
+			}
+			plan, err := facade.PreviewUpdate(cmd.Context(), capabilitypack.UpdateRequest{PackID: args[0], Surface: capabilitypack.Surface(surface)})
+			if err != nil {
+				return err
+			}
+			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
+				return err
+			}
+			return applyPackPlan(cmd, opts, facade, plan, dryRun)
+		},
+	}
+	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	_ = cmd.MarkFlagRequired("surface")
+	return cmd
+}
+
+func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facade, plan capabilitypack.ReconciliationPlan, dryRun bool) error {
+	if !plan.Applicable() || dryRun || plan.NoOp() {
+		return nil
+	}
+	interactive := opts.Terminal.Interactive(cmd.InOrStdin())
+	if !interactive {
+		_, err := facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Interactive: false})
+		return err
+	}
+	var receipts []capabilitypack.ApprovalReceipt
+	for _, phase := range plan.Phases() {
+		if !phase.ApprovalRequired {
+			continue
+		}
+		approved, err := opts.Terminal.Approve(cmd.InOrStdin(), cmd.OutOrStdout(), fmt.Sprintf("Approve %s phase for exact plan %s?", phase.Kind, plan.ID()))
+		if err != nil {
+			return err
+		}
+		if !approved {
+			operation := string(plan.Operation())
+			if plan.Operation() == capabilitypack.OperationActivate {
+				operation = "activation"
+			}
+			return fmt.Errorf("%s cancelled; plan %s was not approved", operation, plan.ID())
+		}
+		receipts = append(receipts, facade.Approve(plan, phase.Kind))
+	}
+	result, err := facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Approvals: receipts, Interactive: true})
+	if err != nil {
+		return err
+	}
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
+		return err
+	}
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", yesNo(result.Readiness.Configured), yesNo(result.Readiness.Authorized), yesNo(result.Readiness.Usable)); err != nil {
+		return err
+	}
+	if len(result.PendingHumanActions) > 0 {
+		if _, err = fmt.Fprintln(cmd.OutOrStdout(), "Pending human actions:"); err != nil {
+			return err
+		}
+		for _, action := range result.PendingHumanActions {
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func newPackActivateCommand(opts Options) *cobra.Command {
@@ -36,52 +113,7 @@ func newPackActivateCommand(opts Options) *cobra.Command {
 			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
 				return err
 			}
-			if !plan.Applicable() {
-				return nil
-			}
-			if dryRun || plan.NoOp() {
-				return nil
-			}
-			interactive := opts.Terminal.Interactive(cmd.InOrStdin())
-			if !interactive {
-				_, err = facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Interactive: false})
-				return err
-			}
-			var receipts []capabilitypack.ApprovalReceipt
-			for _, phase := range plan.Phases() {
-				if !phase.ApprovalRequired {
-					continue
-				}
-				approved, err := opts.Terminal.Approve(cmd.InOrStdin(), cmd.OutOrStdout(), fmt.Sprintf("Approve %s phase for exact plan %s?", phase.Kind, plan.ID()))
-				if err != nil {
-					return err
-				}
-				if !approved {
-					return fmt.Errorf("activation cancelled; plan %s was not approved", plan.ID())
-				}
-				receipts = append(receipts, facade.Approve(plan, phase.Kind))
-			}
-			result, err := facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Approvals: receipts, Interactive: true})
-			if err != nil {
-				return err
-			}
-			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
-				return err
-			}
-			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", yesNo(result.Readiness.Configured), yesNo(result.Readiness.Authorized), yesNo(result.Readiness.Usable)); err != nil {
-				return err
-			}
-			if len(result.PendingHumanActions) > 0 {
-				if _, err = fmt.Fprintln(cmd.OutOrStdout(), "Pending human actions:"); err != nil {
-					return err
-				}
-				for _, action := range result.PendingHumanActions {
-					if _, err = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action); err != nil {
-						return err
-					}
-				}
-			}
-			return err
+			return applyPackPlan(cmd, opts, facade, plan, dryRun)
 		},
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
@@ -120,10 +152,24 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 
 func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.ReconciliationPlan, dryRun bool) error {
 	prefix := "Activation plan"
-	if dryRun {
-		prefix = "Activation dry-run plan"
+	if plan.Operation() == capabilitypack.OperationUpdate {
+		prefix = "Update plan"
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDigest: %s\nPack: %s %s\nSurface: %s\n", prefix, plan.ID(), plan.Digest(), plan.Pack().ID, plan.Pack().Version, plan.Surface()); err != nil {
+	if dryRun {
+		prefix = strings.TrimSuffix(prefix, " plan") + " dry-run plan"
+	}
+	packLabel := plan.Pack().ID
+	if plan.Operation() != capabilitypack.OperationUpdate {
+		packLabel += " " + plan.Pack().Version
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDigest: %s\nPack: %s\nSurface: %s\n", prefix, plan.ID(), plan.Digest(), packLabel, plan.Surface()); err != nil {
+		return err
+	}
+	if plan.Operation() == capabilitypack.OperationUpdate {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s -> %s (catalog-current)\nIntent revision: %d\n", plan.OldVersion(), plan.Pack().Version, plan.IntentRevision()); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Version: %s\nIntent revision: %d\n", plan.Pack().Version, plan.IntentRevision()); err != nil {
 		return err
 	}
 	for _, activation := range plan.Activations() {
@@ -132,7 +178,11 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		}
 	}
 	if !plan.Applicable() {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply activation: %d blockers\n", len(plan.Blockers())); err != nil {
+		operation := "activation"
+		if plan.Operation() == capabilitypack.OperationUpdate {
+			operation = "update"
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply %s: %d blockers\n", operation, len(plan.Blockers())); err != nil {
 			return err
 		}
 		for _, blocker := range plan.Blockers() {
@@ -145,6 +195,22 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	if plan.NoOp() {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Already converged: no approval or Apply required.")
 		return err
+	}
+	contributors := plan.Contributors()
+	keys := make([]string, 0, len(contributors))
+	for id := range contributors {
+		keys = append(keys, id)
+	}
+	sort.Strings(keys)
+	for _, id := range keys {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Contributors: %s <- %s\n", id, strings.Join(contributors[id], ", ")); err != nil {
+			return err
+		}
+	}
+	for _, retained := range plan.RetainedProjections() {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Retained shared projection: %s <- %s (no rewrite)\n", retained.ID, strings.Join(retained.Contributors, ", ")); err != nil {
+			return err
+		}
 	}
 	for _, resolution := range plan.Resolutions() {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Requirement: %s available=%s path=%s origin=%s\n", resolution.Tool, yesNo(resolution.Available), resolution.Path, resolution.Origin); err != nil {

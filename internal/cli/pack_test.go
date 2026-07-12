@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -553,6 +554,261 @@ func TestPackCompositionBlockedPreviewRendersAllBlockersWithoutPromptOrEffects(t
 	}
 	if terminal.calls != prompts || snapshotTree(t, home) != before {
 		t.Fatal("blocked preview prompted or mutated HOME")
+	}
+}
+
+func TestPackUpdateRendersVersionsAndRetainedSharedResourcesOnBothSurfaces(t *testing.T) {
+	for _, surface := range []string{"codex", "opencode"} {
+		t.Run(surface, func(t *testing.T) {
+			terminal := &fakeTerminal{interactive: true, approve: true}
+			opts, home, _ := packActivationOptions(t, terminal)
+			bundle := writeUpdateBundle(t, "1.0.0")
+			opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
+				t.Fatalf("seed activation: %v\n%s", err, out)
+			}
+			writeUpdateManifest(t, bundle, "2.0.0")
+			before := snapshotTree(t, home)
+			prompts := terminal.calls
+			out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", surface, "--dry-run")
+			if err != nil {
+				t.Fatalf("update dry-run: %v\n%s", err, out)
+			}
+			for _, want := range []string{"Update dry-run plan plan-", "Version: 1.0.0 -> 2.0.0 (catalog-current)", "Intent revision:", "Retained shared projection:", "engram, matty", "no rewrite"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("missing %q:\n%s", want, out)
+				}
+			}
+			if terminal.calls != prompts || snapshotTree(t, home) != before {
+				t.Fatal("update dry-run prompted or mutated HOME")
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", surface)
+			if err != nil || !strings.Contains(out, "Verified plan") {
+				t.Fatalf("update apply: %v\n%s", err, out)
+			}
+			out, err = executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", surface)
+			if err != nil || !strings.Contains(out, "Already converged") {
+				t.Fatalf("update no-op: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestPackUpdateCancellationNonTTYAndStalePlanHaveZeroEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal *fakeTerminal
+		stale    bool
+	}{
+		{name: "cancel", terminal: &fakeTerminal{interactive: true, approve: false}},
+		{name: "non-tty", terminal: &fakeTerminal{interactive: false, approve: true}},
+		{name: "stale", terminal: &fakeTerminal{interactive: true, approve: true}, stale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, home, _ := packActivationOptions(t, &fakeTerminal{interactive: true, approve: true})
+			bundle := writeUpdateBundle(t, "1.0.0")
+			opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
+				t.Fatalf("seed: %v\n%s", err, out)
+			}
+			writeUpdateManifest(t, bundle, "2.0.0")
+			if err := os.WriteFile(filepath.Join(bundle, "instructions/shared.md"), []byte("shared v2\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			opts.Terminal = tc.terminal
+			if tc.stale {
+				tc.terminal.onApprove = func() { writeUpdateManifest(t, bundle, "3.0.0") }
+			}
+			before := snapshotTree(t, home)
+			_, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "codex")
+			if err == nil {
+				t.Fatal("unsafe update unexpectedly succeeded")
+			}
+			if snapshotTree(t, home) != before {
+				t.Fatalf("%s mutated HOME before safe Apply", tc.name)
+			}
+		})
+	}
+}
+
+func TestPackUpdateRendersConsolidatedBlockersWithoutPrompts(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	bundle := writeCompositionBundle(t, false)
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	for _, pack := range []string{"engram", "matty"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {
+			t.Fatalf("seed %s: %v\n%s", pack, err, out)
+		}
+	}
+	blocked := `{"schema_version":1,"id":"matty","version":"2.0.0","provides":[],"requires":{"capabilities":["cap:missing"],"tools":[]},"conflicts":["cap:dep"],"resources":[{"kind":"instruction","id":"matty","source":"instructions/app.md"}]}`
+	if err := os.WriteFile(filepath.Join(bundle, "packs/matty/pack.json"), []byte(blocked), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prompts := terminal.calls
+	before := snapshotTree(t, home)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "codex")
+	if err != nil {
+		t.Fatalf("blocked update: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Cannot apply update: 2 blockers", "capability-conflict", "dependency cap:missing"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("blocked update prompted or mutated HOME")
+	}
+}
+
+func TestPackUpdateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	bundle := writeUpdateBundle(t, "1.0.0")
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	for _, surface := range []string{"codex", "opencode"} {
+		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
+			t.Fatalf("seed %s: %v\n%s", surface, err, out)
+		}
+	}
+	openCodeConfig := readFileString(t, filepath.Join(home, "xdg", "opencode", "opencode.json"))
+	statePath := filepath.Join(home, ".matty", "packs.json")
+	openCodeOwnership := ownershipForSurface(t, statePath, "opencode")
+	writeUpdateManifest(t, bundle, "2.0.0")
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "codex"); err != nil {
+		t.Fatalf("Codex update: %v\n%s", err, out)
+	}
+	if got := readFileString(t, filepath.Join(home, "xdg", "opencode", "opencode.json")); got != openCodeConfig {
+		t.Fatal("Codex update mutated OpenCode configuration")
+	}
+	state := readFileString(t, statePath)
+	if !strings.Contains(state, `"version": "2.0.0"`) || !strings.Contains(state, `"version": "1.0.0"`) || !strings.Contains(state, `"surface": "opencode"`) {
+		t.Fatalf("surface intents were not independent:\n%s", state)
+	}
+	if got := ownershipForSurface(t, statePath, "opencode"); got != openCodeOwnership {
+		t.Fatalf("Codex update mutated OpenCode ownership:\nbefore=%s\nafter=%s", openCodeOwnership, got)
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "opencode", "--dry-run"); err != nil || !strings.Contains(out, "Version: 1.0.0 -> 2.0.0") {
+		t.Fatalf("OpenCode intent was unexpectedly changed: %v\n%s", err, out)
+	}
+}
+
+func ownershipForSurface(t *testing.T, statePath, surface string) string {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal([]byte(readFileString(t, statePath)), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range document["activations"].([]any) {
+		activation := raw.(map[string]any)
+		intent := activation["intent"].(map[string]any)
+		if intent["surface"] == surface {
+			encoded, err := json.Marshal(activation["ownership"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(encoded)
+		}
+	}
+	t.Fatalf("missing %s activation", surface)
+	return ""
+}
+
+func TestPackUpdatePromptsLocalAndExternalSeparatelyAndCancellationHasNoEffects(t *testing.T) {
+	seedTerminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, repoRoot, runner := engramActivationOptions(t, seedTerminal)
+	bundle := copyPackBundleForUpdate(t, repoRoot)
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err != nil {
+		t.Fatalf("seed: %v\n%s", err, out)
+	}
+	manifestPath := filepath.Join(bundle, "packs", "engram", "pack.json")
+	manifest := readFileString(t, manifestPath)
+	manifest = strings.Replace(manifest, `"version": "1.0.0"`, `"version": "2.0.0"`, 1)
+	manifest = strings.Replace(manifest, `"--tools=agent"`, `"--tools=agent,update"`, 1)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(home, ".matty", "packs.json")
+	var document map[string]any
+	if err := json.Unmarshal([]byte(readFileString(t, statePath)), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range document["activations"].([]any) {
+		activation := raw.(map[string]any)
+		intent := activation["intent"].(map[string]any)
+		if intent["surface"] == "codex" {
+			delete(activation, "external_effects")
+		}
+	}
+	encoded, _ := json.MarshalIndent(document, "", "  ")
+	if err := os.WriteFile(statePath, append(encoded, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cancel := &fakeTerminal{interactive: true, answers: []bool{true, false}}
+	opts.Terminal = cancel
+	before := snapshotTree(t, home)
+	calls := len(runner.calls)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "engram", "--surface", "codex")
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("cancel error=%v\n%s", err, out)
+	}
+	if len(cancel.prompts) != 2 || !strings.Contains(cancel.prompts[0], "reversible-local") || !strings.Contains(cancel.prompts[1], "executable-external") {
+		t.Fatalf("prompts=%#v", cancel.prompts)
+	}
+	if snapshotTree(t, home) != before || len(runner.calls) != calls {
+		t.Fatal("cancelled multi-phase update caused effects")
+	}
+}
+
+func copyPackBundleForUpdate(t *testing.T, repoRoot string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{"skills", "instructions"} {
+		if err := os.CopyFS(filepath.Join(root, dir), os.DirFS(filepath.Join(repoRoot, "bundle", dir))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pack := range []string{"matty", "engram"} {
+		dir := filepath.Join(root, "packs", pack)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(repoRoot, "bundle", "packs", pack, "pack.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pack.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func writeUpdateBundle(t *testing.T, version string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{"skills", "packs/matty", "packs/engram", "instructions"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "instructions/shared.md"), []byte("shared\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dep := `{"schema_version":1,"id":"engram","version":"1.0.0","provides":["cap:dep"],"requires":{"capabilities":[],"tools":[]},"conflicts":[],"resources":[{"kind":"instruction","id":"shared","source":"instructions/shared.md"}]}`
+	if err := os.WriteFile(filepath.Join(root, "packs/engram/pack.json"), []byte(dep), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeUpdateManifest(t, root, version)
+	return root
+}
+
+func writeUpdateManifest(t *testing.T, root, version string) {
+	t.Helper()
+	app := `{"schema_version":1,"id":"matty","version":"` + version + `","provides":[],"requires":{"capabilities":["cap:dep"],"tools":[]},"conflicts":[],"resources":[{"kind":"instruction","id":"shared","source":"instructions/shared.md"}]}`
+	if err := os.WriteFile(filepath.Join(root, "packs/matty/pack.json"), []byte(app), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 

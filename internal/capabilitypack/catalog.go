@@ -75,7 +75,11 @@ func (p Pack) ResourceCounts() ResourceCounts {
 	return counts
 }
 
-type Catalog struct{ packs []Pack }
+type Catalog struct {
+	packs      []Pack
+	bundleRoot string
+	entries    []catalogEntry
+}
 
 type catalogEntry struct {
 	ID          string
@@ -112,7 +116,14 @@ func discoverCatalog(bundleRoot string, entries []catalogEntry) (Catalog, error)
 		packs = append(packs, pack)
 	}
 	sort.Slice(packs, func(i, j int) bool { return packs[i].ID < packs[j].ID })
-	return Catalog{packs: packs}, nil
+	return Catalog{packs: packs, bundleRoot: bundleRoot, entries: append([]catalogEntry(nil), entries...)}, nil
+}
+
+func (c Catalog) refreshed() (Catalog, error) {
+	if c.bundleRoot == "" {
+		return c, nil
+	}
+	return discoverCatalog(c.bundleRoot, c.entries)
 }
 
 func (c Catalog) List() []Pack {
