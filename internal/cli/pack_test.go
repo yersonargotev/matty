@@ -79,6 +79,51 @@ func TestPackRecoveryDryRunRendersTruthfulHistoryWithoutPromptsOrEffects(t *test
 	}
 }
 
+func TestPackRecoveryPreviewReportsMixedPlanAsNonActionableWithoutEffects(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, repoRoot, runner := engramActivationOptions(t, terminal)
+	bundle := copyPackBundleForUpdate(t, repoRoot)
+	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
+	setup := runner.path["engram"] + " setup codex"
+	runner.fail = map[string]error{setup: errors.New("setup interrupted")}
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err == nil {
+		t.Fatal("expected recovery-required seed failure")
+	}
+	manifestPath := filepath.Join(bundle, "packs", "engram", "pack.json")
+	var manifest map[string]any
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	requires := manifest["requires"].(map[string]any)
+	requires["capabilities"] = []string{"cap:missing"}
+	manifestData, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delete(runner.fail, setup)
+	before := snapshotTree(t, home)
+	calls, prompts := len(runner.calls), terminal.calls
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex", "--dry-run")
+	if !errors.Is(err, capabilitypack.ErrPlanNotActionable) {
+		t.Fatalf("mixed recovery error=%v\n%s", err, out)
+	}
+	for _, want := range []string{"Recovery: fresh activate Preview", "Plan disposition: mixed", "Blocker: dependency", "Phase: executable-external"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("mixed recovery missing %q:\n%s", want, out)
+		}
+	}
+	if snapshotTree(t, home) != before || len(runner.calls) != calls || terminal.calls != prompts {
+		t.Fatal("mixed recovery preview mutated files, state, journals, configuration, or external effects")
+	}
+}
+
 func TestCapabilityPackRolloutRecoveryMatrixUsesFreshPreview(t *testing.T) {
 	for _, packID := range []string{"matty", "engram"} {
 		for _, surface := range []string{"codex", "opencode"} {
@@ -859,10 +904,10 @@ func TestPackCompositionBlockedPreviewRendersAllBlockersWithoutPromptOrEffects(t
 	prompts := terminal.calls
 	before := snapshotTree(t, home)
 	out, err = executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex")
-	if err != nil {
-		t.Fatalf("blocked preview: %v\n%s", err, out)
+	if !errors.Is(err, capabilitypack.ErrPlanNotActionable) {
+		t.Fatalf("blocked preview error: %v\n%s", err, out)
 	}
-	for _, want := range []string{"Cannot apply activation: 2 blockers", "capability-conflict", "dependency cap:missing"} {
+	for _, want := range []string{"Plan disposition: mixed", "Cannot apply activation: 2 blockers", "Preserved or blocked projections:", "Applicable actions (not applied while required blockers remain):", "capability-conflict", "dependency cap:missing", "Phase: reversible-local"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)
 		}
@@ -963,10 +1008,10 @@ func TestPackUpdateRendersConsolidatedBlockersWithoutPrompts(t *testing.T) {
 	prompts := terminal.calls
 	before := snapshotTree(t, home)
 	out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "codex")
-	if err != nil {
-		t.Fatalf("blocked update: %v\n%s", err, out)
+	if !errors.Is(err, capabilitypack.ErrPlanNotActionable) {
+		t.Fatalf("blocked update error: %v\n%s", err, out)
 	}
-	for _, want := range []string{"Cannot apply update: 2 blockers", "capability-conflict", "dependency cap:missing"} {
+	for _, want := range []string{"Plan disposition: blocked", "Cannot apply update: 2 blockers", "capability-conflict", "dependency cap:missing"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)
 		}
@@ -1204,8 +1249,8 @@ func TestPackDeactivateRequiredPackIsBlockedWithoutPromptOrCascade(t *testing.T)
 	before := snapshotTree(t, home)
 	prompts := terminal.calls
 	out, err := executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "engram", "--surface", "codex")
-	if err != nil {
-		t.Fatalf("blocked preview: %v\n%s", err, out)
+	if !errors.Is(err, capabilitypack.ErrPlanNotActionable) {
+		t.Fatalf("blocked preview error: %v\n%s", err, out)
 	}
 	for _, want := range []string{"Cannot apply deactivation", "active-dependent", "matty", "cap:dep", "no automatic cascade"} {
 		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
@@ -1348,6 +1393,75 @@ func TestPackReconcileTargetedAndSurfaceWideRenderSealedDesiredState(t *testing.
 	}
 	if terminal.calls != prompts || snapshotTree(t, home) != before {
 		t.Fatal("reconcile dry-run prompted or caused effects")
+	}
+}
+
+func TestPackReconcileBlockedTargetedAndSurfaceWideExitNonzeroWithoutEffects(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
+		t.Fatalf("seed: %v\n%s", err, out)
+	}
+	clearSurfaceOwnership(t, filepath.Join(home, ".matty", "packs.json"), capabilitypack.SurfaceCodex)
+	projection := filepath.Join(home, ".codex", "AGENTS.md")
+	desired := readFileString(t, projection)
+	if err := os.WriteFile(projection, []byte(strings.Replace(desired, "Matty", "User-Matty", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, home)
+	prompts := terminal.calls
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"targeted", []string{"pack", "reconcile", "matty", "--surface", "codex", "--dry-run"}},
+		{"surface-wide", []string{"pack", "reconcile", "--surface", "codex", "--dry-run"}},
+		{"interactive-apply", []string{"pack", "reconcile", "matty", "--surface", "codex"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), tc.args...)
+			if !errors.Is(err, capabilitypack.ErrPlanNotActionable) {
+				t.Fatalf("blocked reconcile error=%v\n%s", err, out)
+			}
+			for _, want := range []string{"Plan disposition: blocked", "Cannot apply reconcile", "Blocker: ownership"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("missing %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, "Verified plan") {
+				t.Fatalf("blocked interactive Apply overstated success:\n%s", out)
+			}
+		})
+	}
+	if snapshotTree(t, home) != before || terminal.calls != prompts {
+		t.Fatal("blocked reconcile previews mutated files, ownership, intent, journals, or configuration")
+	}
+}
+
+func clearSurfaceOwnership(t *testing.T, path string, surface capabilitypack.Surface) {
+	t.Helper()
+	var document struct {
+		SchemaVersion int                              `json:"schema_version"`
+		Activations   []capabilitypack.ActivationState `json:"activations"`
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	for i := range document.Activations {
+		if document.Activations[i].Intent.Surface == surface {
+			document.Activations[i].Ownership = nil
+		}
+	}
+	data, err = json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -45,11 +45,11 @@ Work the **frontier**: any ticket whose blockers are all done. Four tickets can 
 
 **Blocked by:** Repair drift in Matty-owned projections.
 
-- [ ] An applicable dry-run remains successful and clearly describes the actions that could be approved.
-- [ ] A fully ownership-blocked or otherwise non-actionable lifecycle request is distinguishable through stable output and a non-success exit status.
-- [ ] Mixed plans clearly separate applicable actions from preserved or blocked projections without overstating that repair succeeded.
-- [ ] Interactive Apply cannot claim success when required changes were blocked or no verified desired state was reached.
-- [ ] CLI tests cover update, targeted reconcile, surface-wide reconcile, and recovery previews.
+- [x] An applicable dry-run remains successful and clearly describes the actions that could be approved.
+- [x] A fully ownership-blocked or otherwise non-actionable lifecycle request is distinguishable through stable output and a non-success exit status.
+- [x] Mixed plans clearly separate applicable actions from preserved or blocked projections without overstating that repair succeeded.
+- [x] Interactive Apply cannot claim success when required changes were blocked or no verified desired state was reached.
+- [x] CLI tests cover update, targeted reconcile, surface-wide reconcile, and recovery previews.
 
 ## Clean up Matty-created empty containers
 

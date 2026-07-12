@@ -17,7 +17,25 @@ var (
 	ErrApprovalMismatch    = errors.New("approval does not match the exact plan")
 	ErrStalePlan           = errors.New("reconciliation plan is stale")
 	ErrVerificationFailed  = errors.New("fresh verification did not match desired state")
+	ErrPlanNotActionable   = errors.New("lifecycle plan is not actionable")
 )
+
+type PlanDisposition string
+
+const (
+	PlanConverged    PlanDisposition = "converged"
+	PlanApplicable   PlanDisposition = "applicable"
+	PlanMixed        PlanDisposition = "mixed"
+	PlanBlocked      PlanDisposition = "blocked"
+	PlanPendingHuman PlanDisposition = "pending-human-actions"
+)
+
+type PlanNotActionableError struct{ Disposition PlanDisposition }
+
+func (e PlanNotActionableError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrPlanNotActionable, e.Disposition)
+}
+func (e PlanNotActionableError) Unwrap() error { return ErrPlanNotActionable }
 
 type ConsentKind string
 type Operation string
@@ -382,7 +400,31 @@ func (p ReconciliationPlan) ReconcileScope() ReconcileScope { return p.reconcile
 func (p ReconciliationPlan) OldVersion() string             { return p.oldVersion }
 func (p ReconciliationPlan) IntentRevision() int            { return p.intentRevision }
 func (p ReconciliationPlan) NoOp() bool                     { return p.noOp }
-func (p ReconciliationPlan) Applicable() bool               { return len(p.blockers) == 0 }
+func (p ReconciliationPlan) Applicable() bool {
+	return p.Disposition() == PlanApplicable || p.Disposition() == PlanConverged || p.Disposition() == PlanPendingHuman
+}
+func (p ReconciliationPlan) Disposition() PlanDisposition {
+	actions := false
+	for _, phase := range p.phases {
+		if phase.ApprovalRequired && len(phase.Actions) > 0 {
+			actions = true
+			break
+		}
+	}
+	if len(p.blockers) > 0 {
+		if actions {
+			return PlanMixed
+		}
+		return PlanBlocked
+	}
+	if actions {
+		return PlanApplicable
+	}
+	if len(p.pendingHumanActions) > 0 {
+		return PlanPendingHuman
+	}
+	return PlanConverged
+}
 func (p ReconciliationPlan) Activations() []PlannedActivation {
 	result := append([]PlannedActivation(nil), p.activations...)
 	for i := range result {
@@ -556,7 +598,6 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	}
 	sortBlockers(plan.blockers)
 	if len(plan.blockers) > 0 {
-		plan.phases = nil
 		plan.noOp = false
 	}
 	sort.Slice(plan.retained, func(i, j int) bool { return plan.retained[i].ID < plan.retained[j].ID })
@@ -683,7 +724,6 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 		plan.phases = append(plan.phases, PlanPhase{Kind: ConsentHostFollowUp, Actions: hostActions})
 	}
 	if len(plan.blockers) > 0 {
-		plan.phases = nil
 		plan.noOp = false
 	}
 	plan.requireRecoveryApproval()
@@ -702,7 +742,7 @@ func (f Facade) Approve(plan ReconciliationPlan, kind ConsentKind) ApprovalRecei
 
 func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, error) {
 	if !request.Plan.Applicable() {
-		return ApplyResult{}, fmt.Errorf("blocked reconciliation plan is not applicable")
+		return ApplyResult{}, PlanNotActionableError{Disposition: request.Plan.Disposition()}
 	}
 	if !request.Plan.validSeal() {
 		return ApplyResult{}, ErrApprovalMismatch

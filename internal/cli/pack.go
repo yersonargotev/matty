@@ -124,7 +124,10 @@ func newPackUpdateCommand(opts Options) *cobra.Command {
 }
 
 func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facade, plan capabilitypack.ReconciliationPlan, dryRun bool) error {
-	if !plan.Applicable() || dryRun || plan.NoOp() {
+	if !plan.Applicable() {
+		return capabilitypack.PlanNotActionableError{Disposition: plan.Disposition()}
+	}
+	if dryRun || plan.NoOp() {
 		return nil
 	}
 	interactive := opts.Terminal.Interactive(cmd.InOrStdin())
@@ -278,7 +281,11 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 			return err
 		}
 	}
-	if !plan.Applicable() {
+	disposition := plan.Disposition()
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Plan disposition: %s\n", disposition); err != nil {
+		return err
+	}
+	if disposition == capabilitypack.PlanBlocked || disposition == capabilitypack.PlanMixed {
 		operation := "activation"
 		if plan.Operation() == capabilitypack.OperationUpdate {
 			operation = "update"
@@ -287,7 +294,7 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		} else if plan.Operation() == capabilitypack.OperationReconcile {
 			operation = "reconcile"
 		}
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply %s: %d blockers\n", operation, len(plan.Blockers())); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Cannot apply %s: %d blockers\nPreserved or blocked projections:\n", operation, len(plan.Blockers())); err != nil {
 			return err
 		}
 		for _, blocker := range plan.Blockers() {
@@ -295,7 +302,14 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 				return err
 			}
 		}
-		return nil
+		if disposition == capabilitypack.PlanBlocked {
+			return nil
+		}
+	}
+	if disposition == capabilitypack.PlanMixed {
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Applicable actions (not applied while required blockers remain):"); err != nil {
+			return err
+		}
 	}
 	if plan.NoOp() {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Already converged: no approval or Apply required.")

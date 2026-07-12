@@ -15,6 +15,28 @@ type fakeActivationAdapter struct {
 	applyErr     error
 }
 
+func TestPlanDispositionDefinesLifecycleSemantics(t *testing.T) {
+	action := PlanPhase{Kind: ConsentReversibleLocal, ApprovalRequired: true, Actions: []ProjectionAction{{ID: "instruction:guide"}}}
+	blocker := PlanBlocker{Kind: BlockerOwnership, Subject: "instruction:guide"}
+	for _, tc := range []struct {
+		name string
+		plan ReconciliationPlan
+		want PlanDisposition
+	}{
+		{name: "legitimately converged no-op", plan: ReconciliationPlan{noOp: true}, want: PlanConverged},
+		{name: "applicable actions", plan: ReconciliationPlan{phases: []PlanPhase{action}}, want: PlanApplicable},
+		{name: "mixed actions and protected content", plan: ReconciliationPlan{phases: []PlanPhase{action}, blockers: []PlanBlocker{blocker}}, want: PlanMixed},
+		{name: "fully blocked", plan: ReconciliationPlan{blockers: []PlanBlocker{blocker}}, want: PlanBlocked},
+		{name: "pending human actions only", plan: ReconciliationPlan{pendingHumanActions: []string{"authenticate"}}, want: PlanPendingHuman},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.plan.Disposition(); got != tc.want {
+				t.Fatalf("disposition=%s want=%s", got, tc.want)
+			}
+		})
+	}
+}
+
 func (f *fakeActivationAdapter) InspectActivation(context.Context, Pack) (ActivationObservation, error) {
 	f.inspectCalls++
 	if f.inspectCalls > len(f.observations) {

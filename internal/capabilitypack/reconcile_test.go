@@ -209,6 +209,31 @@ func TestReconcilePreservesAmbiguousOrUnmanagedDriftAsHumanAction(t *testing.T) 
 	}
 }
 
+func TestReconcilePlanDispositionDistinguishesBlockedMixedAndApplicable(t *testing.T) {
+	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "managed"}, {Kind: "instruction", ID: "unmanaged"}}}
+	state := ActivationState{Intent: activeIntent("app", "1", 1), Ownership: []ProjectionOwnership{{ID: "instruction:managed", Contributors: []string{"app"}, Fingerprint: "managed-desired"}}}
+	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{
+		{ID: "instruction:managed", Exists: true, ObservedFingerprint: "drift", DesiredFingerprint: "managed-desired", Action: ProjectionAction{ID: "instruction:managed", Description: "restore managed"}},
+		{ID: "instruction:unmanaged", Exists: true, ObservedFingerprint: "user", DesiredFingerprint: "unmanaged-desired", Action: ProjectionAction{ID: "instruction:unmanaged", Description: "overwrite unmanaged"}},
+	}}
+	facade, _, _ := reconcileFixture([]Pack{pack}, state, obs)
+	mixed, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
+	if err != nil || mixed.Disposition() != PlanMixed || mixed.Applicable() || len(mixed.Phases()) != 1 || len(mixed.Blockers()) != 1 {
+		t.Fatalf("mixed disposition=%s applicable=%v phases=%+v blockers=%+v err=%v", mixed.Disposition(), mixed.Applicable(), mixed.Phases(), mixed.Blockers(), err)
+	}
+	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: mixed, Interactive: true}); !errors.Is(err, ErrPlanNotActionable) {
+		t.Fatalf("mixed Apply error=%v", err)
+	}
+
+	blockedState := state
+	blockedState.Ownership = nil
+	blockedFacade, _, _ := reconcileFixture([]Pack{pack}, blockedState, obs)
+	blocked, err := blockedFacade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
+	if err != nil || blocked.Disposition() != PlanBlocked || blocked.Applicable() || len(blocked.Phases()) != 0 {
+		t.Fatalf("blocked disposition=%s applicable=%v phases=%+v err=%v", blocked.Disposition(), blocked.Applicable(), blocked.Phases(), err)
+	}
+}
+
 func TestReconcileDeletesObsoleteProjectionOnlyWithVerifiedOwnershipAndDestructiveApproval(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}}
 	state := ActivationState{Intent: activeIntent("app", "1", 3), Ownership: []ProjectionOwnership{{ID: "instruction:obsolete", Contributors: []string{"app"}, Fingerprint: "owned"}}}
