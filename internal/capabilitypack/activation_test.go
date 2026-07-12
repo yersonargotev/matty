@@ -37,10 +37,10 @@ type fakeActivationStore struct {
 	saves  []ActivationState
 }
 
-func (f *fakeActivationStore) Load(context.Context) (ActivationState, error) {
+func (f *fakeActivationStore) Load(context.Context, Surface) (ActivationState, error) {
 	return cloneActivationState(f.state), nil
 }
-func (f *fakeActivationStore) Save(_ context.Context, expectedRevision int, state ActivationState) error {
+func (f *fakeActivationStore) Save(_ context.Context, _ Surface, expectedRevision int, state ActivationState) error {
 	if f.state.Intent.Revision != expectedRevision {
 		return ErrStalePlan
 	}
@@ -53,10 +53,14 @@ func (f *fakeActivationStore) Save(_ context.Context, expectedRevision int, stat
 }
 
 func activationFixture(observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
-	pack := Pack{ID: "matty", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "skill", ID: "ask-matt", Source: "/bundle/skills/ask-matt"}, {Kind: "instruction", ID: "matty-guidance", Source: "/bundle/instructions/matty-guidance.md"}}}
+	return activationFixtureForSurface(SurfaceCodex, observations...)
+}
+
+func activationFixtureForSurface(surface Surface, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
+	pack := Pack{ID: "matty", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}, Resources: []Resource{{Kind: "skill", ID: "ask-matt", Source: "/bundle/skills/ask-matt"}, {Kind: "instruction", ID: "matty-guidance", Source: "/bundle/instructions/matty-guidance.md"}}}
 	adapter := &fakeActivationAdapter{observations: observations}
 	store := &fakeActivationStore{}
-	facade := NewFacade(Catalog{packs: []Pack{pack}}, map[Surface]SurfaceInspector{SurfaceCodex: fakeSurfaceInspectorPtr()}, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: []Pack{pack}}, map[Surface]SurfaceInspector{surface: fakeSurfaceInspectorPtr()}, WithActivation(store, map[Surface]ActivationAdapter{surface: adapter}))
 	return facade, adapter, store
 }
 
@@ -192,5 +196,82 @@ func TestAlreadyConvergedActivationIsNoOpWithoutApprovalOrApply(t *testing.T) {
 	}
 	if adapter.inspectCalls != 1 || len(adapter.actions) != 0 || len(store.saves) != 0 {
 		t.Fatalf("no-op caused apply/save")
+	}
+}
+
+func TestOpenCodeActivationUsesExactApprovedPlanAndRecordsOwnershipAfterVerification(t *testing.T) {
+	events := []string{}
+	verified := pendingObservation("missing")
+	verified.Revision = "host-2"
+	for i := range verified.Projections {
+		verified.Projections[i].ObservedFingerprint = verified.Projections[i].DesiredFingerprint
+	}
+	facade, adapter, store := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"), pendingObservation("missing"), verified)
+	adapter.events, store.events = &events, &events
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Surface() != SurfaceOpenCode {
+		t.Fatalf("surface = %s", plan.Surface())
+	}
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || !reflect.DeepEqual(events[:2], []string{"persist", "effects"}) {
+		t.Fatalf("result/events = %+v %v", result, events)
+	}
+	if store.saves[0].Intent.Surface != SurfaceOpenCode || store.saves[0].Journal == nil || len(store.saves[0].Ownership) != 0 {
+		t.Fatalf("pre-effect state = %+v", store.saves[0])
+	}
+	if store.saves[1].Journal != nil || len(store.saves[1].Ownership) != 2 {
+		t.Fatalf("verified state = %+v", store.saves[1])
+	}
+}
+
+func TestApprovalForCodexPlanCannotApproveOpenCodePlan(t *testing.T) {
+	codexFacade, _, _ := activationFixtureForSurface(SurfaceCodex, pendingObservation("missing"))
+	openCodeFacade, adapter, store := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"))
+	codexPlan, _ := codexFacade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
+	openCodePlan, _ := openCodeFacade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceOpenCode})
+
+	_, err := openCodeFacade.Apply(context.Background(), ApplyRequest{Plan: openCodePlan, Approvals: []ApprovalReceipt{codexFacade.Approve(codexPlan, ConsentReversibleLocal)}, Interactive: true})
+	if !errors.Is(err, ErrApprovalMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if adapter.inspectCalls != 1 || len(adapter.actions) != 0 || len(store.saves) != 0 {
+		t.Fatal("cross-surface approval caused effects")
+	}
+}
+
+func TestOpenCodeStalePlanExecutesZeroActions(t *testing.T) {
+	facade, adapter, store := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"), ActivationObservation{Revision: "changed", Projections: pendingObservation("missing").Projections})
+	plan, _ := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceOpenCode})
+	_, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
+	if !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(adapter.actions) != 0 || len(store.saves) != 0 {
+		t.Fatal("stale OpenCode plan caused effects")
+	}
+}
+
+func TestSurfacesSharePortableOutcomesWhileKeepingDistinctPlanIdentity(t *testing.T) {
+	codexFacade, _, _ := activationFixtureForSurface(SurfaceCodex, pendingObservation("missing"))
+	openCodeFacade, _, _ := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"))
+	codexPlan, err := codexFacade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openCodePlan, err := openCodeFacade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(codexPlan.PortableOutcomes(), openCodePlan.PortableOutcomes()) {
+		t.Fatalf("portable outcomes differ: codex=%v opencode=%v", codexPlan.PortableOutcomes(), openCodePlan.PortableOutcomes())
+	}
+	if codexPlan.Digest() == openCodePlan.Digest() {
+		t.Fatal("host-specific surfaces did not produce distinct sealed plans")
 	}
 }

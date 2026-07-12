@@ -2,16 +2,14 @@ package codex
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/matty/internal/localprojection"
 )
 
 const (
@@ -25,12 +23,6 @@ type ActivationAdapter struct {
 	promptFile string
 }
 
-type stagedAction struct {
-	action       capabilitypack.ProjectionAction
-	temp, backup string
-	hadTarget    bool
-}
-
 func NewActivationAdapter(bundleRoot, skillsDir, promptFile string) *ActivationAdapter {
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile}
 }
@@ -42,12 +34,12 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 		source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
 		switch resource.Kind {
 		case "skill":
-			desired, err := fingerprintTree(source)
+			desired, err := localprojection.FingerprintTree(source)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, fmt.Errorf("fingerprint skill %q: %w", resource.ID, err)
 			}
 			target := filepath.Join(a.skillsDir, resource.ID)
-			observed, exists, err := fingerprintPath(target)
+			observed, exists, err := localprojection.FingerprintPath(target)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
 			}
@@ -67,77 +59,26 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 			fragment, exists := extractBlock(string(current))
 			observed := "missing"
 			if exists {
-				observed = fingerprintBytes([]byte(fragment))
+				observed = localprojection.FingerprintBytes([]byte(fragment))
 			}
-			desired := fingerprintBytes([]byte(desiredBlock))
+			desired := localprojection.FingerprintBytes([]byte(desiredBlock))
 			merged := mergeBlock(string(current), desiredBlock)
 			id := "instruction:" + resource.ID
 			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionInstructionFile, Target: a.promptFile, Content: merged, Description: fmt.Sprintf("write instruction %s in %s", resource.ID, a.promptFile)}})
-			revisionParts = append(revisionParts, "prompt="+fingerprintBytes(current))
+			revisionParts = append(revisionParts, "prompt="+localprojection.FingerprintBytes(current))
 		}
 	}
 	sort.Strings(revisionParts)
-	return capabilitypack.ActivationObservation{Revision: fingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections}, nil
+	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections}, nil
 }
 
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
-	items := make([]stagedAction, 0, len(actions))
-	cleanup := func() {
-		for _, item := range items {
-			os.RemoveAll(item.temp)
-			os.RemoveAll(item.backup)
-		}
+	executor := localprojection.Executor{
+		Host:         "Codex",
+		SymlinkKinds: map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionSkillLink: true},
+		FileKinds:    map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionInstructionFile: true},
 	}
-	defer cleanup()
-	for _, action := range actions {
-		if err := os.MkdirAll(filepath.Dir(action.Target), 0o755); err != nil {
-			return err
-		}
-		temp := filepath.Join(filepath.Dir(action.Target), ".matty-stage-"+fingerprintBytes([]byte(action.ID))[:12])
-		_ = os.RemoveAll(temp)
-		switch action.Kind {
-		case capabilitypack.ActionSkillLink:
-			if err := os.Symlink(action.Source, temp); err != nil {
-				return fmt.Errorf("stage %s: %w", action.ID, err)
-			}
-		case capabilitypack.ActionInstructionFile:
-			if err := os.WriteFile(temp, []byte(action.Content), 0o600); err != nil {
-				return fmt.Errorf("stage %s: %w", action.ID, err)
-			}
-		default:
-			return fmt.Errorf("unsupported Codex projection action %q", action.Kind)
-		}
-		_, err := os.Lstat(action.Target)
-		items = append(items, stagedAction{action: action, temp: temp, backup: temp + ".backup", hadTarget: err == nil})
-	}
-	committed := 0
-	for i := range items {
-		item := &items[i]
-		if item.hadTarget {
-			if err := os.Rename(item.action.Target, item.backup); err != nil {
-				rollback(items[:committed])
-				return err
-			}
-		}
-		if err := os.Rename(item.temp, item.action.Target); err != nil {
-			if item.hadTarget {
-				_ = os.Rename(item.backup, item.action.Target)
-			}
-			rollback(items[:committed])
-			return err
-		}
-		committed++
-	}
-	return nil
-}
-
-func rollback(items []stagedAction) {
-	for i := len(items) - 1; i >= 0; i-- {
-		_ = os.RemoveAll(items[i].action.Target)
-		if items[i].hadTarget {
-			_ = os.Rename(items[i].backup, items[i].action.Target)
-		}
-	}
+	return executor.Apply(actions)
 }
 
 func extractBlock(content string) (string, bool) {
@@ -161,57 +102,4 @@ func mergeBlock(content, block string) string {
 		return block + "\n"
 	}
 	return trimmed + "\n\n" + block + "\n"
-}
-func fingerprintBytes(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-func fingerprintPath(path string) (string, bool, error) {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return "missing", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return "broken", true, nil
-		}
-		value, err := fingerprintTree(target)
-		return value, true, err
-	}
-	if info.IsDir() {
-		value, err := fingerprintTree(path)
-		return value, true, err
-	}
-	data, err := os.ReadFile(path)
-	return fingerprintBytes(data), true, err
-}
-func fingerprintTree(root string) (string, error) {
-	var parts []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		parts = append(parts, filepath.ToSlash(rel)+"="+fingerprintBytes(data))
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	sort.Strings(parts)
-	return fingerprintBytes([]byte(strings.Join(parts, "\n"))), nil
 }

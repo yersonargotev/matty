@@ -257,3 +257,133 @@ func TestPackStatusRequiresCompleteTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestPackActivateOpenCodeDryRunIsCompletelySideEffectFree(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, repoRoot := packActivationOptions(t, terminal)
+	opts.Env.(MapEnv)["OPENCODE_CONFIG"] = ""
+	opts.Env.(MapEnv)["OPENCODE_CONFIG_CONTENT"] = ""
+	opts.Env.(MapEnv)["OPENCODE_CONFIG_DIR"] = ""
+	beforeHome := snapshotTree(t, home)
+	beforeBundle := snapshotTree(t, filepath.Join(repoRoot, "bundle"))
+
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "opencode", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Activation dry-run plan plan-", "Surface: opencode", "link OpenCode skill ask-matt", "write OpenCode instruction matty-guidance", "add OpenCode instruction reference"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if terminal.calls != 0 {
+		t.Fatalf("dry-run requested approval")
+	}
+	if got := snapshotTree(t, home); got != beforeHome {
+		t.Fatalf("dry-run mutated HOME:\n%s", got)
+	}
+	if got := snapshotTree(t, filepath.Join(repoRoot, "bundle")); got != beforeBundle {
+		t.Fatal("dry-run mutated source bundle")
+	}
+}
+
+func TestPackActivateOpenCodeRejectsNonTTYBeforeEffects(t *testing.T) {
+	terminal := &fakeTerminal{interactive: false, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	_, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "opencode")
+	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("error = %v", err)
+	}
+	if terminal.calls != 0 {
+		t.Fatal("non-TTY requested approval")
+	}
+	for _, path := range []string{filepath.Join(home, ".matty", "packs.json"), filepath.Join(home, ".agents"), filepath.Join(home, "xdg", "opencode")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("non-TTY wrote %s: %v", path, err)
+		}
+	}
+}
+
+func TestPackActivateOpenCodePreservesUnmanagedContentAndDoesNotMutateCodex(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	xdg := filepath.Join(home, "xdg", "opencode")
+	if err := os.MkdirAll(xdg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(xdg, "opencode.json")
+	existing := "// keep host syntax\n{\n  \"model\": \"anthropic/test\",\n  \"mcp\": {\"jira\": {\"enabled\": true,},},\n  \"instructions\": [\"CONTRIBUTING.md\",],\n}\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(codexPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte("unmanaged Codex guidance\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "opencode")
+	if err != nil {
+		t.Fatalf("activate failed: %v\n%s", err, out)
+	}
+	if terminal.calls != 1 || !strings.Contains(out, "25 OpenCode projections") {
+		t.Fatalf("interaction/output calls=%d\n%s", terminal.calls, out)
+	}
+	updated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"// keep host syntax", `"model": "anthropic/test"`, `"jira"`, `"CONTRIBUTING.md"`, filepath.Join(xdg, "matty.md")} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("OpenCode config lost %q:\n%s", want, updated)
+		}
+	}
+	codex, err := os.ReadFile(codexPath)
+	if err != nil || string(codex) != "unmanaged Codex guidance\n" {
+		t.Fatalf("Codex mutated: %q err=%v", codex, err)
+	}
+
+	out, err = executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "opencode")
+	if err != nil {
+		t.Fatalf("repeat failed: %v\n%s", err, out)
+	}
+	if terminal.calls != 1 || !strings.Contains(out, "Already converged") {
+		t.Fatalf("repeat not no-op: calls=%d\n%s", terminal.calls, out)
+	}
+}
+
+func TestPackActivationKeepsCodexAndOpenCodeIndependentAndConverged(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	for _, args := range [][]string{
+		{"pack", "activate", "matty", "--surface", "codex"},
+		{"pack", "activate", "matty", "--surface", "opencode"},
+	} {
+		if out, err := executeCommand(t, NewRootCommand(opts), args...); err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+	}
+	if terminal.calls != 2 {
+		t.Fatalf("approvals = %d, want one per surface", terminal.calls)
+	}
+	for _, path := range []string{filepath.Join(home, ".codex", "AGENTS.md"), filepath.Join(home, "xdg", "opencode", "opencode.json"), filepath.Join(home, "xdg", "opencode", "matty.md")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("missing host projection %s: %v", path, err)
+		}
+	}
+	for _, surface := range []string{"codex", "opencode"} {
+		out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface)
+		if err != nil || !strings.Contains(out, "Already converged") {
+			t.Fatalf("%s repeat failed/no-op missing: %v\n%s", surface, err, out)
+		}
+	}
+	if terminal.calls != 2 {
+		t.Fatalf("converged repeats requested approval: %d", terminal.calls)
+	}
+	state, err := os.ReadFile(filepath.Join(home, ".matty", "packs.json"))
+	if err != nil || !strings.Contains(string(state), `"surface": "codex"`) || !strings.Contains(string(state), `"surface": "opencode"`) {
+		t.Fatalf("state did not preserve both surfaces: %s err=%v", state, err)
+	}
+}

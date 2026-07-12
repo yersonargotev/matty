@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
+	"github.com/yersonargotev/matty/internal/opencodeactivation"
 )
 
 func newPackCommand(opts Options) *cobra.Command {
@@ -56,14 +57,21 @@ func newPackActivateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d Codex projections owned by matty\n", result.PlanID, result.Projections)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by matty\n", result.PlanID, result.Projections, surfaceName(plan.Surface()))
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex required for this activation slice)")
+	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
 	_ = cmd.MarkFlagRequired("surface")
 	return cmd
+}
+
+func surfaceName(surface capabilitypack.Surface) string {
+	if surface == capabilitypack.SurfaceOpenCode {
+		return "OpenCode"
+	}
+	return "Codex"
 }
 
 func activationFacade(opts Options) (capabilitypack.Facade, error) {
@@ -75,8 +83,10 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	if err != nil {
 		return capabilitypack.Facade{}, err
 	}
-	adapter := codex.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile)
-	return capabilitypack.NewFacade(catalog, nil, capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{capabilitypack.SurfaceCodex: adapter})), nil
+	return capabilitypack.NewFacade(catalog, nil, capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
+		capabilitypack.SurfaceCodex:    codex.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile),
+		capabilitypack.SurfaceOpenCode: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
+	})), nil
 }
 
 func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.ReconciliationPlan, dryRun bool) error {

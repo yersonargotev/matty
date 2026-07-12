@@ -861,3 +861,32 @@ func readOptionalFile(path string) (string, error) {
 	}
 	return string(data), nil
 }
+
+// MergeInstructionProjection renders the OpenCode JSONC projection without
+// writing it, so lifecycle adapters can stage and atomically apply the result.
+func MergeInstructionProjection(existing, configPath, promptPath string) (string, error) {
+	return mergeInstruction(existing, configPath, promptPath)
+}
+
+// ValidateInstructionProjection checks the staged host syntax and required
+// instruction reference before the adapter commits any local projection.
+func ValidateInstructionProjection(content, promptPath string) error {
+	jsonData, err := jsoncToJSON(content)
+	if err != nil {
+		return err
+	}
+	config := map[string]any{}
+	if err := json.Unmarshal(jsonData, &config); err != nil {
+		return err
+	}
+	instructions, err := instructionStrings(config["instructions"])
+	if err != nil {
+		return err
+	}
+	for _, instruction := range instructions {
+		if instruction == promptPath {
+			return nil
+		}
+	}
+	return fmt.Errorf("OpenCode config projection is missing instruction reference %q", promptPath)
+}

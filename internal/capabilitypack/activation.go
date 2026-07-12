@@ -22,10 +22,13 @@ type Operation string
 type ProjectionActionKind string
 
 const (
-	ConsentReversibleLocal ConsentKind          = "reversible-local"
-	OperationActivate      Operation            = "activate"
-	ActionSkillLink        ProjectionActionKind = "skill-link"
-	ActionInstructionFile  ProjectionActionKind = "instruction-file"
+	ConsentReversibleLocal        ConsentKind          = "reversible-local"
+	OperationActivate             Operation            = "activate"
+	ActionSkillLink               ProjectionActionKind = "skill-link"
+	ActionInstructionFile         ProjectionActionKind = "instruction-file"
+	ActionOpenCodeSkillLink       ProjectionActionKind = "opencode-skill-link"
+	ActionOpenCodeInstructionFile ProjectionActionKind = "opencode-instruction-file"
+	ActionOpenCodeConfigReference ProjectionActionKind = "opencode-config-reference"
 )
 
 type StalePlanError struct{ Precondition string }
@@ -94,8 +97,8 @@ type ActivationState struct {
 }
 
 type ActivationStore interface {
-	Load(context.Context) (ActivationState, error)
-	Save(context.Context, int, ActivationState) error
+	Load(context.Context, Surface) (ActivationState, error)
+	Save(context.Context, Surface, int, ActivationState) error
 }
 
 type activationDependencies struct {
@@ -125,16 +128,21 @@ type ReconciliationPlan struct {
 	observationFingerprint string
 	phases                 []PlanPhase
 	desired                []projectionExpectation
+	portable               []PortableOutcome
 	noOp                   bool
 }
 
 type projectionExpectation struct{ ID, Fingerprint string }
+type PortableOutcome struct{ Kind, ID string }
 
 func (p ReconciliationPlan) ID() string       { return p.id }
 func (p ReconciliationPlan) Digest() string   { return p.digest }
 func (p ReconciliationPlan) Pack() Pack       { return clonePack(p.pack) }
 func (p ReconciliationPlan) Surface() Surface { return p.surface }
 func (p ReconciliationPlan) NoOp() bool       { return p.noOp }
+func (p ReconciliationPlan) PortableOutcomes() []PortableOutcome {
+	return append([]PortableOutcome(nil), p.portable...)
+}
 func (p ReconciliationPlan) Phases() []PlanPhase {
 	result := make([]PlanPhase, len(p.phases))
 	for i, phase := range p.phases {
@@ -178,13 +186,23 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 		}
 		if projection.ObservedFingerprint != projection.DesiredFingerprint {
 			if projection.Exists && !ownedAtFingerprint(state.Ownership, projection.ID, projection.ObservedFingerprint) {
-				return ReconciliationPlan{}, fmt.Errorf("projection %q is unmanaged or drifted; preserving existing Codex content", projection.ID)
+				return ReconciliationPlan{}, fmt.Errorf("projection %q is unmanaged or drifted; preserving existing %s content", projection.ID, request.Surface)
 			}
 			actions = append(actions, projection.Action)
 		}
 	}
+	sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
 	noOp := state.Intent.Active && state.Intent.PackID == pack.ID && state.Intent.Surface == request.Surface && state.Intent.Version == pack.Version && ownershipMatches(state.Ownership, observation.Projections) && len(actions) == 0
 	plan := ReconciliationPlan{pack: pack, operation: OperationActivate, surface: request.Surface, intentRevision: state.Intent.Revision, observationFingerprint: observationDigest(observation), noOp: noOp}
+	for _, resource := range pack.Resources {
+		plan.portable = append(plan.portable, PortableOutcome{Kind: resource.Kind, ID: resource.ID})
+	}
+	sort.Slice(plan.portable, func(i, j int) bool {
+		if plan.portable[i].Kind == plan.portable[j].Kind {
+			return plan.portable[i].ID < plan.portable[j].ID
+		}
+		return plan.portable[i].Kind < plan.portable[j].Kind
+	})
 	for _, projection := range observation.Projections {
 		plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint})
 	}
@@ -193,7 +211,7 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 		plan.phases = []PlanPhase{{Kind: ConsentReversibleLocal, Actions: append([]ProjectionAction(nil), actions...)}}
 	}
 	if !noOp && len(actions) == 0 {
-		return ReconciliationPlan{}, fmt.Errorf("existing Codex projections are not verified Matty ownership")
+		return ReconciliationPlan{}, fmt.Errorf("existing %s projections are not verified Matty ownership", request.Surface)
 	}
 	plan.seal()
 	return plan, nil
@@ -242,7 +260,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		return ApplyResult{}, StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d; rerun activation to preview a fresh plan", request.Plan.intentRevision, state.Intent.Revision)}
 	}
 	if observationDigest(observation) != request.Plan.observationFingerprint {
-		return ApplyResult{}, StalePlanError{Precondition: "Codex projections changed after Preview; rerun activation to preview a fresh plan"}
+		return ApplyResult{}, StalePlanError{Precondition: fmt.Sprintf("%s projections changed after Preview; rerun activation to preview a fresh plan", request.Plan.surface)}
 	}
 
 	actions := flattenActions(request.Plan.phases)
@@ -253,7 +271,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		state.Journal.Actions = append(state.Journal.Actions, action.ID)
 	}
 	state.Ownership = nil
-	if err := f.activation.store.Save(ctx, request.Plan.intentRevision, state); err != nil {
+	if err := f.activation.store.Save(ctx, request.Plan.surface, request.Plan.intentRevision, state); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := adapter.ApplyProjections(ctx, actions); err != nil {
@@ -272,7 +290,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: []string{pack.ID}, Fingerprint: projection.DesiredFingerprint})
 	}
 	sort.Slice(state.Ownership, func(i, j int) bool { return state.Ownership[i].ID < state.Ownership[j].ID })
-	if err := f.activation.store.Save(ctx, state.Intent.Revision, state); err != nil {
+	if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
 		return ApplyResult{}, err
 	}
 	return ApplyResult{Verified: true, PlanID: request.Plan.id, Projections: len(state.Ownership)}, nil
@@ -282,8 +300,8 @@ func (f Facade) activationInputs(ctx context.Context, request ActivationRequest)
 	if f.activation == nil || f.activation.store == nil {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation is not configured")
 	}
-	if request.Surface != SurfaceCodex {
-		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation currently supports only CLI surface %q", SurfaceCodex)
+	if request.Surface != SurfaceCodex && request.Surface != SurfaceOpenCode {
+		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation does not support CLI surface %q", request.Surface)
 	}
 	pack, err := f.catalog.Show(request.PackID)
 	if err != nil {
@@ -296,7 +314,7 @@ func (f Facade) activationInputs(ctx context.Context, request ActivationRequest)
 	if adapter == nil {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("no activation adapter configured for CLI surface %q", request.Surface)
 	}
-	state, err := f.activation.store.Load(ctx)
+	state, err := f.activation.store.Load(ctx, request.Surface)
 	return pack, adapter, state, err
 }
 
@@ -324,15 +342,20 @@ func (p ReconciliationPlan) sealPayload() any {
 		Observation     string
 		Phases          []PlanPhase
 		Desired         []projectionExpectation
+		Portable        []PortableOutcome
 		NoOp            bool
-	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.observationFingerprint, p.phases, p.desired, p.noOp}
+	}{p.pack.ID, p.pack.Version, p.operation, p.surface, p.intentRevision, p.observationFingerprint, p.phases, p.desired, p.portable, p.noOp}
 }
 func digestJSON(value any) string {
 	data, _ := json.Marshal(value)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
-func observationDigest(o ActivationObservation) string { return digestJSON(o) }
+func observationDigest(o ActivationObservation) string {
+	normalized := ActivationObservation{Revision: o.Revision, Projections: append([]ObservedProjection(nil), o.Projections...)}
+	sort.Slice(normalized.Projections, func(i, j int) bool { return normalized.Projections[i].ID < normalized.Projections[j].ID })
+	return digestJSON(normalized)
+}
 func flattenActions(phases []PlanPhase) []ProjectionAction {
 	var actions []ProjectionAction
 	for _, phase := range phases {

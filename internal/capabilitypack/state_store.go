@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"syscall"
 )
@@ -15,19 +16,28 @@ type FileActivationStore struct {
 	mu   sync.Mutex
 }
 
+type activationDocument struct {
+	SchemaVersion int               `json:"schema_version"`
+	Activations   []ActivationState `json:"activations"`
+}
+
 func NewFileActivationStore(path string) *FileActivationStore {
 	return &FileActivationStore{path: path}
 }
 
-func (s *FileActivationStore) Load(context.Context) (ActivationState, error) {
+func (s *FileActivationStore) Load(_ context.Context, surface Surface) (ActivationState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.load()
+	document, err := s.load()
+	if err != nil {
+		return ActivationState{}, err
+	}
+	return activationForSurface(document, surface), nil
 }
 
-// Save compares the durable intent revision and atomically replaces the whole
-// activation document, keeping target intent and the applying journal together.
-func (s *FileActivationStore) Save(_ context.Context, expectedRevision int, state ActivationState) error {
+// Save compares the durable revision for one surface and atomically replaces
+// the whole document, preserving every other surface's intent and ownership.
+func (s *FileActivationStore) Save(_ context.Context, surface Surface, expectedRevision int, state ActivationState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
@@ -42,19 +52,81 @@ func (s *FileActivationStore) Save(_ context.Context, expectedRevision int, stat
 		return fmt.Errorf("lock capability-pack state: %w", err)
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	current, err := s.load()
+	document, err := s.load()
 	if err != nil {
 		return err
 	}
+	current := activationForSurface(document, surface)
 	if current.Intent.Revision != expectedRevision {
 		return StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d before persistence; rerun activation to preview a fresh plan", expectedRevision, current.Intent.Revision)}
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	state.SchemaVersion = 1
+	state.Intent.Surface = surface
+	replaced := false
+	for i := range document.Activations {
+		if document.Activations[i].Intent.Surface == surface {
+			document.Activations[i] = cloneActivationState(state)
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		document.Activations = append(document.Activations, cloneActivationState(state))
+	}
+	sort.Slice(document.Activations, func(i, j int) bool {
+		return document.Activations[i].Intent.Surface < document.Activations[j].Intent.Surface
+	})
+	document.SchemaVersion = 2
+	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode capability-pack state: %w", err)
 	}
-	data = append(data, '\n')
-	temp, err := os.CreateTemp(filepath.Dir(s.path), ".packs-*.tmp")
+	return atomicWriteState(s.path, append(data, '\n'))
+}
+
+func activationForSurface(document activationDocument, surface Surface) ActivationState {
+	for _, state := range document.Activations {
+		if state.Intent.Surface == surface {
+			return cloneActivationState(state)
+		}
+	}
+	return ActivationState{}
+}
+
+func (s *FileActivationStore) load() (activationDocument, error) {
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return activationDocument{}, nil
+	}
+	if err != nil {
+		return activationDocument{}, fmt.Errorf("read capability-pack state %s: %w", s.path, err)
+	}
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return activationDocument{}, fmt.Errorf("read capability-pack state %s: invalid JSON: %w", s.path, err)
+	}
+	switch header.SchemaVersion {
+	case 1:
+		var legacy ActivationState
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return activationDocument{}, err
+		}
+		return activationDocument{SchemaVersion: 2, Activations: []ActivationState{legacy}}, nil
+	case 2:
+		var document activationDocument
+		if err := json.Unmarshal(data, &document); err != nil {
+			return activationDocument{}, err
+		}
+		return document, nil
+	default:
+		return activationDocument{}, fmt.Errorf("read capability-pack state %s: unsupported schema_version %d", s.path, header.SchemaVersion)
+	}
+}
+
+func atomicWriteState(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".packs-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create capability-pack state temp file: %w", err)
 	}
@@ -75,26 +147,8 @@ func (s *FileActivationStore) Save(_ context.Context, expectedRevision int, stat
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("close capability-pack state: %w", err)
 	}
-	if err := os.Rename(tempPath, s.path); err != nil {
+	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("replace capability-pack state: %w", err)
 	}
 	return nil
-}
-
-func (s *FileActivationStore) load() (ActivationState, error) {
-	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
-		return ActivationState{}, nil
-	}
-	if err != nil {
-		return ActivationState{}, fmt.Errorf("read capability-pack state %s: %w", s.path, err)
-	}
-	var state ActivationState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return ActivationState{}, fmt.Errorf("read capability-pack state %s: invalid JSON: %w", s.path, err)
-	}
-	if state.SchemaVersion != 1 {
-		return ActivationState{}, fmt.Errorf("read capability-pack state %s: unsupported schema_version %d", s.path, state.SchemaVersion)
-	}
-	return state, nil
 }
