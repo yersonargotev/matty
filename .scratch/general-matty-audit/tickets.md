@@ -71,11 +71,11 @@ Work the **frontier**: any ticket whose blockers are all done. Several tickets c
 
 **Blocked by:** None — can start immediately.
 
-- [ ] The executable-version diagnostic test no longer fails because race instrumentation exceeds a fixed wall-clock assumption.
-- [ ] The full race-enabled test suite passes repeatedly in an isolated environment.
-- [ ] CI runs the race detector with an explicit scope and timeout appropriate for the repository.
-- [ ] A race failure fails CI, while ordinary slow process scheduling does not create false failures.
-- [ ] Existing formatting, vet, build, and normal test checks remain unchanged and passing.
+- [x] The executable-version diagnostic test no longer fails because race instrumentation exceeds a fixed wall-clock assumption.
+- [x] The full race-enabled test suite passes repeatedly in an isolated environment.
+- [x] CI runs the race detector with an explicit scope and timeout appropriate for the repository.
+- [x] A race failure fails CI, while ordinary slow process scheduling does not create false failures.
+- [x] Existing formatting, vet, build, and normal test checks remain unchanged and passing.
 
 ## Protect installed skill-bundle discovery with boundary tests
 

@@ -47,3 +47,20 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  race:
+    name: Race detector (all Go packages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test all Go packages with race detector
+        run: go test -race -timeout 10m ./...

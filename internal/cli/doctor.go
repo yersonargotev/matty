@@ -254,6 +254,10 @@ func engramBinaryChecksWithHomebrewPrefixes(runner Runner, pathEnv, localBinEngr
 		version, versionErr := engrambin.Version(path)
 		executables = append(executables, engrambin.NewExecutable(path, canonical, version, versionErr))
 	}
+	return engramDiagnosticChecks(executables, localBinEngram, canonical, homebrewPrefixes)
+}
+
+func engramDiagnosticChecks(executables []engrambin.Executable, localBinEngram string, canonical *engrambin.Canonical, homebrewPrefixes []string) []doctorCheck {
 	pathEngram := executables[0]
 	checks := []doctorCheck{engramPathCheck(pathEngram, canonical, homebrewPrefixes)}
 	checks = append(checks, engramVersionMismatchChecks(executables)...)

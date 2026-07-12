@@ -15,6 +15,8 @@ import (
 
 const Formula = "gentleman-programming/tap/engram"
 
+const versionTimeout = 2 * time.Second
+
 type Identity struct {
 	Path         string
 	ResolvedPath string
@@ -289,13 +291,29 @@ func (identity Identity) SameExecutable(executable Executable) bool {
 }
 
 func Version(path string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	return version(path, versionCommandOutput)
+}
+
+func version(path string, output func(context.Context, string) ([]byte, error)) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	out, err := output(ctx, path)
 	if err != nil {
 		return "", err
 	}
 	return CleanVersion(string(out)), nil
+}
+
+func versionWithContext(ctx context.Context, path string) (string, error) {
+	out, err := versionCommandOutput(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	return CleanVersion(string(out)), nil
+}
+
+func versionCommandOutput(ctx context.Context, path string) ([]byte, error) {
+	return exec.CommandContext(ctx, path, "--version").CombinedOutput()
 }
 
 func CleanVersion(output string) string {
@@ -324,11 +342,19 @@ func Detail(executable Executable) string {
 func FindServeProcesses() ([]Process, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,args=").Output()
+	return findServeProcesses(ctx, commandOutput, processExecutablePath)
+}
+
+func findServeProcesses(ctx context.Context, output func(context.Context, string, ...string) ([]byte, error), resolveExecutable func(int) string) ([]Process, error) {
+	out, err := output(ctx, "ps", "-axo", "pid=,args=")
 	if err != nil {
 		return nil, err
 	}
-	return ParseServeProcesses(string(out)), nil
+	return ParseServeProcessesWithResolver(string(out), resolveExecutable), nil
+}
+
+func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 func ParseServeProcesses(output string) []Process {
