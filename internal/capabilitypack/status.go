@@ -228,6 +228,12 @@ func deriveProjectionStatus(packID string, observed []ObservedProjection, owners
 		case !p.Exists:
 			status.Health = ProjectionMissing
 			summary.Missing++
+		case p.ExternallyManaged && p.ObservedFingerprint == p.DesiredFingerprint:
+			status.Health = ProjectionVerified
+			summary.Verified++
+		case p.ExternallyManaged:
+			status.Health = ProjectionDrifted
+			summary.Drifted++
 		case p.ObservedFingerprint != p.DesiredFingerprint && owned:
 			status.Health = ProjectionDrifted
 			summary.Drifted++

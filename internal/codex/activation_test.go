@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,15 +11,8 @@ import (
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 )
 
-func TestEngramProjectionIsCodexSpecificAndPreservesUnmanagedFiles(t *testing.T) {
+func TestEngramCodexSetupContractIsObservedWithoutCompetingLocalWrites(t *testing.T) {
 	root := t.TempDir()
-	instructions := filepath.Join(root, "instructions")
-	if err := os.MkdirAll(instructions, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(instructions, "engram-memory.md"), []byte("remember safely\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	prompt := filepath.Join(root, ".codex", "AGENTS.md")
 	config := filepath.Join(root, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(prompt), 0o700); err != nil {
@@ -27,7 +21,39 @@ func TestEngramProjectionIsCodexSpecificAndPreservesUnmanagedFiles(t *testing.T)
 	if err := os.WriteFile(prompt, []byte("# keep Codex guidance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config, []byte("[mcp_servers.jira]\ncommand = \"jira\"\n"), 0o600); err != nil {
+	engramPath := "/opt/homebrew/bin/engram"
+	instructionsFile := filepath.Join(filepath.Dir(config), "engram-instructions.md")
+	compactFile := filepath.Join(filepath.Dir(config), "engram-compact-prompt.md")
+	instructionsGolden, err := os.ReadFile(filepath.Join("testdata", "engram-1.19.0", "engram-instructions.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactGolden, err := os.ReadFile(filepath.Join("testdata", "engram-1.19.0", "engram-compact-prompt.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configContent := `model_instructions_file = "` + instructionsFile + `"
+experimental_compact_prompt_file = "` + compactFile + `"
+[mcp_servers.engram]
+command = "` + engramPath + `"
+args = ["mcp", "--tools=agent"]
+
+[marketplaces.engram]
+last_updated = "volatile"
+source_type = "git"
+source = "https://github.com/Gentleman-Programming/engram.git"
+ref = "main"
+
+[plugins."engram@engram"]
+enabled = true
+`
+	if err := os.WriteFile(config, []byte(configContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(instructionsFile, instructionsGolden, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(compactFile, compactGolden, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	pack := capabilitypack.Pack{ID: "engram", Version: "1.0.0", Resources: []capabilitypack.Resource{
@@ -35,41 +61,99 @@ func TestEngramProjectionIsCodexSpecificAndPreservesUnmanagedFiles(t *testing.T)
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, ".agents", "skills"), prompt, config)
-	observed, err := adapter.InspectActivation(context.Background(), pack)
+	observed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(observed.Projections) != 2 || observed.Projections[0].Action.Kind != capabilitypack.ActionInstructionFile || observed.Projections[1].Action.Kind != capabilitypack.ActionCodexMCPConfig {
+	if len(observed.Projections) != 5 {
 		t.Fatalf("projections = %#v", observed.Projections)
 	}
-	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{observed.Projections[0].Action, observed.Projections[1].Action}); err != nil {
-		t.Fatal(err)
-	}
-	updatedPrompt, err := os.ReadFile(prompt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(updatedPrompt), "keep Codex guidance") || !strings.Contains(string(updatedPrompt), "matty:pack:engram-memory:start") {
-		t.Fatalf("Codex prompt was not preserved/projected: %s", updatedPrompt)
-	}
-	updatedConfig, err := os.ReadFile(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(updatedConfig), "[mcp_servers.jira]") || !strings.Contains(string(updatedConfig), "[mcp_servers.engram]") {
-		t.Fatalf("Codex config was not preserved/projected: %s", updatedConfig)
-	}
-	verified, err := adapter.InspectActivation(context.Background(), pack)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, projection := range verified.Projections {
-		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+	for _, projection := range observed.Projections {
+		if !projection.ExternallyManaged || projection.ObservedFingerprint != projection.DesiredFingerprint {
 			t.Fatalf("projection did not verify: %+v", projection)
 		}
 	}
-	if verified.Readiness.Authorized || verified.Readiness.Usable || len(verified.PendingHumanActions) != 2 {
-		t.Fatalf("Engram readiness = %+v pending=%v", verified.Readiness, verified.PendingHumanActions)
+	for _, test := range []struct {
+		name, id, config, instructions, compact string
+	}{
+		{"mcp args", "mcp", strings.Replace(configContent, `["mcp", "--tools=agent"]`, `["mcp"]`, 1), string(instructionsGolden), string(compactGolden)},
+		{"instructions", "instructions", configContent, "incomplete", string(compactGolden)},
+		{"compact prompt", "compact-prompt", configContent, string(instructionsGolden), "incomplete"},
+		{"marketplace", "marketplace", strings.Replace(configContent, `ref = "main"`, `ref = "other"`, 1), string(instructionsGolden), string(compactGolden)},
+		{"plugin", "plugin", strings.Replace(configContent, `enabled = true`, `enabled = false`, 1), string(instructionsGolden), string(compactGolden)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for path, content := range map[string]string{config: test.config, instructionsFile: test.instructions, compactFile: test.compact} {
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			changed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, projection := range changed.Projections {
+				if strings.HasSuffix(projection.ID, ":"+test.id) && projection.ObservedFingerprint == projection.DesiredFingerprint {
+					t.Fatalf("contract change was not detected: %+v", projection)
+				}
+			}
+		})
+	}
+	unchangedPrompt, err := os.ReadFile(prompt)
+	if err != nil || string(unchangedPrompt) != "# keep Codex guidance\n" {
+		t.Fatalf("Matty competed for Engram instructions: %q err=%v", unchangedPrompt, err)
+	}
+}
+
+func TestEngramCodexContractAcrossExternalProcessBoundary(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	instructionsGolden, _ := filepath.Abs(filepath.Join("testdata", "engram-1.19.0", "engram-instructions.md"))
+	compactGolden, _ := filepath.Abs(filepath.Join("testdata", "engram-1.19.0", "engram-compact-prompt.md"))
+	engram := filepath.Join(root, "engram")
+	script := `#!/bin/sh
+set -eu
+test "$1 $2" = "setup codex"
+mkdir -p "$HOME/.codex"
+cp "$ENGRAM_INSTRUCTIONS_GOLDEN" "$HOME/.codex/engram-instructions.md"
+cp "$ENGRAM_COMPACT_GOLDEN" "$HOME/.codex/engram-compact-prompt.md"
+cat > "$HOME/.codex/config.toml" <<EOF
+model_instructions_file = "$HOME/.codex/engram-instructions.md"
+experimental_compact_prompt_file = "$HOME/.codex/engram-compact-prompt.md"
+[mcp_servers.engram]
+command = "$0"
+args = ["mcp", "--tools=agent"]
+[marketplaces.engram]
+last_updated = "ignored"
+source_type = "git"
+source = "https://github.com/Gentleman-Programming/engram.git"
+ref = "main"
+[plugins."engram@engram"]
+enabled = true
+EOF
+`
+	if err := os.WriteFile(engram, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(engram, "setup", "codex")
+	command.Env = []string{"HOME=" + home, "ENGRAM_INSTRUCTIONS_GOLDEN=" + instructionsGolden, "ENGRAM_COMPACT_GOLDEN=" + compactGolden, "PATH=/usr/bin:/bin"}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("fixture Engram setup: %v: %s", err, output)
+	}
+	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "config.toml"))
+	pack := capabilitypack.Pack{ID: "engram", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "engram-memory"}, {Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}}}}
+	observed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engram}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range observed.Projections {
+		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+			t.Fatalf("external boundary contract mismatch: %+v", projection)
+		}
 	}
 }
 

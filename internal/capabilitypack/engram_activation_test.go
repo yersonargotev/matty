@@ -197,6 +197,66 @@ func TestEngramApplyVerifiesLocalBeforeExternalAndReportsPendingReadiness(t *tes
 	}
 }
 
+func TestExternallyManagedEngramProjectionWaitsForCodexSetup(t *testing.T) {
+	missing := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{
+		ID: "external_setup:engram:codex", Exists: false, ObservedFingerprint: "missing", DesiredFingerprint: "engram-codex-v1",
+		ExternallyManaged: true,
+		Action:            ProjectionAction{ID: "external_setup:engram:codex", Kind: ActionCodexMCPConfig},
+	}}}
+	ready := missing
+	ready.Projections = append([]ObservedProjection(nil), missing.Projections...)
+	ready.Projections[0].Exists = true
+	ready.Projections[0].ObservedFingerprint = "engram-codex-v1"
+
+	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{availableEngramResolution("/opt/homebrew/bin/engram")}}
+	executor := &fakeExternalExecutor{}
+	facade, adapter, store := engramFacadeForTest(resolver, executor, missing, missing, missing, ready)
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := phaseActions(plan.phases, ConsentReversibleLocal); len(got) != 0 {
+		t.Fatalf("Matty planned competing local projections: %#v", got)
+	}
+	if got := phaseActions(plan.phases, ConsentExecutableExternal); len(got) != 1 {
+		t.Fatalf("external setup actions = %#v", got)
+	}
+
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || len(executor.actions) != 1 || len(adapter.actions) != 0 || len(store.state.Ownership) != 0 {
+		t.Fatalf("result=%+v external=%#v local=%#v state=%+v", result, executor.actions, adapter.actions, store.state)
+	}
+}
+
+func TestEngramCodexVerificationFailureRetriesSetupFromFreshRecoveryPlan(t *testing.T) {
+	missing := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{
+		ID: "external_setup:engram:codex", ObservedFingerprint: "missing", DesiredFingerprint: "ready", ExternallyManaged: true,
+		Action: ProjectionAction{ID: "external_setup:engram:codex", Kind: ActionCodexMCPConfig},
+	}}}
+	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{availableEngramResolution("/opt/homebrew/bin/engram")}}
+	executor := &fakeExternalExecutor{}
+	facade, _, store := engramFacadeForTest(resolver, executor, missing)
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
+	if !errors.Is(err, ErrVerificationFailed) || store.state.Journal == nil || store.state.Journal.FailedAction != "verify-after-external" {
+		t.Fatalf("error=%v state=%+v", err, store.state)
+	}
+
+	recovery, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovery.Recovery() || len(phaseActions(recovery.phases, ConsentExecutableExternal)) != 1 || recovery.ID() == plan.ID() {
+		t.Fatalf("fresh recovery plan = %+v", recovery)
+	}
+}
+
 func TestEngramStaleExecutableResolutionExecutesZeroActions(t *testing.T) {
 	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{
 		availableEngramResolution("/opt/homebrew/bin/engram-v1"),

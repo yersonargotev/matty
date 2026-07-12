@@ -11,6 +11,14 @@ type fakeReadinessInspector struct {
 	calls        int
 }
 
+func TestExternallyManagedProjectionIsVerifiedWithoutMattyOwnership(t *testing.T) {
+	projection := ObservedProjection{ID: "external_setup:engram:codex:mcp", Exists: true, ObservedFingerprint: "ready", DesiredFingerprint: "ready", ExternallyManaged: true}
+	details, summary := deriveProjectionStatus("engram", []ObservedProjection{projection}, nil, composition{})
+	if len(details) != 1 || details[0].Health != ProjectionVerified || summary.Verified != 1 || summary.Unmanaged != 0 {
+		t.Fatalf("details=%+v summary=%+v", details, summary)
+	}
+}
+
 func (f *fakeReadinessInspector) InspectReadiness(context.Context, Pack, ActivationObservation, []ExecutableResolution) (ReadinessObservation, error) {
 	i := f.calls
 	f.calls++

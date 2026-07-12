@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -133,6 +134,7 @@ type ObservedProjection struct {
 	Exists              bool
 	ObservedFingerprint string
 	DesiredFingerprint  string
+	ExternallyManaged   bool
 	Action              ProjectionAction
 }
 
@@ -365,7 +367,10 @@ type RetainedProjection struct {
 	Contributors []string
 }
 
-type projectionExpectation struct{ ID, Fingerprint string }
+type projectionExpectation struct {
+	ID, Fingerprint   string
+	ExternallyManaged bool
+}
 type PortableOutcome struct{ Kind, ID string }
 
 func (p ReconciliationPlan) ID() string                     { return p.id }
@@ -524,7 +529,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	for _, projection := range observation.Projections {
 		contributors := target.contributorSet(projection.ID)
 		if projection.DesiredFingerprint != "" {
-			plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint})
+			plan.desired = append(plan.desired, projectionExpectation{ID: projection.ID, Fingerprint: projection.DesiredFingerprint, ExternallyManaged: projection.ExternallyManaged})
 			if projection.Exists && projection.ObservedFingerprint == projection.DesiredFingerprint {
 				plan.retained = append(plan.retained, RetainedProjection{ID: projection.ID, Contributors: contributors})
 			} else {
@@ -601,6 +606,9 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 			return ReconciliationPlan{}, fmt.Errorf("inspect activation of pack %q on %s: adapter returned an invalid projection", pack.ID, request.Surface)
 		}
 		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+			if projection.ExternallyManaged {
+				continue
+			}
 			owned := ownedAtComposition(state.Ownership, projection.ID, projection.ObservedFingerprint, composition)
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				owner, ok := ownershipByID(state.Ownership, projection.ID)
@@ -646,7 +654,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 		return plan.portable[i].Kind < plan.portable[j].Kind
 	})
 	for _, projection := range observation.Projections {
-		plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint})
+		plan.desired = append(plan.desired, projectionExpectation{projection.ID, projection.DesiredFingerprint, projection.ExternallyManaged})
 		contributors := composition.contributorSet(projection.ID)
 		if projection.ObservedFingerprint == projection.DesiredFingerprint && len(contributors) > 1 {
 			plan.retained = append(plan.retained, RetainedProjection{ID: projection.ID, Contributors: contributors})
@@ -787,11 +795,14 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 		return ApplyResult{}, err
 	}
-	verificationDesired := request.Plan.desired
+	verificationDesired := withoutExternallyManagedExpectations(request.Plan.desired)
 	if len(destructiveActions) > 0 {
 		verificationDesired = withoutActionExpectations(verificationDesired, destructiveActions)
 	}
 	verifiedMatches := verificationMatches(verificationDesired, verified.Projections)
+	if len(verificationDesired) != len(request.Plan.desired) {
+		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
+	}
 	if request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted {
 		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
 	}
@@ -902,7 +913,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 	}
 	for _, projection := range verified.Projections {
-		if projection.DesiredFingerprint == "" || hasPhaseActionID(request.Plan.phases, ConsentDestructiveCleanup, projection.ID) || (request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted && !hasExpectation(request.Plan.desired, projection.ID)) {
+		if projection.ExternallyManaged || projection.DesiredFingerprint == "" || hasPhaseActionID(request.Plan.phases, ConsentDestructiveCleanup, projection.ID) || (request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted && !hasExpectation(request.Plan.desired, projection.ID)) {
 			continue
 		}
 		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: currentComposition.contributorSet(projection.ID), Fingerprint: projection.DesiredFingerprint})
@@ -1226,7 +1237,13 @@ func compositionActive(state ActivationState, packs []Pack, surface Surface) boo
 }
 
 func ownershipMatchesContributors(owners []ProjectionOwnership, projections []ObservedProjection, c composition) bool {
-	if len(owners) != len(projections) {
+	managedCount := 0
+	for _, projection := range projections {
+		if !projection.ExternallyManaged {
+			managedCount++
+		}
+	}
+	if len(owners) != managedCount {
 		return false
 	}
 	byID := map[string]ProjectionOwnership{}
@@ -1234,12 +1251,28 @@ func ownershipMatchesContributors(owners []ProjectionOwnership, projections []Ob
 		byID[owner.ID] = owner
 	}
 	for _, projection := range projections {
+		if projection.ExternallyManaged {
+			if projection.ObservedFingerprint != projection.DesiredFingerprint {
+				return false
+			}
+			continue
+		}
 		owner, ok := byID[projection.ID]
 		if !ok || owner.Fingerprint != projection.DesiredFingerprint || digestJSON(owner.Contributors) != digestJSON(c.contributorSet(projection.ID)) {
 			return false
 		}
 	}
 	return true
+}
+
+func withoutExternallyManagedExpectations(values []projectionExpectation) []projectionExpectation {
+	result := make([]projectionExpectation, 0, len(values))
+	for _, value := range values {
+		if !value.ExternallyManaged {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 func digestJSON(value any) string {
 	data, _ := json.Marshal(value)
@@ -1415,12 +1448,19 @@ func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, 
 			continue
 		}
 		setup := ProjectionAction{ID: "external:" + resolution.Tool + ":setup:" + string(surface), Kind: ActionExternalCommand, Command: resolution.Path, Args: []string{"setup", string(surface)}, Description: fmt.Sprintf("run %s setup %s", resolution.Path, surface)}
-		if !externalEffectCompleted(state.External, setup) {
+		if !externalEffectCompleted(state.External, setup) || externalVerificationNeedsRetry(state, setup, surface) {
 			actions = append(actions, setup)
 		}
 	}
 	sortBlockers(blockers)
 	return actions, blockers
+}
+
+func externalVerificationNeedsRetry(state ActivationState, setup ProjectionAction, surface Surface) bool {
+	if state.Journal == nil || state.Journal.Outcome != AttemptRecoveryRequired || state.Journal.FailedAction != "verify-after-external" || !slices.Contains(state.Journal.Completed, setup.ID) {
+		return false
+	}
+	return state.Journal.Surface == surface
 }
 
 func inspectActivation(ctx context.Context, adapter ActivationAdapter, pack Pack, resolutions []ExecutableResolution) (ActivationObservation, error) {

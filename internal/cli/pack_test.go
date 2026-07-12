@@ -146,6 +146,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					engram := writeEngramExecutable(t, filepath.Join(prefix, "bin"), "engram version 1.19.0")
 					runner.path = map[string]string{"engram": engram}
 					env["HOMEBREW_PREFIX"], env["PATH"] = prefix, filepath.Dir(engram)
+					configureEngramCodexSetupFixture(t, runner, env, engram)
 				}
 				opts := Options{Env: env, Runner: runner, Terminal: terminal}
 				paths, err := ResolvePaths(env)
@@ -290,7 +291,56 @@ func engramActivationOptions(t *testing.T, terminal Terminal) (Options, string, 
 	env["OPENCODE_CONFIG"] = ""
 	env["OPENCODE_CONFIG_CONTENT"] = ""
 	env["OPENCODE_CONFIG_DIR"] = ""
+	configureEngramCodexSetupFixture(t, runner, env, engram)
 	return opts, home, repoRoot, runner
+}
+
+func configureEngramCodexSetupFixture(t *testing.T, runner *fakeRunner, env MapEnv, engram string) {
+	t.Helper()
+	instructionsGolden, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "engram-1.19.0", "engram-instructions.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactGolden, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "engram-1.19.0", "engram-compact-prompt.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := engram + " setup codex"
+	if runner.after == nil {
+		runner.after = map[string]func(){}
+	}
+	runner.after[key] = func() {
+		dir := filepath.Join(env["HOME"], ".codex")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		instructions := filepath.Join(dir, "engram-instructions.md")
+		compact := filepath.Join(dir, "engram-compact-prompt.md")
+		config := `model_instructions_file = "` + instructions + `"
+experimental_compact_prompt_file = "` + compact + `"
+[mcp_servers.engram]
+command = "` + engram + `"
+args = ["mcp", "--tools=agent"]
+
+[marketplaces.engram]
+last_updated = "volatile"
+source_type = "git"
+source = "https://github.com/Gentleman-Programming/engram.git"
+ref = "main"
+
+[plugins."engram@engram"]
+enabled = true
+`
+		for path, content := range map[string][]byte{
+			filepath.Join(dir, "config.toml"): []byte(config),
+			instructions:                      instructionsGolden,
+			compact:                           compactGolden,
+		} {
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func TestPackActivateCodexDryRunIsCompletelySideEffectFree(t *testing.T) {
@@ -686,7 +736,7 @@ func TestPackActivateEngramDryRunShowsGlobalResolutionAndNoEffects(t *testing.T)
 	if err != nil {
 		t.Fatalf("dry-run failed: %v\n%s", err, out)
 	}
-	for _, want := range []string{"Pack: engram 1.0.0", "Phase: reversible-local", "Phase: executable-external", "engram setup codex", "Phase: host-follow-up", "/hooks"} {
+	for _, want := range []string{"Pack: engram 1.0.0", "Phase: executable-external", "engram setup codex", "Phase: host-follow-up", "/hooks"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
@@ -702,14 +752,14 @@ func TestPackActivateEngramDryRunShowsGlobalResolutionAndNoEffects(t *testing.T)
 	}
 }
 
-func TestPackActivateEngramPromptsLocalAndExternalSeparatelyAndReportsPendingActions(t *testing.T) {
+func TestPackActivateEngramPromptsForExternalAuthorityAndReportsPendingActions(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _, runner := engramActivationOptions(t, terminal)
 	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex")
 	if err != nil {
 		t.Fatalf("activate failed: %v\n%s", err, out)
 	}
-	if terminal.calls != 2 || len(terminal.prompts) != 2 || !strings.Contains(terminal.prompts[0], "reversible-local") || !strings.Contains(terminal.prompts[1], "executable-external") {
+	if terminal.calls != 1 || len(terminal.prompts) != 1 || !strings.Contains(terminal.prompts[0], "executable-external") {
 		t.Fatalf("prompts = %#v calls=%d", terminal.prompts, terminal.calls)
 	}
 	if len(runner.calls) != 1 || !strings.Contains(callStrings(runner.calls)[0], "setup codex") {
@@ -736,13 +786,13 @@ func TestPackActivateEngramNonTTYAndExternalCancellationAreSideEffectFree(t *tes
 		t.Fatalf("non-TTY caused effects: calls=%v", runner.calls)
 	}
 
-	cancel := &fakeTerminal{interactive: true, approve: true, answers: []bool{true, false}}
+	cancel := &fakeTerminal{interactive: true, approve: true, answers: []bool{false}}
 	opts, home, _, runner = engramActivationOptions(t, cancel)
 	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex")
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("cancellation error = %v\n%s", err, out)
 	}
-	if cancel.calls != 2 || len(runner.calls) != 0 || exists(filepath.Join(home, ".matty", "packs.json")) || exists(filepath.Join(home, ".codex")) {
+	if cancel.calls != 1 || len(runner.calls) != 0 || exists(filepath.Join(home, ".matty", "packs.json")) || exists(filepath.Join(home, ".codex")) {
 		t.Fatalf("cancellation caused effects: prompts=%v calls=%v", cancel.prompts, runner.calls)
 	}
 }
@@ -766,7 +816,7 @@ func TestPackActivateEngramSurfacesRemainIndependent(t *testing.T) {
 			t.Fatalf("OpenCode config missing %q:\n%s", want, openCodeConfig)
 		}
 	}
-	if terminal.calls != 4 || len(runner.calls) != 2 {
+	if terminal.calls != 3 || len(runner.calls) != 2 {
 		t.Fatalf("surface approvals/calls = %d/%d", terminal.calls, len(runner.calls))
 	}
 	state := readFileString(t, filepath.Join(home, ".matty", "packs.json"))
@@ -979,7 +1029,7 @@ func ownershipForSurface(t *testing.T, statePath, surface string) string {
 	return ""
 }
 
-func TestPackUpdatePromptsLocalAndExternalSeparatelyAndCancellationHasNoEffects(t *testing.T) {
+func TestPackUpdateExternalCancellationHasNoEffects(t *testing.T) {
 	seedTerminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, repoRoot, runner := engramActivationOptions(t, seedTerminal)
 	bundle := copyPackBundleForUpdate(t, repoRoot)
@@ -1010,7 +1060,7 @@ func TestPackUpdatePromptsLocalAndExternalSeparatelyAndCancellationHasNoEffects(
 	if err := os.WriteFile(statePath, append(encoded, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cancel := &fakeTerminal{interactive: true, answers: []bool{true, false}}
+	cancel := &fakeTerminal{interactive: true, answers: []bool{false}}
 	opts.Terminal = cancel
 	before := snapshotTree(t, home)
 	calls := len(runner.calls)
@@ -1018,7 +1068,7 @@ func TestPackUpdatePromptsLocalAndExternalSeparatelyAndCancellationHasNoEffects(
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("cancel error=%v\n%s", err, out)
 	}
-	if len(cancel.prompts) != 2 || !strings.Contains(cancel.prompts[0], "reversible-local") || !strings.Contains(cancel.prompts[1], "executable-external") {
+	if len(cancel.prompts) != 1 || !strings.Contains(cancel.prompts[0], "executable-external") {
 		t.Fatalf("prompts=%#v", cancel.prompts)
 	}
 	if snapshotTree(t, home) != before || len(runner.calls) != calls {
@@ -1365,7 +1415,7 @@ func TestPackReconcileDriftFreeIsApprovalFreeNoOp(t *testing.T) {
 	}
 }
 
-func TestPackReconcilePromptsEachConsentKindSeparatelyAndStopsOnCancellation(t *testing.T) {
+func TestPackReconcileExternalConsentStopsOnCancellation(t *testing.T) {
 	seed := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _, runner := engramActivationOptions(t, seed)
 	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err != nil {
@@ -1378,7 +1428,7 @@ func TestPackReconcilePromptsEachConsentKindSeparatelyAndStopsOnCancellation(t *
 		t.Fatal(err)
 	}
 	runner.path = map[string]string{}
-	terminal := &fakeTerminal{interactive: true, answers: []bool{true, false}}
+	terminal := &fakeTerminal{interactive: true, answers: []bool{false}}
 	opts.Terminal = terminal
 	beforeState := readFileString(t, filepath.Join(home, ".matty", "packs.json"))
 	beforeCalls := len(runner.calls)
@@ -1386,8 +1436,8 @@ func TestPackReconcilePromptsEachConsentKindSeparatelyAndStopsOnCancellation(t *
 	if err == nil {
 		t.Fatalf("cancelled reconcile succeeded:\n%s", out)
 	}
-	if len(terminal.prompts) != 2 || !strings.Contains(terminal.prompts[0], "reversible-local") || !strings.Contains(terminal.prompts[1], "executable-external") {
-		t.Fatalf("consent prompts were not separate: %v\n%s", terminal.prompts, out)
+	if len(terminal.prompts) != 1 || !strings.Contains(terminal.prompts[0], "executable-external") {
+		t.Fatalf("external consent prompt missing: %v\n%s", terminal.prompts, out)
 	}
 	if exists(filepath.Join(home, ".codex", "config.toml")) || len(runner.calls) != beforeCalls || readFileString(t, filepath.Join(home, ".matty", "packs.json")) != beforeState {
 		t.Fatal("cancellation before Apply caused local, external, or state effects")

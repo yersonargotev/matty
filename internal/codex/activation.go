@@ -45,7 +45,25 @@ func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabili
 func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
+	engramOwned := hasEngramCodexSetupResources(pack)
+	if engramOwned {
+		config, err := readOptionalFile(a.configFile)
+		if err != nil {
+			return capabilitypack.ActivationObservation{}, err
+		}
+		engramProjections, err := a.inspectEngramContract(config, resolutions)
+		if err != nil {
+			return capabilitypack.ActivationObservation{}, err
+		}
+		projections = append(projections, engramProjections...)
+		for _, projection := range engramProjections {
+			revisionParts = append(revisionParts, projection.ID+"="+projection.ObservedFingerprint)
+		}
+	}
 	for _, resource := range pack.Resources {
+		if engramOwned && isEngramOwnedResource(resource) {
+			continue
+		}
 		switch resource.Kind {
 		case "skill":
 			source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
