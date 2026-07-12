@@ -104,6 +104,72 @@ func TestActivationAdapterInspectDoesNotWrite(t *testing.T) {
 	}
 }
 
+func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
+	root := t.TempDir()
+	instructions := filepath.Join(root, "instructions")
+	if err := os.MkdirAll(instructions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructions, "engram-memory.md"), []byte("remember safely\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "opencode.json")
+	prompt := filepath.Join(root, "engram-memory.md")
+	existing := `// keep OpenCode syntax
+{
+  "model": "anthropic/test",
+  "mcp": {"jira": {"type": "remote", "url": "https://jira.example/mcp",},},
+  "instructions": ["CONTRIBUTING.md",],
+}
+`
+	if err := os.WriteFile(config, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pack := capabilitypack.Pack{ID: "engram", Version: "1.0.0", Resources: []capabilitypack.Resource{
+		{Kind: "instruction", ID: "engram-memory", Source: "instructions/engram-memory.md"},
+		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
+	}}
+	adapter := NewActivationAdapter(root, filepath.Join(root, ".agents", "skills"), config, prompt)
+	observed, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed.Projections) != 3 {
+		t.Fatalf("projections = %#v", observed.Projections)
+	}
+	var actions []capabilitypack.ProjectionAction
+	for _, projection := range observed.Projections {
+		actions = append(actions, projection.Action)
+	}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"// keep OpenCode syntax", `"model": "anthropic/test"`, `"jira"`, `"engram"`, prompt} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("OpenCode config lost/projected %q:\n%s", want, updated)
+		}
+	}
+	if _, err := os.Stat(prompt); err != nil {
+		t.Fatalf("Engram instruction file missing: %v", err)
+	}
+	verified, err := adapter.InspectActivation(context.Background(), pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range verified.Projections {
+		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+			t.Fatalf("projection did not verify: %+v", projection)
+		}
+	}
+	if verified.Readiness.Authorized || verified.Readiness.Usable || len(verified.PendingHumanActions) != 2 {
+		t.Fatalf("Engram readiness = %+v pending=%v", verified.Readiness, verified.PendingHumanActions)
+	}
+}
+
 func TestActivationAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) {
 	root := t.TempDir()
 	adapter := NewActivationAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "matty.md"))

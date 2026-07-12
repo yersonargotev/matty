@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -8,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
+	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencodeactivation"
 )
 
@@ -44,6 +46,9 @@ func newPackActivateCommand(opts Options) *cobra.Command {
 			}
 			var receipts []capabilitypack.ApprovalReceipt
 			for _, phase := range plan.Phases() {
+				if !phase.ApprovalRequired {
+					continue
+				}
 				approved, err := opts.Terminal.Approve(cmd.InOrStdin(), cmd.OutOrStdout(), fmt.Sprintf("Approve %s phase for exact plan %s?", phase.Kind, plan.ID()))
 				if err != nil {
 					return err
@@ -57,7 +62,22 @@ func newPackActivateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by matty\n", result.PlanID, result.Projections, surfaceName(plan.Surface()))
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
+				return err
+			}
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", yesNo(result.Readiness.Configured), yesNo(result.Readiness.Authorized), yesNo(result.Readiness.Usable)); err != nil {
+				return err
+			}
+			if len(result.PendingHumanActions) > 0 {
+				if _, err = fmt.Fprintln(cmd.OutOrStdout(), "Pending human actions:"); err != nil {
+					return err
+				}
+				for _, action := range result.PendingHumanActions {
+					if _, err = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action); err != nil {
+						return err
+					}
+				}
+			}
 			return err
 		},
 	}
@@ -83,10 +103,16 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	if err != nil {
 		return capabilitypack.Facade{}, err
 	}
-	return capabilitypack.NewFacade(catalog, nil, capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
-		capabilitypack.SurfaceCodex:    codex.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile),
-		capabilitypack.SurfaceOpenCode: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
-	})), nil
+	return capabilitypack.NewFacade(catalog, nil,
+		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
+			capabilitypack.SurfaceCodex:    codex.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile),
+			capabilitypack.SurfaceOpenCode: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
+		}),
+		capabilitypack.WithExternalEffects(
+			engrambin.NewResolver(paths.PathEnv, paths.HomebrewPrefixEnv, opts.Runner.LookPath),
+			runnerExternalExecutor{runner: opts.Runner},
+		),
+	), nil
 }
 
 func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.ReconciliationPlan, dryRun bool) error {
@@ -101,12 +127,21 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Already converged: no approval or Apply required.")
 		return err
 	}
+	for _, resolution := range plan.Resolutions() {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Requirement: %s available=%s path=%s origin=%s\n", resolution.Tool, yesNo(resolution.Available), resolution.Path, resolution.Origin); err != nil {
+			return err
+		}
+	}
 	for _, phase := range plan.Phases() {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Phase: %s (%s)\n", phase.Kind, phase.Digest); err != nil {
 			return err
 		}
 		for _, action := range phase.Actions {
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action.Description); err != nil {
+			description := action.Description
+			if action.Kind == capabilitypack.ActionExternalCommand {
+				description = "run: " + strings.Join(append([]string{action.Command}, action.Args...), " ") + " (" + action.Description + ")"
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", description); err != nil {
 				return err
 			}
 		}
@@ -114,16 +149,18 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	return nil
 }
 
+type runnerExternalExecutor struct{ runner Runner }
+
+func (e runnerExternalExecutor) Execute(ctx context.Context, action capabilitypack.ProjectionAction) error {
+	return e.runner.Run(ctx, action.Command, action.Args...)
+}
+
 func newPackStatusCommand(opts Options) *cobra.Command {
 	var surface string
 	cmd := &cobra.Command{
 		Use: "status [pack]", Short: "Inspect capability pack status", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			catalog, err := discoverPackCatalog(opts)
-			if err != nil {
-				return err
-			}
-			paths, err := ResolvePaths(opts.Env)
+			facade, err := activationFacade(opts)
 			if err != nil {
 				return err
 			}
@@ -131,10 +168,6 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 			if len(args) == 1 {
 				packID = args[0]
 			}
-			facade := capabilitypack.NewFacade(catalog, map[capabilitypack.Surface]capabilitypack.SurfaceInspector{
-				capabilitypack.SurfaceCodex:    capabilitypack.NewCodexInspector(paths.CodexPromptFile),
-				capabilitypack.SurfaceOpenCode: capabilitypack.NewOpenCodeInspector(paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
-			})
 			report, err := facade.Status(cmd.Context(), capabilitypack.StatusRequest{PackID: packID, Surface: capabilitypack.Surface(surface)})
 			if err != nil {
 				return err

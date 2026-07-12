@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yersonargotev/matty/internal/capabilitypack"
 )
 
 const Formula = "gentleman-programming/tap/engram"
@@ -29,6 +31,81 @@ type Executable struct {
 	Version      string
 	VersionErr   error
 	Canonical    bool
+}
+
+// Resolver adapts the existing Homebrew/path identity checks to the
+// capability-pack executable-resolution seam. It never executes the tool;
+// callers that need a version or runtime observation use a separate seam.
+type Resolver struct {
+	PathEnv           string
+	HomebrewPrefixEnv string
+	LookPath          func(string) (string, error)
+}
+
+func NewResolver(pathEnv, homebrewPrefixEnv string, lookPath func(string) (string, error)) Resolver {
+	return Resolver{PathEnv: pathEnv, HomebrewPrefixEnv: homebrewPrefixEnv, LookPath: lookPath}
+}
+
+func (r Resolver) Resolve(_ context.Context, tool string) (capabilitypack.ExecutableResolution, error) {
+	if tool != "engram" {
+		return capabilitypack.ExecutableResolution{}, fmt.Errorf("unsupported executable requirement %q", tool)
+	}
+	canonical := DiscoverHomebrew(r.HomebrewPrefixEnv)
+	if canonical != nil {
+		return capabilitypack.ExecutableResolution{
+			Tool:                 tool,
+			Available:            true,
+			Path:                 canonical.Path,
+			ResolvedPath:         canonical.ResolvedPath,
+			Origin:               "homebrew",
+			AcquisitionSupported: true,
+			AcquisitionCommand:   "brew",
+			AcquisitionArgs:      []string{"install", Formula},
+			Precondition:         executablePrecondition(canonical.Path, canonical.ResolvedPath),
+		}, nil
+	}
+
+	path := ""
+	if r.LookPath != nil {
+		resolved, err := r.LookPath(tool)
+		if err == nil {
+			path = resolved
+		}
+	}
+	expected := ExpectedHomebrewPath(r.HomebrewPrefixEnv)
+	if path != "" && IsExpectedHomebrewPath(path, expected) {
+		identity := NewIdentity(path)
+		return capabilitypack.ExecutableResolution{
+			Tool:                 tool,
+			Available:            true,
+			Path:                 path,
+			ResolvedPath:         identity.ResolvedPath,
+			Origin:               "homebrew",
+			AcquisitionSupported: true,
+			AcquisitionCommand:   "brew",
+			AcquisitionArgs:      []string{"install", Formula},
+			Precondition:         executablePrecondition(identity.Path, identity.ResolvedPath),
+		}, nil
+	}
+
+	return capabilitypack.ExecutableResolution{
+		Tool:                 tool,
+		Available:            false,
+		Path:                 expected,
+		Origin:               "homebrew",
+		AcquisitionSupported: true,
+		AcquisitionCommand:   "brew",
+		AcquisitionArgs:      []string{"install", Formula},
+		Precondition:         "missing|" + expected,
+	}, nil
+}
+
+func executablePrecondition(path, resolved string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return path + "|" + resolved + "|unstatable:" + err.Error()
+	}
+	return fmt.Sprintf("%s|%s|%d|%d|%o", path, resolved, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
 }
 
 type Process struct {

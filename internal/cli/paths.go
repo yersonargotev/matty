@@ -40,6 +40,7 @@ type Paths struct {
 	SkillSourceMissingHint string
 	SkillSourceIsDefault   bool
 	SkillSourceOrigin      SkillSourceOrigin
+	CodexConfigFile        string
 	CodexPromptFile        string
 	OpenCodeConfigFile     string
 	OpenCodePromptFile     string
@@ -78,6 +79,7 @@ func ResolvePaths(env Env) (Paths, error) {
 		SkillSourceMissingHint: skillSource.MissingHint,
 		SkillSourceIsDefault:   skillSource.IsDefault,
 		SkillSourceOrigin:      skillSource.Origin,
+		CodexConfigFile:        filepath.Join(home, ".codex", "config.toml"),
 		CodexPromptFile:        filepath.Join(home, ".codex", "AGENTS.md"),
 		OpenCodeConfigFile:     filepath.Join(configHome, "opencode", "opencode.json"),
 		OpenCodePromptFile:     filepath.Join(configHome, "opencode", "matty.md"),
