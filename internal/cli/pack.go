@@ -105,11 +105,11 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	}
 	return capabilitypack.NewFacade(catalog, nil,
 		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
-			capabilitypack.SurfaceCodex:    codex.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile),
+			capabilitypack.SurfaceCodex:    codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile),
 			capabilitypack.SurfaceOpenCode: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
 		}),
 		capabilitypack.WithExternalEffects(
-			engrambin.NewResolver(paths.PathEnv, paths.HomebrewPrefixEnv, opts.Runner.LookPath),
+			engrambin.NewResolver(paths.HomebrewPrefixEnv, opts.Runner.LookPath),
 			runnerExternalExecutor{runner: opts.Runner},
 		),
 	), nil
@@ -160,7 +160,11 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "status [pack]", Short: "Inspect capability pack status", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			facade, err := activationFacade(opts)
+			catalog, err := discoverPackCatalog(opts)
+			if err != nil {
+				return err
+			}
+			paths, err := ResolvePaths(opts.Env)
 			if err != nil {
 				return err
 			}
@@ -168,6 +172,10 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 			if len(args) == 1 {
 				packID = args[0]
 			}
+			facade := capabilitypack.NewFacade(catalog, map[capabilitypack.Surface]capabilitypack.SurfaceInspector{
+				capabilitypack.SurfaceCodex:    capabilitypack.NewCodexInspector(paths.CodexPromptFile),
+				capabilitypack.SurfaceOpenCode: capabilitypack.NewOpenCodeInspector(paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
+			})
 			report, err := facade.Status(cmd.Context(), capabilitypack.StatusRequest{PackID: packID, Surface: capabilitypack.Surface(surface)})
 			if err != nil {
 				return err

@@ -109,6 +109,14 @@ type ActivationAdapter interface {
 	ApplyProjections(context.Context, []ProjectionAction) error
 }
 
+// ResolutionAwareActivationAdapter receives the already-resolved executable
+// facts when a host projection embeds a global tool command. The optional
+// interface keeps existing adapter fakes source-compatible while ensuring the
+// production Codex/OpenCode adapters use the exact sealed executable.
+type ResolutionAwareActivationAdapter interface {
+	InspectActivationWithResolution(context.Context, Pack, []ExecutableResolution) (ActivationObservation, error)
+}
+
 type ActivationIntent struct {
 	PackID   string  `json:"pack_id"`
 	Surface  Surface `json:"surface"`
@@ -265,7 +273,11 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
-	observation, err := adapter.InspectActivation(ctx, pack)
+	resolutions, err := f.resolveExecutables(ctx, pack)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	observation, err := inspectActivation(ctx, adapter, pack, resolutions)
 	if err != nil {
 		return ReconciliationPlan{}, fmt.Errorf("inspect activation of pack %q on %s: %w", pack.ID, request.Surface, err)
 	}
@@ -283,7 +295,7 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 		}
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
-	externalActions, resolutions, err := f.externalPlan(ctx, pack, request.Surface, state)
+	externalActions, err := f.externalPlan(pack, request.Surface, state, resolutions)
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
@@ -325,7 +337,7 @@ func (f Facade) Preview(ctx context.Context, request ActivationRequest) (Reconci
 		}
 		plan.phases = append(plan.phases, PlanPhase{Kind: ConsentHostFollowUp, Actions: hostActions})
 	}
-	if !noOp && len(actions) == 0 {
+	if !noOp && len(actions) == 0 && len(externalActions) == 0 {
 		return ReconciliationPlan{}, fmt.Errorf("existing %s projections are not verified Matty ownership", request.Surface)
 	}
 	plan.seal()
@@ -370,7 +382,14 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	observation, err := adapter.InspectActivation(ctx, pack)
+	resolutions, err := f.resolveExecutables(ctx, pack)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if !sameResolutions(request.Plan.resolutions, resolutions) {
+		return ApplyResult{}, StalePlanError{Precondition: "Engram executable resolution changed after Preview; rerun activation to preview a fresh plan"}
+	}
+	observation, err := inspectActivation(ctx, adapter, pack, resolutions)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -379,15 +398,6 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	}
 	if observationDigest(observation) != request.Plan.observationFingerprint {
 		return ApplyResult{}, StalePlanError{Precondition: fmt.Sprintf("%s projections changed after Preview; rerun activation to preview a fresh plan", request.Plan.surface)}
-	}
-	if f.activation.resolver != nil || len(request.Plan.resolutions) > 0 {
-		resolutions, err := f.resolveExecutables(ctx, pack)
-		if err != nil {
-			return ApplyResult{}, err
-		}
-		if !sameResolutions(request.Plan.resolutions, resolutions) {
-			return ApplyResult{}, StalePlanError{Precondition: "Engram executable resolution changed after Preview; rerun activation to preview a fresh plan"}
-		}
 	}
 	if hasPhaseActions(request.Plan.phases, ConsentExecutableExternal) && f.activation.executor == nil {
 		return ApplyResult{}, fmt.Errorf("external effects are not configured")
@@ -409,15 +419,25 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	localActions := phaseActions(request.Plan.phases, ConsentReversibleLocal)
 	if len(localActions) > 0 {
 		if err := adapter.ApplyProjections(ctx, localActions); err != nil {
+			state.Journal.FailedAction = "reversible-local"
+			state.Journal.FailureDetail = err.Error()
+			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
+				return ApplyResult{}, fmt.Errorf("apply reversible local projections: %v; could not persist recovery facts: %w", err, saveErr)
+			}
 			return ApplyResult{}, err
 		}
 	}
-	verified, err := adapter.InspectActivation(ctx, pack)
+	verified, err := inspectActivation(ctx, adapter, pack, resolutions)
 	if err != nil {
 		return ApplyResult{}, err
 	}
 	if !verificationMatches(request.Plan.desired, verified.Projections) {
-		return ApplyResult{}, ErrVerificationFailed
+		state.Journal.FailedAction = "verify-reversible-local"
+		state.Journal.FailureDetail = verificationMismatch(request.Plan.desired, verified.Projections)
+		if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
+			return ApplyResult{}, fmt.Errorf("%w: %s; could not persist recovery facts: %v", ErrVerificationFailed, state.Journal.FailureDetail, saveErr)
+		}
+		return ApplyResult{}, fmt.Errorf("%w: %s", ErrVerificationFailed, verificationMismatch(request.Plan.desired, verified.Projections))
 	}
 	externalActions := phaseActions(request.Plan.phases, ConsentExecutableExternal)
 	if len(externalActions) > 0 {
@@ -444,12 +464,17 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 	}
 	if len(externalActions) > 0 {
-		verified, err = adapter.InspectActivation(ctx, pack)
+		verified, err = inspectActivation(ctx, adapter, pack, resolutions)
 		if err != nil {
 			return ApplyResult{}, err
 		}
 		if !verificationMatches(request.Plan.desired, verified.Projections) {
-			return ApplyResult{}, ErrVerificationFailed
+			state.Journal.FailedAction = "verify-after-external"
+			state.Journal.FailureDetail = verificationMismatch(request.Plan.desired, verified.Projections)
+			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
+				return ApplyResult{}, fmt.Errorf("%w: %s; could not persist recovery facts: %v", ErrVerificationFailed, state.Journal.FailureDetail, saveErr)
+			}
+			return ApplyResult{}, fmt.Errorf("%w: %s", ErrVerificationFailed, verificationMismatch(request.Plan.desired, verified.Projections))
 		}
 	}
 	state.Journal = nil
@@ -566,6 +591,36 @@ func verificationMatches(expected []projectionExpectation, values []ObservedProj
 	}
 	return true
 }
+
+func verificationMismatch(expected []projectionExpectation, values []ObservedProjection) string {
+	want := map[string]string{}
+	for _, projection := range expected {
+		want[projection.ID] = projection.Fingerprint
+	}
+	got := map[string]string{}
+	for _, projection := range values {
+		got[projection.ID] = projection.ObservedFingerprint
+	}
+	var details []string
+	ids := make([]string, 0, len(want)+len(got))
+	seen := map[string]bool{}
+	for id := range want {
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	for id := range got {
+		if !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if want[id] != got[id] {
+			details = append(details, fmt.Sprintf("%s expected %s observed %s", id, want[id], got[id]))
+		}
+	}
+	return fmt.Sprintf("expected %d projections, observed %d; %s", len(expected), len(values), strings.Join(details, "; "))
+}
 func ownershipMatches(owners []ProjectionOwnership, projections []ObservedProjection, packID string) bool {
 	if len(owners) != len(projections) {
 		return false
@@ -605,19 +660,15 @@ func cloneActivationState(state ActivationState) ActivationState {
 	return state
 }
 
-func (f Facade) externalPlan(ctx context.Context, pack Pack, surface Surface, state ActivationState) ([]ProjectionAction, []ExecutableResolution, error) {
+func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, resolutions []ExecutableResolution) ([]ProjectionAction, error) {
 	if pack.ID != "engram" {
-		return nil, nil, nil
-	}
-	resolutions, err := f.resolveExecutables(ctx, pack)
-	if err != nil {
-		return nil, nil, err
+		return nil, nil
 	}
 	var actions []ProjectionAction
 	for _, resolution := range resolutions {
 		if !resolution.Available {
 			if !resolution.AcquisitionSupported || strings.TrimSpace(resolution.AcquisitionCommand) == "" {
-				return nil, nil, fmt.Errorf("unsatisfied global tool requirement %q: no supported acquisition action is available", resolution.Tool)
+				return nil, fmt.Errorf("unsatisfied global tool requirement %q: no supported acquisition action is available; set HOMEBREW_PREFIX or install the supported Homebrew formula before retrying", resolution.Tool)
 			}
 			acquisition := ProjectionAction{ID: "external:" + resolution.Tool + ":acquire", Kind: ActionExternalCommand, Command: resolution.AcquisitionCommand, Args: append([]string(nil), resolution.AcquisitionArgs...), Description: fmt.Sprintf("acquire global tool %s via %s %s", resolution.Tool, resolution.AcquisitionCommand, strings.Join(resolution.AcquisitionArgs, " "))}
 			if !externalEffectCompleted(state.External, acquisition) {
@@ -625,14 +676,32 @@ func (f Facade) externalPlan(ctx context.Context, pack Pack, surface Surface, st
 			}
 		}
 		if strings.TrimSpace(resolution.Path) == "" {
-			return nil, nil, fmt.Errorf("resolved global tool %q has no executable path", resolution.Tool)
+			return nil, fmt.Errorf("resolved global tool %q has no executable path", resolution.Tool)
 		}
 		setup := ProjectionAction{ID: "external:" + resolution.Tool + ":setup:" + string(surface), Kind: ActionExternalCommand, Command: resolution.Path, Args: []string{"setup", string(surface)}, Description: fmt.Sprintf("run %s setup %s", resolution.Path, surface)}
 		if !externalEffectCompleted(state.External, setup) {
 			actions = append(actions, setup)
 		}
 	}
-	return actions, resolutions, nil
+	return actions, nil
+}
+
+func inspectActivation(ctx context.Context, adapter ActivationAdapter, pack Pack, resolutions []ExecutableResolution) (ActivationObservation, error) {
+	var observation ActivationObservation
+	var err error
+	if resolved, ok := adapter.(ResolutionAwareActivationAdapter); ok {
+		observation, err = resolved.InspectActivationWithResolution(ctx, pack, resolutions)
+	} else {
+		observation, err = adapter.InspectActivation(ctx, pack)
+	}
+	if err != nil {
+		return ActivationObservation{}, err
+	}
+	if pack.ID == "matty" {
+		observation.Readiness.Authorized = true
+		observation.Readiness.Usable = true
+	}
+	return observation, nil
 }
 
 func (f Facade) resolveExecutables(ctx context.Context, pack Pack) ([]ExecutableResolution, error) {
@@ -656,6 +725,15 @@ func (f Facade) resolveExecutables(ctx context.Context, pack Pack) ([]Executable
 		result = append(result, resolution)
 	}
 	return result, nil
+}
+
+func ResolvedExecutablePath(command string, resolutions []ExecutableResolution) string {
+	for _, resolution := range resolutions {
+		if resolution.Tool == command && resolution.Path != "" {
+			return resolution.Path
+		}
+	}
+	return command
 }
 
 func resolutionFingerprint(resolution ExecutableResolution) string {

@@ -34,7 +34,7 @@ func TestEngramProjectionIsCodexSpecificAndPreservesUnmanagedFiles(t *testing.T)
 		{Kind: "instruction", ID: "engram-memory", Source: "instructions/engram-memory.md"},
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
-	adapter := NewActivationAdapter(root, filepath.Join(root, ".agents", "skills"), prompt, config)
+	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, ".agents", "skills"), prompt, config)
 	observed, err := adapter.InspectActivation(context.Background(), pack)
 	if err != nil {
 		t.Fatal(err)

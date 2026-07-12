@@ -20,15 +20,19 @@ type ActivationAdapter struct {
 	configFile string
 }
 
-func NewActivationAdapter(bundleRoot, skillsDir, promptFile string, configFiles ...string) *ActivationAdapter {
-	configFile := filepath.Join(filepath.Dir(promptFile), "config.toml")
-	if len(configFiles) > 0 && configFiles[0] != "" {
-		configFile = configFiles[0]
-	}
+func NewActivationAdapter(bundleRoot, skillsDir, promptFile string) *ActivationAdapter {
+	return NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, filepath.Join(filepath.Dir(promptFile), "config.toml"))
+}
+
+func NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, configFile string) *ActivationAdapter {
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile, configFile: configFile}
 }
 
-func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
+func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
+	return a.InspectActivationWithResolution(ctx, pack, nil)
+}
+
+func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
 	for _, resource := range pack.Resources {
@@ -74,7 +78,8 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
 			}
-			desiredBlock := mcpBlock(resource)
+			command := capabilitypack.ResolvedExecutablePath(resource.Command, resolutions)
+			desiredBlock := mcpBlock(resource, command)
 			start, end := mcpMarkers(resource.ID)
 			fragment, exists := extractBlock(current, start, end)
 			observed := "missing"
@@ -86,12 +91,12 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 			}
 			desired := localprojection.FingerprintBytes([]byte(desiredBlock))
 			id := "mcp_server:" + resource.ID
-			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexMCPConfig, Target: a.configFile, Content: mergeBlock(current, desiredBlock, start, end), Description: fmt.Sprintf("configure Codex MCP server %s in %s", resource.ID, a.configFile)}})
+			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexMCPConfig, Target: a.configFile, Content: mergeBlock(current, desiredBlock, start, end), Command: command, Args: append([]string(nil), resource.Args...), Description: fmt.Sprintf("configure Codex MCP server %s in %s", resource.ID, a.configFile)}})
 			revisionParts = append(revisionParts, "config="+localprojection.FingerprintBytes([]byte(current)))
 		}
 	}
 	sort.Strings(revisionParts)
-	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, Readiness: readinessFor(pack), PendingHumanActions: pendingActions(pack)}, nil
+	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
@@ -114,15 +119,15 @@ func mcpMarkers(id string) (string, string) {
 	return "# matty:pack:" + id + ":start", "# matty:pack:" + id + ":end"
 }
 
-func mcpBlock(resource capabilitypack.Resource) string {
+func mcpBlock(resource capabilitypack.Resource, command string) string {
 	start, end := mcpMarkers(resource.ID)
-	command, _ := json.Marshal(resource.Command)
+	encodedCommand, _ := json.Marshal(command)
 	args := make([]string, 0, len(resource.Args))
 	for _, arg := range resource.Args {
 		encoded, _ := json.Marshal(arg)
 		args = append(args, string(encoded))
 	}
-	return fmt.Sprintf("%s\n[mcp_servers.%s]\ncommand = %s\nargs = [%s]\n%s", start, resource.ID, command, strings.Join(args, ", "), end)
+	return fmt.Sprintf("%s\n[mcp_servers.%s]\ncommand = %s\nargs = [%s]\n%s", start, resource.ID, encodedCommand, strings.Join(args, ", "), end)
 }
 
 func extractBlock(content, startMarker, endMarker string) (string, bool) {
@@ -167,13 +172,6 @@ func readOptionalFile(path string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 	return string(data), nil
-}
-
-func readinessFor(pack capabilitypack.Pack) capabilitypack.ReadinessStatus {
-	if pack.ID == "matty" {
-		return capabilitypack.ReadinessStatus{Authorized: true, Usable: true}
-	}
-	return capabilitypack.ReadinessStatus{}
 }
 
 func pendingActions(pack capabilitypack.Pack) []string {

@@ -212,7 +212,7 @@ func TestEngramStaleExecutableResolutionExecutesZeroActions(t *testing.T) {
 	if !errors.Is(err, ErrStalePlan) || !strings.Contains(err.Error(), "executable resolution changed") {
 		t.Fatalf("error = %v", err)
 	}
-	if adapter.inspectCalls != 2 || len(store.saves) != 0 || len(executor.actions) != 0 {
+	if adapter.inspectCalls != 1 || len(store.saves) != 0 || len(executor.actions) != 0 {
 		t.Fatalf("stale executable caused effects: inspect=%d saves=%d external=%d", adapter.inspectCalls, len(store.saves), len(executor.actions))
 	}
 }
@@ -245,7 +245,7 @@ func TestEngramLocalFailureRunsNoExternalEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal), facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
-	if err == nil || len(executor.actions) != 0 || len(store.saves) != 1 || store.saves[0].Journal == nil {
+	if err == nil || len(executor.actions) != 0 || len(store.saves) != 2 || store.state.Journal == nil || store.state.Journal.FailedAction != "reversible-local" {
 		t.Fatalf("local failure facts/effects: err=%v external=%d saves=%d", err, len(executor.actions), len(store.saves))
 	}
 }
@@ -269,6 +269,21 @@ func TestEngramExternalFailureStopsLaterActionsAndKeepsRecoveryFacts(t *testing.
 	if state.Journal == nil || state.Journal.FailedAction != "external:engram:setup:opencode" || !reflect.DeepEqual(state.Journal.Completed, []string{"instruction:engram-memory", "mcp_server:engram", "external:engram:acquire"}) || len(state.Ownership) != 0 {
 		t.Fatalf("recovery state = %+v", state)
 	}
+
+	executor.failID = ""
+	recovery, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(phaseActions(recovery.phases, ConsentReversibleLocal)) != 0 || len(phaseActions(recovery.phases, ConsentExecutableExternal)) != 1 {
+		t.Fatalf("recovery phases = %#v", recovery.phases)
+	}
+	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: recovery, Approvals: []ApprovalReceipt{facade.Approve(recovery, ConsentExecutableExternal)}, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if store.state.Journal != nil || len(store.state.Ownership) != 2 {
+		t.Fatalf("verified recovery state = %+v", store.state)
+	}
 }
 
 func TestEngramVerificationFailureDoesNotClaimOwnership(t *testing.T) {
@@ -283,8 +298,25 @@ func TestEngramVerificationFailureDoesNotClaimOwnership(t *testing.T) {
 	if !errors.Is(err, ErrVerificationFailed) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(executor.actions) != 0 || len(store.state.Ownership) != 0 || store.state.Journal == nil {
+	if len(executor.actions) != 0 || len(store.state.Ownership) != 0 || store.state.Journal == nil || store.state.Journal.FailedAction != "verify-reversible-local" {
 		t.Fatalf("verification failure state/effects = %+v external=%d", store.state, len(executor.actions))
+	}
+}
+
+func TestEngramPostExternalVerificationFailurePersistsRecoveryFacts(t *testing.T) {
+	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{availableEngramResolution("/opt/homebrew/bin/engram")}}
+	executor := &fakeExternalExecutor{}
+	facade, _, store := engramFacadeForTest(resolver, executor, engramObservation("missing"), engramObservation("missing"), engramObservation("ready"), engramObservation("still-missing"))
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "engram", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal), facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
+	if !errors.Is(err, ErrVerificationFailed) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(executor.actions) != 1 || len(store.state.Ownership) != 0 || store.state.Journal == nil || store.state.Journal.FailedAction != "verify-after-external" || store.state.Journal.FailureDetail == "" {
+		t.Fatalf("post-external verification state/effects = %+v external=%d", store.state, len(executor.actions))
 	}
 }
 

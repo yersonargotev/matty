@@ -26,7 +26,11 @@ func NewActivationAdapter(bundleRoot, skillsDir, configFile, promptFile string) 
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, configFile: configFile, promptFile: promptFile}
 }
 
-func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
+func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
+	return a.InspectActivationWithResolution(ctx, pack, nil)
+}
+
+func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
 	desiredConfig := ""
@@ -96,6 +100,7 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 			projections = append(projections, capabilitypack.ObservedProjection{ID: refID, Exists: inspection.HasMattyInstruction, ObservedFingerprint: refObserved, DesiredFingerprint: refDesired, Action: capabilitypack.ProjectionAction{ID: refID, Kind: capabilitypack.ActionOpenCodeConfigReference, Target: a.configFile, Content: merged, Description: fmt.Sprintf("add OpenCode instruction reference in %s", a.configFile)}})
 			revisionParts = append(revisionParts, "prompt="+localprojection.FingerprintBytes(currentPrompt), "config="+localprojection.FingerprintBytes([]byte(currentConfig)))
 		case "mcp_server":
+			command := capabilitypack.ResolvedExecutablePath(resource.Command, resolutions)
 			currentConfig, err := readOptionalActivationFile(a.configFile)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
@@ -104,20 +109,20 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 				desiredConfig = currentConfig
 				configLoaded = true
 			}
-			inspection, err := opencode.InspectMCPContent(currentConfig, a.configFile, resource.ID, resource.Command, resource.Args)
+			inspection, err := opencode.InspectMCPContent(currentConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
 			}
-			merged, err := opencode.MergeMCPProjection(currentConfig, a.configFile, resource.ID, resource.Command, resource.Args)
+			merged, err := opencode.MergeMCPProjection(currentConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
 			}
-			desiredConfig, err = opencode.MergeMCPProjection(desiredConfig, a.configFile, resource.ID, resource.Command, resource.Args)
+			desiredConfig, err = opencode.MergeMCPProjection(desiredConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.ActivationObservation{}, err
 			}
 			id := "mcp_server:" + resource.ID
-			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: inspection.Exists, ObservedFingerprint: inspection.ObservedFingerprint, DesiredFingerprint: inspection.DesiredFingerprint, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile, Content: merged, Command: resource.Command, Args: append([]string(nil), resource.Args...), Description: fmt.Sprintf("configure OpenCode MCP server %s in %s", resource.ID, a.configFile)}})
+			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: inspection.Exists, ObservedFingerprint: inspection.ObservedFingerprint, DesiredFingerprint: inspection.DesiredFingerprint, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile, Content: merged, Command: command, Args: append([]string(nil), resource.Args...), Description: fmt.Sprintf("configure OpenCode MCP server %s in %s", resource.ID, a.configFile)}})
 			revisionParts = append(revisionParts, "config="+localprojection.FingerprintBytes([]byte(currentConfig)))
 		}
 	}
@@ -129,7 +134,7 @@ func (a *ActivationAdapter) InspectActivation(_ context.Context, pack capability
 		}
 	}
 	sort.Strings(revisionParts)
-	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, Readiness: readinessFor(pack), PendingHumanActions: pendingActions(pack)}, nil
+	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
 func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) error {
@@ -162,13 +167,6 @@ func (a *ActivationAdapter) instructionPath(id string) string {
 		return a.promptFile
 	}
 	return filepath.Join(filepath.Dir(a.promptFile), id+".md")
-}
-
-func readinessFor(pack capabilitypack.Pack) capabilitypack.ReadinessStatus {
-	if pack.ID == "matty" {
-		return capabilitypack.ReadinessStatus{Authorized: true, Usable: true}
-	}
-	return capabilitypack.ReadinessStatus{}
 }
 
 func pendingActions(pack capabilitypack.Pack) []string {

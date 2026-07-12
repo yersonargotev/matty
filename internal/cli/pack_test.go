@@ -457,15 +457,6 @@ func TestPackActivateEngramPromptsLocalAndExternalSeparatelyAndReportsPendingAct
 	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
 		t.Fatalf("Codex MCP projection missing: %v", err)
 	}
-	status, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "engram", "--surface", "codex")
-	if err != nil {
-		t.Fatalf("status failed: %v\n%s", err, status)
-	}
-	for _, want := range []string{"Intent: active", "Readiness: configured=yes, authorized=no, usable=no", "Pending human actions: review and trust"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q:\n%s", want, status)
-		}
-	}
 }
 
 func TestPackActivateEngramNonTTYAndExternalCancellationAreSideEffectFree(t *testing.T) {

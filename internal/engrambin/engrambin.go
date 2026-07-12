@@ -37,18 +37,24 @@ type Executable struct {
 // capability-pack executable-resolution seam. It never executes the tool;
 // callers that need a version or runtime observation use a separate seam.
 type Resolver struct {
-	PathEnv           string
 	HomebrewPrefixEnv string
 	LookPath          func(string) (string, error)
 }
 
-func NewResolver(pathEnv, homebrewPrefixEnv string, lookPath func(string) (string, error)) Resolver {
-	return Resolver{PathEnv: pathEnv, HomebrewPrefixEnv: homebrewPrefixEnv, LookPath: lookPath}
+func NewResolver(homebrewPrefixEnv string, lookPath func(string) (string, error)) Resolver {
+	return Resolver{HomebrewPrefixEnv: homebrewPrefixEnv, LookPath: lookPath}
 }
 
 func (r Resolver) Resolve(_ context.Context, tool string) (capabilitypack.ExecutableResolution, error) {
 	if tool != "engram" {
 		return capabilitypack.ExecutableResolution{}, fmt.Errorf("unsupported executable requirement %q", tool)
+	}
+	acquisitionSupported := strings.TrimSpace(r.HomebrewPrefixEnv) != ""
+	acquisitionCommand := ""
+	var acquisitionArgs []string
+	if acquisitionSupported {
+		acquisitionCommand = "brew"
+		acquisitionArgs = []string{"install", Formula}
 	}
 	canonical := DiscoverHomebrew(r.HomebrewPrefixEnv)
 	if canonical != nil {
@@ -58,9 +64,9 @@ func (r Resolver) Resolve(_ context.Context, tool string) (capabilitypack.Execut
 			Path:                 canonical.Path,
 			ResolvedPath:         canonical.ResolvedPath,
 			Origin:               "homebrew",
-			AcquisitionSupported: true,
-			AcquisitionCommand:   "brew",
-			AcquisitionArgs:      []string{"install", Formula},
+			AcquisitionSupported: acquisitionSupported,
+			AcquisitionCommand:   acquisitionCommand,
+			AcquisitionArgs:      acquisitionArgs,
 			Precondition:         executablePrecondition(canonical.Path, canonical.ResolvedPath),
 		}, nil
 	}
@@ -81,9 +87,9 @@ func (r Resolver) Resolve(_ context.Context, tool string) (capabilitypack.Execut
 			Path:                 path,
 			ResolvedPath:         identity.ResolvedPath,
 			Origin:               "homebrew",
-			AcquisitionSupported: true,
-			AcquisitionCommand:   "brew",
-			AcquisitionArgs:      []string{"install", Formula},
+			AcquisitionSupported: acquisitionSupported,
+			AcquisitionCommand:   acquisitionCommand,
+			AcquisitionArgs:      acquisitionArgs,
 			Precondition:         executablePrecondition(identity.Path, identity.ResolvedPath),
 		}, nil
 	}
@@ -93,9 +99,9 @@ func (r Resolver) Resolve(_ context.Context, tool string) (capabilitypack.Execut
 		Available:            false,
 		Path:                 expected,
 		Origin:               "homebrew",
-		AcquisitionSupported: true,
-		AcquisitionCommand:   "brew",
-		AcquisitionArgs:      []string{"install", Formula},
+		AcquisitionSupported: acquisitionSupported,
+		AcquisitionCommand:   acquisitionCommand,
+		AcquisitionArgs:      acquisitionArgs,
 		Precondition:         "missing|" + expected,
 	}, nil
 }

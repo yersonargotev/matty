@@ -102,73 +102,24 @@ func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport
 			if request.Surface != "" && surface != request.Surface {
 				continue
 			}
-			entry, err := f.inspectStatusEntry(ctx, pack, surface)
-			if err != nil {
-				return StatusReport{}, err
+			inspector, ok := f.inspectors[surface]
+			if !ok {
+				return StatusReport{}, fmt.Errorf("no inspector configured for CLI surface %q", surface)
 			}
-			report.Entries = append(report.Entries, entry)
+			observation, err := inspector.Inspect(ctx, pack)
+			if err != nil {
+				return StatusReport{}, fmt.Errorf("inspect pack %q on %s: %w", pack.ID, surface, err)
+			}
+			if !observation.Inspected {
+				return StatusReport{}, fmt.Errorf("inspect pack %q on %s: adapter returned no fresh observation", pack.ID, surface)
+			}
+			report.Entries = append(report.Entries, StatusEntry{Pack: pack, Surface: surface, Observation: observation})
 		}
 	}
 	if request.Surface != "" && len(report.Entries) == 0 {
 		return StatusReport{}, fmt.Errorf("pack %q does not support CLI surface %q", request.PackID, request.Surface)
 	}
 	return report, nil
-}
-
-func (f Facade) inspectStatusEntry(ctx context.Context, pack Pack, surface Surface) (StatusEntry, error) {
-	if f.activation != nil && f.activation.store != nil {
-		adapter, ok := f.activation.adapters[surface]
-		if !ok {
-			return StatusEntry{}, fmt.Errorf("no activation adapter configured for CLI surface %q", surface)
-		}
-		observation, err := adapter.InspectActivation(ctx, pack)
-		if err != nil {
-			return StatusEntry{}, fmt.Errorf("inspect pack %q on %s: %w", pack.ID, surface, err)
-		}
-		state, err := f.activation.store.Load(ctx, surface)
-		if err != nil {
-			return StatusEntry{}, err
-		}
-		entry := StatusEntry{Pack: pack, Surface: surface, Observation: SurfaceObservation{Inspected: true}}
-		if !state.Intent.Active || state.Intent.PackID != pack.ID {
-			return entry, nil
-		}
-		entry.Intent = IntentStatus{Active: true, Revision: state.Intent.Revision}
-		entry.Readiness = observation.Readiness
-		entry.Readiness.Configured = ownershipMatches(state.Ownership, observation.Projections, pack.ID)
-		if !entry.Readiness.Configured {
-			entry.Readiness.Authorized = false
-			entry.Readiness.Usable = false
-		} else if !entry.Readiness.Authorized {
-			entry.Readiness.Usable = false
-		}
-		entry.PendingHumanActions = append([]string(nil), observation.PendingHumanActions...)
-		for _, projection := range observation.Projections {
-			if ownedAtFingerprint(state.Ownership, projection.ID, projection.ObservedFingerprint, pack.ID) && projection.ObservedFingerprint == projection.DesiredFingerprint {
-				entry.Projections.Verified++
-			} else if projection.Exists {
-				entry.Projections.Ambiguous++
-			} else {
-				entry.Projections.Drifted++
-			}
-		}
-		if state.Journal != nil {
-			entry.LatestAttempt = &AttemptStatus{Outcome: "recovery-required", PlanID: state.Journal.PlanID}
-		}
-		return entry, nil
-	}
-	inspector, ok := f.inspectors[surface]
-	if !ok {
-		return StatusEntry{}, fmt.Errorf("no inspector configured for CLI surface %q", surface)
-	}
-	observation, err := inspector.Inspect(ctx, pack)
-	if err != nil {
-		return StatusEntry{}, fmt.Errorf("inspect pack %q on %s: %w", pack.ID, surface, err)
-	}
-	if !observation.Inspected {
-		return StatusEntry{}, fmt.Errorf("inspect pack %q on %s: adapter returned no fresh observation", pack.ID, surface)
-	}
-	return StatusEntry{Pack: pack, Surface: surface, Observation: observation}, nil
 }
 
 type codexInspector struct{ promptPath string }

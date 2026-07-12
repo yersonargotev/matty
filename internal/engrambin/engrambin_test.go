@@ -17,7 +17,7 @@ func TestResolverUsesHomebrewIdentityWithoutExecutingEngram(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not executed"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	resolver := NewResolver("", prefix, func(string) (string, error) {
+	resolver := NewResolver(prefix, func(string) (string, error) {
 		return path, nil
 	})
 	resolution, err := resolver.Resolve(context.Background(), "engram")
@@ -31,7 +31,7 @@ func TestResolverUsesHomebrewIdentityWithoutExecutingEngram(t *testing.T) {
 
 func TestResolverReportsSupportedHomebrewAcquisitionWhenMissing(t *testing.T) {
 	prefix := filepath.Join(t.TempDir(), "homebrew")
-	resolver := NewResolver("", prefix, func(string) (string, error) { return "", os.ErrNotExist })
+	resolver := NewResolver(prefix, func(string) (string, error) { return "", os.ErrNotExist })
 	resolution, err := resolver.Resolve(context.Background(), "engram")
 	if err != nil {
 		t.Fatal(err)
