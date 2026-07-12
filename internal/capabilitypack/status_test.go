@@ -11,6 +11,110 @@ type fakeReadinessInspector struct {
 	calls        int
 }
 
+type resourceStatusAdapter struct{}
+
+func (resourceStatusAdapter) InspectActivation(_ context.Context, pack Pack) (ActivationObservation, error) {
+	projections := make([]ObservedProjection, 0, len(pack.Resources))
+	for _, resource := range pack.Resources {
+		projection := ObservedProjection{
+			ID:                 resource.Kind + ":" + resource.ID,
+			Exists:             true,
+			DesiredFingerprint: "healthy",
+			Action:             ProjectionAction{ID: resource.Kind + ":" + resource.ID},
+		}
+		if resource.ID == "engram-memory" {
+			projection.ObservedFingerprint = "drifted"
+			projection.ExternallyManaged = true
+		} else {
+			projection.ObservedFingerprint = "healthy"
+		}
+		projections = append(projections, projection)
+	}
+	return ActivationObservation{Projections: projections}, nil
+}
+
+func (resourceStatusAdapter) ApplyProjections(context.Context, []ProjectionAction) *ProjectionActionError {
+	return nil
+}
+
+type packReadinessInspector struct{}
+
+func (packReadinessInspector) InspectReadiness(_ context.Context, pack Pack, _ ActivationObservation, _ []ExecutableResolution) (ReadinessObservation, error) {
+	return ReadinessObservation{AuthorizationObserved: true, Authorized: pack.ID == "matty", UsabilityObserved: true, Usable: pack.ID == "matty"}, nil
+}
+
+func TestStatusIsolatesReadinessForTwoActivePacksOnOneSurface(t *testing.T) {
+	matty := Pack{ID: "matty", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "matty-guidance"}}}
+	engram := Pack{ID: "engram", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "external_setup", ID: "engram-memory"}}}
+	store := &fakeActivationStore{state: ActivationState{
+		Intents: []ActivationIntent{
+			{PackID: "matty", Surface: SurfaceCodex, Version: "1", Active: true, Revision: 1},
+			{PackID: "engram", Surface: SurfaceCodex, Version: "1", Active: true, Revision: 2},
+		},
+		Ownership: []ProjectionOwnership{{ID: "instruction:matty-guidance", Fingerprint: "healthy", Contributors: []string{"matty"}}},
+	}}
+	facade := NewFacade(
+		Catalog{packs: []Pack{engram, matty}},
+		nil,
+		WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: resourceStatusAdapter{}}),
+		WithReadinessInspectors(map[Surface]ReadinessInspector{SurfaceCodex: packReadinessInspector{}}),
+	)
+
+	directed, err := facade.Status(context.Background(), StatusRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := directed.Entries[0]; got.Readiness != (ReadinessStatus{Configured: true, Authorized: true, Usable: true}) || len(got.ProjectionDetails) != 1 || got.ProjectionDetails[0].ID != "instruction:matty-guidance" {
+		t.Fatalf("directed Matty status includes unrelated evidence: %+v", got)
+	}
+	directed, err = facade.Status(context.Background(), StatusRequest{PackID: "engram", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := directed.Entries[0]; got.Readiness != (ReadinessStatus{}) || got.Projections.Drifted != 1 || len(got.Blockers) == 0 {
+		t.Fatalf("directed Engram status did not retain its drift and blockers: %+v", got)
+	}
+
+	overview, err := facade.Status(context.Background(), StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Entries) != 2 {
+		t.Fatalf("overview entries=%d want=2", len(overview.Entries))
+	}
+	engramEntry, mattyEntry := overview.Entries[0], overview.Entries[1]
+	if engramEntry.Pack.ID != "engram" || engramEntry.Readiness != (ReadinessStatus{}) || engramEntry.Projections.Drifted != 1 || len(engramEntry.Blockers) == 0 {
+		t.Fatalf("Engram status did not retain its drift and blockers: %+v", engramEntry)
+	}
+	if mattyEntry.Pack.ID != "matty" || mattyEntry.Readiness != (ReadinessStatus{Configured: true, Authorized: true, Usable: true}) || mattyEntry.Projections.Verified != 1 || len(mattyEntry.Blockers) != 0 {
+		t.Fatalf("Matty status was degraded by Engram: %+v", mattyEntry)
+	}
+}
+
+func TestSurfaceWideStatusRetainsSharedProjectionConflicts(t *testing.T) {
+	shared := Resource{Kind: "instruction", ID: "shared-guidance"}
+	matty := Pack{ID: "matty", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{shared}}
+	engram := Pack{ID: "engram", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{shared}}
+	store := &fakeActivationStore{state: ActivationState{
+		Intents: []ActivationIntent{
+			{PackID: "matty", Surface: SurfaceCodex, Version: "1", Active: true},
+			{PackID: "engram", Surface: SurfaceCodex, Version: "1", Active: true},
+		},
+		Ownership: []ProjectionOwnership{{ID: "instruction:shared-guidance", Fingerprint: "healthy", Contributors: []string{"matty"}}},
+	}}
+	facade := NewFacade(Catalog{packs: []Pack{engram, matty}}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: resourceStatusAdapter{}}))
+
+	report, err := facade.Status(context.Background(), StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range report.Entries {
+		if entry.Projections.Ambiguous != 1 || len(entry.Blockers) == 0 || !reflect.DeepEqual(entry.ProjectionDetails[0].Contributors, []string{"engram", "matty"}) {
+			t.Fatalf("shared conflict hidden for %s: %+v", entry.Pack.ID, entry)
+		}
+	}
+}
+
 func TestExternallyManagedProjectionIsVerifiedWithoutMattyOwnership(t *testing.T) {
 	projection := ObservedProjection{ID: "external_setup:engram:codex:mcp", Exists: true, ObservedFingerprint: "ready", DesiredFingerprint: "ready", ExternallyManaged: true}
 	details, summary := deriveProjectionStatus("engram", []ObservedProjection{projection}, nil, composition{})

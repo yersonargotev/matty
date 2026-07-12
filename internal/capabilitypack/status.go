@@ -163,9 +163,9 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
 	}
 	entry.LatestAttempt = latestAttemptStatus(state, pack.ID, surface)
-	composition := f.compose(pack, state, surface)
-	combined := composition.combinedPack()
-	resolutions, err := f.resolveExecutables(ctx, combined)
+	surfaceComposition := f.compose(pack, state, surface)
+	relevantPack := f.statusEvidencePack(pack, surface)
+	resolutions, err := f.resolveExecutables(ctx, relevantPack)
 	if err != nil {
 		entry.Blockers = append(entry.Blockers, err.Error())
 		resolutions = nil
@@ -178,11 +178,11 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 			}
 		}
 	}
-	observation, inspectErr := inspectActivation(ctx, adapter, combined, resolutions)
+	observation, inspectErr := inspectActivation(ctx, adapter, relevantPack, resolutions)
 	if inspectErr != nil {
 		return StatusEntry{}, inspectErr
 	}
-	entry.ProjectionDetails, entry.Projections = deriveProjectionStatus(pack.ID, observation.Projections, state.Ownership, composition)
+	entry.ProjectionDetails, entry.Projections = deriveProjectionStatus(pack.ID, observation.Projections, state.Ownership, surfaceComposition)
 	entry.Readiness.Configured = entry.Projections.Verified == len(observation.Projections) && len(observation.Projections) > 0
 	for _, detail := range entry.ProjectionDetails {
 		entry.Evidence = append(entry.Evidence, fmt.Sprintf("%s: %s observed=%s desired=%s target=%s", detail.ID, detail.Health, detail.ObservedFingerprint, detail.DesiredFingerprint, detail.Target))
@@ -216,6 +216,12 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	sort.Strings(entry.PendingHumanActions)
 	sort.Strings(entry.Evidence)
 	return entry, nil
+}
+
+// statusEvidencePack excludes unrelated active packs while retaining the
+// requested pack's dependency closure.
+func (f Facade) statusEvidencePack(pack Pack, surface Surface) Pack {
+	return f.compose(pack, ActivationState{}, surface).combinedPack()
 }
 
 func deriveProjectionStatus(packID string, observed []ObservedProjection, ownership []ProjectionOwnership, c composition) ([]ProjectionStatus, ProjectionSummary) {

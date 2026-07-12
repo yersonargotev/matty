@@ -22,10 +22,10 @@ Work the **frontier**: any ticket whose blockers are all done. Four tickets can 
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Engram-specific unmanaged or drifted Codex projections do not make Matty/Codex report unconfigured when all Matty-owned projections verify.
-- [ ] Each configured, authorized, and usable result is derived only from evidence relevant to the requested pack/surface pair.
-- [ ] Surface-wide status still reports each affected pair truthfully without hiding shared-host conflicts.
-- [ ] Tests cover two active packs on one surface with one healthy pair and one failed or drifted pair.
+- [x] Engram-specific unmanaged or drifted Codex projections do not make Matty/Codex report unconfigured when all Matty-owned projections verify.
+- [x] Each configured, authorized, and usable result is derived only from evidence relevant to the requested pack/surface pair.
+- [x] Surface-wide status still reports each affected pair truthfully without hiding shared-host conflicts.
+- [x] Tests cover two active packs on one surface with one healthy pair and one failed or drifted pair.
 
 ## Repair drift in Matty-owned projections
 
