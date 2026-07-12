@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,7 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yersonargotev/matty/internal/capabilitypack"
 )
+
+type alwaysUsableInspector struct{}
+
+func (alwaysUsableInspector) InspectReadiness(context.Context, capabilitypack.Pack, capabilitypack.ActivationObservation, []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true, Evidence: []string{"fake runtime loaded capability"}}, nil
+}
 
 func TestPackRecoveryDryRunRendersTruthfulHistoryWithoutPromptsOrEffects(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
@@ -319,6 +328,35 @@ func TestPackStatusRequiresCompleteTarget(t *testing.T) {
 		_, err := executeCommand(t, NewRootCommand(opts), tc.args...)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%v error = %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestPackStatusRequireUsableIsIndependentNonInteractiveGate(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	opts.ReadinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{capabilitypack.SurfaceCodex: alwaysUsableInspector{}}
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex", "--require", "usable"); err == nil || !strings.Contains(err.Error(), "not freshly observed usable") {
+		t.Fatalf("inactive gate error=%v", err)
+	}
+	if terminal.calls != 0 || exists(filepath.Join(home, ".matty", "packs.json")) {
+		t.Fatal("failed status gate prompted or persisted")
+	}
+	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	prompts := terminal.calls
+	before := snapshotTree(t, home)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex", "--require", "usable")
+	if err != nil || !strings.Contains(out, "configured=yes, authorized=yes, usable=yes") {
+		t.Fatalf("gate err=%v\n%s", err, out)
+	}
+	if terminal.calls != prompts || snapshotTree(t, home) != before {
+		t.Fatal("successful status gate prompted or mutated files")
+	}
+	for _, args := range [][]string{{"pack", "status", "--require", "usable"}, {"pack", "status", "matty", "--surface", "codex", "--require", "authorized"}} {
+		if _, err := executeCommand(t, NewRootCommand(opts), args...); err == nil || !strings.Contains(err.Error(), "valid only") {
+			t.Fatalf("%v error=%v", args, err)
 		}
 	}
 }

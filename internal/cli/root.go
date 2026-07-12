@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/bootstrap"
+	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
@@ -16,9 +17,10 @@ import (
 // Options carries injectable process boundaries for tests and future command
 // implementations. The zero value uses the real OS environment and runner.
 type Options struct {
-	Env      Env
-	Runner   Runner
-	Terminal Terminal
+	Env                 Env
+	Runner              Runner
+	Terminal            Terminal
+	ReadinessInspectors map[capabilitypack.Surface]capabilitypack.ReadinessInspector
 }
 
 func (o Options) withDefaults() Options {

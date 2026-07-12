@@ -228,6 +228,7 @@ type AttemptOutcome string
 
 const (
 	AttemptApplying         AttemptOutcome = "applying"
+	AttemptVerified         AttemptOutcome = "verified"
 	AttemptRecoveryRequired AttemptOutcome = "recovery-required"
 )
 
@@ -279,6 +280,7 @@ type ActivationState struct {
 	Intent        ActivationIntent      `json:"intent"`
 	Intents       []ActivationIntent    `json:"intents,omitempty"`
 	Journal       *ApplyingJournal      `json:"applying_journal,omitempty"`
+	LastAttempts  []ApplyingJournal     `json:"last_attempts,omitempty"`
 	History       []ApplyingJournal     `json:"attempt_history,omitempty"`
 	Ownership     []ProjectionOwnership `json:"ownership,omitempty"`
 	External      []ExternalEffect      `json:"external_effects,omitempty"`
@@ -882,6 +884,9 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 			return ApplyResult{}, fmt.Errorf("%w: %s", ErrVerificationFailed, verificationMismatch(request.Plan.desired, verified.Projections))
 		}
 	}
+	verifiedAttempt := cloneJournal(*state.Journal)
+	verifiedAttempt.Outcome = AttemptVerified
+	state.LastAttempts = recordLatestAttempt(state.LastAttempts, verifiedAttempt)
 	state.Journal = nil
 	previousOwnership := cloneOwnership(state.Ownership)
 	state.Ownership = make([]ProjectionOwnership, 0, len(verified.Projections))
@@ -1362,6 +1367,10 @@ func cloneActivationState(state ActivationState) ActivationState {
 		journal := cloneJournal(*state.Journal)
 		state.Journal = &journal
 	}
+	state.LastAttempts = append([]ApplyingJournal(nil), state.LastAttempts...)
+	for i := range state.LastAttempts {
+		state.LastAttempts[i] = cloneJournal(state.LastAttempts[i])
+	}
 	state.History = append([]ApplyingJournal(nil), state.History...)
 	for i := range state.History {
 		state.History[i] = cloneJournal(state.History[i])
@@ -1374,6 +1383,17 @@ func cloneJournal(journal ApplyingJournal) ApplyingJournal {
 	journal.Actions = append([]string(nil), journal.Actions...)
 	journal.Completed = append([]string(nil), journal.Completed...)
 	return journal
+}
+
+func recordLatestAttempt(attempts []ApplyingJournal, attempt ApplyingJournal) []ApplyingJournal {
+	result := append([]ApplyingJournal(nil), attempts...)
+	for i := range result {
+		if result[i].PackID == attempt.PackID && result[i].Surface == attempt.Surface {
+			result[i] = cloneJournal(attempt)
+			return result
+		}
+	}
+	return append(result, cloneJournal(attempt))
 }
 
 func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, resolutions []ExecutableResolution) ([]ProjectionAction, []PlanBlocker) {

@@ -26,6 +26,13 @@ func NewActivationAdapter(bundleRoot, skillsDir, configFile, promptFile string) 
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, configFile: configFile, promptFile: promptFile}
 }
 
+func (a *ActivationAdapter) InspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.ActivationObservation, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+	if pack.ID != "matty" {
+		return capabilitypack.ReadinessObservation{AuthorizationObserved: true, PendingHumanActions: observation.PendingHumanActions, Evidence: []string{"OpenCode permissions and runtime loading are not yet observed"}}, nil
+	}
+	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, PendingHumanActions: []string{"reload OpenCode and verify the capability in a new runtime session"}, Evidence: []string{"OpenCode filesystem and config discovery paths inspected; runtime loading is not observable without a host signal"}}, nil
+}
+
 func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
 	return a.InspectActivationWithResolution(ctx, pack, nil)
 }

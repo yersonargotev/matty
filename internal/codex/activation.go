@@ -28,6 +28,16 @@ func NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, configFil
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile, configFile: configFile}
 }
 
+// InspectReadiness is filesystem-only and side-effect-free. The initial matty
+// pack has no authentication boundary and its file-discovered resources are
+// usable as soon as every required projection is loadable at its host path.
+func (a *ActivationAdapter) InspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.ActivationObservation, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+	if pack.ID != "matty" {
+		return capabilitypack.ReadinessObservation{AuthorizationObserved: true, PendingHumanActions: observation.PendingHumanActions, Evidence: []string{"Codex trust and runtime loading are not yet observed"}}, nil
+	}
+	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, PendingHumanActions: []string{"reload Codex and verify the capability in a new runtime session"}, Evidence: []string{"Codex filesystem discovery paths inspected; runtime loading is not observable without a host signal"}}, nil
+}
+
 func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
 	return a.InspectActivationWithResolution(ctx, pack, nil)
 }

@@ -191,11 +191,18 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	if err != nil {
 		return capabilitypack.Facade{}, err
 	}
+	codexAdapter := codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)
+	openCodeAdapter := opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
+	readinessInspectors := opts.ReadinessInspectors
+	if readinessInspectors == nil {
+		readinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{
+			capabilitypack.SurfaceCodex: codexAdapter, capabilitypack.SurfaceOpenCode: openCodeAdapter,
+		}
+	}
 	return capabilitypack.NewFacade(catalog, nil,
 		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
-			capabilitypack.SurfaceCodex:    codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile),
-			capabilitypack.SurfaceOpenCode: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
-		}),
+			capabilitypack.SurfaceCodex: codexAdapter, capabilitypack.SurfaceOpenCode: openCodeAdapter,
+		}), capabilitypack.WithReadinessInspectors(readinessInspectors),
 		capabilitypack.WithExternalEffects(
 			engrambin.NewResolver(paths.HomebrewPrefixEnv, opts.Runner.LookPath),
 			runnerExternalExecutor{runner: opts.Runner},
@@ -344,25 +351,21 @@ func (e runnerExternalExecutor) Execute(ctx context.Context, action capabilitypa
 
 func newPackStatusCommand(opts Options) *cobra.Command {
 	var surface string
+	var require string
 	cmd := &cobra.Command{
 		Use: "status [pack]", Short: "Inspect capability pack status", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			catalog, err := discoverPackCatalog(opts)
-			if err != nil {
-				return err
-			}
-			paths, err := ResolvePaths(opts.Env)
-			if err != nil {
-				return err
-			}
 			packID := ""
 			if len(args) == 1 {
 				packID = args[0]
 			}
-			facade := capabilitypack.NewFacade(catalog, map[capabilitypack.Surface]capabilitypack.SurfaceInspector{
-				capabilitypack.SurfaceCodex:    capabilitypack.NewCodexInspector(paths.CodexPromptFile),
-				capabilitypack.SurfaceOpenCode: capabilitypack.NewOpenCodeInspector(paths.OpenCodeConfigFile, paths.OpenCodePromptFile),
-			})
+			if require != "" && (require != "usable" || packID == "" || surface == "") {
+				return fmt.Errorf("--require usable is valid only for status of one pack and surface")
+			}
+			facade, err := activationFacade(opts)
+			if err != nil {
+				return err
+			}
 			report, err := facade.Status(cmd.Context(), capabilitypack.StatusRequest{PackID: packID, Surface: capabilitypack.Surface(surface)})
 			if err != nil {
 				return err
@@ -370,10 +373,17 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 			if packID == "" {
 				return renderPackStatusOverview(cmd, report)
 			}
-			return renderPackStatusDetail(cmd, report.Entries[0])
+			if err := renderPackStatusDetail(cmd, report.Entries[0]); err != nil {
+				return err
+			}
+			if require == "usable" && !report.Entries[0].Readiness.Usable {
+				return fmt.Errorf("pack %q on %s is not freshly observed usable", packID, surface)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
+	cmd.Flags().StringVar(&require, "require", "", "Require a readiness dimension (usable)")
 	return cmd
 }
 
@@ -381,19 +391,14 @@ func renderPackStatusOverview(cmd *cobra.Command, report capabilitypack.StatusRe
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(writer, "PACK\tSURFACE\tINTENT\tATTEMPT\tCONFIGURED\tAUTHORIZED\tUSABLE\tACTION")
 	for _, entry := range report.Entries {
-		configured, authorized, usable := "—", "—", "—"
-		if entry.Intent.Active {
-			configured = yesNo(entry.Readiness.Configured)
-			authorized = yesNo(entry.Readiness.Authorized)
-			usable = yesNo(entry.Readiness.Usable)
-		}
+		configured, authorized, usable := yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable)
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", entry.Pack.ID, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), configured, authorized, usable, renderPendingAction(entry.PendingHumanActions))
 	}
 	return writer.Flush()
 }
 
 func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry) error {
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous\nPending human actions: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, renderPendingAction(entry.PendingHumanActions))
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence))
 	return err
 }
 

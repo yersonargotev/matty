@@ -3,23 +3,8 @@ package capabilitypack
 import (
 	"context"
 	"fmt"
-
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/prompt"
+	"sort"
 )
-
-// SurfaceInspector is the host-observation boundary used by capability-pack
-// policy. Implementations inspect one surface but do not decide lifecycle or
-// readiness state.
-type SurfaceInspector interface {
-	Inspect(context.Context, Pack) (SurfaceObservation, error)
-}
-
-// SurfaceObservation records that a host adapter freshly inspected the
-// requested pack/surface pair. Projection interpretation remains facade policy.
-type SurfaceObservation struct {
-	Inspected bool
-}
 
 type StatusRequest struct {
 	PackID  string
@@ -42,10 +27,41 @@ type ReadinessStatus struct {
 	Usable     bool
 }
 
+type ProjectionHealth string
+
+const (
+	ProjectionVerified  ProjectionHealth = "verified"
+	ProjectionMissing   ProjectionHealth = "missing"
+	ProjectionDrifted   ProjectionHealth = "drifted"
+	ProjectionAmbiguous ProjectionHealth = "ambiguous"
+	ProjectionUnmanaged ProjectionHealth = "unmanaged"
+)
+
+type ProjectionStatus struct {
+	ID, Target, ObservedFingerprint, DesiredFingerprint string
+	Health                                              ProjectionHealth
+	Contributors                                        []string
+}
+
 type ProjectionSummary struct {
-	Verified  int
-	Drifted   int
-	Ambiguous int
+	Verified, Missing, Drifted, Ambiguous, Unmanaged int
+}
+
+// ReadinessObservation is fresh host-owned evidence. Observed distinguishes a
+// negative observation from an adapter that cannot inspect that dimension.
+type ReadinessObservation struct {
+	AuthorizationObserved bool
+	Authorized            bool
+	UsabilityObserved     bool
+	Usable                bool
+	PendingHumanActions   []string
+	Evidence              []string
+}
+
+// ReadinessInspector observes authentication/trust/permissions and runtime
+// loading without performing commands or mutations.
+type ReadinessInspector interface {
+	InspectReadiness(context.Context, Pack, ActivationObservation, []ExecutableResolution) (ReadinessObservation, error)
 }
 
 type StatusEntry struct {
@@ -55,19 +71,21 @@ type StatusEntry struct {
 	LatestAttempt       *AttemptStatus
 	Readiness           ReadinessStatus
 	Projections         ProjectionSummary
+	ProjectionDetails   []ProjectionStatus
+	Blockers            []string
 	PendingHumanActions []string
+	Evidence            []string
 	Observation         SurfaceObservation
 }
 
-type StatusReport struct {
-	Entries []StatusEntry
-}
+type StatusReport struct{ Entries []StatusEntry }
 
 // Facade is the single capability-pack use-case boundary consumed by the CLI.
 type Facade struct {
-	catalog    Catalog
-	inspectors map[Surface]SurfaceInspector
-	activation *activationDependencies
+	catalog             Catalog
+	activation          *activationDependencies
+	readinessInspectors map[Surface]ReadinessInspector
+	inspectors          map[Surface]SurfaceInspector
 }
 
 func NewFacade(catalog Catalog, inspectors map[Surface]SurfaceInspector, options ...FacadeOption) Facade {
@@ -78,9 +96,12 @@ func NewFacade(catalog Catalog, inspectors map[Surface]SurfaceInspector, options
 	return facade
 }
 
-// Status freshly inspects every requested host pair. Until activation intent
-// and ownership exist, all catalog packs truthfully start inactive, with no
-// attempt, readiness success, owned projections, or pending human action.
+// WithReadinessInspectors installs replaceable, side-effect-free host evidence
+// providers. Missing providers conservatively leave authorization/usability false.
+func WithReadinessInspectors(values map[Surface]ReadinessInspector) FacadeOption {
+	return func(f *Facade) { f.readinessInspectors = values }
+}
+
 func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport, error) {
 	packs := f.catalog.List()
 	if request.PackID != "" {
@@ -95,25 +116,17 @@ func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport
 	} else if request.Surface != "" {
 		return StatusReport{}, fmt.Errorf("a pack is required when --surface is specified")
 	}
-
 	var report StatusReport
 	for _, pack := range packs {
 		for _, surface := range pack.Surfaces {
-			if request.Surface != "" && surface != request.Surface {
+			if request.Surface != "" && request.Surface != surface {
 				continue
 			}
-			inspector, ok := f.inspectors[surface]
-			if !ok {
-				return StatusReport{}, fmt.Errorf("no inspector configured for CLI surface %q", surface)
-			}
-			observation, err := inspector.Inspect(ctx, pack)
+			entry, err := f.statusEntry(ctx, pack, surface)
 			if err != nil {
 				return StatusReport{}, fmt.Errorf("inspect pack %q on %s: %w", pack.ID, surface, err)
 			}
-			if !observation.Inspected {
-				return StatusReport{}, fmt.Errorf("inspect pack %q on %s: adapter returned no fresh observation", pack.ID, surface)
-			}
-			report.Entries = append(report.Entries, StatusEntry{Pack: pack, Surface: surface, Observation: observation})
+			report.Entries = append(report.Entries, entry)
 		}
 	}
 	if request.Surface != "" && len(report.Entries) == 0 {
@@ -122,27 +135,144 @@ func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport
 	return report, nil
 }
 
-type codexInspector struct{ promptPath string }
-
-func NewCodexInspector(promptPath string) SurfaceInspector {
-	return codexInspector{promptPath: promptPath}
+func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (StatusEntry, error) {
+	if f.activation == nil || f.activation.store == nil {
+		inspector := f.inspectors[surface]
+		if inspector == nil {
+			return StatusEntry{}, fmt.Errorf("no inspector configured for CLI surface %q", surface)
+		}
+		observed, err := inspector.Inspect(ctx, pack)
+		if err != nil {
+			return StatusEntry{}, err
+		}
+		if !observed.Inspected {
+			return StatusEntry{}, fmt.Errorf("adapter returned no fresh observation")
+		}
+		return StatusEntry{Pack: pack, Surface: surface, Observation: observed}, nil
+	}
+	adapter := f.activation.adapters[surface]
+	if adapter == nil {
+		return StatusEntry{}, fmt.Errorf("no activation adapter configured for CLI surface %q", surface)
+	}
+	state, err := f.activation.store.Load(ctx, surface)
+	if err != nil {
+		return StatusEntry{}, err
+	}
+	entry := StatusEntry{Pack: pack, Surface: surface, Observation: SurfaceObservation{Inspected: true}}
+	if intent, ok := intentForPack(state, pack.ID, surface); ok {
+		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
+	}
+	entry.LatestAttempt = latestAttemptStatus(state, pack.ID, surface)
+	composition := f.compose(pack, state, surface)
+	combined := composition.combinedPack()
+	resolutions, err := f.resolveExecutables(ctx, combined)
+	if err != nil {
+		entry.Blockers = append(entry.Blockers, err.Error())
+		resolutions = nil
+	}
+	for _, resolution := range resolutions {
+		if !resolution.Available {
+			entry.Blockers = append(entry.Blockers, fmt.Sprintf("required executable %s is missing", resolution.Tool))
+			if entry.Intent.Active {
+				entry.PendingHumanActions = append(entry.PendingHumanActions, fmt.Sprintf("install %s and rerun status; Matty will not install it during Status", resolution.Tool))
+			}
+		}
+	}
+	observation, inspectErr := inspectActivation(ctx, adapter, combined, resolutions)
+	if inspectErr != nil {
+		return StatusEntry{}, inspectErr
+	}
+	entry.ProjectionDetails, entry.Projections = deriveProjectionStatus(pack.ID, observation.Projections, state.Ownership, composition)
+	entry.Readiness.Configured = entry.Projections.Verified == len(observation.Projections) && len(observation.Projections) > 0
+	for _, detail := range entry.ProjectionDetails {
+		entry.Evidence = append(entry.Evidence, fmt.Sprintf("%s: %s observed=%s desired=%s target=%s", detail.ID, detail.Health, detail.ObservedFingerprint, detail.DesiredFingerprint, detail.Target))
+		if detail.Health != ProjectionVerified {
+			entry.Blockers = append(entry.Blockers, fmt.Sprintf("%s is %s", detail.ID, detail.Health))
+		}
+	}
+	if inspector := f.readinessInspectors[surface]; inspector != nil {
+		fresh, err := inspector.InspectReadiness(ctx, pack, observation, resolutions)
+		if err != nil {
+			return StatusEntry{}, err
+		}
+		if entry.Readiness.Configured {
+			entry.PendingHumanActions = append(entry.PendingHumanActions, fresh.PendingHumanActions...)
+		}
+		entry.Evidence = append(entry.Evidence, fresh.Evidence...)
+		entry.Readiness.Authorized = entry.Readiness.Configured && fresh.AuthorizationObserved && fresh.Authorized
+		entry.Readiness.Usable = entry.Readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
+	} else {
+		if entry.Readiness.Configured {
+			entry.PendingHumanActions = append(entry.PendingHumanActions, observation.PendingHumanActions...)
+		}
+	}
+	if entry.Readiness.Configured && !entry.Readiness.Authorized {
+		entry.Blockers = append(entry.Blockers, "authorization/trust is not freshly demonstrated")
+	}
+	if entry.Readiness.Authorized && !entry.Readiness.Usable {
+		entry.Blockers = append(entry.Blockers, "runtime usability is not freshly demonstrated")
+	}
+	sort.Strings(entry.Blockers)
+	sort.Strings(entry.PendingHumanActions)
+	sort.Strings(entry.Evidence)
+	return entry, nil
 }
 
-func (i codexInspector) Inspect(_ context.Context, _ Pack) (SurfaceObservation, error) {
-	_, err := prompt.InspectCodex(i.promptPath)
-	return SurfaceObservation{Inspected: err == nil}, err
+func deriveProjectionStatus(packID string, observed []ObservedProjection, ownership []ProjectionOwnership, c composition) ([]ProjectionStatus, ProjectionSummary) {
+	result := make([]ProjectionStatus, 0, len(observed))
+	var summary ProjectionSummary
+	for _, p := range observed {
+		status := ProjectionStatus{ID: p.ID, Target: p.Action.Target, ObservedFingerprint: p.ObservedFingerprint, DesiredFingerprint: p.DesiredFingerprint, Contributors: c.contributorSet(p.ID)}
+		owner, owned := ownershipByID(ownership, p.ID)
+		switch {
+		case !p.Exists:
+			status.Health = ProjectionMissing
+			summary.Missing++
+		case p.ObservedFingerprint != p.DesiredFingerprint && owned:
+			status.Health = ProjectionDrifted
+			summary.Drifted++
+		case p.ObservedFingerprint != p.DesiredFingerprint:
+			status.Health = ProjectionUnmanaged
+			summary.Unmanaged++
+		case !owned:
+			status.Health = ProjectionUnmanaged
+			summary.Unmanaged++
+		case owner.Fingerprint != p.DesiredFingerprint || digestJSON(owner.Contributors) != digestJSON(status.Contributors):
+			status.Health = ProjectionAmbiguous
+			summary.Ambiguous++
+		default:
+			status.Health = ProjectionVerified
+			summary.Verified++
+		}
+		result = append(result, status)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, summary
 }
 
-type openCodeInspector struct {
-	configPath string
-	promptPath string
+func latestAttemptStatus(state ActivationState, packID string, surface Surface) *AttemptStatus {
+	var candidate *ApplyingJournal
+	for i := range state.History {
+		if state.History[i].PackID == packID && state.History[i].Surface == surface {
+			candidate = &state.History[i]
+		}
+	}
+	for i := range state.LastAttempts {
+		if state.LastAttempts[i].PackID == packID && state.LastAttempts[i].Surface == surface {
+			candidate = &state.LastAttempts[i]
+		}
+	}
+	if state.Journal != nil && state.Journal.PackID == packID && state.Journal.Surface == surface {
+		candidate = state.Journal
+	}
+	if candidate == nil {
+		return nil
+	}
+	return &AttemptStatus{Outcome: string(candidate.Outcome), PlanID: candidate.PlanID}
 }
 
-func NewOpenCodeInspector(configPath, promptPath string) SurfaceInspector {
-	return openCodeInspector{configPath: configPath, promptPath: promptPath}
+// Deprecated baseline seam retained source-compatibly for existing callers.
+type SurfaceInspector interface {
+	Inspect(context.Context, Pack) (SurfaceObservation, error)
 }
-
-func (i openCodeInspector) Inspect(_ context.Context, _ Pack) (SurfaceObservation, error) {
-	_, err := opencode.Inspect(i.configPath, i.promptPath)
-	return SurfaceObservation{Inspected: err == nil}, err
-}
+type SurfaceObservation struct{ Inspected bool }
