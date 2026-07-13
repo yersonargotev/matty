@@ -8,6 +8,9 @@ A lightweight AI workflow toolkit inspired by Gentle AI, but intentionally centr
 ### Matty core
 The always-available installer/configurator that manages capability packs and their lifecycle. Matty core is distinct from the optional `matty` capability pack, so deactivating that pack never disables the tool needed to manage it.
 
+### Matty core lifecycle
+The install, update, and uninstall behavior that reconciles Matty-managed global workflow artifacts. It excludes Installed Source initialization, setup health diagnosis, and capability-pack lifecycle operations.
+
 ### CLI surface
 An AI coding CLI that Matty can configure or integrate with. The initial supported CLI surfaces are Codex and OpenCode; Claude Code, Antigravity, and GitHub Copilot CLI are future candidates.
 
