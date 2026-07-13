@@ -43,6 +43,80 @@ func TestUpdatePreviewIsReadOnlyAndItsActionViewCannotMutateThePlan(t *testing.T
 	}
 }
 
+func TestUpdatePreviewDoesNotExecuteGit(t *testing.T) {
+	config := installTestConfig(t)
+	config.SkillSourceIsDefault = true
+	config.RunningVersion = "v1.2.3"
+	prepareUpdateSourceRepository(t, &config, config.RunningVersion, false)
+	runUpdateTestGit(t, config.InstalledSourceRoot, "pack-refs", "--all")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "git-called")
+	gitShim := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\nprintf called > '" + marker + "'\nexec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(gitShim, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(gitShim))
+
+	if _, err := NewFacade(config, &installTestCommands{}, time.Now).Preview(Update); err != nil {
+		t.Fatalf("Preview(Update) failed: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("Preview(Update) executed git; marker error = %v", err)
+	}
+}
+
+func TestUpdatePreviewAcceptsAlignedLinkedWorktree(t *testing.T) {
+	config := installTestConfig(t)
+	config.SkillSourceIsDefault = true
+	config.RunningVersion = "v1.2.3"
+	prepareUpdateSourceRepository(t, &config, config.RunningVersion, false)
+
+	worktree := filepath.Join(t.TempDir(), "installed-source-worktree")
+	runUpdateTestGit(t, config.InstalledSourceRoot, "worktree", "add", "--detach", worktree, config.RunningVersion)
+	config.InstalledSourceRoot = worktree
+	config.SkillSourceRoot = filepath.Join(worktree, "bundle", "skills")
+
+	if _, err := NewFacade(config, &installTestCommands{}, time.Now).Preview(Update); err != nil {
+		t.Fatalf("Preview(Update) rejected aligned linked worktree: %v", err)
+	}
+}
+
+func TestUpdatePreviewAcceptsAlignedAnnotatedTagWithPackedObject(t *testing.T) {
+	config := installTestConfig(t)
+	config.SkillSourceIsDefault = true
+	config.RunningVersion = "v1.2.3"
+	prepareUpdateSourceRepository(t, &config, "", false)
+	runUpdateTestGit(t, config.InstalledSourceRoot, "tag", "-a", config.RunningVersion, "-m", "release")
+	runUpdateTestGit(t, config.InstalledSourceRoot, "gc")
+	tagObject := runUpdateTestGitOutput(t, config.InstalledSourceRoot, "rev-parse", "refs/tags/"+config.RunningVersion)
+	runUpdateTestGit(t, config.InstalledSourceRoot, "update-ref", "-d", "refs/tags/"+config.RunningVersion)
+	runUpdateTestGit(t, config.InstalledSourceRoot, "update-ref", "refs/tags/"+config.RunningVersion, tagObject)
+
+	if _, err := NewFacade(config, &installTestCommands{}, time.Now).Preview(Update); err != nil {
+		t.Fatalf("Preview(Update) rejected aligned annotated tag with packed object: %v", err)
+	}
+}
+
+func TestUpdatePreviewRejectsCyclicHeadReference(t *testing.T) {
+	config := installTestConfig(t)
+	config.SkillSourceIsDefault = true
+	config.RunningVersion = "v1.2.3"
+	prepareUpdateSourceRepository(t, &config, config.RunningVersion, false)
+	if err := os.WriteFile(filepath.Join(config.InstalledSourceRoot, ".git", "HEAD"), []byte("ref: HEAD\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewFacade(config, &installTestCommands{}, time.Now).Preview(Update)
+	if err == nil || !strings.Contains(err.Error(), "inspect Installed Source HEAD") {
+		t.Fatalf("Preview(Update) error = %v, want actionable cyclic HEAD error", err)
+	}
+}
+
 func TestUpdateApplyConvergesAndIsIdempotent(t *testing.T) {
 	config := installTestConfig(t)
 	engram := filepath.Join(config.HomebrewPrefix, "bin", "engram")
@@ -258,7 +332,6 @@ func TestUpdatePreviewEnforcesDefaultInstalledSourceAlignment(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sandboxUpdateTestGitPath(t)
 			config := installTestConfig(t)
 			config.SkillSourceIsDefault = true
 			config.RunningVersion = "v1.2.3"
@@ -305,7 +378,9 @@ func prepareUpdateSourceRepository(t *testing.T, config *Config, tag string, sta
 	runUpdateTestGit(t, root, "init", "-q")
 	runUpdateTestGit(t, root, "add", ".")
 	runUpdateTestGit(t, root, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-qm", "source")
-	runUpdateTestGit(t, root, "tag", tag)
+	if tag != "" {
+		runUpdateTestGit(t, root, "tag", tag)
+	}
 	if stale {
 		if err := os.WriteFile(filepath.Join(root, "STALE"), []byte("stale"), 0o600); err != nil {
 			t.Fatal(err)
@@ -317,26 +392,17 @@ func prepareUpdateSourceRepository(t *testing.T, config *Config, tag string, sta
 
 func runUpdateTestGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	runUpdateTestGitOutput(t, dir, args...)
+}
+
+func runUpdateTestGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
 	gitHome := t.TempDir()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = []string{"HOME=" + gitHome, "XDG_CONFIG_HOME=" + filepath.Join(gitHome, "xdg"), "PATH=" + os.Getenv("PATH")}
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
-}
-
-func sandboxUpdateTestGitPath(t *testing.T) {
-	t.Helper()
-	gitTarget, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gitBin := filepath.Join(t.TempDir(), "bin", "git")
-	if err := os.MkdirAll(filepath.Dir(gitBin), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(gitTarget, gitBin); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(gitBin))
+	return strings.TrimSpace(string(output))
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 )
 
@@ -157,7 +159,7 @@ func ValidateInstalledSourceRef(opts BootstrapOptions) error {
 	if validateInstalledSource(opts.SourceRoot) != nil {
 		return fmt.Errorf("default Installed Source is missing or invalid at %s; run matty init to initialize it", filepath.Join(opts.SourceRoot, "bundle", "skills"))
 	}
-	matches, err := repositoryRefMatches(opts, fmt.Sprintf("run matty init to align it with %s", ref))
+	matches, err := repositoryRefMatchesReadOnly(opts, fmt.Sprintf("run matty init to align it with %s", ref))
 	if err != nil {
 		return err
 	}
@@ -165,6 +167,60 @@ func ValidateInstalledSourceRef(opts BootstrapOptions) error {
 		return fmt.Errorf("default Installed Source at %s is stale for Matty %s; run matty init to align it before matty update", opts.SourceRoot, ref)
 	}
 	return nil
+}
+
+// repositoryRefMatchesReadOnly validates the already-installed checkout
+// without invoking Git. Lifecycle Preview uses this path so dry-runs never
+// execute commands; mutating bootstrap operations continue to use Git itself.
+func repositoryRefMatchesReadOnly(opts BootstrapOptions, missingGitReason string) (bool, error) {
+	repository, err := git.PlainOpen(opts.SourceRoot)
+	if err != nil {
+		if errors.Is(err, git.ErrRepositoryNotExists) {
+			return false, fmt.Errorf("Installed Source at %s is not a git checkout; %s. Move it aside or pass --source-root", opts.SourceRoot, missingGitReason)
+		}
+		return false, fmt.Errorf("inspect Installed Source git metadata: %w", err)
+	}
+	head, err := repository.Head()
+	if err != nil {
+		return false, fmt.Errorf("inspect Installed Source HEAD: %w", err)
+	}
+	references, err := installedSourceReferenceRepository(opts.SourceRoot, repository)
+	if err != nil {
+		return false, fmt.Errorf("inspect Installed Source git metadata: %w", err)
+	}
+	target, err := references.ResolveRevision(plumbing.Revision(opts.RepositoryRef + "^{commit}"))
+	if err != nil {
+		return false, nil
+	}
+	return head.Hash() == *target, nil
+}
+
+func installedSourceReferenceRepository(sourceRoot string, repository *git.Repository) (*git.Repository, error) {
+	gitFile := filepath.Join(sourceRoot, ".git")
+	info, err := os.Stat(gitFile)
+	if err != nil || info.IsDir() {
+		return repository, err
+	}
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return nil, err
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(sourceRoot, gitDir)
+	}
+	common, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return repository, nil
+		}
+		return nil, err
+	}
+	commonDir := strings.TrimSpace(string(common))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(gitDir, commonDir)
+	}
+	return git.PlainOpen(filepath.Clean(commonDir))
 }
 
 func repositoryRefMatches(opts BootstrapOptions, missingGitReason string) (bool, error) {
