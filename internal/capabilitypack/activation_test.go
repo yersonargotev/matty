@@ -9,10 +9,14 @@ import (
 
 type fakeSurfaceAdapter struct {
 	observations []SurfaceInspection
+	readiness    []ReadinessObservation
+	calls        []surfaceInspectionCall
+	applied      [][]ProjectionAction
 	inspectCalls int
 	actions      []ProjectionAction
 	events       *[]string
 	applyErr     error
+	inspect      func(SurfaceTransition) SurfaceInspection
 }
 
 func TestPlanDispositionDefinesLifecycleSemantics(t *testing.T) {
@@ -39,18 +43,36 @@ func TestPlanDispositionDefinesLifecycleSemantics(t *testing.T) {
 
 func (f *fakeSurfaceAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
 	f.inspectCalls++
+	kind := "desired"
+	if transition.Prior.ID != "" {
+		kind = "prior-to-desired"
+	} else if transition.ResidualOwnership != nil {
+		kind = "ownership-residual"
+	}
+	f.calls = append(f.calls, surfaceInspectionCall{kind: kind, prior: transition.Prior, desired: transition.Desired, ownership: cloneOwnership(transition.ResidualOwnership), resolutions: cloneResolutions(transition.ResolvedExecutables)})
 	var result SurfaceInspection
-	if f.inspectCalls > len(f.observations) {
+	if f.inspect != nil {
+		result = f.inspect(transition)
+	} else if len(f.observations) == 0 {
+		result = SurfaceInspection{}
+	} else if f.inspectCalls > len(f.observations) {
 		result = f.observations[len(f.observations)-1]
 	} else {
 		result = f.observations[f.inspectCalls-1]
+	}
+	readinessIndex := f.inspectCalls - 1
+	if readinessIndex >= len(f.readiness) {
+		readinessIndex = len(f.readiness) - 1
+	}
+	if readinessIndex >= 0 {
+		result.Readiness = f.readiness[readinessIndex]
 	}
 	for i := range result.Projections {
 		projection := &result.Projections[i]
 		if projection.Action.ID == "" {
 			projection.Action.ID = projection.ID
 		}
-		if (transition.Prior.ID != "" || transition.ResidualOwnership != nil) && (projection.DesiredFingerprint == "" || projection.DesiredFingerprint == "missing") {
+		if projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent || ((transition.Prior.ID != "" || transition.ResidualOwnership != nil) && (projection.DesiredFingerprint == "" || projection.DesiredFingerprint == "missing")) {
 			projection.Goal = ProjectionAbsent
 			projection.DesiredFingerprint = ""
 			if projection.Action.Mode == "" {
@@ -68,6 +90,7 @@ func (f *fakeSurfaceAdapter) ApplyProjections(_ context.Context, actions []Proje
 		*f.events = append(*f.events, "effects")
 	}
 	f.actions = append(f.actions, actions...)
+	f.applied = append(f.applied, append([]ProjectionAction(nil), actions...))
 	if f.applyErr == nil {
 		return nil
 	}

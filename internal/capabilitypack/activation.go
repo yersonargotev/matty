@@ -257,7 +257,7 @@ func requiredFailedActionID(err error, phase string) string {
 	if errors.As(err, &actionErr) && actionErr.ID != "" {
 		return actionErr.ID
 	}
-	panic("activation adapter violated its action-specific error contract: " + phase)
+	panic("surface adapter violated its action-specific error contract: " + phase)
 }
 
 type ExternalEffect struct {
@@ -1299,7 +1299,7 @@ func observationDigest(o SurfaceInspection) string {
 	// destructive intent explicit and readiness now travels with inspection,
 	// but neither changes the host revision/projection facts that made an
 	// existing plan stale before this refactor.
-	type legacyProjection struct {
+	type fingerprintProjection struct {
 		ID                  string
 		Exists              bool
 		ObservedFingerprint string
@@ -1307,9 +1307,9 @@ func observationDigest(o SurfaceInspection) string {
 		ExternallyManaged   bool
 		Action              ProjectionAction
 	}
-	var projections []legacyProjection
+	var projections []fingerprintProjection
 	for _, projection := range o.Projections {
-		projections = append(projections, legacyProjection{
+		projections = append(projections, fingerprintProjection{
 			ID: projection.ID, Exists: projection.Exists,
 			ObservedFingerprint: projection.ObservedFingerprint,
 			DesiredFingerprint:  projection.DesiredFingerprint,
@@ -1321,11 +1321,11 @@ func observationDigest(o SurfaceInspection) string {
 	pending := append([]string(nil), o.PendingHumanActions...)
 	sort.Strings(pending)
 	return digestJSON(struct {
-		Revision            string
-		Projections         []legacyProjection
-		Readiness           ReadinessStatus
-		PendingHumanActions []string
-		RemovalCandidates   []legacyProjection
+		Revision                        string
+		Projections                     []fingerprintProjection
+		Readiness                       ReadinessStatus
+		PendingHumanActions             []string
+		LegacyEmptyProjectionDigestSlot []fingerprintProjection `json:"RemovalCandidates"`
 	}{Revision: o.Revision, Projections: projections, PendingHumanActions: pending})
 }
 func flattenActions(phases []PlanPhase) []ProjectionAction {

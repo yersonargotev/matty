@@ -18,59 +18,7 @@ type surfaceInspectionCall struct {
 	resolutions []ExecutableResolution
 }
 
-// completeSurfaceContractAdapter deliberately implements every current
-// inspection capability. Ticket 02 can replace those optional entry points
-// with SurfaceAdapter without changing these facade-level expectations.
-type completeSurfaceContractAdapter struct {
-	observations []SurfaceInspection
-	readiness    []ReadinessObservation
-	calls        []surfaceInspectionCall
-	applied      [][]ProjectionAction
-}
-
-func (a *completeSurfaceContractAdapter) nextObservation() SurfaceInspection {
-	index := len(a.calls) - 1
-	if index >= len(a.observations) {
-		index = len(a.observations) - 1
-	}
-	if index < 0 {
-		return SurfaceInspection{}
-	}
-	return a.observations[index]
-}
-
-func (a *completeSurfaceContractAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
-	kind := "desired"
-	if transition.Prior.ID != "" {
-		kind = "prior-to-desired"
-	} else if transition.ResidualOwnership != nil {
-		kind = "ownership-residual"
-	}
-	a.calls = append(a.calls, surfaceInspectionCall{kind: kind, prior: transition.Prior, desired: transition.Desired, ownership: cloneOwnership(transition.ResidualOwnership), resolutions: cloneResolutions(transition.ResolvedExecutables)})
-	result := a.nextObservation()
-	index := len(a.calls) - 1
-	if index >= len(a.readiness) {
-		index = len(a.readiness) - 1
-	}
-	if index >= 0 {
-		result.Readiness = a.readiness[index]
-	}
-	for i := range result.Projections {
-		if result.Projections[i].Action.Mode == ProjectionDeleteTarget || result.Projections[i].Action.Mode == ProjectionRemoveContent {
-			result.Projections[i].Goal = ProjectionAbsent
-		} else {
-			result.Projections[i].Goal = ProjectionPresent
-		}
-	}
-	return result, nil
-}
-
-func (a *completeSurfaceContractAdapter) ApplyProjections(_ context.Context, actions []ProjectionAction) *ProjectionActionError {
-	a.applied = append(a.applied, append([]ProjectionAction(nil), actions...))
-	return nil
-}
-
-func contractFacade(packs []Pack, state ActivationState, adapter *completeSurfaceContractAdapter) (Facade, *fakeActivationStore) {
+func contractFacade(packs []Pack, state ActivationState, adapter *fakeSurfaceAdapter) (Facade, *fakeActivationStore) {
 	store := &fakeActivationStore{state: state}
 	facade := NewFacade(
 		Catalog{packs: packs},
@@ -107,7 +55,7 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 	activeOther := activeIntent("other", "1", 2)
 
 	t.Run("status is desired-only and excludes unrelated active packs", func(t *testing.T) {
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{projectionObservation(app)}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{projectionObservation(app)}}
 		facade, _ := contractFacade([]Pack{app, other}, ActivationState{Intent: activeApp, Intents: []ActivationIntent{activeApp, activeOther}}, adapter)
 		if _, err := facade.Status(context.Background(), StatusRequest{PackID: "app", Surface: SurfaceCodex}); err != nil {
 			t.Fatal(err)
@@ -119,7 +67,7 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 
 	t.Run("activation is desired-only", func(t *testing.T) {
 		observation := projectionObservation(Pack{Resources: append(append([]Resource{}, app.Resources...), other.Resources...)})
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{observation}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 		facade, _ := contractFacade([]Pack{app, other}, ActivationState{Intent: activeOther, Intents: []ActivationIntent{activeOther}}, adapter)
 		if _, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex}); err != nil {
 			t.Fatal(err)
@@ -132,7 +80,7 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 	t.Run("update is desired-only and uses catalog-current content", func(t *testing.T) {
 		oldIntent := activeIntent("app", "1", 4)
 		observation := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:app", Exists: true, ObservedFingerprint: "v1", DesiredFingerprint: "v2", Action: ProjectionAction{ID: "instruction:app", Description: "write v2"}}}}
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{observation}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 		state := ActivationState{Intent: oldIntent, Ownership: []ProjectionOwnership{{ID: "instruction:app", Contributors: []string{"app"}, Fingerprint: "v1"}}}
 		facade, _ := contractFacade([]Pack{app}, state, adapter)
 		plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -146,7 +94,7 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 	})
 
 	t.Run("deactivation compares prior to desired", func(t *testing.T) {
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{{Revision: "host-current"}}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{{Revision: "host-current"}}}
 		facade, _ := contractFacade([]Pack{app, other}, ActivationState{Intent: activeApp, Intents: []ActivationIntent{activeApp, activeOther}}, adapter)
 		if _, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex}); err != nil {
 			t.Fatal(err)
@@ -165,8 +113,8 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 			{ID: "instruction:other", ObservedFingerprint: "missing", DesiredFingerprint: "other", Action: ProjectionAction{ID: "instruction:other", Description: "write other"}},
 		}}
 		state := ActivationState{Intent: activeApp, Intents: []ActivationIntent{activeApp, activeOther}, Ownership: ownership}
-		preview := func(request ReconcileRequest) (ReconciliationPlan, *completeSurfaceContractAdapter) {
-			adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{observation}}
+		preview := func(request ReconcileRequest) (ReconciliationPlan, *fakeSurfaceAdapter) {
+			adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 			facade, _ := contractFacade([]Pack{app, other}, state, adapter)
 			plan, err := facade.PreviewReconcile(context.Background(), request)
 			if err != nil {
@@ -186,7 +134,7 @@ func TestSurfaceInspectionContractPreservesLifecycleScopes(t *testing.T) {
 		if got := phaseActionIDs(surfaceWide.Phases(), ConsentReversibleLocal); !reflect.DeepEqual(got, []string{"instruction:app", "instruction:other"}) {
 			t.Fatalf("surface-wide actions = %v", got)
 		}
-		for name, adapter := range map[string]*completeSurfaceContractAdapter{"targeted": targetedAdapter, "surface-wide": surfaceAdapter} {
+		for name, adapter := range map[string]*fakeSurfaceAdapter{"targeted": targetedAdapter, "surface-wide": surfaceAdapter} {
 			if len(adapter.calls) != 1 || adapter.calls[0].kind != "ownership-residual" || !reflect.DeepEqual(adapter.calls[0].ownership, ownership) || !reflect.DeepEqual(packResourceIDs(adapter.calls[0].desired), []string{"app", "other"}) {
 				t.Fatalf("%s reconcile inspection = %+v", name, adapter.calls)
 			}
@@ -201,7 +149,7 @@ func TestSurfaceInspectionContractPreservesOwnershipAndDestructiveConsent(t *tes
 	removal := ObservedProjection{ID: "instruction:guide", Exists: true, ObservedFingerprint: "owned", Action: ProjectionAction{ID: "instruction:guide", Description: "delete guide", Mode: ProjectionDeleteTarget}}
 
 	t.Run("deactivation protects ownership and requires destructive approval", func(t *testing.T) {
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{removal}}}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{removal}}}}
 		facade, store := contractFacade([]Pack{pack}, ownedState, adapter)
 		plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 		if err != nil {
@@ -217,7 +165,7 @@ func TestSurfaceInspectionContractPreservesOwnershipAndDestructiveConsent(t *tes
 	})
 
 	t.Run("deactivation preserves unowned content as pending human action", func(t *testing.T) {
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{removal}}}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{removal}}}}
 		facade, store := contractFacade([]Pack{pack}, ActivationState{Intent: intent}, adapter)
 		plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 		if err != nil {
@@ -230,7 +178,7 @@ func TestSurfaceInspectionContractPreservesOwnershipAndDestructiveConsent(t *tes
 
 	t.Run("reconciliation requires destructive approval for verified ownership residual", func(t *testing.T) {
 		candidate := RemovalCandidate(removal, ProjectionDeleteTarget, "", "delete obsolete guide")
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{candidate}}}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{{Revision: "host", Projections: []ObservedProjection{candidate}}}}
 		facade, store := contractFacade([]Pack{pack}, ownedState, adapter)
 		plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 		if err != nil {
@@ -280,7 +228,7 @@ func TestSurfaceInspectionContractPreservesPlanPolicyAndInspectionPurity(t *test
 		Readiness:           ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true},
 		PendingHumanActions: []string{"reload host"},
 	}
-	adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{observation}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 	facade, store := contractFacade([]Pack{pack}, ActivationState{}, adapter)
 	resolver := &fakeExecutableResolver{}
 	executor := &fakeExternalExecutor{}
@@ -330,7 +278,7 @@ func TestSurfaceInspectionContractPreservesPreflightVerificationRecoveryAndReadi
 	t.Run("stale preflight executes no effects", func(t *testing.T) {
 		changed := pending
 		changed.Revision = "host-changed"
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{pending, changed}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, changed}}
 		facade, store := contractFacade([]Pack{pack}, ActivationState{}, adapter)
 		plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 		if err != nil {
@@ -343,7 +291,7 @@ func TestSurfaceInspectionContractPreservesPreflightVerificationRecoveryAndReadi
 	})
 
 	t.Run("apply verifies freshly and returns normalized readiness", func(t *testing.T) {
-		adapter := &completeSurfaceContractAdapter{
+		adapter := &fakeSurfaceAdapter{
 			observations: []SurfaceInspection{pending, pending, verified},
 			readiness:    []ReadinessObservation{{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, PendingHumanActions: []string{"reload host"}}},
 		}
@@ -370,7 +318,7 @@ func TestSurfaceInspectionContractPreservesPreflightVerificationRecoveryAndReadi
 	t.Run("recovery remains bound to historical attempt", func(t *testing.T) {
 		history := ApplyingJournal{PlanID: "plan-old", PlanDigest: "digest-old", Operation: OperationActivate, Surface: SurfaceCodex, PackID: "app", Outcome: AttemptRecoveryRequired, FailedAction: "reversible-local", FailureDetail: "interrupted"}
 		state := ActivationState{Intent: activeIntent("app", "1", 6), Journal: &history, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "catalog"}}}
-		adapter := &completeSurfaceContractAdapter{observations: []SurfaceInspection{verified}}
+		adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{verified}}
 		facade, store := contractFacade([]Pack{pack}, state, adapter)
 		plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 		if err != nil {
@@ -390,7 +338,7 @@ func TestSurfaceInspectionContractPreservesPreflightVerificationRecoveryAndReadi
 
 	t.Run("status observes readiness freshly without mutation", func(t *testing.T) {
 		state := ActivationState{Intent: activeIntent("app", "1", 3), Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "catalog"}}}
-		adapter := &completeSurfaceContractAdapter{
+		adapter := &fakeSurfaceAdapter{
 			observations: []SurfaceInspection{verified},
 			readiness:    []ReadinessObservation{{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true, Evidence: []string{"runtime loaded"}}},
 		}

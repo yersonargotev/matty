@@ -6,9 +6,7 @@ import (
 	"testing"
 )
 
-type resourceStatusAdapter struct{}
-
-func (resourceStatusAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
+func resourceStatusInspection(transition SurfaceTransition) SurfaceInspection {
 	pack := transition.Desired
 	projections := make([]ObservedProjection, 0, len(pack.Resources))
 	for _, resource := range pack.Resources {
@@ -27,11 +25,7 @@ func (resourceStatusAdapter) InspectSurface(_ context.Context, transition Surfac
 		}
 		projections = append(projections, projection)
 	}
-	return SurfaceInspection{Projections: projections, Readiness: ReadinessObservation{AuthorizationObserved: true, Authorized: pack.ID == "matty", UsabilityObserved: true, Usable: pack.ID == "matty"}}, nil
-}
-
-func (resourceStatusAdapter) ApplyProjections(context.Context, []ProjectionAction) *ProjectionActionError {
-	return nil
+	return SurfaceInspection{Projections: projections, Readiness: ReadinessObservation{AuthorizationObserved: true, Authorized: pack.ID == "matty", UsabilityObserved: true, Usable: pack.ID == "matty"}}
 }
 
 func TestStatusIsolatesReadinessForTwoActivePacksOnOneSurface(t *testing.T) {
@@ -46,7 +40,7 @@ func TestStatusIsolatesReadinessForTwoActivePacksOnOneSurface(t *testing.T) {
 	}}
 	facade := NewFacade(
 		Catalog{packs: []Pack{engram, matty}},
-		WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: resourceStatusAdapter{}}),
+		WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: &fakeSurfaceAdapter{inspect: resourceStatusInspection}}),
 	)
 
 	directed, err := facade.Status(context.Background(), StatusRequest{PackID: "matty", Surface: SurfaceCodex})
@@ -91,7 +85,7 @@ func TestSurfaceWideStatusRetainsSharedProjectionConflicts(t *testing.T) {
 		},
 		Ownership: []ProjectionOwnership{{ID: "instruction:shared-guidance", Fingerprint: "healthy", Contributors: []string{"matty"}}},
 	}}
-	facade := NewFacade(Catalog{packs: []Pack{engram, matty}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: resourceStatusAdapter{}}))
+	facade := NewFacade(Catalog{packs: []Pack{engram, matty}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: &fakeSurfaceAdapter{inspect: resourceStatusInspection}}))
 
 	report, err := facade.Status(context.Background(), StatusRequest{})
 	if err != nil {
@@ -110,10 +104,6 @@ func TestExternallyManagedProjectionIsVerifiedWithoutMattyOwnership(t *testing.T
 	if len(details) != 1 || details[0].Health != ProjectionVerified || summary.Verified != 1 || summary.Unmanaged != 0 {
 		t.Fatalf("details=%+v summary=%+v", details, summary)
 	}
-}
-
-type fakeSurfaceInspector struct {
-	calls []string
 }
 
 func TestStatusDerivesReadinessFreshlyAndNormalizesInconsistentEvidence(t *testing.T) {
@@ -179,22 +169,13 @@ func TestStatusConfiguredDoesNotDependOnIntentAndLatestAttemptIsPairSpecific(t *
 	}
 }
 
-func (f *fakeSurfaceInspector) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
-	f.calls = append(f.calls, transition.Desired.ID)
-	return SurfaceInspection{}, nil
-}
-
-func (f *fakeSurfaceInspector) ApplyProjections(context.Context, []ProjectionAction) *ProjectionActionError {
-	return nil
-}
-
 func TestStatusInspectsEveryPackSurfaceAndReportsInactiveBaseline(t *testing.T) {
 	catalog := Catalog{packs: []Pack{
 		{ID: "engram", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
 		{ID: "matty", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
 	}}
-	codex := &fakeSurfaceInspector{}
-	opencode := &fakeSurfaceInspector{}
+	codex := &fakeSurfaceAdapter{}
+	opencode := &fakeSurfaceAdapter{}
 	store := &fakeActivationStore{}
 	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: codex, SurfaceOpenCode: opencode}))
 
@@ -216,15 +197,15 @@ func TestStatusInspectsEveryPackSurfaceAndReportsInactiveBaseline(t *testing.T) 
 			t.Fatalf("invented ownership or pending actions: %+v", entry)
 		}
 	}
-	if !reflect.DeepEqual(codex.calls, []string{"engram", "matty"}) || !reflect.DeepEqual(opencode.calls, []string{"engram", "matty"}) {
+	if !reflect.DeepEqual(desiredPackIDs(codex.calls), []string{"engram", "matty"}) || !reflect.DeepEqual(desiredPackIDs(opencode.calls), []string{"engram", "matty"}) {
 		t.Fatalf("inspection calls: codex=%v opencode=%v", codex.calls, opencode.calls)
 	}
 }
 
 func TestStatusTargetsOnePackAndSurface(t *testing.T) {
 	catalog := Catalog{packs: []Pack{{ID: "engram", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}}}}
-	codex := &fakeSurfaceInspector{}
-	opencode := &fakeSurfaceInspector{}
+	codex := &fakeSurfaceAdapter{}
+	opencode := &fakeSurfaceAdapter{}
 	store := &fakeActivationStore{}
 	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: codex, SurfaceOpenCode: opencode}))
 
@@ -235,7 +216,15 @@ func TestStatusTargetsOnePackAndSurface(t *testing.T) {
 	if len(report.Entries) != 1 || report.Entries[0].Pack.ID != "engram" || report.Entries[0].Surface != SurfaceCodex {
 		t.Fatalf("report = %+v", report)
 	}
-	if !reflect.DeepEqual(codex.calls, []string{"engram"}) || len(opencode.calls) != 0 {
+	if !reflect.DeepEqual(desiredPackIDs(codex.calls), []string{"engram"}) || len(opencode.calls) != 0 {
 		t.Fatalf("inspection calls: codex=%v opencode=%v", codex.calls, opencode.calls)
 	}
+}
+
+func desiredPackIDs(calls []surfaceInspectionCall) []string {
+	ids := make([]string, len(calls))
+	for i, call := range calls {
+		ids[i] = call.desired.ID
+	}
+	return ids
 }

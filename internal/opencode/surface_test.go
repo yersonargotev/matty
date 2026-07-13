@@ -1,4 +1,4 @@
-package opencodeactivation
+package opencode
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 )
 
-func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testing.T) {
+func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
 	skill := filepath.Join(bundle, "skills", "ask-matt")
@@ -41,7 +41,7 @@ func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *tes
 		{Kind: "skill", ID: "ask-matt", Source: "skills/ask-matt"},
 		{Kind: "instruction", ID: "matty-guidance", Source: "instructions/matty.md"},
 	}}
-	adapter := NewActivationAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *tes
 	}
 }
 
-func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T) {
+func TestPriorTransitionInspectionPreservesUnmanagedOpenCodeConfiguration(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
 	source := filepath.Join(bundle, "guide.md")
@@ -98,7 +98,7 @@ func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T
 	if err := os.WriteFile(config, []byte("// keep\n{\n  \"model\": \"test\"\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: active})
 	if err != nil {
@@ -134,7 +134,7 @@ func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T
 	}
 }
 
-func TestActivationAdapterInspectDoesNotWrite(t *testing.T) {
+func TestSurfaceAdapterInspectDoesNotWrite(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
 	if err := os.MkdirAll(filepath.Join(bundle, "instructions"), 0o755); err != nil {
@@ -145,7 +145,7 @@ func TestActivationAdapterInspectDoesNotWrite(t *testing.T) {
 	}
 	config := filepath.Join(root, "xdg", "opencode", "opencode.json")
 	prompt := filepath.Join(root, "xdg", "opencode", "matty.md")
-	adapter := NewActivationAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
 	pack := capabilitypack.Pack{ID: "matty", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "matty-guidance", Source: "instructions/matty.md"}}}
 	if _, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack}); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
 		{Kind: "instruction", ID: "engram-memory", Source: "instructions/engram-memory.md"},
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
-	adapter := NewActivationAdapter(root, filepath.Join(root, ".agents", "skills"), config, prompt)
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, ".agents", "skills"), config, prompt)
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
@@ -221,9 +221,9 @@ func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
 	}
 }
 
-func TestActivationAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) {
+func TestSurfaceAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) {
 	root := t.TempDir()
-	adapter := NewActivationAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "matty.md"))
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "matty.md"))
 	actions := []capabilitypack.ProjectionAction{
 		{ID: "instruction:matty-guidance", Kind: capabilitypack.ActionOpenCodeInstructionFile, Target: filepath.Join(root, "matty.md"), Content: "guidance\n"},
 		{ID: "opencode-instruction-reference:matty-guidance", Kind: capabilitypack.ActionOpenCodeConfigReference, Target: filepath.Join(root, "opencode.json"), Content: `{invalid`},
@@ -236,7 +236,7 @@ func TestActivationAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) 
 	}
 }
 
-func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUnmanagedConfig(t *testing.T) {
+func TestOwnershipResidualInspectionDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUnmanagedConfig(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
 	if err := os.MkdirAll(bundle, 0o700); err != nil {
@@ -250,7 +250,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUn
 	if err := os.WriteFile(config, []byte("// keep comment\n{\n  \"model\": \"test\"\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
 	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
@@ -276,7 +276,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUn
 		t.Fatal(err)
 	}
 	if len(reconcile.Projections) != 2 {
-		t.Fatalf("removal candidates = %+v", reconcile.Projections)
+		t.Fatalf("ownership residual projections = %+v", reconcile.Projections)
 	}
 	for _, projection := range reconcile.Projections {
 		if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{projection.Action}); err != nil {

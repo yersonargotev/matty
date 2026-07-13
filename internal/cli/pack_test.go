@@ -12,7 +12,7 @@ import (
 
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/opencodeactivation"
+	"github.com/yersonargotev/matty/internal/opencode"
 )
 
 type alwaysUsableAdapter struct{ delegate capabilitypack.SurfaceAdapter }
@@ -34,8 +34,8 @@ func alwaysUsableAdapters(t *testing.T, opts Options) map[capabilitypack.Surface
 		t.Fatal(err)
 	}
 	return map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
-		capabilitypack.SurfaceCodex:    alwaysUsableAdapter{delegate: codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)},
-		capabilitypack.SurfaceOpenCode: alwaysUsableAdapter{delegate: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)},
+		capabilitypack.SurfaceCodex:    alwaysUsableAdapter{delegate: codex.NewSurfaceAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)},
+		capabilitypack.SurfaceOpenCode: alwaysUsableAdapter{delegate: opencode.NewSurfaceAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)},
 	}
 }
 

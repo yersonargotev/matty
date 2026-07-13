@@ -12,7 +12,7 @@ import (
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
 	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencodeactivation"
+	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 )
 
@@ -220,8 +220,8 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	if err != nil {
 		return capabilitypack.Facade{}, err
 	}
-	codexAdapter := codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)
-	openCodeAdapter := opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
+	codexAdapter := codex.NewSurfaceAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)
+	openCodeAdapter := opencode.NewSurfaceAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
 	adapters := opts.SurfaceAdapters
 	if adapters == nil {
 		adapters = map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{

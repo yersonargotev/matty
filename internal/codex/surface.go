@@ -13,22 +13,22 @@ import (
 	"github.com/yersonargotev/matty/internal/localprojection"
 )
 
-type ActivationAdapter struct {
+type SurfaceAdapter struct {
 	bundleRoot string
 	skillsDir  string
 	promptFile string
 	configFile string
 }
 
-func NewActivationAdapter(bundleRoot, skillsDir, promptFile string) *ActivationAdapter {
-	return NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, filepath.Join(filepath.Dir(promptFile), "config.toml"))
+func NewSurfaceAdapter(bundleRoot, skillsDir, promptFile string) *SurfaceAdapter {
+	return NewSurfaceAdapterWithConfig(bundleRoot, skillsDir, promptFile, filepath.Join(filepath.Dir(promptFile), "config.toml"))
 }
 
-func NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, configFile string) *ActivationAdapter {
-	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile, configFile: configFile}
+func NewSurfaceAdapterWithConfig(bundleRoot, skillsDir, promptFile, configFile string) *SurfaceAdapter {
+	return &SurfaceAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile, configFile: configFile}
 }
 
-func (a *ActivationAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
 	var (
 		observation capabilitypack.SurfaceInspection
 		err         error
@@ -50,14 +50,14 @@ func (a *ActivationAdapter) InspectSurface(ctx context.Context, transition capab
 // InspectReadiness is filesystem-only and side-effect-free. The initial matty
 // pack has no authentication boundary and its file-discovered resources are
 // usable as soon as every required projection is loadable at its host path.
-func (a *ActivationAdapter) inspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.SurfaceInspection, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+func (a *SurfaceAdapter) inspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.SurfaceInspection, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
 	if pack.ID != "matty" {
 		return capabilitypack.ReadinessObservation{AuthorizationObserved: true, PendingHumanActions: observation.PendingHumanActions, Evidence: []string{"Codex trust and runtime loading are not yet observed"}}, nil
 	}
 	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, PendingHumanActions: []string{"reload Codex and verify the capability in a new runtime session"}, Evidence: []string{"Codex filesystem discovery paths inspected; runtime loading is not observable without a host signal"}}, nil
 }
 
-func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
 	engramOwned := hasEngramCodexSetupResources(pack)
@@ -145,7 +145,7 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
-func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	current, err := a.inspectDesired(ctx, active, resolutions)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
@@ -203,7 +203,7 @@ func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, 
 	return result, nil
 }
 
-func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectOwnershipResidual(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	result, err := a.inspectDesired(ctx, desired, resolutions)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
@@ -251,7 +251,7 @@ func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desire
 	return result, nil
 }
 
-func (a *ActivationAdapter) inspectOwnedProjection(id, promptContent, configContent string) (capabilitypack.ObservedProjection, bool, error) {
+func (a *SurfaceAdapter) inspectOwnedProjection(id, promptContent, configContent string) (capabilitypack.ObservedProjection, bool, error) {
 	projection := capabilitypack.ObservedProjection{ID: id, DesiredFingerprint: "missing"}
 	switch {
 	case strings.HasPrefix(id, "skill:"):
@@ -292,7 +292,7 @@ func (a *ActivationAdapter) inspectOwnedProjection(id, promptContent, configCont
 	}
 }
 
-func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
+func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
 	executor := localprojection.Executor{
 		Host:         "Codex",
 		SymlinkKinds: map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionSkillLink: true},

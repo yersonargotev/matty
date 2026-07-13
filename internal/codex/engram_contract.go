@@ -27,7 +27,7 @@ func isEngramOwnedResource(resource capabilitypack.Resource) bool {
 	return resource.Kind == "instruction" && resource.ID == "engram-memory" || resource.Kind == "mcp_server" && resource.ID == "engram"
 }
 
-func (a *ActivationAdapter) inspectEngramContract(config string, resolutions []capabilitypack.ExecutableResolution) ([]capabilitypack.ObservedProjection, error) {
+func (a *SurfaceAdapter) inspectEngramContract(config string, resolutions []capabilitypack.ExecutableResolution) ([]capabilitypack.ObservedProjection, error) {
 	dir := filepath.Dir(a.configFile)
 	instructionsPath := filepath.Join(dir, "engram-instructions.md")
 	compactPath := filepath.Join(dir, "engram-compact-prompt.md")

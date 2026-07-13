@@ -1,4 +1,4 @@
-package opencodeactivation
+package opencode
 
 import (
 	"context"
@@ -10,23 +10,22 @@ import (
 
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/localprojection"
-	"github.com/yersonargotev/matty/internal/opencode"
 )
 
-// ActivationAdapter translates portable pack resources into OpenCode-owned
+// SurfaceAdapter translates portable pack resources into OpenCode-owned
 // filesystem and JSONC projections. Lifecycle policy remains in capabilitypack.
-type ActivationAdapter struct {
+type SurfaceAdapter struct {
 	bundleRoot string
 	skillsDir  string
 	configFile string
 	promptFile string
 }
 
-func NewActivationAdapter(bundleRoot, skillsDir, configFile, promptFile string) *ActivationAdapter {
-	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, configFile: configFile, promptFile: promptFile}
+func NewSurfaceAdapter(bundleRoot, skillsDir, configFile, promptFile string) *SurfaceAdapter {
+	return &SurfaceAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, configFile: configFile, promptFile: promptFile}
 }
 
-func (a *ActivationAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
 	var (
 		observation capabilitypack.SurfaceInspection
 		err         error
@@ -45,14 +44,14 @@ func (a *ActivationAdapter) InspectSurface(ctx context.Context, transition capab
 	return observation, err
 }
 
-func (a *ActivationAdapter) inspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.SurfaceInspection, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+func (a *SurfaceAdapter) inspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.SurfaceInspection, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
 	if pack.ID != "matty" {
 		return capabilitypack.ReadinessObservation{AuthorizationObserved: true, PendingHumanActions: observation.PendingHumanActions, Evidence: []string{"OpenCode permissions and runtime loading are not yet observed"}}, nil
 	}
 	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, PendingHumanActions: []string{"reload OpenCode and verify the capability in a new runtime session"}, Evidence: []string{"OpenCode filesystem and config discovery paths inspected; runtime loading is not observable without a host signal"}}, nil
 }
 
-func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
 	desiredConfig := ""
@@ -93,7 +92,7 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 			promptID := "instruction:" + resource.ID
 			projections = append(projections, capabilitypack.ObservedProjection{ID: promptID, Exists: promptExists, ObservedFingerprint: promptObserved, DesiredFingerprint: localprojection.FingerprintBytes([]byte(desiredContent)), Action: capabilitypack.ProjectionAction{ID: promptID, Kind: capabilitypack.ActionOpenCodeInstructionFile, Target: promptFile, Content: desiredContent, Description: fmt.Sprintf("write OpenCode instruction %s at %s", resource.ID, promptFile)}})
 
-			currentConfig, err := readOptionalActivationFile(a.configFile)
+			currentConfig, err := readOptionalSurfaceFile(a.configFile)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
@@ -101,15 +100,15 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 				desiredConfig = currentConfig
 				configLoaded = true
 			}
-			inspection, err := opencode.Inspect(a.configFile, promptFile)
+			inspection, err := Inspect(a.configFile, promptFile)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			merged, err := opencode.MergeInstructionProjection(currentConfig, a.configFile, promptFile)
+			merged, err := MergeInstructionProjection(currentConfig, a.configFile, promptFile)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			desiredConfig, err = opencode.MergeInstructionProjection(desiredConfig, a.configFile, promptFile)
+			desiredConfig, err = MergeInstructionProjection(desiredConfig, a.configFile, promptFile)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
@@ -123,7 +122,7 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 			revisionParts = append(revisionParts, "prompt="+localprojection.FingerprintBytes(currentPrompt), "config="+localprojection.FingerprintBytes([]byte(currentConfig)))
 		case "mcp_server":
 			command := capabilitypack.ResolvedExecutablePath(resource.Command, resolutions)
-			currentConfig, err := readOptionalActivationFile(a.configFile)
+			currentConfig, err := readOptionalSurfaceFile(a.configFile)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
@@ -131,15 +130,15 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 				desiredConfig = currentConfig
 				configLoaded = true
 			}
-			inspection, err := opencode.InspectMCPContent(currentConfig, a.configFile, resource.ID, command, resource.Args)
+			inspection, err := InspectMCPContent(currentConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			merged, err := opencode.MergeMCPProjection(currentConfig, a.configFile, resource.ID, command, resource.Args)
+			merged, err := MergeMCPProjection(currentConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			desiredConfig, err = opencode.MergeMCPProjection(desiredConfig, a.configFile, resource.ID, command, resource.Args)
+			desiredConfig, err = MergeMCPProjection(desiredConfig, a.configFile, resource.ID, command, resource.Args)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
@@ -162,7 +161,7 @@ func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypac
 	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
-func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	current, err := a.inspectDesired(ctx, active, resolutions)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
@@ -175,7 +174,7 @@ func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, 
 	for _, projection := range result.Projections {
 		retained[projection.ID] = true
 	}
-	configContent, err := readOptionalActivationFile(a.configFile)
+	configContent, err := readOptionalSurfaceFile(a.configFile)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
 	}
@@ -191,14 +190,14 @@ func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, 
 			mode = capabilitypack.ProjectionDeleteTarget
 		case capabilitypack.ActionOpenCodeConfigReference:
 			id := strings.TrimPrefix(projection.ID, "opencode-instruction-reference:")
-			configContent, err = opencode.RemoveInstructionProjection(configContent, a.configFile, a.instructionPath(id))
+			configContent, err = RemoveInstructionProjection(configContent, a.configFile, a.instructionPath(id))
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
 			projection.Action.Content = configContent
 		case capabilitypack.ActionOpenCodeMCPConfig:
 			id := strings.TrimPrefix(projection.ID, "mcp_server:")
-			configContent, err = opencode.RemoveMCPProjection(configContent, a.configFile, id)
+			configContent, err = RemoveMCPProjection(configContent, a.configFile, id)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
@@ -217,7 +216,7 @@ func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, 
 	return result, nil
 }
 
-func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+func (a *SurfaceAdapter) inspectOwnershipResidual(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	result, err := a.inspectDesired(ctx, desired, resolutions)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
@@ -226,7 +225,7 @@ func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desire
 	for _, projection := range result.Projections {
 		retained[projection.ID] = true
 	}
-	configContent, err := readOptionalActivationFile(a.configFile)
+	configContent, err := readOptionalSurfaceFile(a.configFile)
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
 	}
@@ -255,7 +254,7 @@ func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desire
 	return result, nil
 }
 
-func (a *ActivationAdapter) inspectOwnedProjection(id, configContent string) (capabilitypack.ObservedProjection, bool, error) {
+func (a *SurfaceAdapter) inspectOwnedProjection(id, configContent string) (capabilitypack.ObservedProjection, bool, error) {
 	projection := capabilitypack.ObservedProjection{ID: id, DesiredFingerprint: "missing", ObservedFingerprint: "missing"}
 	switch {
 	case strings.HasPrefix(id, "skill:"):
@@ -274,7 +273,7 @@ func (a *ActivationAdapter) inspectOwnedProjection(id, configContent string) (ca
 	case strings.HasPrefix(id, "opencode-instruction-reference:"):
 		resourceID := strings.TrimPrefix(id, "opencode-instruction-reference:")
 		target := a.instructionPath(resourceID)
-		inspection, err := opencode.Inspect(a.configFile, target)
+		inspection, err := Inspect(a.configFile, target)
 		if err != nil {
 			return capabilitypack.ObservedProjection{}, false, err
 		}
@@ -282,17 +281,17 @@ func (a *ActivationAdapter) inspectOwnedProjection(id, configContent string) (ca
 		if projection.Exists {
 			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte(target))
 		}
-		content, err := opencode.RemoveInstructionProjection(configContent, a.configFile, target)
+		content, err := RemoveInstructionProjection(configContent, a.configFile, target)
 		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeConfigReference, Target: a.configFile}
 		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove OpenCode projection %s", id)), true, err
 	case strings.HasPrefix(id, "mcp_server:"):
 		resourceID := strings.TrimPrefix(id, "mcp_server:")
-		inspection, err := opencode.InspectMCPContent(configContent, a.configFile, resourceID, "", nil)
+		inspection, err := InspectMCPContent(configContent, a.configFile, resourceID, "", nil)
 		if err != nil {
 			return capabilitypack.ObservedProjection{}, false, err
 		}
 		projection.Exists, projection.ObservedFingerprint = inspection.Exists, inspection.ObservedFingerprint
-		content, err := opencode.RemoveMCPProjection(configContent, a.configFile, resourceID)
+		content, err := RemoveMCPProjection(configContent, a.configFile, resourceID)
 		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile}
 		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove OpenCode projection %s", id)), true, err
 	default:
@@ -300,30 +299,30 @@ func (a *ActivationAdapter) inspectOwnedProjection(id, configContent string) (ca
 	}
 }
 
-func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
+func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
 	for _, action := range actions {
 		switch action.Kind {
 		case capabilitypack.ActionOpenCodeConfigReference:
 			resourceID := strings.TrimPrefix(action.ID, "opencode-instruction-reference:")
 			if action.Mode == capabilitypack.ProjectionRemoveContent {
-				if err := opencode.ValidateInstructionRemoval(action.Content, a.configFile, a.instructionPath(resourceID)); err != nil {
+				if err := ValidateInstructionRemoval(action.Content, a.configFile, a.instructionPath(resourceID)); err != nil {
 					return &capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged OpenCode config removal: %w", err)}
 				}
 				continue
 			}
-			if err := opencode.ValidateInstructionProjection(action.Content, a.instructionPath(resourceID)); err != nil {
+			if err := ValidateInstructionProjection(action.Content, a.instructionPath(resourceID)); err != nil {
 				return &capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged OpenCode config: %w", err)}
 			}
 		case capabilitypack.ActionOpenCodeMCPConfig:
 			resourceID := strings.TrimPrefix(action.ID, "mcp_server:")
 			if action.Mode == capabilitypack.ProjectionRemoveContent {
-				inspection, err := opencode.InspectMCPContent(action.Content, a.configFile, resourceID, action.Command, action.Args)
+				inspection, err := InspectMCPContent(action.Content, a.configFile, resourceID, action.Command, action.Args)
 				if err != nil || inspection.Exists {
 					return &capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged OpenCode MCP removal: %v", err)}
 				}
 				continue
 			}
-			if err := opencode.ValidateMCPProjection(action.Content, a.configFile, resourceID, action.Command, action.Args); err != nil {
+			if err := ValidateMCPProjection(action.Content, a.configFile, resourceID, action.Command, action.Args); err != nil {
 				return &capabilitypack.ProjectionActionError{ID: action.ID, Err: fmt.Errorf("validate staged OpenCode MCP config: %w", err)}
 			}
 		}
@@ -345,7 +344,7 @@ func (a *ActivationAdapter) ApplyProjections(_ context.Context, actions []capabi
 	return &capabilitypack.ProjectionActionError{ID: actions[0].ID, Err: err}
 }
 
-func (a *ActivationAdapter) instructionPath(id string) string {
+func (a *SurfaceAdapter) instructionPath(id string) string {
 	if id == "matty-guidance" {
 		return a.promptFile
 	}
@@ -362,7 +361,7 @@ func pendingActions(pack capabilitypack.Pack) []string {
 	}
 }
 
-func readOptionalActivationFile(path string) (string, error) {
+func readOptionalSurfaceFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil

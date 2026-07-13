@@ -60,7 +60,7 @@ enabled = true
 		{Kind: "instruction", ID: "engram-memory", Source: "instructions/engram-memory.md"},
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
-	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, ".agents", "skills"), prompt, config)
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, ".agents", "skills"), prompt, config)
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, ResolvedExecutables: []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}}})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ EOF
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("fixture Engram setup: %v: %s", err, output)
 	}
-	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "config.toml"))
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, "skills"), filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "config.toml"))
 	pack := capabilitypack.Pack{ID: "engram", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "engram-memory"}, {Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, ResolvedExecutables: []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engram}}})
 	if err != nil {
@@ -157,7 +157,7 @@ EOF
 	}
 }
 
-func TestInspectDeactivationRemovesManagedBlocksAndPreservesUnmanagedCodexConfig(t *testing.T) {
+func TestPriorTransitionInspectionRemovesManagedBlocksAndPreservesUnmanagedCodexConfig(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "guide.md")
 	prompt := filepath.Join(root, "AGENTS.md")
@@ -167,7 +167,7 @@ func TestInspectDeactivationRemovesManagedBlocksAndPreservesUnmanagedCodexConfig
 	if err := os.WriteFile(prompt, []byte("unmanaged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: active})
 	if err != nil {
@@ -192,7 +192,7 @@ func TestInspectDeactivationRemovesManagedBlocksAndPreservesUnmanagedCodexConfig
 	}
 }
 
-func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.T) {
+func TestPriorTransitionInspectionComposesMultipleRemovalsFromOneCodexFile(t *testing.T) {
 	root := t.TempDir()
 	prompt := filepath.Join(root, "AGENTS.md")
 	for _, name := range []string{"one.md", "two.md"} {
@@ -208,7 +208,7 @@ func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.
 	if err := os.WriteFile(prompt, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
 	removal, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Prior: active, Desired: capabilitypack.Pack{ID: "desired"}, ResolvedExecutables: nil})
 	if err != nil {
@@ -226,7 +226,7 @@ func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.
 	}
 }
 
-func TestInspectReconcileDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmanagedContent(t *testing.T) {
+func TestOwnershipResidualInspectionDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmanagedContent(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "guide.md")
 	prompt := filepath.Join(root, "AGENTS.md")
@@ -236,7 +236,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmana
 	if err := os.WriteFile(prompt, []byte("unmanaged guidance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmana
 		t.Fatal(err)
 	}
 	if len(reconcile.Projections) != 1 || reconcile.Projections[0].ObservedFingerprint != owner.Fingerprint || reconcile.Projections[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
-		t.Fatalf("removal candidates = %+v", reconcile.Projections)
+		t.Fatalf("ownership residual projections = %+v", reconcile.Projections)
 	}
 	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{reconcile.Projections[0].Action}); err != nil {
 		t.Fatal(err)
