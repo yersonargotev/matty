@@ -149,6 +149,71 @@ func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T
 	assertNoStateTemps(t, path)
 }
 
+func TestObserveManagedSkillLinksReportsReadOnlyFilesystemFacts(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	links := filepath.Join(root, "links")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(links, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	skills := []ManagedSkill{
+		{Name: "missing", SourcePath: filepath.Join(source, "missing"), LinkPath: filepath.Join(links, "missing")},
+		{Name: "managed", SourcePath: filepath.Join(source, "managed"), LinkPath: filepath.Join(links, "managed")},
+		{Name: "path", SourcePath: filepath.Join(source, "path"), LinkPath: filepath.Join(links, "path")},
+		{Name: "symlink", SourcePath: filepath.Join(source, "symlink"), LinkPath: filepath.Join(links, "symlink")},
+	}
+	if err := os.Symlink(filepath.Join("..", "source", "managed"), skills[1].LinkPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skills[2].LinkPath, []byte("unmanaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(root, "foreign")
+	if err := os.Symlink(foreign, skills[3].LinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	observations := ObserveManagedSkillLinks(skills)
+	want := []SkillLinkCondition{SkillLinkMissing, SkillLinkManaged, SkillLinkUnmanagedPath, SkillLinkUnmanagedSymlink}
+	if len(observations) != len(want) {
+		t.Fatalf("observations = %#v", observations)
+	}
+	for i, condition := range want {
+		if observations[i].Name() != skills[i].Name || observations[i].LinkPath() != skills[i].LinkPath || observations[i].Condition() != condition || observations[i].Err() != nil {
+			t.Fatalf("observation[%d] = name %q path %q condition %q err %v", i, observations[i].Name(), observations[i].LinkPath(), observations[i].Condition(), observations[i].Err())
+		}
+	}
+	if observations[3].Target() != foreign {
+		t.Fatalf("unmanaged target = %q, want %q", observations[3].Target(), foreign)
+	}
+
+	observations[0] = SkillLinkObservation{}
+	again := ObserveManagedSkillLinks(skills)
+	if again[0].Name() != "missing" || again[0].Condition() != SkillLinkMissing {
+		t.Fatalf("caller mutation changed later observation: %#v", again[0])
+	}
+}
+
+func TestObserveExpectedManagedSkillLinksUsesLifecycleDiscovery(t *testing.T) {
+	config := installTestConfig(t)
+	observations, err := ObserveExpectedManagedSkillLinks(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 6 {
+		t.Fatalf("expected observations = %#v", observations)
+	}
+	for _, observation := range observations {
+		if observation.Condition() != SkillLinkMissing {
+			t.Fatalf("expected observation = %#v", observation)
+		}
+	}
+}
+
 func existingStateFile(t *testing.T) (string, []byte) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")

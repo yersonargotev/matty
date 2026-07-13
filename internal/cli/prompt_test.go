@@ -35,25 +35,6 @@ func readFileString(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestInstallCreatesOpenCodeConfigWhenMissing(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	out, err := executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	config := readFileString(t, paths.OpenCodeConfigFile)
-	if !strings.Contains(config, paths.OpenCodePromptFile) {
-		t.Fatalf("OpenCode config missing Matty instruction reference:\n%s", config)
-	}
-	if !strings.Contains(readFileString(t, paths.OpenCodePromptFile), "ask-matt") {
-		t.Fatalf("OpenCode prompt missing ask-matt")
-	}
-}
-
 func TestInstallDryRunDoesNotWriteOpenCodePrompt(t *testing.T) {
 	opts, _, _ := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)

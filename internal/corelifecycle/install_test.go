@@ -111,6 +111,58 @@ func TestInstallApplyConsumesThePreviewedPlanAndPublishesConfirmedOwnership(t *t
 	}
 }
 
+func TestClassicLifecycleDoesNotReadOrMutateCapabilityPackStateOrArtifacts(t *testing.T) {
+	for _, operation := range []Operation{Install, Update, Uninstall} {
+		t.Run(string(operation), func(t *testing.T) {
+			config := installTestConfig(t)
+			writeInstallTestExecutable(t, filepath.Join(config.HomebrewPrefix, "bin", "engram"))
+			commands := &installTestCommands{}
+			facade := NewFacade(config, commands, func() time.Time { return time.Unix(123, 0) })
+
+			if operation != Install {
+				plan, err := facade.Preview(Install)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := facade.Apply(context.Background(), plan); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			packState := filepath.Join(config.MattyDir, "packs.json")
+			packArtifact := filepath.Join(installTestHome(config), ".codex", "pack-owned-artifact")
+			if err := os.MkdirAll(config.MattyDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(packArtifact), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			packStateContents := []byte(`{"deliberately":"not a classic state schema"}`)
+			packArtifactContents := []byte("capability-pack-owned")
+			if err := os.WriteFile(packState, packStateContents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(packArtifact, packArtifactContents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			plan, err := facade.Preview(operation)
+			if err != nil {
+				t.Fatalf("Preview(%s) read capability-pack state: %v", operation, err)
+			}
+			if _, err := facade.Apply(context.Background(), plan); err != nil {
+				t.Fatalf("Apply(%s) failed: %v", operation, err)
+			}
+			if got, err := os.ReadFile(packState); err != nil || !reflect.DeepEqual(got, packStateContents) {
+				t.Fatalf("%s changed pack state: contents %q err %v", operation, got, err)
+			}
+			if got, err := os.ReadFile(packArtifact); err != nil || !reflect.DeepEqual(got, packArtifactContents) {
+				t.Fatalf("%s changed pack artifact: contents %q err %v", operation, got, err)
+			}
+		})
+	}
+}
+
 func TestInstallApplyAcquiresMissingEngramBeforeDelegatedSetup(t *testing.T) {
 	config := installTestConfig(t)
 	engram := filepath.Join(config.HomebrewPrefix, "bin", "engram")

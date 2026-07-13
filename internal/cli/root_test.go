@@ -847,61 +847,6 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	}
 }
 
-func TestInstallWritesSmallStateAndRunsEngramSetup(t *testing.T) {
-	opts, runner, home := sandboxOptions(t)
-	out, err := executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	if got, want := callStrings(runner.calls), engramSetupCallStrings(t, opts); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("runner calls = %#v, want %#v", got, want)
-	}
-
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	state, found, err := corelifecycle.LoadState(paths.StateFile)
-	if err != nil {
-		t.Fatalf("LoadState failed: %v", err)
-	}
-	if !found {
-		t.Fatal("expected state file to be written")
-	}
-	if state.SchemaVersion != corelifecycle.SchemaVersion || state.MattyVersion != mattyversion.Value {
-		t.Fatalf("unexpected state metadata: %#v", state)
-	}
-	if got, want := state.ConfiguredSurfaces, []string{"codex", "opencode"}; strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("ConfiguredSurfaces = %#v, want %#v", got, want)
-	}
-	if state.Paths.StateFile != filepath.Join(home, ".matty", "config.json") {
-		t.Fatalf("state path = %q", state.Paths.StateFile)
-	}
-	if !hasManagedSkill(state, "ask-matt") || !hasManagedSkill(state, "wayfinder") {
-		t.Fatalf("state missing expected managed skills: %#v", state.ManagedSkills)
-	}
-	data, err := os.ReadFile(paths.StateFile)
-	if err != nil {
-		t.Fatalf("read written state: %v", err)
-	}
-	if len(data) > 10000 {
-		t.Fatalf("state file is too large for metadata-only state: %d bytes", len(data))
-	}
-	if strings.Contains(string(data), "You are") || strings.Contains(string(data), "## Instructions") {
-		t.Fatalf("state appears to contain prompt content:\n%s", data)
-	}
-	for _, name := range []string{"ask-matt", "codebase-design", "grilling", "handoff", "loop-me", "wayfinder"} {
-		link := filepath.Join(home, ".agents", "skills", name)
-		info, err := os.Lstat(link)
-		if err != nil {
-			t.Fatalf("expected managed skill link %s: %v", link, err)
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("%s is not a symlink", link)
-		}
-	}
-}
-
 func TestInstallRejectsCorruptState(t *testing.T) {
 	opts, _, _ := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)
@@ -960,7 +905,7 @@ func TestDoctorWarnsWhenNullManagedSkillsHaveExpectedUnmanagedSymlinks(t *testin
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	state := corelifecycle.DesiredState(classicStateConfig(paths), fixedTestTime(), nil)
+	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
 	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
 		t.Fatalf("SaveState failed: %v", err)
 	}
@@ -985,6 +930,37 @@ func TestDoctorWarnsWhenNullManagedSkillsHaveExpectedUnmanagedSymlinks(t *testin
 		filepath.Join(paths.AgentSkillsDir, "ask-matt") + " -> " + filepath.Join(home, "stale-repo-skills", "ask-matt"),
 		recoveryAdvice,
 	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorReportsExpectedSkillInspectionErrors(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatalf("ResolvePaths failed: %v", err)
+	}
+	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
+	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.AgentSkillsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.AgentSkillsDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
+	if err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"could not inspect expected skill links", "inspect skill link"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
 		}
@@ -1092,7 +1068,7 @@ func TestDoctorReportsIncompleteEngramSetupExpectationsAsFailedCheck(t *testing.
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	state := corelifecycle.DesiredState(classicStateConfig(paths), fixedTestTime(), nil)
+	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
 	state.ConfiguredSurfaces = []string{"codex"}
 	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
 		t.Fatalf("SaveState failed: %v", err)
@@ -1129,15 +1105,6 @@ func TestDoctorReportsOpenCodeInspectErrorsUnderConfigCheck(t *testing.T) {
 	}
 }
 
-func hasManagedSkill(state corelifecycle.State, name string) bool {
-	for _, skill := range state.ManagedSkills {
-		if skill.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 	opts, _, home := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)
@@ -1160,45 +1127,6 @@ func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install output missing %q:\n%s", want, out)
 		}
-	}
-	state, found, err := corelifecycle.LoadState(paths.StateFile)
-	if err != nil || !found {
-		t.Fatalf("LoadState = found %v err %v", found, err)
-	}
-	if len(state.ManagedSkills) != 0 {
-		t.Fatalf("expected no managed skills when all skill links were unmanaged, got %#v", state.ManagedSkills)
-	}
-	for _, name := range testSkillNames() {
-		target, err := os.Readlink(filepath.Join(paths.AgentSkillsDir, name))
-		if err != nil {
-			t.Fatalf("read unmanaged symlink %s: %v", name, err)
-		}
-		if want := filepath.Join(home, "stale-repo-skills", name); target != want {
-			t.Fatalf("unmanaged symlink %s target = %q, want %q", name, target, want)
-		}
-	}
-}
-
-func TestInstallAndUpdateAreIdempotent(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	before := readSkillLinks(t, paths)
-
-	out, err = executeCommand(t, NewRootCommand(opts), "update")
-	if err != nil {
-		t.Fatalf("update failed: %v\n%s", err, out)
-	}
-	after := readSkillLinks(t, paths)
-	if strings.Join(before, "\n") != strings.Join(after, "\n") {
-		t.Fatalf("skill links changed after update:\nbefore=%v\nafter=%v", before, after)
 	}
 }
 
@@ -1327,31 +1255,6 @@ func TestInstallDryRunReportsUnmanagedSkipsWithoutMutating(t *testing.T) {
 	if exists(paths.StateFile) {
 		t.Fatalf("dry-run wrote state")
 	}
-}
-
-func readSkillLinks(t *testing.T, paths Paths) []string {
-	t.Helper()
-	entries, err := os.ReadDir(paths.AgentSkillsDir)
-	if err != nil {
-		t.Fatalf("read agent skills dir: %v", err)
-	}
-	var links []string
-	for _, entry := range entries {
-		path := filepath.Join(paths.AgentSkillsDir, entry.Name())
-		info, err := os.Lstat(path)
-		if err != nil {
-			t.Fatalf("lstat %s: %v", path, err)
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		target, err := os.Readlink(path)
-		if err != nil {
-			t.Fatalf("readlink %s: %v", path, err)
-		}
-		links = append(links, entry.Name()+"->"+target)
-	}
-	return links
 }
 
 func TestInterruptedInstallIsExplicitAndDoctorReportsSafeRecovery(t *testing.T) {

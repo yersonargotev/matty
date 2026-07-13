@@ -88,14 +88,6 @@ func ResolvePaths(env Env) (Paths, error) {
 	}, nil
 }
 
-func (p Paths) SkillLinkPath(name string) string {
-	return filepath.Join(p.AgentSkillsDir, name)
-}
-
-func classicStateConfig(paths Paths) corelifecycle.StateConfig {
-	return corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}
-}
-
 func classicLifecycleConfig(paths Paths, runningVersion string) corelifecycle.Config {
 	return corelifecycle.Config{
 		HomeDir:                paths.HomeDir,

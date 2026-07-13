@@ -169,25 +169,18 @@ func skillChecks(paths Paths, state corelifecycle.StateObservation) []doctorChec
 		return []doctorCheck{{status: doctorWarn, name: "skill-symlinks", detail: zeroManagedSkillsDetail(paths)}}
 	}
 	var missing, changed []string
-	for _, skill := range managedSkills {
-		link, err := inspectSkillLink(skill)
-		if err != nil {
-			changed = append(changed, fmt.Sprintf("%s (%v)", skill.Name, err))
-			continue
-		}
-		behavior, ok := skillLinkBehaviors[link.status]
-		if !ok {
-			changed = append(changed, fmt.Sprintf("%s (unknown link status %s)", skill.Name, link.status))
-			continue
-		}
-		problem, hasProblem := behavior.doctorProblem(skill, link)
-		if !hasProblem {
-			continue
-		}
-		if problem.missing {
-			missing = append(missing, problem.detail)
-		} else {
-			changed = append(changed, problem.detail)
+	for _, link := range corelifecycle.ObserveManagedSkillLinks(managedSkills) {
+		switch {
+		case link.Err() != nil:
+			changed = append(changed, fmt.Sprintf("%s (%v)", link.Name(), link.Err()))
+		case link.Condition() == corelifecycle.SkillLinkMissing:
+			missing = append(missing, link.Name())
+		case link.Condition() == corelifecycle.SkillLinkUnmanagedPath:
+			changed = append(changed, link.Name()+" is not a symlink")
+		case link.Condition() == corelifecycle.SkillLinkUnmanagedSymlink:
+			changed = append(changed, link.Name())
+		case link.Condition() != corelifecycle.SkillLinkManaged:
+			changed = append(changed, fmt.Sprintf("%s (unknown link status %s)", link.Name(), link.Condition()))
 		}
 	}
 	if len(missing) == 0 && len(changed) == 0 {
@@ -205,15 +198,28 @@ func skillChecks(paths Paths, state corelifecycle.StateObservation) []doctorChec
 
 func zeroManagedSkillsDetail(paths Paths) string {
 	detail := "state has no managed skills; run matty install"
-	plan, err := buildDoctorExpectedSkillPlan(paths)
+	links, err := corelifecycle.ObserveExpectedManagedSkillLinks(classicLifecycleConfig(paths, ""))
 	if err != nil {
 		return detail + "; could not inspect expected skill links: " + err.Error()
 	}
-	summary, ok := unmanagedSymlinkSkipSummary(plan)
-	if !ok {
+	var unmanaged []corelifecycle.SkillLinkObservation
+	for _, link := range links {
+		if link.Err() != nil {
+			return detail + "; could not inspect expected skill links: " + link.Err().Error()
+		}
+		if link.Condition() == corelifecycle.SkillLinkUnmanagedSymlink {
+			unmanaged = append(unmanaged, link)
+		}
+	}
+	if len(links) == 0 || len(unmanaged)*2 <= len(links) {
 		return detail
 	}
-	return fmt.Sprintf("state has no managed skills, but %d expected skill symlinks are unmanaged by current Matty state; setup may be incomplete. Example: %s -> %s. %s", summary.count, summary.example.Path, summary.example.Target, unmanagedSymlinkRecoveryAdvice())
+	example := unmanaged[0]
+	return fmt.Sprintf("state has no managed skills, but %d expected skill symlinks are unmanaged by current Matty state; setup may be incomplete. Example: %s -> %s. %s", len(unmanaged), example.LinkPath(), example.Target(), unmanagedSymlinkRecoveryAdvice())
+}
+
+func unmanagedSymlinkRecoveryAdvice() string {
+	return "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
 }
 
 func engramChecks(runner Runner, paths Paths, state corelifecycle.StateObservation, facts engrambin.Facts) []doctorCheck {

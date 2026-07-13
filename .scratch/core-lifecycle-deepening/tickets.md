@@ -13,4 +13,4 @@ between tickets and use `/implement` for one frontier ticket at a time.
 | 02 | [Route install through the lifecycle facade](tickets/02-route-install-through-lifecycle-facade.md) | 01 | resolved |
 | 03 | [Route update through the lifecycle facade](tickets/03-route-update-through-lifecycle-facade.md) | 02 | resolved |
 | 04 | [Route uninstall through the lifecycle facade](tickets/04-route-uninstall-through-lifecycle-facade.md) | 01 | resolved |
-| 05 | [Contract the CLI lifecycle and verify the architecture](tickets/05-contract-cli-lifecycle-and-verify.md) | 02, 03, 04 | ready-for-agent |
+| 05 | [Contract the CLI lifecycle and verify the architecture](tickets/05-contract-cli-lifecycle-and-verify.md) | 02, 03, 04 | resolved |

@@ -87,7 +87,7 @@ func NewFacade(config Config, commands Commands, now func() time.Time) *Facade {
 
 type plannedAction struct {
 	ActionView
-	skipReason skillLinkStatus
+	skipReason SkillLinkCondition
 }
 
 // Plan deliberately exposes behavior only through detached views. Its state,
@@ -302,33 +302,100 @@ func (facade *Facade) homebrewEngramInstalled() bool {
 	return err == nil && engrambin.IsExpectedHomebrewPath(resolved, engrambin.ExpectedHomebrewPath(facade.config.HomebrewPrefix))
 }
 
-type skillLinkStatus string
+type SkillLinkCondition string
 
 const (
-	skillLinkMissing          skillLinkStatus = "missing"
-	skillLinkUnmanagedPath    skillLinkStatus = "unmanaged-path"
-	skillLinkUnmanagedSymlink skillLinkStatus = "unmanaged-symlink"
+	SkillLinkMissing          SkillLinkCondition = "missing"
+	SkillLinkManaged          SkillLinkCondition = "managed"
+	SkillLinkUnmanagedPath    SkillLinkCondition = "unmanaged-path"
+	SkillLinkUnmanagedSymlink SkillLinkCondition = "unmanaged-symlink"
 )
 
-func previewSkillLink(skill ManagedSkill) (plannedAction, error) {
+// SkillLinkObservation is a detached read-only view of one managed skill link.
+type SkillLinkObservation struct {
+	name      string
+	linkPath  string
+	target    string
+	condition SkillLinkCondition
+	err       error
+}
+
+func (observation SkillLinkObservation) Name() string                  { return observation.name }
+func (observation SkillLinkObservation) LinkPath() string              { return observation.linkPath }
+func (observation SkillLinkObservation) Target() string                { return observation.target }
+func (observation SkillLinkObservation) Condition() SkillLinkCondition { return observation.condition }
+func (observation SkillLinkObservation) Err() error                    { return observation.err }
+
+// ObserveManagedSkillLinks inspects recorded ownership without mutating it or
+// the filesystem. Inspection failures are reported on the corresponding fact.
+func ObserveManagedSkillLinks(skills []ManagedSkill) []SkillLinkObservation {
+	observations := make([]SkillLinkObservation, len(skills))
+	for i, skill := range skills {
+		observations[i] = observeManagedSkillLink(skill)
+	}
+	return observations
+}
+
+// ObserveExpectedManagedSkillLinks discovers the configured bundle through
+// the lifecycle owner and returns detached, read-only link facts for doctor.
+func ObserveExpectedManagedSkillLinks(config Config) ([]SkillLinkObservation, error) {
+	discovered, err := skillbundle.Discover(config.SkillSourceRoot, config.AgentSkillsDir, config.SkillSourceMissingHint)
+	if err != nil {
+		return nil, err
+	}
+	skills := make([]ManagedSkill, 0, len(discovered))
+	for _, skill := range discovered {
+		skills = append(skills, ManagedSkill{Name: skill.Name, SourcePath: skill.SourcePath, LinkPath: skill.LinkPath})
+	}
+	return ObserveManagedSkillLinks(skills), nil
+}
+
+func observeManagedSkillLink(skill ManagedSkill) SkillLinkObservation {
+	observation := SkillLinkObservation{name: skill.Name, linkPath: skill.LinkPath}
 	info, err := os.Lstat(skill.LinkPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return plannedAction{ActionView: ActionView{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}, skipReason: skillLinkMissing}, nil
+			observation.condition = SkillLinkMissing
+			return observation
 		}
-		return plannedAction{}, fmt.Errorf("inspect skill link %s: %w", skill.LinkPath, err)
+		observation.err = fmt.Errorf("inspect skill link %s: %w", skill.LinkPath, err)
+		return observation
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return plannedAction{ActionView: ActionView{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}, skipReason: skillLinkUnmanagedPath}, nil
+		observation.condition = SkillLinkUnmanagedPath
+		return observation
 	}
 	target, err := os.Readlink(skill.LinkPath)
 	if err != nil {
-		return plannedAction{}, fmt.Errorf("read skill link %s: %w", skill.LinkPath, err)
+		observation.err = fmt.Errorf("read skill link %s: %w", skill.LinkPath, err)
+		return observation
 	}
+	observation.target = target
 	if sameLinkTarget(skill.LinkPath, target, skill.SourcePath) {
-		return plannedAction{}, nil
+		observation.condition = SkillLinkManaged
+		return observation
 	}
-	return plannedAction{ActionView: ActionView{Kind: ActionSkip, Path: skill.LinkPath, Target: target, Description: "preserve unmanaged symlink for skill " + skill.Name}, skipReason: skillLinkUnmanagedSymlink}, nil
+	observation.condition = SkillLinkUnmanagedSymlink
+	return observation
+}
+
+func previewSkillLink(skill ManagedSkill) (plannedAction, error) {
+	observation := observeManagedSkillLink(skill)
+	if observation.Err() != nil {
+		return plannedAction{}, observation.Err()
+	}
+	switch observation.Condition() {
+	case SkillLinkMissing:
+		return plannedAction{ActionView: ActionView{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}, skipReason: SkillLinkMissing}, nil
+	case SkillLinkManaged:
+		return plannedAction{}, nil
+	case SkillLinkUnmanagedPath:
+		return plannedAction{ActionView: ActionView{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name}, skipReason: SkillLinkUnmanagedPath}, nil
+	case SkillLinkUnmanagedSymlink:
+		return plannedAction{ActionView: ActionView{Kind: ActionSkip, Path: skill.LinkPath, Target: observation.Target(), Description: "preserve unmanaged symlink for skill " + skill.Name}, skipReason: SkillLinkUnmanagedSymlink}, nil
+	default:
+		return plannedAction{}, fmt.Errorf("inspect skill link %s: unknown condition %q", skill.LinkPath, observation.Condition())
+	}
 }
 
 func sameLinkTarget(linkPath, gotTarget, wantTarget string) bool {
@@ -452,7 +519,7 @@ func unmanagedInstallSymlinkWarning(plan Plan) (string, bool) {
 			continue
 		}
 		skipped++
-		if action.skipReason == skillLinkUnmanagedSymlink {
+		if action.skipReason == SkillLinkUnmanagedSymlink {
 			if count == 0 {
 				example = action
 			}
