@@ -166,7 +166,7 @@ func newInstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			lifecycle := corelifecycle.NewFacade(classicLifecycleConfig(paths), opts.Runner, opts.Clock)
+			lifecycle := corelifecycle.NewFacade(classicLifecycleConfig(paths, mattyversion.Value), opts.Runner, opts.Clock)
 			plan, err := lifecycle.Preview(corelifecycle.Install)
 			if err != nil {
 				return err
@@ -229,13 +229,8 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateUpdateInstalledSource(paths); err != nil {
-				return err
-			}
-			if _, _, err := corelifecycle.LoadState(paths.StateFile); err != nil {
-				return err
-			}
-			plan, err := BuildUpdatePlan(paths, time.Now())
+			lifecycle := corelifecycle.NewFacade(classicLifecycleConfig(paths, mattyversion.Value), opts.Runner, opts.Clock)
+			plan, err := lifecycle.Preview(corelifecycle.Update)
 			if err != nil {
 				return err
 			}
@@ -243,34 +238,21 @@ func newUpdateCommand(opts Options) *cobra.Command {
 				return err
 			}
 			if dryRun {
-				return printDryRunPlan(cmd.OutOrStdout(), "matty update", plan)
+				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "matty update", plan)
 			}
-			warnings, err := ApplyUpdatePlan(cmd.Context(), paths, plan, opts.Runner)
+			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
 				return err
 			}
-			warnings = appendPlanWarnings(warnings, plan)
-			if err := printWarnings(cmd.OutOrStdout(), warnings); err != nil {
+			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", len(plan.State.ManagedSkills), paths.StateFile)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
 			return err
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed update changes without writing files or running commands")
 	return cmd
-}
-
-func validateUpdateInstalledSource(paths Paths) error {
-	if !paths.SkillSourceIsDefault {
-		return nil
-	}
-	return bootstrap.ValidateInstalledSourceRef(bootstrap.BootstrapOptions{
-		SourceRoot:    paths.InstalledSourceRoot,
-		RepositoryRef: defaultInitRepositoryRef("", mattyversion.Value),
-		HomeDir:       paths.HomeDir,
-		ConfigHome:    paths.ConfigHome,
-	})
 }
 
 func printSkillSourceReport(out io.Writer, paths Paths) error {
@@ -341,13 +323,6 @@ func printWarnings(out io.Writer, warnings []string) error {
 		}
 	}
 	return nil
-}
-
-func appendPlanWarnings(warnings []string, plan Plan) []string {
-	if warning, ok := unmanagedSymlinkRecoveryWarning(plan); ok {
-		return append(warnings, warning)
-	}
-	return warnings
 }
 
 func newUninstallCommand(opts Options) *cobra.Command {

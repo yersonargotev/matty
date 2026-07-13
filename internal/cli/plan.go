@@ -7,10 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/ownedcontainer"
 	"github.com/yersonargotev/matty/internal/prompt"
@@ -71,15 +69,13 @@ type Plan struct {
 	cleanup ownedcontainer.Plan
 }
 
-func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
+func buildDoctorExpectedSkillPlan(paths Paths) (Plan, error) {
 	discovered, err := DiscoverManagedSkills(paths)
 	if err != nil {
 		return Plan{}, err
 	}
 
-	actions := []PlannedAction{
-		{Kind: ActionWriteFile, Path: paths.StateFile, Description: "persist Matty state metadata"},
-	}
+	var actions []PlannedAction
 	managed := make([]corelifecycle.ManagedSkill, 0, len(discovered))
 	for _, skill := range discovered {
 		status, err := plannedSkillLinkAction(skill)
@@ -93,30 +89,7 @@ func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
 			managed = append(managed, skill)
 		}
 	}
-	updateActions := make([]PlannedAction, 0, len(actions)+6)
-	updateActions = append(updateActions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"update"}, Description: "refresh Homebrew formula metadata"})
-	updateActions = append(updateActions, PlannedAction{Kind: ActionRun, Command: "brew", Args: []string{"upgrade", "engram"}, Description: "update Engram via Homebrew"})
-	updateActions = append(updateActions, actions...)
-	actions = updateActions
-	actions = append(actions, engramSetupActions(paths)...)
-	actions = append(actions, codexPromptWriteAction(paths), openCodePromptWriteAction(paths))
-	return Plan{Actions: actions, State: corelifecycle.DesiredState(classicStateConfig(paths), checkedAt, managed)}, nil
-}
-
-func codexPromptWriteAction(paths Paths) PlannedAction {
-	return PlannedAction{Kind: ActionWriteCodexPrompt, Path: paths.CodexPromptFile, Description: "write Codex Matty prompt markers"}
-}
-
-func openCodePromptWriteAction(paths Paths) PlannedAction {
-	return PlannedAction{Kind: ActionWriteOpenCodePrompt, Path: paths.OpenCodeConfigFile, Target: paths.OpenCodePromptFile, Description: "write OpenCode Matty prompt reference"}
-}
-
-func engramSetupActions(paths Paths) []PlannedAction {
-	engram := engrambin.ExpectedHomebrewPath(paths.HomebrewPrefixEnv)
-	return []PlannedAction{
-		{Kind: ActionRun, Command: engram, Args: []string{"setup", "codex"}, Description: "delegate Codex Engram setup through Homebrew binary"},
-		{Kind: ActionRun, Command: engram, Args: []string{"setup", "opencode"}, Description: "delegate OpenCode Engram setup through Homebrew binary"},
-	}
+	return Plan{Actions: actions, State: corelifecycle.State{ManagedSkills: managed}}, nil
 }
 
 func plannedSkillLinkAction(skill corelifecycle.ManagedSkill) (PlannedAction, error) {
@@ -308,188 +281,8 @@ func isMostExpectedSkillLinks(count, expectedSkillLinks int) bool {
 	return expectedSkillLinks > 0 && count*2 > expectedSkillLinks
 }
 
-func unmanagedSymlinkRecoveryWarning(plan Plan) (string, bool) {
-	summary, ok := unmanagedSymlinkSkipSummary(plan)
-	if !ok {
-		return "", false
-	}
-	return fmt.Sprintf("skipped %d unmanaged skill symlinks; setup may be incomplete. Example: %s -> %s. %s", summary.count, summary.example.Path, summary.example.Target, unmanagedSymlinkRecoveryAdvice()), true
-}
-
 func unmanagedSymlinkRecoveryAdvice() string {
 	return "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
-}
-
-// persistUpdateState remains injectable until update sequencing moves behind
-// corelifecycle in ticket 03.
-var persistUpdateState = corelifecycle.SaveState
-
-func ApplyUpdatePlan(ctx context.Context, paths Paths, plan Plan, runner Runner) ([]string, error) {
-	previous, previousFound, err := corelifecycle.LoadState(paths.StateFile)
-	if err != nil {
-		return nil, err
-	}
-	anchor, err := provisionStateAnchor(paths)
-	if err != nil {
-		return nil, err
-	}
-	recovery := recoveryState(plan.State, previous, previousFound, anchor)
-	if err := persistUpdateState(paths.StateFile, recovery); err != nil {
-		if cleanupErr := cleanupUnrecordedContainers(anchor); cleanupErr != nil {
-			return nil, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
-		}
-		return nil, err
-	}
-	created, provisionErr := ownedcontainer.Provision(effectContainerRecords(paths))
-	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
-	if err := persistUpdateState(paths.StateFile, recovery); err != nil {
-		if cleanupErr := cleanupUnrecordedContainers(created); cleanupErr != nil {
-			return nil, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
-		}
-		return nil, err
-	}
-	if provisionErr != nil {
-		return nil, provisionErr
-	}
-	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
-	}
-	if err := os.MkdirAll(paths.AgentSkillsDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create agent skills directory %s: %w", paths.AgentSkillsDir, err)
-	}
-	var warnings []string
-	for _, action := range plan.Actions {
-		switch action.Kind {
-		case ActionSymlink:
-			if err := os.Symlink(action.Target, action.Path); err != nil {
-				return nil, fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
-			}
-			recovery.ManagedSkills = append(recovery.ManagedSkills, managedSkillForAction(plan.State.ManagedSkills, action))
-			if err := persistUpdateState(paths.StateFile, recovery); err != nil {
-				if removeErr := os.Remove(action.Path); removeErr != nil {
-					return nil, fmt.Errorf("%w; roll back unrecorded skill symlink %s: %v", err, action.Path, removeErr)
-				}
-				return nil, err
-			}
-		case ActionWriteCodexPrompt:
-			result, err := prompt.WriteCodex(action.Path)
-			if err != nil {
-				return nil, err
-			}
-			warnings = append(warnings, result.Warnings...)
-		case ActionWriteOpenCodePrompt:
-			result, err := opencode.Write(action.Path, action.Target)
-			if err != nil {
-				return nil, err
-			}
-			warnings = append(warnings, result.Warnings...)
-		case ActionRun:
-			if isEngramSetupAction(action) {
-				canonical := engrambin.DiscoverHomebrew(paths.HomebrewPrefixEnv)
-				if canonical == nil {
-					return nil, missingCanonicalEngramSetupError(action, engrambin.HomebrewCandidatePaths(engrambin.HomebrewPrefixes(paths.HomebrewPrefixEnv)))
-				}
-				action.Command = canonical.Path
-			}
-			if err := runner.Run(ctx, action.Command, action.Args...); err != nil {
-				return nil, actionRunError(action, err)
-			}
-		}
-	}
-	if previous.RecoveryRequired() {
-		plan.State.ManagedSkills = append([]corelifecycle.ManagedSkill(nil), recovery.ManagedSkills...)
-	}
-	plan.State.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
-	plan.State.InstallStatus = corelifecycle.InstallConfirmed
-	if err := persistUpdateState(paths.StateFile, plan.State); err != nil {
-		return nil, err
-	}
-	return warnings, nil
-}
-
-func provisionStateAnchor(paths Paths) ([]ownedcontainer.Record, error) {
-	var created []ownedcontainer.Record
-	if _, err := os.Lstat(paths.MattyDir); os.IsNotExist(err) {
-		if err := os.Mkdir(paths.MattyDir, 0o700); err != nil {
-			return nil, fmt.Errorf("create Matty config directory %s: %w", paths.MattyDir, err)
-		}
-		created = append(created, ownedcontainer.Record{Path: paths.MattyDir, Kind: ownedcontainer.Directory})
-	} else if err != nil {
-		return nil, fmt.Errorf("inspect Matty config directory %s: %w", paths.MattyDir, err)
-	}
-	if _, err := os.Lstat(paths.StateFile); os.IsNotExist(err) {
-		created = append(created, ownedcontainer.Record{Path: paths.StateFile, Kind: ownedcontainer.File})
-	} else if err != nil {
-		return nil, fmt.Errorf("inspect Matty state %s: %w", paths.StateFile, err)
-	}
-	return created, nil
-}
-
-func effectContainerRecords(paths Paths) []ownedcontainer.Record {
-	records := containerRecords(paths)
-	out := make([]ownedcontainer.Record, 0, len(records)-2)
-	for _, record := range records {
-		if record.Path != paths.MattyDir && record.Path != paths.StateFile {
-			out = append(out, record)
-		}
-	}
-	return out
-}
-
-func cleanupUnrecordedContainers(created []ownedcontainer.Record) error {
-	cleanup, err := ownedcontainer.Preview(created)
-	if err != nil {
-		return err
-	}
-	_, err = cleanup.Cleanup()
-	return err
-}
-
-func recoveryState(desired, previous corelifecycle.State, previousFound bool, created []ownedcontainer.Record) corelifecycle.State {
-	recovery := desired
-	recovery.InstallStatus = corelifecycle.InstallRecoveryRequired
-	recovery.ManagedSkills = nil
-	if previousFound {
-		for _, skill := range previous.ManagedSkills {
-			link, err := inspectSkillLink(skill)
-			if err == nil && link.status == skillLinkManaged {
-				recovery.ManagedSkills = append(recovery.ManagedSkills, skill)
-			}
-		}
-	}
-	recovery.CreatedContainers = ownedcontainer.Merge(previous.CreatedContainers, created)
-	return recovery
-}
-
-func managedSkillForAction(skills []corelifecycle.ManagedSkill, action PlannedAction) corelifecycle.ManagedSkill {
-	for _, skill := range skills {
-		if skill.LinkPath == action.Path && skill.SourcePath == action.Target {
-			return skill
-		}
-	}
-	panic("install plan symlink has no matching managed skill")
-}
-
-func isEngramSetupAction(action PlannedAction) bool {
-	return filepath.Base(action.Command) == "engram" && len(action.Args) >= 2 && action.Args[0] == "setup"
-}
-
-func missingCanonicalEngramSetupError(action PlannedAction, candidates []string) error {
-	return fmt.Errorf("run %s: canonical Homebrew Engram was not found at any expected Homebrew path (%s); run brew install %s or set HOMEBREW_PREFIX to the active Homebrew prefix, then retry matty install or matty update", strings.Join(append([]string{action.Command}, action.Args...), " "), strings.Join(candidates, ", "), engrambin.Formula)
-}
-
-func actionRunError(action PlannedAction, err error) error {
-	cmd := strings.Join(append([]string{action.Command}, action.Args...), " ")
-	switch {
-	case action.Command == "brew" && len(action.Args) > 0 && action.Args[0] == "install":
-		return fmt.Errorf("run %s: failed to install Engram via Homebrew; ensure Homebrew is installed and retry: %w", cmd, err)
-	case action.Command == "brew" && len(action.Args) > 0 && (action.Args[0] == "update" || action.Args[0] == "upgrade"):
-		return fmt.Errorf("run %s: failed to update Engram via Homebrew; ensure Homebrew is installed and retry: %w", cmd, err)
-	case isEngramSetupAction(action):
-		return fmt.Errorf("run %s: failed to configure Engram for %s through the Homebrew-managed binary; run brew install %s or brew upgrade engram, then retry matty install or matty update: %w", cmd, action.Args[1], engrambin.Formula, err)
-	default:
-		return fmt.Errorf("run %s: %w", cmd, err)
-	}
 }
 
 func ApplyUninstallPlan(_ context.Context, paths Paths, plan Plan) error {

@@ -18,7 +18,10 @@ import (
 
 type Operation string
 
-const Install Operation = "install"
+const (
+	Install Operation = "install"
+	Update  Operation = "update"
+)
 
 type ActionKind string
 
@@ -43,6 +46,7 @@ type ActionView struct {
 }
 
 type Config struct {
+	HomeDir                string
 	ConfigHome             string
 	MattyDir               string
 	StateFile              string
@@ -53,6 +57,9 @@ type Config struct {
 	OpenCodeConfigFile     string
 	OpenCodePromptFile     string
 	HomebrewPrefix         string
+	InstalledSourceRoot    string
+	SkillSourceIsDefault   bool
+	RunningVersion         string
 }
 
 type Commands interface {
@@ -111,8 +118,13 @@ func (plan Plan) Actions() []ActionView {
 func (plan Plan) ManagedSkillCount() int { return len(plan.desired.ManagedSkills) }
 
 func (facade *Facade) Preview(operation Operation) (Plan, error) {
-	if operation != Install {
+	if operation != Install && operation != Update {
 		return Plan{}, fmt.Errorf("preview unsupported core lifecycle operation %q", operation)
+	}
+	if operation == Update {
+		if err := facade.validateUpdateInstalledSource(); err != nil {
+			return Plan{}, err
+		}
 	}
 	if _, _, err := LoadState(facade.config.StateFile); err != nil {
 		return Plan{}, err
@@ -136,8 +148,14 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 			managed = append(managed, managedSkill)
 		}
 	}
-	if !facade.homebrewEngramInstalled() {
+	if operation == Install && !facade.homebrewEngramInstalled() {
 		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRun, Command: "brew", Args: []string{"install", engrambin.Formula}, Description: "install Engram via Homebrew"}})
+	}
+	if operation == Update {
+		actions = append([]plannedAction{
+			{ActionView: ActionView{Kind: ActionRun, Command: "brew", Args: []string{"update"}, Description: "refresh Homebrew formula metadata"}},
+			{ActionView: ActionView{Kind: ActionRun, Command: "brew", Args: []string{"upgrade", "engram"}, Description: "update Engram via Homebrew"}},
+		}, actions...)
 	}
 	engram := engrambin.ExpectedHomebrewPath(facade.config.HomebrewPrefix)
 	actions = append(actions,
@@ -161,9 +179,16 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 // otherwise remains concrete and is exercised in sandbox directories.
 var saveInstallState = SaveState
 
+// saveUpdateState is the focused persistence-failure seam for update recovery.
+var saveUpdateState = SaveState
+
 func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
-	if plan.owner != facade || plan.operation != Install {
+	if plan.owner != facade || (plan.operation != Install && plan.operation != Update) {
 		return Result{}, ErrForeignPlan
+	}
+	saveState := saveInstallState
+	if plan.operation == Update {
+		saveState = saveUpdateState
 	}
 	previous, previousFound, err := LoadState(facade.config.StateFile)
 	if err != nil {
@@ -174,7 +199,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 		return Result{}, err
 	}
 	recovery := facade.recoveryState(plan.desired, previous, previousFound, anchor)
-	if err := saveInstallState(facade.config.StateFile, recovery); err != nil {
+	if err := saveState(facade.config.StateFile, recovery); err != nil {
 		if cleanupErr := cleanupInstallContainers(anchor); cleanupErr != nil {
 			return Result{}, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
 		}
@@ -182,7 +207,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	}
 	created, provisionErr := ownedcontainer.Provision(facade.effectContainerRecords())
 	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
-	if err := saveInstallState(facade.config.StateFile, recovery); err != nil {
+	if err := saveState(facade.config.StateFile, recovery); err != nil {
 		if cleanupErr := cleanupInstallContainers(created); cleanupErr != nil {
 			return Result{}, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
 		}
@@ -205,7 +230,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 				return Result{}, fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
 			}
 			recovery.ManagedSkills = append(recovery.ManagedSkills, managedSkillForInstallAction(plan.desired.ManagedSkills, action))
-			if err := saveInstallState(facade.config.StateFile, recovery); err != nil {
+			if err := saveState(facade.config.StateFile, recovery); err != nil {
 				if removeErr := os.Remove(action.Path); removeErr != nil {
 					return Result{}, fmt.Errorf("%w; roll back unrecorded skill symlink %s: %v", err, action.Path, removeErr)
 				}
@@ -234,7 +259,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 			}
 			if err := facade.commands.Run(ctx, command, action.Args...); err != nil {
 				action.Command = command
-				return Result{}, installActionRunError(action, err)
+				return Result{}, lifecycleActionRunError(action, err)
 			}
 		}
 	}
@@ -244,7 +269,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	}
 	confirmed.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
 	confirmed.InstallStatus = InstallConfirmed
-	if err := saveInstallState(facade.config.StateFile, confirmed); err != nil {
+	if err := saveState(facade.config.StateFile, confirmed); err != nil {
 		return Result{}, err
 	}
 	if warning, ok := unmanagedInstallSymlinkWarning(plan); ok {
@@ -388,11 +413,13 @@ func missingInstallEngramError(action plannedAction, candidates []string) error 
 	return fmt.Errorf("run %s: canonical Homebrew Engram was not found at any expected Homebrew path (%s); run brew install %s or set HOMEBREW_PREFIX to the active Homebrew prefix, then retry matty install or matty update", strings.Join(append([]string{action.Command}, action.Args...), " "), strings.Join(candidates, ", "), engrambin.Formula)
 }
 
-func installActionRunError(action plannedAction, err error) error {
+func lifecycleActionRunError(action plannedAction, err error) error {
 	command := strings.Join(append([]string{action.Command}, action.Args...), " ")
 	switch {
 	case action.Command == "brew" && len(action.Args) > 0 && action.Args[0] == "install":
 		return fmt.Errorf("run %s: failed to install Engram via Homebrew; ensure Homebrew is installed and retry: %w", command, err)
+	case action.Command == "brew" && len(action.Args) > 0 && (action.Args[0] == "update" || action.Args[0] == "upgrade"):
+		return fmt.Errorf("run %s: failed to update Engram via Homebrew; ensure Homebrew is installed and retry: %w", command, err)
 	case isInstallEngramSetup(action):
 		return fmt.Errorf("run %s: failed to configure Engram for %s through the Homebrew-managed binary; run brew install %s or brew upgrade engram, then retry matty install or matty update: %w", command, action.Args[1], engrambin.Formula, err)
 	default:

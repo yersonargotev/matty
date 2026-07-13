@@ -96,8 +96,9 @@ func classicStateConfig(paths Paths) corelifecycle.StateConfig {
 	return corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}
 }
 
-func classicLifecycleConfig(paths Paths) corelifecycle.Config {
+func classicLifecycleConfig(paths Paths, runningVersion string) corelifecycle.Config {
 	return corelifecycle.Config{
+		HomeDir:                paths.HomeDir,
 		ConfigHome:             paths.ConfigHome,
 		MattyDir:               paths.MattyDir,
 		StateFile:              paths.StateFile,
@@ -108,6 +109,9 @@ func classicLifecycleConfig(paths Paths) corelifecycle.Config {
 		OpenCodeConfigFile:     paths.OpenCodeConfigFile,
 		OpenCodePromptFile:     paths.OpenCodePromptFile,
 		HomebrewPrefix:         paths.HomebrewPrefixEnv,
+		InstalledSourceRoot:    paths.InstalledSourceRoot,
+		SkillSourceIsDefault:   paths.SkillSourceIsDefault,
+		RunningVersion:         runningVersion,
 	}
 }
 

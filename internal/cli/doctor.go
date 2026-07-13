@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
@@ -206,7 +205,7 @@ func skillChecks(paths Paths, state corelifecycle.StateObservation) []doctorChec
 
 func zeroManagedSkillsDetail(paths Paths) string {
 	detail := "state has no managed skills; run matty install"
-	plan, err := BuildUpdatePlan(paths, time.Now())
+	plan, err := buildDoctorExpectedSkillPlan(paths)
 	if err != nil {
 		return detail + "; could not inspect expected skill links: " + err.Error()
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -660,13 +659,13 @@ func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 	}
 }
 
-func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing.T) {
+func TestPackageInstalledInstallSuggestsInitWhenSourceMissing(t *testing.T) {
 	home := t.TempDir()
 	chdirTempOutsideRepo(t)
 
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
 	missing := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
-	for _, args := range [][]string{{"install", "--dry-run"}, {"update", "--dry-run"}} {
+	for _, args := range [][]string{{"install", "--dry-run"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			out, err := executeCommand(t, NewRootCommand(opts), args...)
 			if err == nil {
@@ -684,7 +683,7 @@ func TestPackageInstalledInstallAndUpdateSuggestInitWhenSourceMissing(t *testing
 	}
 }
 
-func TestPackageInstalledInstallAndUpdateRejectMalformedSourceBeforeMutation(t *testing.T) {
+func TestPackageInstalledInstallRejectsMalformedSourceBeforeMutation(t *testing.T) {
 	home := t.TempDir()
 	chdirTempOutsideRepo(t)
 	malformed := installedSkillSourceRoot(home)
@@ -701,7 +700,7 @@ func TestPackageInstalledInstallAndUpdateRejectMalformedSourceBeforeMutation(t *
 	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
 	before := snapshotTree(t, home)
-	for _, args := range [][]string{{"install"}, {"update"}} {
+	for _, args := range [][]string{{"install"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			runner.calls = nil
 			out, err := executeCommand(t, NewRootCommand(opts), args...)
@@ -720,112 +719,6 @@ func TestPackageInstalledInstallAndUpdateRejectMalformedSourceBeforeMutation(t *
 				t.Fatalf("malformed source mutated sandbox\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 		})
-	}
-}
-
-func TestPackageInstalledUpdateRejectsStaleDefaultInstalledSource(t *testing.T) {
-	withVersion(t, "v0.2.0")
-	home := t.TempDir()
-	repo := createMattySourceRepo(t)
-	runGitCommand(t, repo, "tag", "v0.1.0")
-	if err := os.WriteFile(filepath.Join(repo, "bundle", "skills", "engineering", "ask-matt", "CHANGELOG.md"), []byte("v0.2.0 only"), 0o600); err != nil {
-		t.Fatalf("write newer source fixture: %v", err)
-	}
-	runGitCommand(t, repo, "add", ".")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "v0.2.0")
-	runGitCommand(t, repo, "tag", "v0.2.0")
-	chdirTempOutsideRepo(t)
-
-	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
-	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
-	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo, "--repository-ref", "v0.1.0")
-	if err != nil {
-		t.Fatalf("init old source failed: %v\n%s", err, out)
-	}
-	before := snapshotTree(t, home)
-
-	for _, args := range [][]string{{"update", "--dry-run"}, {"update"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			runner.calls = nil
-			out, err := executeCommand(t, NewRootCommand(opts), args...)
-			if err == nil {
-				t.Fatalf("expected stale Installed Source error, got output:\n%s", out)
-			}
-			for _, want := range []string{"stale", "v0.2.0", "run matty init"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("error missing %q: %v", want, err)
-				}
-			}
-			if len(runner.calls) != 0 {
-				t.Fatalf("stale update ran external commands: %#v", runner.calls)
-			}
-			if after := snapshotTree(t, home); after != before {
-				t.Fatalf("stale update mutated sandbox home\nbefore:\n%s\nafter:\n%s", before, after)
-			}
-		})
-	}
-}
-
-func TestPackageInstalledUpdateAcceptsSourceAfterInitAlignsReleaseTag(t *testing.T) {
-	withVersion(t, "v0.2.0")
-	home := t.TempDir()
-	repo := createMattySourceRepo(t)
-	runGitCommand(t, repo, "tag", "v0.1.0")
-	chdirTempOutsideRepo(t)
-
-	runner := &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}
-	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: runner}
-	repositoryURL := (&url.URL{Scheme: "file", Path: repo}).String()
-	if out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repositoryURL, "--repository-ref", "v0.1.0"); err != nil {
-		t.Fatalf("init old source failed: %v\n%s", err, out)
-	}
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
-	if got := strings.TrimSpace(runGitCommand(t, sourceRoot, "rev-parse", "--is-shallow-repository")); got != "true" {
-		t.Fatalf("initial Installed Source shallow = %q, want true", got)
-	}
-
-	if err := os.WriteFile(filepath.Join(repo, "bundle", "skills", "engineering", "ask-matt", "CHANGELOG.md"), []byte("v0.2.0 only"), 0o600); err != nil {
-		t.Fatalf("write newer source fixture: %v", err)
-	}
-	runGitCommand(t, repo, "add", ".")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "v0.2.0")
-	runGitCommand(t, repo, "tag", "v0.2.0")
-
-	if out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repositoryURL); err != nil {
-		t.Fatalf("align source with current release failed: %v\n%s", err, out)
-	}
-	got := strings.TrimSpace(runGitCommand(t, sourceRoot, "rev-parse", "--verify", "v0.2.0^{commit}"))
-	want := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "--verify", "v0.2.0^{commit}"))
-	if got != want {
-		t.Fatalf("Installed Source v0.2.0 = %s, want %s", got, want)
-	}
-	if out, err := executeCommand(t, NewRootCommand(opts), "update", "--dry-run"); err != nil {
-		t.Fatalf("update --dry-run after init failed: %v\n%s", err, out)
-	}
-}
-
-func TestUpdateSkipsReleaseRefValidationForConfiguredSkillSource(t *testing.T) {
-	withVersion(t, "v0.2.0")
-	opts, runner, home := sandboxOptions(t)
-	out, err := executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	before := snapshotTree(t, home)
-	runner.calls = nil
-
-	out, err = executeCommand(t, NewRootCommand(opts), "update", "--dry-run")
-	if err != nil {
-		t.Fatalf("update --dry-run with MATTY_SKILLS_SOURCE failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "matty update dry-run: planned actions") {
-		t.Fatalf("update --dry-run did not report plan:\n%s", out)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("update --dry-run executed external commands: %#v", runner.calls)
-	}
-	if after := snapshotTree(t, home); after != before {
-		t.Fatalf("update --dry-run mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
 
@@ -1653,18 +1546,6 @@ func readSkillLinks(t *testing.T, paths Paths) []string {
 	return links
 }
 
-func TestUpdateRunsEngramHomebrewUpdateAndSetup(t *testing.T) {
-	opts, runner, _ := sandboxOptions(t)
-	out, err := executeCommand(t, NewRootCommand(opts), "update")
-	if err != nil {
-		t.Fatalf("update failed: %v\n%s", err, out)
-	}
-	want := engramUpdateCallStrings(t, opts)
-	if got := callStrings(runner.calls); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("runner calls = %#v, want %#v", got, want)
-	}
-}
-
 func TestInterruptedInstallIsExplicitAndDoctorReportsSafeRecovery(t *testing.T) {
 	opts, runner, _ := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)
@@ -2080,67 +1961,5 @@ func TestUninstallFromInterruptedInstallUsesOnlyVerifiedOwnership(t *testing.T) 
 	}
 	if exists(filepath.Join(paths.AgentSkillsDir, "wayfinder")) {
 		t.Fatal("partial uninstall left verified owned symlink")
-	}
-}
-
-func TestFinalUpdateStateCommitFailureLeavesRecoverableState(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalPersist := persistUpdateState
-	t.Cleanup(func() { persistUpdateState = originalPersist })
-	persistUpdateState = func(path string, state corelifecycle.State) error {
-		if state.InstallStatus == corelifecycle.InstallConfirmed {
-			return errors.New("final commit interrupted")
-		}
-		return corelifecycle.SaveState(path, state)
-	}
-	if out, err := executeCommand(t, NewRootCommand(opts), "update"); err == nil {
-		t.Fatalf("update unexpectedly succeeded:\n%s", out)
-	}
-	state, found, err := corelifecycle.LoadState(paths.StateFile)
-	if err != nil || !found || !state.RecoveryRequired() {
-		t.Fatalf("state = %#v found %v err %v", state, found, err)
-	}
-}
-
-func TestUpdateStatePreparationFailureLeavesNoLocalWrites(t *testing.T) {
-	opts, _, home := sandboxOptions(t)
-	originalPersist := persistUpdateState
-	t.Cleanup(func() { persistUpdateState = originalPersist })
-	persistUpdateState = func(string, corelifecycle.State) error { return errors.New("preparation interrupted") }
-	if out, err := executeCommand(t, NewRootCommand(opts), "update"); err == nil {
-		t.Fatalf("update unexpectedly succeeded:\n%s", out)
-	}
-	if got := snapshotTree(t, home); strings.Count(strings.TrimSpace(got), "\n") != 0 {
-		t.Fatalf("preparation failure left local writes:\n%s", got)
-	}
-}
-
-func TestUpdateSymlinkOwnershipPersistenceFailureRollsBackUnrecordedLink(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalPersist := persistUpdateState
-	t.Cleanup(func() { persistUpdateState = originalPersist })
-	persistUpdateState = func(path string, state corelifecycle.State) error {
-		if state.RecoveryRequired() && len(state.ManagedSkills) == 1 {
-			return errors.New("ownership persistence interrupted")
-		}
-		return corelifecycle.SaveState(path, state)
-	}
-	if out, err := executeCommand(t, NewRootCommand(opts), "update"); err == nil {
-		t.Fatalf("update unexpectedly succeeded:\n%s", out)
-	}
-	if exists(filepath.Join(paths.AgentSkillsDir, "ask-matt")) {
-		t.Fatal("unrecorded symlink was not rolled back")
-	}
-	state, found, err := corelifecycle.LoadState(paths.StateFile)
-	if err != nil || !found || !state.RecoveryRequired() || len(state.ManagedSkills) != 0 {
-		t.Fatalf("state = %#v found %v err %v", state, found, err)
 	}
 }
