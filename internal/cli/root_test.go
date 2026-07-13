@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/ownedcontainer"
 	"github.com/yersonargotev/matty/internal/skillbundle"
@@ -968,14 +969,14 @@ func TestInstallWritesSmallStateAndRunsEngramSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePaths failed: %v", err)
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil {
 		t.Fatalf("LoadState failed: %v", err)
 	}
 	if !found {
 		t.Fatal("expected state file to be written")
 	}
-	if state.SchemaVersion != stateSchemaVersion || state.MattyVersion != mattyversion.Value {
+	if state.SchemaVersion != corelifecycle.SchemaVersion || state.MattyVersion != mattyversion.Value {
 		t.Fatalf("unexpected state metadata: %#v", state)
 	}
 	if got, want := state.ConfiguredSurfaces, []string{"codex", "opencode"}; strings.Join(got, ",") != strings.Join(want, ",") {
@@ -1067,8 +1068,8 @@ func TestDoctorWarnsWhenNullManagedSkillsHaveExpectedUnmanagedSymlinks(t *testin
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	state := DesiredState(paths, fixedTestTime(), nil)
-	if err := SaveState(paths.StateFile, state); err != nil {
+	state := corelifecycle.DesiredState(classicStateConfig(paths), fixedTestTime(), nil)
+	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
 		t.Fatalf("SaveState failed: %v", err)
 	}
 	before := snapshotTree(t, home)
@@ -1199,9 +1200,9 @@ func TestDoctorReportsIncompleteEngramSetupExpectationsAsFailedCheck(t *testing.
 	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	state := DesiredState(paths, fixedTestTime(), nil)
+	state := corelifecycle.DesiredState(classicStateConfig(paths), fixedTestTime(), nil)
 	state.ConfiguredSurfaces = []string{"codex"}
-	if err := SaveState(paths.StateFile, state); err != nil {
+	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
 		t.Fatalf("SaveState failed: %v", err)
 	}
 
@@ -1236,7 +1237,7 @@ func TestDoctorReportsOpenCodeInspectErrorsUnderConfigCheck(t *testing.T) {
 	}
 }
 
-func hasManagedSkill(state State, name string) bool {
+func hasManagedSkill(state corelifecycle.State, name string) bool {
 	for _, skill := range state.ManagedSkills {
 		if skill.Name == name {
 			return true
@@ -1300,7 +1301,7 @@ func TestInstallPreservesUnmanagedPaths(t *testing.T) {
 		t.Fatalf("unmanaged symlink target = %q, %v; want %q", gotTarget, err, otherTarget)
 	}
 
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found {
 		t.Fatalf("LoadState = found %v err %v", found, err)
 	}
@@ -1335,7 +1336,7 @@ func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 			t.Fatalf("install output missing %q:\n%s", want, out)
 		}
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found {
 		t.Fatalf("LoadState = found %v err %v", found, err)
 	}
@@ -1536,7 +1537,7 @@ func TestApplyUninstallRejectsContainerChangeAfterPreviewWithoutRemovingArtifact
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err != nil {
 		t.Fatalf("install failed: %v\n%s", err, out)
 	}
-	state, _, err := LoadState(paths.StateFile)
+	state, _, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1566,7 +1567,7 @@ func TestUninstallDoesNotTrustContainerPathsOutsideCurrentMattyAllowlist(t *test
 	if err := os.Mkdir(outside, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	state := DesiredState(paths, time.Now(), nil)
+	state := corelifecycle.DesiredState(classicStateConfig(paths), time.Now(), nil)
 	state.CreatedContainers = []ownedcontainer.Record{{Path: outside, Kind: ownedcontainer.Directory}}
 	plan := BuildUninstallPlan(paths, state)
 	if err := ApplyUninstallPlan(context.Background(), paths, plan); err != nil {
@@ -1807,7 +1808,7 @@ func TestInterruptedInstallIsExplicitAndDoctorReportsSafeRecovery(t *testing.T) 
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found {
 		t.Fatalf("LoadState = found %v err %v", found, err)
 	}
@@ -2203,11 +2204,11 @@ func TestInterruptedInstallConvergesWithoutAdoptingConflict(t *testing.T) {
 	if out, err := executeCommand(t, NewRootCommand(opts), "update"); err != nil {
 		t.Fatalf("update recovery failed: %v\n%s", err, out)
 	}
-	state, _, err := LoadState(paths.StateFile)
+	state, _, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.RecoveryRequired() || state.InstallStatus != InstallConfirmed {
+	if state.RecoveryRequired() || state.InstallStatus != corelifecycle.InstallConfirmed {
 		t.Fatalf("recovered status = %q", state.InstallStatus)
 	}
 	for _, skill := range state.ManagedSkills {
@@ -2263,22 +2264,18 @@ func TestFinalStateCommitFailureLeavesRecoverableState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalPublish := publishStateTemp
-	t.Cleanup(func() { publishStateTemp = originalPublish })
-	publishStateTemp = func(oldPath, newPath string) error {
-		data, err := os.ReadFile(oldPath)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(string(data), `"install_status": "confirmed"`) {
+	originalPersist := persistClassicState
+	t.Cleanup(func() { persistClassicState = originalPersist })
+	persistClassicState = func(path string, state corelifecycle.State) error {
+		if state.InstallStatus == corelifecycle.InstallConfirmed {
 			return errors.New("final commit interrupted")
 		}
-		return os.Rename(oldPath, newPath)
+		return corelifecycle.SaveState(path, state)
 	}
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found || !state.RecoveryRequired() {
 		t.Fatalf("state = %#v found %v err %v", state, found, err)
 	}
@@ -2286,9 +2283,9 @@ func TestFinalStateCommitFailureLeavesRecoverableState(t *testing.T) {
 
 func TestStatePreparationFailureLeavesNoLocalWrites(t *testing.T) {
 	opts, _, home := sandboxOptions(t)
-	originalPublish := publishStateTemp
-	t.Cleanup(func() { publishStateTemp = originalPublish })
-	publishStateTemp = func(_, _ string) error { return errors.New("preparation interrupted") }
+	originalPersist := persistClassicState
+	t.Cleanup(func() { persistClassicState = originalPersist })
+	persistClassicState = func(string, corelifecycle.State) error { return errors.New("preparation interrupted") }
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
 	}
@@ -2310,7 +2307,7 @@ func TestPartialContainerProvisionFailureKeepsRecoveryEvidence(t *testing.T) {
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found || !state.RecoveryRequired() {
 		t.Fatalf("state = %#v found %v err %v", state, found, err)
 	}
@@ -2325,21 +2322,13 @@ func TestSymlinkOwnershipPersistenceFailureRollsBackUnrecordedLink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalPublish := publishStateTemp
-	t.Cleanup(func() { publishStateTemp = originalPublish })
-	partialPublications := 0
-	publishStateTemp = func(oldPath, newPath string) error {
-		data, err := os.ReadFile(oldPath)
-		if err != nil {
-			return err
+	originalPersist := persistClassicState
+	t.Cleanup(func() { persistClassicState = originalPersist })
+	persistClassicState = func(path string, state corelifecycle.State) error {
+		if state.RecoveryRequired() && len(state.ManagedSkills) == 1 {
+			return errors.New("ownership persistence interrupted")
 		}
-		if strings.Contains(string(data), `"install_status": "recovery-required"`) {
-			partialPublications++
-			if partialPublications == 2 {
-				return errors.New("ownership persistence interrupted")
-			}
-		}
-		return os.Rename(oldPath, newPath)
+		return corelifecycle.SaveState(path, state)
 	}
 	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
@@ -2347,7 +2336,7 @@ func TestSymlinkOwnershipPersistenceFailureRollsBackUnrecordedLink(t *testing.T)
 	if exists(filepath.Join(paths.AgentSkillsDir, "ask-matt")) {
 		t.Fatal("unrecorded symlink was not rolled back")
 	}
-	state, found, err := LoadState(paths.StateFile)
+	state, found, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil || !found || !state.RecoveryRequired() || len(state.ManagedSkills) != 0 {
 		t.Fatalf("state = %#v found %v err %v", state, found, err)
 	}

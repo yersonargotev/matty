@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 )
 
@@ -89,6 +90,10 @@ func ResolvePaths(env Env) (Paths, error) {
 
 func (p Paths) SkillLinkPath(name string) string {
 	return filepath.Join(p.AgentSkillsDir, name)
+}
+
+func classicStateConfig(paths Paths) corelifecycle.StateConfig {
+	return corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}
 }
 
 func resolveSkillSourceRoot(env Env, installedSourceRoot string) (SkillSource, error) {

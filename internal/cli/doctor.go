@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/prompt"
@@ -77,14 +78,10 @@ func BuildDoctorReport(paths Paths, runner Runner) DoctorReport {
 }
 
 func buildDoctorReport(paths Paths, runner Runner, facts engrambin.Facts) DoctorReport {
-	state, stateFound, err := LoadState(paths.StateFile)
-	if err != nil {
-		state = State{}
-		stateFound = false
-	}
-	checks := []doctorCheck{stateCheck(paths, state, stateFound, err)}
-	checks = append(checks, skillChecks(paths, state, stateFound)...)
-	checks = append(checks, engramChecks(runner, paths, state, stateFound, facts.WithDefaults())...)
+	state := corelifecycle.ObserveState(paths.StateFile)
+	checks := []doctorCheck{stateCheck(paths, state)}
+	checks = append(checks, skillChecks(paths, state)...)
+	checks = append(checks, engramChecks(runner, paths, state, facts.WithDefaults())...)
 	checks = append(checks, codexChecks(paths)...)
 	openCodeChecks, openCodeErr := openCodeChecks(paths)
 	if openCodeErr != nil {
@@ -109,7 +106,7 @@ func buildDoctorReport(paths Paths, runner Runner, facts engrambin.Facts) Doctor
 		summary.Status = "warnings"
 	}
 	stateStatus := "missing"
-	if stateFound {
+	if state.Found() {
 		stateStatus = "present"
 	}
 	return DoctorReport{SchemaVersion: 1, Report: "doctor", Checks: checks, Summary: summary, header: doctorHeader{paths.HomeDir, paths.ConfigHome, paths.StateFile, stateStatus, paths.AgentSkillsDir}}
@@ -151,28 +148,29 @@ func RunDoctor(w io.Writer, paths Paths, runner Runner) error {
 	return report.HealthError()
 }
 
-func stateCheck(paths Paths, state State, found bool, loadErr error) doctorCheck {
-	if loadErr != nil {
-		return doctorCheck{status: doctorFail, name: "matty-state", detail: loadErr.Error() + "; inspect or remove the corrupt state, then run matty install"}
+func stateCheck(paths Paths, state corelifecycle.StateObservation) doctorCheck {
+	if state.Condition() == corelifecycle.StateCorrupt {
+		return doctorCheck{status: doctorFail, name: "matty-state", detail: state.Err().Error() + "; inspect or remove the corrupt state, then run matty install"}
 	}
-	if !found {
+	if state.Condition() == corelifecycle.StateMissing {
 		return doctorCheck{status: doctorWarn, name: "matty-state", detail: "missing at " + paths.StateFile + "; run matty install"}
 	}
-	if state.RecoveryRequired() {
+	if state.Condition() == corelifecycle.StateRecoveryRequired {
 		return doctorCheck{status: doctorFail, name: "matty-state", detail: "classic installation was interrupted and requires recovery; run matty install or matty update to retry safely, or matty uninstall to remove only verified Matty-owned artifacts"}
 	}
 	return doctorCheck{status: doctorPass, name: "matty-state", detail: "present at " + paths.StateFile}
 }
 
-func skillChecks(paths Paths, state State, stateFound bool) []doctorCheck {
-	if !stateFound {
+func skillChecks(paths Paths, state corelifecycle.StateObservation) []doctorCheck {
+	if !state.Found() {
 		return []doctorCheck{{status: doctorWarn, name: "skill-symlinks", detail: "state is missing, so Matty-owned skill links are unknown; run matty install"}}
 	}
-	if len(state.ManagedSkills) == 0 {
+	managedSkills := state.Ownership().ManagedSkills
+	if len(managedSkills) == 0 {
 		return []doctorCheck{{status: doctorWarn, name: "skill-symlinks", detail: zeroManagedSkillsDetail(paths)}}
 	}
 	var missing, changed []string
-	for _, skill := range state.ManagedSkills {
+	for _, skill := range managedSkills {
 		link, err := inspectSkillLink(skill)
 		if err != nil {
 			changed = append(changed, fmt.Sprintf("%s (%v)", skill.Name, err))
@@ -194,7 +192,7 @@ func skillChecks(paths Paths, state State, stateFound bool) []doctorCheck {
 		}
 	}
 	if len(missing) == 0 && len(changed) == 0 {
-		return []doctorCheck{{status: doctorPass, name: "skill-symlinks", detail: fmt.Sprintf("%d managed links under %s", len(state.ManagedSkills), paths.AgentSkillsDir)}}
+		return []doctorCheck{{status: doctorPass, name: "skill-symlinks", detail: fmt.Sprintf("%d managed links under %s", len(managedSkills), paths.AgentSkillsDir)}}
 	}
 	detail := "managed skill links need repair"
 	if len(missing) > 0 {
@@ -219,15 +217,16 @@ func zeroManagedSkillsDetail(paths Paths) string {
 	return fmt.Sprintf("state has no managed skills, but %d expected skill symlinks are unmanaged by current Matty state; setup may be incomplete. Example: %s -> %s. %s", summary.count, summary.example.Path, summary.example.Target, unmanagedSymlinkRecoveryAdvice())
 }
 
-func engramChecks(runner Runner, paths Paths, state State, stateFound bool, facts engrambin.Facts) []doctorCheck {
+func engramChecks(runner Runner, paths Paths, state corelifecycle.StateObservation, facts engrambin.Facts) []doctorCheck {
 	checks := engramBinaryChecks(runner, paths, facts)
 	canonical := engrambin.DiscoverHomebrew(paths.HomebrewPrefixEnv)
 	checks = append(checks, engramRuntimeChecks(canonical, pathEngramExecutable(runner, canonical), facts)...)
-	if !stateFound {
+	if !state.Found() {
 		checks = append(checks, doctorCheck{status: doctorWarn, name: "engram-setup", detail: "state is missing, so delegated setup cannot be confirmed; run matty install"})
 		return checks
 	}
-	if hasSurface(state, "codex") && hasSurface(state, "opencode") {
+	configuredSurfaces := state.ConfiguredSurfaces()
+	if hasSurface(configuredSurfaces, "codex") && hasSurface(configuredSurfaces, "opencode") {
 		checks = append(checks, doctorCheck{status: doctorPass, name: "engram-setup", detail: "state records Codex and OpenCode setup expectations; run matty update if Engram setup drifted"})
 	} else {
 		checks = append(checks, doctorCheck{status: doctorFail, name: "engram-setup", detail: "state does not record both Codex and OpenCode setup expectations; run matty update"})
@@ -389,8 +388,8 @@ func engramRuntimeCheckForProcess(process engrambin.Process, canonical *engrambi
 	return doctorCheck{status: doctorWarn, name: "engram-runtime", detail: detail + "; " + strings.Join(diagnosis.Problems, "; ") + "; " + diagnosis.Remediation}
 }
 
-func hasSurface(state State, want string) bool {
-	for _, surface := range state.ConfiguredSurfaces {
+func hasSurface(configuredSurfaces []string, want string) bool {
+	for _, surface := range configuredSurfaces {
 		if surface == want {
 			return true
 		}

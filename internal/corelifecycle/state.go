@@ -1,4 +1,4 @@
-package cli
+package corelifecycle
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 	mattyversion "github.com/yersonargotev/matty/internal/version"
 )
 
-const stateSchemaVersion = 1
+const SchemaVersion = 1
 
 type InstallStatus string
 
@@ -57,6 +57,13 @@ type StatePaths struct {
 	AgentSkillsDir string `json:"agent_skills_dir"`
 }
 
+// StateConfig contains the resolved paths needed to derive classic desired
+// state without transferring workstation path resolution into this package.
+type StateConfig struct {
+	StateFile      string
+	AgentSkillsDir string
+}
+
 // LoadState reads Matty state. Missing state is a safe default; corrupt state is
 // returned as a clear error because applying changes from unknown ownership data
 // would be unsafe.
@@ -73,7 +80,7 @@ func LoadState(path string) (State, bool, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, false, fmt.Errorf("read Matty state %s: invalid JSON: %w", path, err)
 	}
-	if state.SchemaVersion != stateSchemaVersion {
+	if state.SchemaVersion != SchemaVersion {
 		return State{}, false, fmt.Errorf("read Matty state %s: unsupported schema_version %d", path, state.SchemaVersion)
 	}
 	return state, true, nil
@@ -112,15 +119,15 @@ func SaveState(path string, state State) error {
 	return nil
 }
 
-func DesiredState(paths Paths, checkedAt time.Time, managedSkills []ManagedSkill) State {
+func DesiredState(config StateConfig, checkedAt time.Time, managedSkills []ManagedSkill) State {
 	return State{
-		SchemaVersion:      stateSchemaVersion,
+		SchemaVersion:      SchemaVersion,
 		MattyVersion:       mattyversion.Value,
 		ManagedSkills:      append([]ManagedSkill(nil), managedSkills...),
 		ConfiguredSurfaces: append([]string(nil), defaultConfiguredSurfaces...),
 		Paths: StatePaths{
-			StateFile:      paths.StateFile,
-			AgentSkillsDir: paths.AgentSkillsDir,
+			StateFile:      config.StateFile,
+			AgentSkillsDir: config.AgentSkillsDir,
 		},
 		LastInstallCheck: checkedAt.UTC().Format(time.RFC3339),
 		InstallStatus:    InstallConfirmed,
@@ -129,4 +136,61 @@ func DesiredState(paths Paths, checkedAt time.Time, managedSkills []ManagedSkill
 
 func (state State) RecoveryRequired() bool {
 	return state.InstallStatus == InstallRecoveryRequired
+}
+
+type StateCondition string
+
+const (
+	StateMissing          StateCondition = "missing"
+	StateValid            StateCondition = "valid"
+	StateCorrupt          StateCondition = "corrupt"
+	StateRecoveryRequired StateCondition = "recovery-required"
+)
+
+// RecordedOwnership is the deletion authority recorded by classic state.
+type RecordedOwnership struct {
+	ManagedSkills     []ManagedSkill
+	CreatedContainers []ownedcontainer.Record
+}
+
+// StateObservation exposes read-only classic state facts without exposing the
+// persistence implementation.
+type StateObservation struct {
+	condition StateCondition
+	state     State
+	err       error
+}
+
+func ObserveState(path string) StateObservation {
+	state, found, err := LoadState(path)
+	if err != nil {
+		return StateObservation{condition: StateCorrupt, err: err}
+	}
+	if !found {
+		return StateObservation{condition: StateMissing}
+	}
+	condition := StateValid
+	if state.RecoveryRequired() {
+		condition = StateRecoveryRequired
+	}
+	return StateObservation{condition: condition, state: state}
+}
+
+func (observation StateObservation) Condition() StateCondition { return observation.condition }
+
+func (observation StateObservation) Found() bool {
+	return observation.condition == StateValid || observation.condition == StateRecoveryRequired
+}
+
+func (observation StateObservation) Err() error { return observation.err }
+
+func (observation StateObservation) Ownership() RecordedOwnership {
+	return RecordedOwnership{
+		ManagedSkills:     append([]ManagedSkill(nil), observation.state.ManagedSkills...),
+		CreatedContainers: append([]ownedcontainer.Record(nil), observation.state.CreatedContainers...),
+	}
+}
+
+func (observation StateObservation) ConfiguredSurfaces() []string {
+	return append([]string(nil), observation.state.ConfiguredSurfaces...)
 }

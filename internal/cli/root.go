@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/matty/internal/bootstrap"
 	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/skillbundle"
 	mattyversion "github.com/yersonargotev/matty/internal/version"
@@ -161,7 +162,7 @@ func newInstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, _, err := LoadState(paths.StateFile); err != nil {
+			if _, _, err := corelifecycle.LoadState(paths.StateFile); err != nil {
 				return err
 			}
 
@@ -232,7 +233,7 @@ func newUpdateCommand(opts Options) *cobra.Command {
 			if err := validateUpdateInstalledSource(paths); err != nil {
 				return err
 			}
-			if _, _, err := LoadState(paths.StateFile); err != nil {
+			if _, _, err := corelifecycle.LoadState(paths.StateFile); err != nil {
 				return err
 			}
 			plan, err := BuildUpdatePlan(paths, time.Now())
@@ -335,7 +336,7 @@ func newUninstallCommand(opts Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, _, err := LoadState(paths.StateFile)
+			state, _, err := corelifecycle.LoadState(paths.StateFile)
 			if err != nil {
 				return err
 			}

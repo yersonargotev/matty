@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/ownedcontainer"
@@ -70,7 +71,7 @@ type PlannedAction struct {
 
 type Plan struct {
 	Actions []PlannedAction
-	State   State
+	State   corelifecycle.State
 	cleanup ownedcontainer.Plan
 }
 
@@ -83,7 +84,7 @@ func BuildInstallPlan(paths Paths, checkedAt time.Time, engramInstalled bool) (P
 	actions := []PlannedAction{
 		{Kind: ActionWriteFile, Path: paths.StateFile, Description: "persist Matty state metadata"},
 	}
-	managed := make([]ManagedSkill, 0, len(discovered))
+	managed := make([]corelifecycle.ManagedSkill, 0, len(discovered))
 	for _, skill := range discovered {
 		status, err := plannedSkillLinkAction(skill)
 		if err != nil {
@@ -101,7 +102,7 @@ func BuildInstallPlan(paths Paths, checkedAt time.Time, engramInstalled bool) (P
 	}
 	actions = append(actions, engramSetupActions(paths)...)
 	actions = append(actions, codexPromptWriteAction(paths), openCodePromptWriteAction(paths))
-	return Plan{Actions: actions, State: DesiredState(paths, checkedAt, managed)}, nil
+	return Plan{Actions: actions, State: corelifecycle.DesiredState(classicStateConfig(paths), checkedAt, managed)}, nil
 }
 
 func BuildUpdatePlan(paths Paths, checkedAt time.Time) (Plan, error) {
@@ -140,7 +141,7 @@ func engramSetupActions(paths Paths) []PlannedAction {
 	}
 }
 
-func plannedSkillLinkAction(skill ManagedSkill) (PlannedAction, error) {
+func plannedSkillLinkAction(skill corelifecycle.ManagedSkill) (PlannedAction, error) {
 	link, err := inspectSkillLink(skill)
 	if err != nil {
 		return PlannedAction{}, err
@@ -172,44 +173,44 @@ type skillLinkDoctorProblem struct {
 }
 
 type skillLinkBehavior struct {
-	plannedAction func(ManagedSkill, skillLinkInspection) PlannedAction
-	doctorProblem func(ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool)
+	plannedAction func(corelifecycle.ManagedSkill, skillLinkInspection) PlannedAction
+	doctorProblem func(corelifecycle.ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool)
 }
 
 var skillLinkBehaviors = map[skillLinkStatus]skillLinkBehavior{
 	skillLinkMissing: {
-		plannedAction: func(skill ManagedSkill, _ skillLinkInspection) PlannedAction {
+		plannedAction: func(skill corelifecycle.ManagedSkill, _ skillLinkInspection) PlannedAction {
 			return PlannedAction{Kind: ActionSymlink, Path: skill.LinkPath, Target: skill.SourcePath, Description: "link managed skill " + skill.Name}
 		},
-		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+		doctorProblem: func(skill corelifecycle.ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
 			return skillLinkDoctorProblem{missing: true, detail: skill.Name}, true
 		},
 	},
 	skillLinkManaged: {
-		plannedAction: func(ManagedSkill, skillLinkInspection) PlannedAction { return PlannedAction{} },
-		doctorProblem: func(ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool) {
+		plannedAction: func(corelifecycle.ManagedSkill, skillLinkInspection) PlannedAction { return PlannedAction{} },
+		doctorProblem: func(corelifecycle.ManagedSkill, skillLinkInspection) (skillLinkDoctorProblem, bool) {
 			return skillLinkDoctorProblem{}, false
 		},
 	},
 	skillLinkUnmanagedPath: {
-		plannedAction: func(skill ManagedSkill, _ skillLinkInspection) PlannedAction {
+		plannedAction: func(skill corelifecycle.ManagedSkill, _ skillLinkInspection) PlannedAction {
 			return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: skill.SourcePath, Description: "preserve unmanaged path for skill " + skill.Name, skipReason: skillLinkUnmanagedPath}
 		},
-		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+		doctorProblem: func(skill corelifecycle.ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
 			return skillLinkDoctorProblem{detail: skill.Name + " is not a symlink"}, true
 		},
 	},
 	skillLinkUnmanagedSymlink: {
-		plannedAction: func(skill ManagedSkill, link skillLinkInspection) PlannedAction {
+		plannedAction: func(skill corelifecycle.ManagedSkill, link skillLinkInspection) PlannedAction {
 			return PlannedAction{Kind: ActionSkip, Path: skill.LinkPath, Target: link.target, Description: "preserve unmanaged symlink for skill " + skill.Name, skipReason: skillLinkUnmanagedSymlink}
 		},
-		doctorProblem: func(skill ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
+		doctorProblem: func(skill corelifecycle.ManagedSkill, _ skillLinkInspection) (skillLinkDoctorProblem, bool) {
 			return skillLinkDoctorProblem{detail: skill.Name}, true
 		},
 	},
 }
 
-func inspectSkillLink(skill ManagedSkill) (skillLinkInspection, error) {
+func inspectSkillLink(skill corelifecycle.ManagedSkill) (skillLinkInspection, error) {
 	info, err := os.Lstat(skill.LinkPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -242,7 +243,7 @@ func sameSymlinkTarget(linkPath, gotTarget, wantTarget string) bool {
 	return gotErr == nil && wantErr == nil && gotAbs == wantAbs
 }
 
-func BuildUninstallPlan(paths Paths, state State) Plan {
+func BuildUninstallPlan(paths Paths, state corelifecycle.State) Plan {
 	actions := make([]PlannedAction, 0, len(state.ManagedSkills)+1)
 	for _, skill := range state.ManagedSkills {
 		link, err := inspectSkillLink(skill)
@@ -260,7 +261,7 @@ func BuildUninstallPlan(paths Paths, state State) Plan {
 	return Plan{Actions: actions, State: state, cleanup: cleanup}
 }
 
-func UninstallPlanHasWork(paths Paths, state State) bool {
+func UninstallPlanHasWork(paths Paths, state corelifecycle.State) bool {
 	if pathExists(paths.StateFile) {
 		return true
 	}
@@ -341,8 +342,12 @@ func unmanagedSymlinkRecoveryAdvice() string {
 	return "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
 }
 
+// persistClassicState remains injectable while the CLI owns operation
+// sequencing. The install-facade slice moves this seam into corelifecycle.
+var persistClassicState = corelifecycle.SaveState
+
 func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner) ([]string, error) {
-	previous, previousFound, err := LoadState(paths.StateFile)
+	previous, previousFound, err := corelifecycle.LoadState(paths.StateFile)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +356,7 @@ func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner
 		return nil, err
 	}
 	recovery := recoveryState(plan.State, previous, previousFound, anchor)
-	if err := SaveState(paths.StateFile, recovery); err != nil {
+	if err := persistClassicState(paths.StateFile, recovery); err != nil {
 		if cleanupErr := cleanupUnrecordedContainers(anchor); cleanupErr != nil {
 			return nil, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
 		}
@@ -359,7 +364,7 @@ func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner
 	}
 	created, provisionErr := ownedcontainer.Provision(effectContainerRecords(paths))
 	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
-	if err := SaveState(paths.StateFile, recovery); err != nil {
+	if err := persistClassicState(paths.StateFile, recovery); err != nil {
 		if cleanupErr := cleanupUnrecordedContainers(created); cleanupErr != nil {
 			return nil, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
 		}
@@ -382,7 +387,7 @@ func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner
 				return nil, fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
 			}
 			recovery.ManagedSkills = append(recovery.ManagedSkills, managedSkillForAction(plan.State.ManagedSkills, action))
-			if err := SaveState(paths.StateFile, recovery); err != nil {
+			if err := persistClassicState(paths.StateFile, recovery); err != nil {
 				if removeErr := os.Remove(action.Path); removeErr != nil {
 					return nil, fmt.Errorf("%w; roll back unrecorded skill symlink %s: %v", err, action.Path, removeErr)
 				}
@@ -414,11 +419,11 @@ func ApplyInstallPlan(ctx context.Context, paths Paths, plan Plan, runner Runner
 		}
 	}
 	if previous.RecoveryRequired() {
-		plan.State.ManagedSkills = append([]ManagedSkill(nil), recovery.ManagedSkills...)
+		plan.State.ManagedSkills = append([]corelifecycle.ManagedSkill(nil), recovery.ManagedSkills...)
 	}
 	plan.State.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
-	plan.State.InstallStatus = InstallConfirmed
-	if err := SaveState(paths.StateFile, plan.State); err != nil {
+	plan.State.InstallStatus = corelifecycle.InstallConfirmed
+	if err := persistClassicState(paths.StateFile, plan.State); err != nil {
 		return nil, err
 	}
 	return warnings, nil
@@ -462,9 +467,9 @@ func cleanupUnrecordedContainers(created []ownedcontainer.Record) error {
 	return err
 }
 
-func recoveryState(desired, previous State, previousFound bool, created []ownedcontainer.Record) State {
+func recoveryState(desired, previous corelifecycle.State, previousFound bool, created []ownedcontainer.Record) corelifecycle.State {
 	recovery := desired
-	recovery.InstallStatus = InstallRecoveryRequired
+	recovery.InstallStatus = corelifecycle.InstallRecoveryRequired
 	recovery.ManagedSkills = nil
 	if previousFound {
 		for _, skill := range previous.ManagedSkills {
@@ -478,7 +483,7 @@ func recoveryState(desired, previous State, previousFound bool, created []ownedc
 	return recovery
 }
 
-func managedSkillForAction(skills []ManagedSkill, action PlannedAction) ManagedSkill {
+func managedSkillForAction(skills []corelifecycle.ManagedSkill, action PlannedAction) corelifecycle.ManagedSkill {
 	for _, skill := range skills {
 		if skill.LinkPath == action.Path && skill.SourcePath == action.Target {
 			return skill

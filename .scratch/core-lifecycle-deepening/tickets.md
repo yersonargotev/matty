@@ -9,7 +9,7 @@ between tickets and use `/implement` for one frontier ticket at a time.
 
 | # | Ticket | Blocked by | Status |
 | --- | --- | --- | --- |
-| 01 | [Move classic state behind lifecycle ownership](tickets/01-move-classic-state-behind-lifecycle-ownership.md) | None | ready-for-agent |
+| 01 | [Move classic state behind lifecycle ownership](tickets/01-move-classic-state-behind-lifecycle-ownership.md) | None | resolved |
 | 02 | [Route install through the lifecycle facade](tickets/02-route-install-through-lifecycle-facade.md) | 01 | ready-for-agent |
 | 03 | [Route update through the lifecycle facade](tickets/03-route-update-through-lifecycle-facade.md) | 02 | ready-for-agent |
 | 04 | [Route uninstall through the lifecycle facade](tickets/04-route-uninstall-through-lifecycle-facade.md) | 01 | ready-for-agent |
