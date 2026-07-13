@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 # Contract the CLI health adapter and verify the architecture
@@ -33,3 +33,26 @@ adapter suite.
 - New health behavior, schema versions, commands, flags, or repair operations.
 - Capability-pack status integration or workstation path redesign.
 - Opportunistic cleanup outside the setup health ownership refactor.
+
+
+## Answer
+
+Removed the obsolete CLI-owned doctor report model, summary, builders, domain
+classifiers, remediation and ordering policy, and their private-helper tests.
+The command now has one production route through
+`setuphealth.New(...).Diagnose(config) -> Report`; `internal/cli` only adapts
+resolved paths, renders human and JSON v1 output, propagates writer failures,
+maps report failures to `ErrDoctorUnhealthy`, and wires Cobra.
+
+Policy-heavy CLI scenarios were deleted in favor of the existing
+`internal/setuphealth` report-level semantic matrix. CLI coverage now consists
+of focused adapter tests, command wiring/configuration checks, the sandboxed
+read-only baseline, and the exact ticket-01 human/JSON/exit contract. A setup
+health architecture deletion test proves the former files and symbols are gone,
+no domain observation or diagnosis policy has moved into CLI production or test
+helpers, and only one construction and invocation route remains.
+
+`internal/setuphealth` was unchanged. Focused tests, the deletion test,
+`go vet ./...`, `go build ./...`, and `go test ./...` pass. Two-axis review
+against `7d35199`, this ticket, the specification, and ADR 0004 returned no
+Standards or Spec findings.

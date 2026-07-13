@@ -2,11 +2,24 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/yersonargotev/matty/internal/setuphealth"
 )
+
+// ErrDoctorUnhealthy identifies a completed diagnostic report containing one
+// or more failed health checks. Warnings alone do not make a report unhealthy.
+var ErrDoctorUnhealthy = errors.New("doctor found failed health checks")
+
+type doctorHealthError struct{ failedChecks int }
+
+func (err doctorHealthError) Error() string {
+	return fmt.Sprintf("%s: %d", ErrDoctorUnhealthy, err.failedChecks)
+}
+
+func (err doctorHealthError) Unwrap() error { return ErrDoctorUnhealthy }
 
 func setupHealthConfig(paths Paths) setuphealth.Config {
 	return setuphealth.Config{

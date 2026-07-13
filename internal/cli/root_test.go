@@ -35,7 +35,7 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 			SchemaVersion int    `json:"schema_version"`
 			Report        string `json:"report"`
 			Checks        []struct{ Name, Severity, Detail string }
-			Summary       DoctorSummary `json:"summary"`
+			Summary       setupHealthJSONSummary `json:"summary"`
 		}
 		if err := json.Unmarshal([]byte(out), &doc); err != nil {
 			t.Fatalf("invalid JSON: %v\n%s", err, out)
@@ -49,12 +49,15 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	})
 	t.Run("warnings", func(t *testing.T) {
 		opts, _, _ := sandboxOptions(t)
+		opts.SetupHealthDiagnose = func(setuphealth.Config) setuphealth.Report {
+			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{{Severity: setuphealth.Warn, Name: "fixture", Detail: "warning"}}, Summary: setuphealth.Summary{Status: "warnings", Warnings: 1}}
+		}
 		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
 		if err != nil {
 			t.Fatalf("doctor: %v\n%s", err, out)
 		}
 		var doc struct {
-			Summary DoctorSummary `json:"summary"`
+			Summary setupHealthJSONSummary `json:"summary"`
 		}
 		if err := json.Unmarshal([]byte(out), &doc); err != nil || doc.Summary.Status != "warnings" || doc.Summary.Warnings == 0 {
 			t.Fatalf("warning report: %#v err=%v", doc, err)
@@ -62,14 +65,19 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	})
 	t.Run("failures emit full report before error", func(t *testing.T) {
 		opts, _, _ := sandboxOptions(t)
-		opts.Runner = &fakeRunner{}
+		opts.SetupHealthDiagnose = func(setuphealth.Config) setuphealth.Report {
+			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{
+				{Severity: setuphealth.Fail, Name: "failed", Detail: "failure"},
+				{Severity: setuphealth.Warn, Name: "later", Detail: "complete report"},
+			}, Summary: setuphealth.Summary{Status: "failures", Warnings: 1, Failures: 1}}
+		}
 		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
 		if !errors.Is(err, ErrDoctorUnhealthy) {
 			t.Fatalf("error=%v", err)
 		}
 		var doc struct {
 			Checks  []struct{ Name, Severity string }
-			Summary DoctorSummary `json:"summary"`
+			Summary setupHealthJSONSummary `json:"summary"`
 		}
 		if json.Unmarshal([]byte(out), &doc) != nil || doc.Summary.Failures == 0 || len(doc.Checks) < 2 {
 			t.Fatalf("incomplete report: %s", out)
@@ -393,78 +401,6 @@ func TestReadOnlyOrScaffoldCommandsDoNotCreateFilesInSandboxHome(t *testing.T) {
 	}
 }
 
-func TestDoctorUsesInjectedEngramFactsWithoutMutationOrRunnerSideEffects(t *testing.T) {
-	opts, runner, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths: %v", err)
-	}
-	canonical := engrambin.ExpectedHomebrewPath(paths.HomebrewPrefixEnv)
-	versionCalls := []string{}
-	processCalls := 0
-	opts.EngramFacts = engrambin.Facts{
-		Version: func(path string) (string, error) {
-			versionCalls = append(versionCalls, path)
-			return "1.19.0", nil
-		},
-		ServeProcesses: func() ([]engrambin.Process, error) {
-			processCalls++
-			return []engrambin.Process{{PID: 42, ExecutablePath: canonical, Command: canonical + " serve"}}, nil
-		},
-	}
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor: %v\n%s", err, out)
-	}
-	assertDoctorManagedPathsAbsent(t, paths)
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran side-effect commands: %#v", runner.calls)
-	}
-	if len(versionCalls) != 1 || versionCalls[0] != canonical || processCalls != 1 {
-		t.Fatalf("Engram facts calls: versions=%#v processes=%d", versionCalls, processCalls)
-	}
-	if !strings.Contains(out, "PASS engram-runtime: pid 42 running "+canonical) {
-		t.Fatalf("doctor did not render injected runtime fact:\n%s", out)
-	}
-	if !strings.Contains(out, "WARN engram-setup: state is missing") {
-		t.Fatalf("doctor setup intent was not reported independently:\n%s", out)
-	}
-}
-
-func TestDoctorReportsInjectedEngramInspectionFailuresStably(t *testing.T) {
-	opts, runner, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths: %v", err)
-	}
-	opts.EngramFacts = engrambin.Facts{
-		Version:        func(string) (string, error) { return "", errors.New("version unavailable") },
-		ServeProcesses: func() ([]engrambin.Process, error) { return nil, errors.New("process inspection unavailable") },
-	}
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
-	if err != nil {
-		t.Fatalf("doctor: %v\n%s", err, out)
-	}
-	assertDoctorManagedPathsAbsent(t, paths)
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran side effects: calls=%#v", runner.calls)
-	}
-	for _, want := range []string{"version unavailable", "could not inspect active engram serve processes", "process inspection unavailable"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor JSON missing %q:\n%s", want, out)
-		}
-	}
-}
-
-func assertDoctorManagedPathsAbsent(t *testing.T, paths Paths) {
-	t.Helper()
-	for _, path := range []string{paths.StateFile, paths.AgentSkillsDir, paths.CodexPromptFile, paths.OpenCodeConfigFile, paths.OpenCodePromptFile} {
-		if exists(path) {
-			t.Fatalf("doctor unexpectedly created managed path %s", path)
-		}
-	}
-}
-
 func TestResolvePathsRejectsMissingHome(t *testing.T) {
 	_, err := ResolvePaths(MapEnv{})
 	if err == nil {
@@ -623,22 +559,7 @@ func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 		t.Fatalf("install did not create Matty-managed artifacts from installed source")
 	}
 
-	beforeDoctor := snapshotTree(t, home)
 	runner.calls = nil
-	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed outside repo after init: %v\n%s", err, out)
-	}
-	if afterDoctor := snapshotTree(t, home); afterDoctor != beforeDoctor {
-		t.Fatalf("doctor mutated sandbox outside repo:\nbefore:\n%s\nafter:\n%s", beforeDoctor, afterDoctor)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran external commands: %#v", runner.calls)
-	}
-	if !strings.Contains(out, "PASS skill-symlinks:") {
-		t.Fatalf("doctor did not report installed-source skill links healthy:\n%s", out)
-	}
-
 	out, err = executeCommand(t, NewRootCommand(opts), "update")
 	if err != nil {
 		t.Fatalf("update failed outside repo after init: %v\n%s", err, out)
@@ -870,242 +791,6 @@ func TestInstallRejectsCorruptState(t *testing.T) {
 	}
 }
 
-func TestDoctorReportsStateStatusWithoutCreatingState(t *testing.T) {
-	opts, _, home := sandboxOptions(t)
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor with only PASS and WARN checks failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "MATTY_STATE_STATUS=missing") {
-		t.Fatalf("doctor did not report missing state:\n%s", out)
-	}
-	if exists(filepath.Join(home, ".matty")) {
-		t.Fatalf("doctor created state directory")
-	}
-
-	out, err = executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor after install failed: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "MATTY_STATE_STATUS=present") {
-		t.Fatalf("doctor did not report present state:\n%s", out)
-	}
-}
-
-func TestDoctorWarnsWhenNullManagedSkillsHaveExpectedUnmanagedSymlinks(t *testing.T) {
-	opts, runner, home := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	createUnmanagedSkillSymlinks(t, paths, filepath.Join(home, "stale-repo-skills"))
-	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
-	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
-		t.Fatalf("SaveState failed: %v", err)
-	}
-	before := snapshotTree(t, home)
-	runner.calls = nil
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
-	}
-	after := snapshotTree(t, home)
-	if before != after {
-		t.Fatalf("doctor mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran external commands: %#v", runner.calls)
-	}
-	recoveryAdvice := unmanagedSymlinkRecoveryAdvice()
-	for _, want := range []string{
-		"WARN skill-symlinks: state has no managed skills",
-		"6 expected skill symlinks are unmanaged by current Matty state",
-		filepath.Join(paths.AgentSkillsDir, "ask-matt") + " -> " + filepath.Join(home, "stale-repo-skills", "ask-matt"),
-		recoveryAdvice,
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, out)
-		}
-	}
-}
-
-func TestDoctorReportsExpectedSkillInspectionErrors(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
-	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.AgentSkillsDir), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(paths.AgentSkillsDir, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
-	}
-	for _, want := range []string{"could not inspect expected skill links", "inspect skill link"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, out)
-		}
-	}
-}
-
-func TestDoctorReportsFullSetupHealthAndIsReadOnly(t *testing.T) {
-	opts, runner, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.CodexPromptFile), 0o700); err != nil {
-		t.Fatalf("mkdir codex config: %v", err)
-	}
-	if err := os.WriteFile(paths.CodexPromptFile, []byte("<!-- gentle-ai:persona -->\nkeep\n<!-- /gentle-ai:persona -->\n"), 0o600); err != nil {
-		t.Fatalf("write codex conflict fixture: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
-		t.Fatalf("mkdir opencode config: %v", err)
-	}
-	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"plugin":["gentle-ai"]}`), 0o600); err != nil {
-		t.Fatalf("write opencode conflict fixture: %v", err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "install")
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
-	}
-	before := snapshotTree(t, paths.HomeDir)
-	runner.calls = nil
-
-	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
-	}
-	after := snapshotTree(t, paths.HomeDir)
-	if before != after {
-		t.Fatalf("doctor mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran external commands: %#v", runner.calls)
-	}
-	for _, want := range []string{
-		"PASS matty-state:",
-		"PASS skill-symlinks:",
-		"PASS engram-binary:",
-		"PASS engram-setup:",
-		"PASS codex-config:",
-		"PASS opencode-config:",
-		"WARN codex-conflict:",
-		"WARN opencode-conflict:",
-		"state records Codex and OpenCode setup expectations",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, out)
-		}
-	}
-}
-
-func TestDoctorReportsCorruptStateAsFailedCheck(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	if err := os.WriteFile(paths.StateFile, []byte("{not json"), 0o600); err != nil {
-		t.Fatalf("write corrupt state: %v", err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if !errors.Is(err, ErrDoctorUnhealthy) {
-		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
-	}
-	if !strings.Contains(out, "FAIL matty-state:") || !strings.Contains(out, "invalid JSON") {
-		t.Fatalf("doctor did not report corrupt state as failed check:\n%s", out)
-	}
-}
-
-func TestDoctorReportsMissingRequiredExecutableAndFailsHealthGate(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	opts.Runner = &fakeRunner{}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if !errors.Is(err, ErrDoctorUnhealthy) {
-		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
-	}
-	if !strings.Contains(out, "FAIL engram-binary: engram is not available on PATH") {
-		t.Fatalf("doctor did not preserve the missing executable report:\n%s", out)
-	}
-	if !strings.Contains(out, "WARN opencode-config:") {
-		t.Fatalf("doctor stopped rendering after the failed check:\n%s", out)
-	}
-}
-
-func TestDoctorReportsIncompleteEngramSetupExpectationsAsFailedCheck(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	if err := os.MkdirAll(paths.MattyDir, 0o700); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	state := corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: paths.StateFile, AgentSkillsDir: paths.AgentSkillsDir}, fixedTestTime(), nil)
-	state.ConfiguredSurfaces = []string{"codex"}
-	if err := corelifecycle.SaveState(paths.StateFile, state); err != nil {
-		t.Fatalf("SaveState failed: %v", err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if !errors.Is(err, ErrDoctorUnhealthy) {
-		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
-	}
-	if !strings.Contains(out, "FAIL engram-setup:") || !strings.Contains(out, "Codex and OpenCode setup expectations") {
-		t.Fatalf("doctor did not fail incomplete Engram setup expectations:\n%s", out)
-	}
-}
-
-func TestDoctorReportsOpenCodeInspectErrorsUnderConfigCheck(t *testing.T) {
-	opts, _, _ := sandboxOptions(t)
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		t.Fatalf("ResolvePaths failed: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
-		t.Fatalf("mkdir opencode config: %v", err)
-	}
-	if err := os.WriteFile(paths.OpenCodeConfigFile, []byte(`{"instructions": "wrong"}`), 0o600); err != nil {
-		t.Fatalf("write invalid opencode config: %v", err)
-	}
-
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if !errors.Is(err, ErrDoctorUnhealthy) {
-		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
-	}
-	if !strings.Contains(out, "FAIL opencode-config:") || strings.Contains(out, "FAIL opencode:") {
-		t.Fatalf("doctor did not report OpenCode inspect error under opencode-config:\n%s", out)
-	}
-}
-
 func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 	opts, _, home := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)
@@ -1118,7 +803,7 @@ func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install failed: %v\n%s", err, out)
 	}
-	recoveryAdvice := unmanagedSymlinkRecoveryAdvice()
+	recoveryAdvice := "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
 	for _, want := range []string{
 		"warning: skipped 6 unmanaged skill symlinks; setup may be incomplete",
 		"Example: " + filepath.Join(paths.AgentSkillsDir, "ask-matt") + " -> " + filepath.Join(home, "stale-repo-skills", "ask-matt"),
@@ -1181,24 +866,7 @@ func TestEndToEndSandboxLifecyclePreservesGentleAIAndRealHome(t *testing.T) {
 		t.Fatalf("install did not create expected Matty-managed artifacts in sandbox")
 	}
 
-	beforeDoctor := snapshotTree(t, home)
 	runner.calls = nil
-	out, err = executeCommand(t, NewRootCommand(opts), "doctor")
-	if err != nil {
-		t.Fatalf("doctor failed: %v\n%s", err, out)
-	}
-	if afterDoctor := snapshotTree(t, home); afterDoctor != beforeDoctor {
-		t.Fatalf("doctor mutated sandbox:\nbefore:\n%s\nafter:\n%s", beforeDoctor, afterDoctor)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran external commands: %#v", runner.calls)
-	}
-	for _, want := range []string{"PASS matty-state:", "WARN codex-conflict:", "WARN opencode-conflict:"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, out)
-		}
-	}
-
 	out, err = executeCommand(t, NewRootCommand(opts), "update")
 	if err != nil {
 		t.Fatalf("update failed: %v\n%s", err, out)
@@ -1258,7 +926,7 @@ func TestInstallDryRunReportsUnmanagedSkipsWithoutMutating(t *testing.T) {
 	}
 }
 
-func TestInterruptedInstallIsExplicitAndDoctorReportsSafeRecovery(t *testing.T) {
+func TestInterruptedInstallIsExplicitAndPersistsRecoveryState(t *testing.T) {
 	opts, runner, _ := sandboxOptions(t)
 	paths, err := ResolvePaths(opts.Env)
 	if err != nil {
@@ -1277,23 +945,6 @@ func TestInterruptedInstallIsExplicitAndDoctorReportsSafeRecovery(t *testing.T) 
 		t.Fatalf("install status = %q, want recovery-required", state.InstallStatus)
 	}
 
-	before := snapshotTree(t, paths.HomeDir)
-	runner.calls = nil
-	out, err := executeCommand(t, NewRootCommand(opts), "doctor")
-	if !errors.Is(err, ErrDoctorUnhealthy) {
-		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
-	}
-	for _, want := range []string{"FAIL matty-state:", "interrupted", "matty install or matty update"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("doctor output missing %q:\n%s", want, out)
-		}
-	}
-	if after := snapshotTree(t, paths.HomeDir); after != before {
-		t.Fatalf("doctor mutated sandbox:\nbefore:\n%s\nafter:\n%s", before, after)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("doctor ran commands: %#v", runner.calls)
-	}
 }
 
 func callStrings(calls []fakeCall) []string {
@@ -1637,4 +1288,17 @@ func runGitCommand(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
+}
+
+func writeEngramExecutable(t *testing.T, dir, versionOutput string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir executable dir: %v", err)
+	}
+	path := filepath.Join(dir, "engram")
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '" + versionOutput + "'; exit 0; fi\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("write executable: %v", err)
+	}
+	return path
 }
