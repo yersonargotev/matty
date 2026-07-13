@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func updateFixture(packs []Pack, state ActivationState, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
-	adapter := &fakeActivationAdapter{observations: observations}
+func updateFixture(packs []Pack, state ActivationState, observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
+	adapter := &fakeSurfaceAdapter{observations: observations}
 	store := &fakeActivationStore{state: state}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	return facade, adapter, store
 }
 
 func TestUpdatePlansCatalogCurrentAndPersistsTargetBeforeEffects(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	pending := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide", Description: "write v2"}}}}
+	pending := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide", Description: "write v2"}}}}
 	verified := pending
 	verified.Revision = "host-2"
 	verified.Projections = append([]ObservedProjection(nil), pending.Projections...)
@@ -50,7 +50,7 @@ func TestUpdateIncludesNewDependencyAndRetainsUnchangedSharedProjection(t *testi
 		{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"dep"}}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}},
 		{ID: "dep", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"dep"}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}},
 	}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2}, Ownership: []ProjectionOwnership{{ID: "instruction:shared", Contributors: []string{"app"}, Fingerprint: "same"}}}
 	facade, adapter, _ := updateFixture(packs, state, obs)
 
@@ -73,7 +73,7 @@ func TestUpdateIncludesNewDependencyAndRetainsUnchangedSharedProjection(t *testi
 
 func TestCatalogCurrentUpdateIsNoOpOnlyWhenConverged(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	converged := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	converged := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "2.0.0", Active: true, Revision: 7}, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "same"}}}
 	facade, _, store := updateFixture([]Pack{pack}, state, converged)
 	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -87,7 +87,7 @@ func TestCatalogCurrentUpdateIsNoOpOnlyWhenConverged(t *testing.T) {
 
 func TestUpdateRejectsStaleCatalogAndExactPlanApproval(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 1}, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "old"}}}
 	facade, adapter, store := updateFixture([]Pack{pack}, state, obs)
 	plan, _ := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -101,7 +101,7 @@ func TestUpdateRejectsStaleCatalogAndExactPlanApproval(t *testing.T) {
 
 func TestUpdateBlocksIncompatibleNewContribution(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "new"}}}, {ID: "other", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "other"}}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:shared"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 3}, Intents: []ActivationIntent{{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true}, {PackID: "other", Surface: SurfaceCodex, Version: "1.0.0", Active: true}}}
 	facade, adapter, store := updateFixture(packs, state, obs)
 	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -118,7 +118,7 @@ func TestUpdateBlocksCapabilityConflictIntroducedByCatalogCurrent(t *testing.T) 
 		{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Conflicts: []string{"cap:other"}},
 		{ID: "other", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:other"}},
 	}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 3}, Intents: []ActivationIntent{{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true}, {PackID: "other", Surface: SurfaceCodex, Version: "1.0.0", Active: true}}}
 	facade, _, _ := updateFixture(packs, state, obs)
 	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -132,7 +132,7 @@ func TestUpdateBlocksCapabilityConflictIntroducedByCatalogCurrent(t *testing.T) 
 
 func TestCatalogCurrentDriftPlansSafeRepair(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	drift := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "drift", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	drift := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "drift", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "2.0.0", Active: true, Revision: 7}, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "drift"}}}
 	facade, _, _ := updateFixture([]Pack{pack}, state, drift)
 	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -145,11 +145,11 @@ func TestUpdateRejectsStaleIntentOwnershipAndHostFactsWithZeroEffects(t *testing
 	for _, tc := range []struct {
 		name   string
 		mutate func(*fakeActivationStore)
-		obs    []ActivationObservation
+		obs    []SurfaceInspection
 	}{
 		{name: "intent", mutate: func(s *fakeActivationStore) { s.state.Intent.Revision++ }},
 		{name: "ownership", mutate: func(s *fakeActivationStore) { s.state.Ownership[0].Contributors = []string{"changed"} }},
-		{name: "host", obs: []ActivationObservation{
+		{name: "host", obs: []SurfaceInspection{
 			{Revision: "changed", Projections: []ObservedProjection{
 				{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}},
 			}},
@@ -157,8 +157,8 @@ func TestUpdateRejectsStaleIntentOwnershipAndHostFactsWithZeroEffects(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-			preview := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
-			observations := append([]ActivationObservation{preview}, tc.obs...)
+			preview := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
+			observations := append([]SurfaceInspection{preview}, tc.obs...)
 			state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 4}, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "old"}}}
 			facade, adapter, store := updateFixture([]Pack{pack}, state, observations...)
 			plan, _ := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})
@@ -199,7 +199,7 @@ func TestUpdateExternalPhasesUseTypedApprovalsAndStopAtBarrier(t *testing.T) {
 
 func TestUpdateRejectsChangedDependencyClosureWithZeroEffects(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"dep"}}}, {ID: "dep", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"dep"}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2}}
 	facade, adapter, store := updateFixture(packs, state, obs)
 	plan, _ := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "app", Surface: SurfaceCodex})

@@ -24,7 +24,7 @@ type Options struct {
 	Runner              Runner
 	Clock               func() time.Time
 	Terminal            Terminal
-	ReadinessInspectors map[capabilitypack.Surface]capabilitypack.ReadinessInspector
+	SurfaceAdapters     map[capabilitypack.Surface]capabilitypack.SurfaceAdapter
 	EngramFacts         engrambin.Facts
 	SetupHealthDiagnose func(setuphealth.Config) setuphealth.Report
 }

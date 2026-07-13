@@ -11,10 +11,10 @@ func TestPreviewIncludesInactiveTransitiveRequirementsInCanonicalComposition(t *
 		{ID: "b", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:b"}, Requires: Requirements{Capabilities: []string{"cap:c"}}, Resources: []Resource{{Kind: "instruction", ID: "b", Source: "b"}}},
 		{ID: "c", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:c"}, Resources: []Resource{{Kind: "instruction", ID: "c", Source: "c"}}},
 	}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:all", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:all", Description: "combined"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{obs}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:all", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:all", Description: "combined"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{obs}}
 	store := &fakeActivationStore{}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
@@ -33,10 +33,10 @@ func TestPreviewAggregatesCompositionAndOwnershipBlockersWithoutApplicableAction
 		{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:x"}, Conflicts: []string{"cap:y"}, Requires: Requirements{Capabilities: []string{"missing"}}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "one"}}},
 		{ID: "active", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:y"}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "two"}}},
 	}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "user", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:shared"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{obs}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "user", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{obs}}
 	store := &fakeActivationStore{state: ActivationState{Intent: ActivationIntent{PackID: "active", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2}}}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
@@ -57,11 +57,11 @@ func TestApplyRecordsCompleteContributorsOnlyAfterFreshVerification(t *testing.T
 		{ID: "active", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}},
 		{ID: "requested", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}},
 	}
-	pending := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:shared", ObservedFingerprint: "missing", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:shared", Description: "write shared"}}}}
-	verified := ActivationObservation{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "desired", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:shared"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{pending, pending, verified}}
+	pending := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:shared", ObservedFingerprint: "missing", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:shared", Description: "write shared"}}}}
+	verified := SurfaceInspection{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "desired", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, verified}}
 	store := &fakeActivationStore{state: ActivationState{Intent: ActivationIntent{PackID: "active", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 4}}}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "requested", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +81,10 @@ func TestApplyRecordsCompleteContributorsOnlyAfterFreshVerification(t *testing.T
 
 func TestApplyRejectsChangedDependencyCatalogBeforePersistenceOrActions(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"cap:dep"}}}, {ID: "dep", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"cap:dep"}}}
-	observation := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:combined", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:combined"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{observation}}
+	observation := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:combined", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:combined"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 	store := &fakeActivationStore{}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
@@ -101,10 +101,10 @@ func TestApplyRejectsChangedDependencyCatalogBeforePersistenceOrActions(t *testi
 
 func TestPreviewTraversesRequirementsOfAlreadyActiveDependencies(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"b"}}}, {ID: "b", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"b"}, Requires: Requirements{Capabilities: []string{"c"}}}, {ID: "c", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Provides: []string{"c"}}}
-	observation := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{observation}}
+	observation := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "combined", ObservedFingerprint: "missing", DesiredFingerprint: "new", Action: ProjectionAction{ID: "combined"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{observation}}
 	store := &fakeActivationStore{state: ActivationState{Intent: ActivationIntent{PackID: "b", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 3}}}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +117,11 @@ func TestPreviewTraversesRequirementsOfAlreadyActiveDependencies(t *testing.T) {
 
 func TestNoOpApplyStillRejectsFreshHostChanges(t *testing.T) {
 	pack := Pack{ID: "matty", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "guide"}}}
-	converged := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
-	changed := ActivationObservation{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "changed", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
-	adapter := &fakeActivationAdapter{observations: []ActivationObservation{converged, changed}}
+	converged := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	changed := SurfaceInspection{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "changed", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{converged, changed}}
 	store := &fakeActivationStore{state: ActivationState{Intent: ActivationIntent{PackID: "matty", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2}, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"matty"}, Fingerprint: "same"}}}}
-	facade := NewFacade(Catalog{packs: []Pack{pack}}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: []Pack{pack}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
 	if err != nil || !plan.NoOp() {
 		t.Fatalf("no-op preview=%v err=%v", plan.NoOp(), err)

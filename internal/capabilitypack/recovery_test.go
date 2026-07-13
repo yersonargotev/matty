@@ -9,7 +9,7 @@ import (
 
 func TestRepeatUpdateRecoversTowardPersistedIntentWithoutNewRevision(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	pending := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide", Description: "write v2"}}}}
+	pending := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide", Description: "write v2"}}}}
 	verified := pending
 	verified.Revision = "host-2"
 	verified.Projections = append([]ObservedProjection(nil), pending.Projections...)
@@ -83,7 +83,7 @@ func TestConvergedRecoveryStillRequiresFreshApprovalToCloseAttempt(t *testing.T)
 
 func TestRecoveryBecomesStaleWithZeroEffectsWhenOwnershipChanges(t *testing.T) {
 	pack := Pack{ID: "app", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v2"}}}
-	pending := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	pending := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
 	history := ApplyingJournal{PlanID: "old", PlanDigest: "old-digest", Operation: OperationUpdate, Surface: SurfaceCodex, PackID: "app", Outcome: AttemptRecoveryRequired, Actions: []string{"instruction:guide"}, FailedAction: "instruction:guide"}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "2.0.0", Active: true, Revision: 4}, Journal: &history, Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "old"}}}
 	facade, adapter, store := updateFixture([]Pack{pack}, state, pending)

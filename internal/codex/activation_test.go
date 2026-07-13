@@ -61,7 +61,7 @@ enabled = true
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, ".agents", "skills"), prompt, config)
-	observed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}})
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, ResolvedExecutables: []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ enabled = true
 					t.Fatal(err)
 				}
 			}
-			changed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}})
+			changed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, ResolvedExecutables: []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engramPath}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,7 +146,7 @@ EOF
 	}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "config.toml"))
 	pack := capabilitypack.Pack{ID: "engram", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "engram-memory"}, {Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}}}}
-	observed, err := adapter.InspectActivationWithResolution(context.Background(), pack, []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engram}})
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, ResolvedExecutables: []capabilitypack.ExecutableResolution{{Tool: "engram", Available: true, Path: engram}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,21 +169,21 @@ func TestInspectDeactivationRemovesManagedBlocksAndPreservesUnmanagedCodexConfig
 	}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
-	observed, err := adapter.InspectActivation(context.Background(), active)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: active})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{observed.Projections[0].Action}); err != nil {
 		t.Fatal(err)
 	}
-	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	removal, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Prior: active, Desired: capabilitypack.Pack{ID: "desired"}, ResolvedExecutables: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removal.RemovalCandidates) != 1 || removal.RemovalCandidates[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
-		t.Fatalf("removals = %+v", removal.RemovalCandidates)
+	if len(removal.Projections) != 1 || removal.Projections[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
+		t.Fatalf("removals = %+v", removal.Projections)
 	}
-	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.RemovalCandidates[0].Action}); err != nil {
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.Projections[0].Action}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(prompt)
@@ -210,14 +210,14 @@ func TestInspectDeactivationComposesMultipleRemovalsFromOneCodexFile(t *testing.
 	}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
-	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	removal, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Prior: active, Desired: capabilitypack.Pack{ID: "desired"}, ResolvedExecutables: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removal.RemovalCandidates) != 2 {
-		t.Fatalf("removals=%+v", removal.RemovalCandidates)
+	if len(removal.Projections) != 2 {
+		t.Fatalf("removals=%+v", removal.Projections)
 	}
-	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.RemovalCandidates[0].Action, removal.RemovalCandidates[1].Action}); err != nil {
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{removal.Projections[0].Action, removal.Projections[1].Action}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(prompt)
@@ -238,26 +238,26 @@ func TestInspectReconcileDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmana
 	}
 	adapter := NewActivationAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
 	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
-	observed, err := adapter.InspectActivation(context.Background(), pack)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{observed.Projections[0].Action}); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := adapter.InspectActivation(context.Background(), pack)
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
 	owner := capabilitypack.ProjectionOwnership{ID: verified.Projections[0].ID, Fingerprint: verified.Projections[0].ObservedFingerprint, Contributors: []string{"app"}}
-	reconcile, err := adapter.InspectReconcile(context.Background(), capabilitypack.Pack{ID: "desired"}, []capabilitypack.ProjectionOwnership{owner}, nil)
+	reconcile, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: capabilitypack.Pack{ID: "desired"}, ResidualOwnership: []capabilitypack.ProjectionOwnership{owner}, ResolvedExecutables: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reconcile.RemovalCandidates) != 1 || reconcile.RemovalCandidates[0].ObservedFingerprint != owner.Fingerprint || reconcile.RemovalCandidates[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
-		t.Fatalf("removal candidates = %+v", reconcile.RemovalCandidates)
+	if len(reconcile.Projections) != 1 || reconcile.Projections[0].ObservedFingerprint != owner.Fingerprint || reconcile.Projections[0].Action.Mode != capabilitypack.ProjectionRemoveContent {
+		t.Fatalf("removal candidates = %+v", reconcile.Projections)
 	}
-	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{reconcile.RemovalCandidates[0].Action}); err != nil {
+	if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{reconcile.Projections[0].Action}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(prompt)

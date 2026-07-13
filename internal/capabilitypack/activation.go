@@ -139,7 +139,8 @@ type ProjectionAction struct {
 }
 
 func RemovalCandidate(projection ObservedProjection, mode ProjectionActionMode, content, description string) ObservedProjection {
-	projection.DesiredFingerprint = "missing"
+	projection.Goal = ProjectionAbsent
+	projection.DesiredFingerprint = ""
 	projection.Action.Source = ""
 	projection.Action.Content = content
 	projection.Action.Mode = mode
@@ -149,6 +150,7 @@ func RemovalCandidate(projection ObservedProjection, mode ProjectionActionMode, 
 
 type ObservedProjection struct {
 	ID                  string
+	Goal                ProjectionGoal
 	Exists              bool
 	ObservedFingerprint string
 	DesiredFingerprint  string
@@ -156,65 +158,33 @@ type ObservedProjection struct {
 	Action              ProjectionAction
 }
 
-type ActivationObservation struct {
+type ProjectionGoal string
+
+const (
+	ProjectionPresent ProjectionGoal = "present"
+	ProjectionAbsent  ProjectionGoal = "absent"
+)
+
+// SurfaceTransition is the complete, lifecycle-neutral input to host
+// inspection. Capability-pack decides which facts are relevant to each use
+// case; adapters only translate those facts into host projections.
+type SurfaceTransition struct {
+	Prior               Pack
+	Desired             Pack
+	ResidualOwnership   []ProjectionOwnership
+	ResolvedExecutables []ExecutableResolution
+}
+
+type SurfaceInspection struct {
 	Revision            string
 	Projections         []ObservedProjection
-	Readiness           ReadinessStatus
+	Readiness           ReadinessObservation
 	PendingHumanActions []string
-	RemovalCandidates   []ObservedProjection
 }
 
-type ActivationAdapter interface {
-	InspectActivation(context.Context, Pack) (ActivationObservation, error)
+type SurfaceAdapter interface {
+	InspectSurface(context.Context, SurfaceTransition) (SurfaceInspection, error)
 	ApplyProjections(context.Context, []ProjectionAction) *ProjectionActionError
-}
-
-// ResolutionAwareActivationAdapter receives the already-resolved executable
-// facts when a host projection embeds a global tool command. The optional
-// interface keeps existing adapter fakes source-compatible while ensuring the
-// production Codex/OpenCode adapters use the exact sealed executable.
-type ResolutionAwareActivationAdapter interface {
-	InspectActivationWithResolution(context.Context, Pack, []ExecutableResolution) (ActivationObservation, error)
-}
-
-type DeactivationAwareActivationAdapter interface {
-	InspectDeactivation(context.Context, Pack, Pack, []ExecutableResolution) (ActivationObservation, error)
-}
-
-// ReconciliationAwareActivationAdapter can inspect Matty-owned projections
-// that no longer occur in the complete desired pack. The facade remains
-// responsible for verifying ownership before authorizing their removal.
-type ReconciliationAwareActivationAdapter interface {
-	InspectReconcile(context.Context, Pack, []ProjectionOwnership, []ExecutableResolution) (ActivationObservation, error)
-}
-
-func inspectDeactivation(ctx context.Context, adapter ActivationAdapter, active, desired Pack, resolutions []ExecutableResolution) (ActivationObservation, error) {
-	if aware, ok := adapter.(DeactivationAwareActivationAdapter); ok {
-		observation, err := aware.InspectDeactivation(ctx, active, desired, resolutions)
-		if err != nil {
-			return ActivationObservation{}, err
-		}
-		for i := range observation.RemovalCandidates {
-			observation.RemovalCandidates[i].DesiredFingerprint = ""
-		}
-		observation.Projections = append(observation.Projections, observation.RemovalCandidates...)
-		observation.RemovalCandidates = nil
-		return observation, nil
-	}
-	return inspectActivation(ctx, adapter, desired, resolutions)
-}
-
-func inspectReconcile(ctx context.Context, adapter ActivationAdapter, desired Pack, ownership []ProjectionOwnership, resolutions []ExecutableResolution) (ActivationObservation, error) {
-	if aware, ok := adapter.(ReconciliationAwareActivationAdapter); ok {
-		observation, err := aware.InspectReconcile(ctx, desired, cloneOwnership(ownership), resolutions)
-		if err != nil {
-			return ActivationObservation{}, err
-		}
-		observation.Projections = append(observation.Projections, observation.RemovalCandidates...)
-		observation.RemovalCandidates = nil
-		return observation, nil
-	}
-	return inspectActivation(ctx, adapter, desired, resolutions)
 }
 
 type ActivationIntent struct {
@@ -313,14 +283,14 @@ type ActivationStore interface {
 
 type activationDependencies struct {
 	store    ActivationStore
-	adapters map[Surface]ActivationAdapter
+	adapters map[Surface]SurfaceAdapter
 	resolver ExecutableResolver
 	executor ExternalExecutor
 }
 
 type FacadeOption func(*Facade)
 
-func WithActivation(store ActivationStore, adapters map[Surface]ActivationAdapter) FacadeOption {
+func WithActivation(store ActivationStore, adapters map[Surface]SurfaceAdapter) FacadeOption {
 	return func(f *Facade) {
 		var resolver ExecutableResolver
 		var executor ExternalExecutor
@@ -548,7 +518,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
-	observation, err := inspectDeactivation(ctx, adapter, before.combinedPack(), combined, resolutions)
+	observation, err := inspectSurface(ctx, adapter, surfaceTransitionFacts(OperationDeactivate, before.combinedPack(), combined, nil, resolutions))
 	if err != nil {
 		return ReconciliationPlan{}, fmt.Errorf("inspect deactivation of pack %q on %s: %w", requested.ID, request.Surface, err)
 	}
@@ -630,12 +600,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
-	var observation ActivationObservation
-	if operation == OperationReconcile {
-		observation, err = inspectReconcile(ctx, adapter, pack, state.Ownership, resolutions)
-	} else {
-		observation, err = inspectActivation(ctx, adapter, pack, resolutions)
-	}
+	observation, err := inspectSurface(ctx, adapter, surfaceTransitionFacts(operation, Pack{}, pack, state.Ownership, resolutions))
 	if err != nil {
 		return ReconciliationPlan{}, fmt.Errorf("inspect activation of pack %q on %s: %w", pack.ID, request.Surface, err)
 	}
@@ -643,9 +608,6 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	actions := make([]ProjectionAction, 0, len(observation.Projections))
 	destructiveActions := make([]ProjectionAction, 0)
 	for _, projection := range observation.Projections {
-		if projection.ID == "" || projection.DesiredFingerprint == "" || projection.Action.ID != projection.ID {
-			return ReconciliationPlan{}, fmt.Errorf("inspect activation of pack %q on %s: adapter returned an invalid projection", pack.ID, request.Surface)
-		}
 		if projection.ObservedFingerprint != projection.DesiredFingerprint {
 			if projection.ExternallyManaged {
 				continue
@@ -676,7 +638,10 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	composition.blockers = append(composition.blockers, externalBlockers...)
 	sortBlockers(composition.blockers)
 	noOp := compositionActive(state, composition.packs, request.Surface) && ownershipMatchesContributors(state.Ownership, observation.Projections, composition) && len(actions) == 0 && len(externalActions) == 0
-	readiness := observation.Readiness
+	// Readiness evidence is observed through the unified adapter, but preview
+	// preserves the established contract: authorization/usability are reported
+	// freshly by Status and Apply, not promoted into a plan.
+	readiness := ReadinessStatus{}
 	readiness.Configured = noOp
 	if !readiness.Configured {
 		readiness.Authorized = false
@@ -826,12 +791,8 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 	}
 	destructiveActions := phaseActions(request.Plan.phases, ConsentDestructiveCleanup)
-	var verified ActivationObservation
-	if request.Plan.operation == OperationReconcile {
-		verified, err = inspectReconcile(ctx, adapter, combined, state.Ownership, resolutions)
-	} else {
-		verified, err = inspectActivation(ctx, adapter, combined, resolutions)
-	}
+	prior := composition{requested: pack, packs: request.Plan.beforeCompositionFacts}.combinedPack()
+	verified, err := inspectSurface(ctx, adapter, surfaceTransitionFacts(request.Plan.operation, prior, combined, state.Ownership, resolutions))
 	if err != nil {
 		state.Journal.recordFailure("verify-reversible-local", err)
 		if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
@@ -853,7 +814,13 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	if request.Plan.operation == OperationDeactivate && len(destructiveActions) > 0 {
 		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
 	} else if request.Plan.operation == OperationDeactivate {
-		verifiedMatches = verificationMatchesDeactivation(request.Plan.desired, verified.Projections)
+		present := make([]ObservedProjection, 0, len(verified.Projections))
+		for _, projection := range verified.Projections {
+			if projection.Goal == ProjectionPresent {
+				present = append(present, projection)
+			}
+		}
+		verifiedMatches = verificationMatchesDeactivation(request.Plan.desired, present)
 	}
 	if !verifiedMatches {
 		state.Journal.recordFailure("verify-reversible-local", errors.New(verificationMismatch(request.Plan.desired, verified.Projections)))
@@ -912,11 +879,7 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 	}
 	if len(externalActions) > 0 || len(destructiveActions) > 0 {
-		if request.Plan.operation == OperationReconcile {
-			verified, err = inspectReconcile(ctx, adapter, combined, state.Ownership, resolutions)
-		} else {
-			verified, err = inspectActivation(ctx, adapter, combined, resolutions)
-		}
+		verified, err = inspectSurface(ctx, adapter, surfaceTransitionFacts(request.Plan.operation, prior, combined, state.Ownership, resolutions))
 		if err != nil {
 			state.Journal.recordFailure("verify-after-external", err)
 			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
@@ -924,12 +887,25 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 			}
 			return ApplyResult{}, err
 		}
-		matches := verificationMatches(request.Plan.desired, verified.Projections)
+		verificationProjections := verified.Projections
+		if request.Plan.operation == OperationDeactivate {
+			actionIDs := make(map[string]bool, len(destructiveActions))
+			for _, action := range destructiveActions {
+				actionIDs[action.ID] = true
+			}
+			verificationProjections = make([]ObservedProjection, 0, len(verified.Projections))
+			for _, projection := range verified.Projections {
+				if projection.Goal == ProjectionPresent || actionIDs[projection.ID] {
+					verificationProjections = append(verificationProjections, projection)
+				}
+			}
+		}
+		matches := verificationMatches(request.Plan.desired, verificationProjections)
 		if request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted {
 			matches = verificationMatchesSubset(request.Plan.desired, verified.Projections)
 		}
 		if request.Plan.operation == OperationDeactivate {
-			matches = verificationMatchesDeactivation(request.Plan.desired, verified.Projections)
+			matches = verificationMatchesDeactivation(request.Plan.desired, verificationProjections)
 		}
 		if !matches {
 			state.Journal.recordFailure("verify-after-external", errors.New(verificationMismatch(request.Plan.desired, verified.Projections)))
@@ -966,24 +942,12 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
 		return ApplyResult{}, err
 	}
-	readiness := verified.Readiness
-	pendingHumanActions := append([]string(nil), verified.PendingHumanActions...)
-	if inspector := f.readinessInspectors[request.Plan.surface]; inspector != nil {
-		fresh, err := inspector.InspectReadiness(ctx, pack, verified, resolutions)
-		if err != nil {
-			return ApplyResult{}, err
-		}
-		readiness = ReadinessStatus{
-			Configured: true,
-			Authorized: fresh.AuthorizationObserved && fresh.Authorized,
-		}
-		readiness.Usable = readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
-		pendingHumanActions = append([]string(nil), fresh.PendingHumanActions...)
-	} else {
-		readiness.Configured = true
-		if !readiness.Authorized {
-			readiness.Usable = false
-		}
+	fresh := verified.Readiness
+	readiness := ReadinessStatus{Configured: true, Authorized: fresh.AuthorizationObserved && fresh.Authorized}
+	readiness.Usable = readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
+	pendingHumanActions := append([]string(nil), fresh.PendingHumanActions...)
+	if len(pendingHumanActions) == 0 {
+		pendingHumanActions = append(pendingHumanActions, verified.PendingHumanActions...)
 	}
 	return ApplyResult{Verified: true, PlanID: request.Plan.id, Projections: len(state.Ownership), Readiness: readiness, PendingHumanActions: pendingHumanActions}, nil
 }
@@ -1036,7 +1000,7 @@ func hasExpectation(values []projectionExpectation, id string) bool {
 
 type planPreflight struct {
 	pack        Pack
-	adapter     ActivationAdapter
+	adapter     SurfaceAdapter
 	state       ActivationState
 	composition composition
 	combined    Pack
@@ -1093,15 +1057,8 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 	if !sameResolutions(plan.resolutions, resolutions) {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("executable resolution changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 	}
-	var observation ActivationObservation
-	if plan.operation == OperationDeactivate {
-		before := composition{requested: pack, packs: plan.beforeCompositionFacts}.combinedPack()
-		observation, err = inspectDeactivation(ctx, adapter, before, combined, resolutions)
-	} else if plan.operation == OperationReconcile {
-		observation, err = inspectReconcile(ctx, adapter, combined, state.Ownership, resolutions)
-	} else {
-		observation, err = inspectActivation(ctx, adapter, combined, resolutions)
-	}
+	before := composition{requested: pack, packs: plan.beforeCompositionFacts}.combinedPack()
+	observation, err := inspectSurface(ctx, adapter, surfaceTransitionFacts(plan.operation, before, combined, state.Ownership, resolutions))
 	if err != nil {
 		return planPreflight{}, err
 	}
@@ -1123,7 +1080,7 @@ func appendCompleted(completed []string, id string) []string {
 	return append(completed, id)
 }
 
-func (f Facade) activationInputs(ctx context.Context, request ActivationRequest) (Pack, ActivationAdapter, ActivationState, error) {
+func (f Facade) activationInputs(ctx context.Context, request ActivationRequest) (Pack, SurfaceAdapter, ActivationState, error) {
 	if f.activation == nil || f.activation.store == nil {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation is not configured")
 	}
@@ -1337,11 +1294,39 @@ func digestJSON(value any) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
-func observationDigest(o ActivationObservation) string {
-	normalized := ActivationObservation{Revision: o.Revision, Projections: append([]ObservedProjection(nil), o.Projections...), Readiness: o.Readiness, PendingHumanActions: append([]string(nil), o.PendingHumanActions...)}
-	sort.Slice(normalized.Projections, func(i, j int) bool { return normalized.Projections[i].ID < normalized.Projections[j].ID })
-	sort.Strings(normalized.PendingHumanActions)
-	return digestJSON(normalized)
+func observationDigest(o SurfaceInspection) string {
+	// Preserve the pre-SurfaceAdapter plan fingerprint payload. Goal makes
+	// destructive intent explicit and readiness now travels with inspection,
+	// but neither changes the host revision/projection facts that made an
+	// existing plan stale before this refactor.
+	type legacyProjection struct {
+		ID                  string
+		Exists              bool
+		ObservedFingerprint string
+		DesiredFingerprint  string
+		ExternallyManaged   bool
+		Action              ProjectionAction
+	}
+	var projections []legacyProjection
+	for _, projection := range o.Projections {
+		projections = append(projections, legacyProjection{
+			ID: projection.ID, Exists: projection.Exists,
+			ObservedFingerprint: projection.ObservedFingerprint,
+			DesiredFingerprint:  projection.DesiredFingerprint,
+			ExternallyManaged:   projection.ExternallyManaged,
+			Action:              projection.Action,
+		})
+	}
+	sort.Slice(projections, func(i, j int) bool { return projections[i].ID < projections[j].ID })
+	pending := append([]string(nil), o.PendingHumanActions...)
+	sort.Strings(pending)
+	return digestJSON(struct {
+		Revision            string
+		Projections         []legacyProjection
+		Readiness           ReadinessStatus
+		PendingHumanActions []string
+		RemovalCandidates   []legacyProjection
+	}{Revision: o.Revision, Projections: projections, PendingHumanActions: pending})
 }
 func flattenActions(phases []PlanPhase) []ProjectionAction {
 	var actions []ProjectionAction
@@ -1538,18 +1523,82 @@ func externalVerificationNeedsRetry(state ActivationState, setup ProjectionActio
 	return state.Journal.Surface == surface
 }
 
-func inspectActivation(ctx context.Context, adapter ActivationAdapter, pack Pack, resolutions []ExecutableResolution) (ActivationObservation, error) {
-	var observation ActivationObservation
-	var err error
-	if resolved, ok := adapter.(ResolutionAwareActivationAdapter); ok {
-		observation, err = resolved.InspectActivationWithResolution(ctx, pack, resolutions)
-	} else {
-		observation, err = adapter.InspectActivation(ctx, pack)
-	}
+// inspectSurface is the only gateway from capability-pack policy to host
+// observation. It isolates caller and adapter memory, validates the complete
+// contract, and canonicalizes facts used by planning and plan sealing.
+func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition SurfaceTransition) (SurfaceInspection, error) {
+	transition = cloneSurfaceTransition(transition)
+	observation, err := adapter.InspectSurface(ctx, transition)
 	if err != nil {
-		return ActivationObservation{}, err
+		return SurfaceInspection{}, err
 	}
+	observation = cloneSurfaceInspection(observation)
+	seen := make(map[string]struct{}, len(observation.Projections))
+	for i := range observation.Projections {
+		projection := &observation.Projections[i]
+		if projection.ID == "" || projection.Action.ID != projection.ID {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned a malformed projection identity")
+		}
+		if _, duplicate := seen[projection.ID]; duplicate {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned duplicate projection %q", projection.ID)
+		}
+		seen[projection.ID] = struct{}{}
+		switch projection.Goal {
+		case ProjectionPresent:
+			if projection.DesiredFingerprint == "" || projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent {
+				return SurfaceInspection{}, fmt.Errorf("surface adapter returned incompatible present goal for projection %q", projection.ID)
+			}
+		case ProjectionAbsent:
+			if projection.DesiredFingerprint != "" || (projection.Action.Mode != ProjectionDeleteTarget && projection.Action.Mode != ProjectionRemoveContent) {
+				return SurfaceInspection{}, fmt.Errorf("surface adapter returned incompatible absent goal for projection %q", projection.ID)
+			}
+		default:
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned zero goal for projection %q", projection.ID)
+		}
+	}
+	sort.Slice(observation.Projections, func(i, j int) bool { return observation.Projections[i].ID < observation.Projections[j].ID })
+	sort.Strings(observation.PendingHumanActions)
+	sort.Strings(observation.Readiness.PendingHumanActions)
+	sort.Strings(observation.Readiness.Evidence)
 	return observation, nil
+}
+
+func surfaceTransitionFacts(operation Operation, prior, desired Pack, ownership []ProjectionOwnership, resolutions []ExecutableResolution) SurfaceTransition {
+	transition := SurfaceTransition{Desired: desired, ResolvedExecutables: resolutions}
+	switch operation {
+	case OperationDeactivate:
+		transition.Prior = prior
+	case OperationReconcile:
+		transition.ResidualOwnership = ownership
+	}
+	return transition
+}
+
+func cloneSurfaceTransition(value SurfaceTransition) SurfaceTransition {
+	value.Prior = clonePack(value.Prior)
+	value.Desired = clonePack(value.Desired)
+	value.ResidualOwnership = cloneOwnership(value.ResidualOwnership)
+	value.ResolvedExecutables = cloneResolutions(value.ResolvedExecutables)
+	return value
+}
+
+func cloneSurfaceInspection(value SurfaceInspection) SurfaceInspection {
+	value.Projections = append([]ObservedProjection(nil), value.Projections...)
+	for i := range value.Projections {
+		value.Projections[i].Action.Args = append([]string(nil), value.Projections[i].Action.Args...)
+	}
+	value.PendingHumanActions = append([]string(nil), value.PendingHumanActions...)
+	value.Readiness.PendingHumanActions = append([]string(nil), value.Readiness.PendingHumanActions...)
+	value.Readiness.Evidence = append([]string(nil), value.Readiness.Evidence...)
+	return value
+}
+
+func cloneResolutions(values []ExecutableResolution) []ExecutableResolution {
+	result := append([]ExecutableResolution(nil), values...)
+	for i := range result {
+		result[i].AcquisitionArgs = append([]string(nil), result[i].AcquisitionArgs...)
+	}
+	return result
 }
 
 func (f Facade) resolveExecutables(ctx context.Context, pack Pack) ([]ExecutableResolution, error) {

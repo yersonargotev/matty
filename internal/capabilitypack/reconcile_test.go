@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-func reconcileFixture(packs []Pack, state ActivationState, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
-	adapter := &fakeActivationAdapter{observations: observations}
+func reconcileFixture(packs []Pack, state ActivationState, observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
+	adapter := &fakeSurfaceAdapter{observations: observations}
 	store := &fakeActivationStore{state: state}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	return facade, adapter, store
 }
 
@@ -30,7 +30,7 @@ func TestTargetedReconcileRepairsActivePackInsideCompleteSurfaceDesiredStateWith
 		{ID: "instruction:app", Contributors: []string{"app"}, Fingerprint: "old"},
 		{ID: "instruction:other", Contributors: []string{"other"}, Fingerprint: "other"},
 	}}
-	preview := ActivationObservation{Revision: "host", Projections: []ObservedProjection{
+	preview := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{
 		{ID: "instruction:shared", Exists: true, ObservedFingerprint: "shared-drift", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared", Description: "write shared instruction"}},
 		{ID: "instruction:app", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:app", Description: "repair app"}},
 		{ID: "instruction:other", Exists: true, ObservedFingerprint: "other", DesiredFingerprint: "other", Action: ProjectionAction{ID: "instruction:other"}},
@@ -74,11 +74,11 @@ func TestTargetedReconcileRepairsDriftWhenCatalogCurrentOwnershipIsUnambiguous(t
 		Intent:    activeIntent("app", "1", 4),
 		Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "catalog-current"}},
 	}
-	drifted := ActivationObservation{Revision: "host-drifted", Projections: []ObservedProjection{{
+	drifted := SurfaceInspection{Revision: "host-drifted", Projections: []ObservedProjection{{
 		ID: "instruction:guide", Exists: true, ObservedFingerprint: "operator-edit", DesiredFingerprint: "catalog-current",
 		Action: ProjectionAction{ID: "instruction:guide", Description: "write instruction guide"},
 	}}}
-	verified := ActivationObservation{Revision: "host-repaired", Projections: []ObservedProjection{{
+	verified := SurfaceInspection{Revision: "host-repaired", Projections: []ObservedProjection{{
 		ID: "instruction:guide", Exists: true, ObservedFingerprint: "catalog-current", DesiredFingerprint: "catalog-current",
 		Action: ProjectionAction{ID: "instruction:guide", Description: "write instruction guide"},
 	}}}
@@ -109,7 +109,7 @@ func TestSurfaceWideReconcileUsesOnlyActiveSurfaceIntentsAndAllContributorSets(t
 	}
 	intents := []ActivationIntent{activeIntent("one", "1", 2), activeIntent("two", "1", 4), {PackID: "inactive", Surface: SurfaceCodex, Version: "1", Active: false, Revision: 8}}
 	state := ActivationState{Intent: intents[0], Intents: intents}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{
 		{ID: "instruction:shared", ObservedFingerprint: "missing", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}},
 		{ID: "instruction:two", ObservedFingerprint: "missing", DesiredFingerprint: "two", Action: ProjectionAction{ID: "instruction:two"}},
 	}}
@@ -136,7 +136,7 @@ func TestTargetedReconcileDoesNotRepairUnrelatedActivePack(t *testing.T) {
 	}
 	intents := []ActivationIntent{activeIntent("app", "1", 2), activeIntent("other", "1", 3)}
 	state := ActivationState{Intent: intents[0], Intents: intents, Ownership: []ProjectionOwnership{{ID: "instruction:app", Contributors: []string{"app"}, Fingerprint: "same"}, {ID: "instruction:other", Contributors: []string{"other"}, Fingerprint: "old"}}}
-	obs := ActivationObservation{Projections: []ObservedProjection{
+	obs := SurfaceInspection{Projections: []ObservedProjection{
 		{ID: "instruction:app", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:app"}},
 		{ID: "instruction:other", Exists: true, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:other"}},
 	}}
@@ -151,7 +151,7 @@ func TestTargetedReconcileDoesNotDeleteUnrelatedObsoleteOwnership(t *testing.T) 
 	packs := []Pack{{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}}, {ID: "other", Version: "1", Surfaces: []Surface{SurfaceCodex}}}
 	intents := []ActivationIntent{activeIntent("app", "1", 2), activeIntent("other", "1", 3)}
 	state := ActivationState{Intent: intents[0], Intents: intents, Ownership: []ProjectionOwnership{{ID: "instruction:obsolete", Contributors: []string{"other"}, Fingerprint: "owned"}}}
-	obs := ActivationObservation{Projections: []ObservedProjection{{ID: "instruction:obsolete", Exists: true, ObservedFingerprint: "owned", DesiredFingerprint: "missing", Action: ProjectionAction{ID: "instruction:obsolete", Mode: ProjectionDeleteTarget}}}}
+	obs := SurfaceInspection{Projections: []ObservedProjection{{ID: "instruction:obsolete", Exists: true, ObservedFingerprint: "owned", DesiredFingerprint: "missing", Action: ProjectionAction{ID: "instruction:obsolete", Mode: ProjectionDeleteTarget}}}}
 	facade, _, _ := reconcileFixture(packs, state, obs)
 	plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil || !plan.NoOp() || len(plan.Phases()) != 0 {
@@ -162,7 +162,7 @@ func TestTargetedReconcileDoesNotDeleteUnrelatedObsoleteOwnership(t *testing.T) 
 func TestTargetedReconcileRejectsInactivePackWithoutEffects(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1", Active: false, Revision: 5}}
-	facade, adapter, store := reconcileFixture([]Pack{pack}, state, ActivationObservation{Revision: "host"})
+	facade, adapter, store := reconcileFixture([]Pack{pack}, state, SurfaceInspection{Revision: "host"})
 	_, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not active") || adapter.inspectCalls != 0 || len(store.saves) != 0 {
 		t.Fatalf("inactive reconcile err=%v inspect=%d saves=%d", err, adapter.inspectCalls, len(store.saves))
@@ -172,7 +172,7 @@ func TestTargetedReconcileRejectsInactivePackWithoutEffects(t *testing.T) {
 func TestDriftFreeReconcileIsNoOpWithoutApprovalApplyOrIntentMutation(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide"}}}
 	state := ActivationState{Intent: activeIntent("app", "1", 9), Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "same"}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:guide"}}}}
 	facade, adapter, store := reconcileFixture([]Pack{pack}, state, obs)
 	plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil || !plan.NoOp() || len(plan.Phases()) != 0 || adapter.inspectCalls != 1 || len(store.saves) != 0 {
@@ -193,7 +193,7 @@ func TestReconcilePreservesAmbiguousOrUnmanagedDriftAsHumanAction(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := ActivationState{Intent: activeIntent("app", "1", 1), Ownership: tc.ownership}
-			obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "user-content", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:guide", Description: "overwrite guide"}}}}
+			obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:guide", Exists: true, ObservedFingerprint: "user-content", DesiredFingerprint: "desired", Action: ProjectionAction{ID: "instruction:guide", Description: "overwrite guide"}}}}
 			facade, adapter, store := reconcileFixture([]Pack{pack}, state, obs)
 			plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 			if err != nil {
@@ -212,7 +212,7 @@ func TestReconcilePreservesAmbiguousOrUnmanagedDriftAsHumanAction(t *testing.T) 
 func TestReconcilePlanDispositionDistinguishesBlockedMixedAndApplicable(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "managed"}, {Kind: "instruction", ID: "unmanaged"}}}
 	state := ActivationState{Intent: activeIntent("app", "1", 1), Ownership: []ProjectionOwnership{{ID: "instruction:managed", Contributors: []string{"app"}, Fingerprint: "managed-desired"}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{
 		{ID: "instruction:managed", Exists: true, ObservedFingerprint: "drift", DesiredFingerprint: "managed-desired", Action: ProjectionAction{ID: "instruction:managed", Description: "restore managed"}},
 		{ID: "instruction:unmanaged", Exists: true, ObservedFingerprint: "user", DesiredFingerprint: "unmanaged-desired", Action: ProjectionAction{ID: "instruction:unmanaged", Description: "overwrite unmanaged"}},
 	}}
@@ -237,11 +237,11 @@ func TestReconcilePlanDispositionDistinguishesBlockedMixedAndApplicable(t *testi
 func TestReconcileDeletesObsoleteProjectionOnlyWithVerifiedOwnershipAndDestructiveApproval(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}}
 	state := ActivationState{Intent: activeIntent("app", "1", 3), Ownership: []ProjectionOwnership{{ID: "instruction:obsolete", Contributors: []string{"app"}, Fingerprint: "owned"}}}
-	owned := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{
+	owned := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{
 		ID: "instruction:obsolete", Exists: true, ObservedFingerprint: "owned", DesiredFingerprint: "missing",
 		Action: ProjectionAction{ID: "instruction:obsolete", Description: "delete obsolete instruction", Mode: ProjectionDeleteTarget},
 	}}}
-	deleted := ActivationObservation{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:obsolete", Exists: false, DesiredFingerprint: "missing"}}}
+	deleted := SurfaceInspection{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:obsolete", Exists: false, DesiredFingerprint: "missing"}}}
 	facade, adapter, store := reconcileFixture([]Pack{pack}, state, owned, owned, deleted)
 	plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
@@ -278,19 +278,19 @@ func TestReconcileRejectsRepresentativeStaleFactsWithZeroEffectsAndUnchangedInte
 	for _, tc := range []struct {
 		name   string
 		mutate func(*Facade, *fakeActivationStore)
-		obs    []ActivationObservation
+		obs    []SurfaceInspection
 		want   string
 	}{
 		{name: "intent revision", mutate: func(_ *Facade, store *fakeActivationStore) { store.state.Intent.Revision++ }, want: "intent"},
 		{name: "ownership", mutate: func(_ *Facade, store *fakeActivationStore) { store.state.Ownership[0].Fingerprint = "changed" }, want: "ownership"},
 		{name: "catalog manifest", mutate: func(facade *Facade, _ *fakeActivationStore) { facade.catalog.packs[0].Resources[0].Source = "changed" }, want: "catalog"},
-		{name: "host observation", obs: []ActivationObservation{{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}}, want: "projections"},
+		{name: "host observation", obs: []SurfaceInspection{{Revision: "host-2", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}}, want: "projections"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "guide"}}}
 			state := ActivationState{Intent: activeIntent("app", "1", 4), Ownership: []ProjectionOwnership{{ID: "instruction:guide", Contributors: []string{"app"}, Fingerprint: "old"}}}
-			preview := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
-			facade, adapter, store := reconcileFixture([]Pack{pack}, state, append([]ActivationObservation{preview}, tc.obs...)...)
+			preview := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "instruction:guide", ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "instruction:guide"}}}}
+			facade, adapter, store := reconcileFixture([]Pack{pack}, state, append([]SurfaceInspection{preview}, tc.obs...)...)
 			plan, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "app", Surface: SurfaceCodex})
 			if err != nil {
 				t.Fatal(err)

@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-type fakeActivationAdapter struct {
-	observations []ActivationObservation
+type fakeSurfaceAdapter struct {
+	observations []SurfaceInspection
 	inspectCalls int
 	actions      []ProjectionAction
 	events       *[]string
@@ -37,15 +37,33 @@ func TestPlanDispositionDefinesLifecycleSemantics(t *testing.T) {
 	}
 }
 
-func (f *fakeActivationAdapter) InspectActivation(context.Context, Pack) (ActivationObservation, error) {
+func (f *fakeSurfaceAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
 	f.inspectCalls++
+	var result SurfaceInspection
 	if f.inspectCalls > len(f.observations) {
-		return f.observations[len(f.observations)-1], nil
+		result = f.observations[len(f.observations)-1]
+	} else {
+		result = f.observations[f.inspectCalls-1]
 	}
-	return f.observations[f.inspectCalls-1], nil
+	for i := range result.Projections {
+		projection := &result.Projections[i]
+		if projection.Action.ID == "" {
+			projection.Action.ID = projection.ID
+		}
+		if (transition.Prior.ID != "" || transition.ResidualOwnership != nil) && (projection.DesiredFingerprint == "" || projection.DesiredFingerprint == "missing") {
+			projection.Goal = ProjectionAbsent
+			projection.DesiredFingerprint = ""
+			if projection.Action.Mode == "" {
+				projection.Action.Mode = ProjectionDeleteTarget
+			}
+		} else if projection.Goal == "" {
+			projection.Goal = ProjectionPresent
+		}
+	}
+	return result, nil
 }
 
-func (f *fakeActivationAdapter) ApplyProjections(_ context.Context, actions []ProjectionAction) *ProjectionActionError {
+func (f *fakeSurfaceAdapter) ApplyProjections(_ context.Context, actions []ProjectionAction) *ProjectionActionError {
 	if f.events != nil {
 		*f.events = append(*f.events, "effects")
 	}
@@ -81,22 +99,20 @@ func (f *fakeActivationStore) Save(_ context.Context, _ Surface, expectedRevisio
 	return nil
 }
 
-func activationFixture(observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
+func activationFixture(observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
 	return activationFixtureForSurface(SurfaceCodex, observations...)
 }
 
-func activationFixtureForSurface(surface Surface, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
+func activationFixtureForSurface(surface Surface, observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
 	pack := Pack{ID: "matty", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}, Resources: []Resource{{Kind: "skill", ID: "ask-matt", Source: "/bundle/skills/ask-matt"}, {Kind: "instruction", ID: "matty-guidance", Source: "/bundle/instructions/matty-guidance.md"}}}
-	adapter := &fakeActivationAdapter{observations: observations}
+	adapter := &fakeSurfaceAdapter{observations: observations}
 	store := &fakeActivationStore{}
-	facade := NewFacade(Catalog{packs: []Pack{pack}}, map[Surface]SurfaceInspector{surface: fakeSurfaceInspectorPtr()}, WithActivation(store, map[Surface]ActivationAdapter{surface: adapter}))
+	facade := NewFacade(Catalog{packs: []Pack{pack}}, WithActivation(store, map[Surface]SurfaceAdapter{surface: adapter}))
 	return facade, adapter, store
 }
 
-func fakeSurfaceInspectorPtr() SurfaceInspector { return &fakeSurfaceInspector{} }
-
-func pendingObservation(fingerprint string) ActivationObservation {
-	return ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{ID: "skill:ask-matt", DesiredFingerprint: "skill-new", ObservedFingerprint: fingerprint, Action: ProjectionAction{ID: "skill:ask-matt", Description: "link ask-matt skill"}}, {ID: "instruction:matty-guidance", DesiredFingerprint: "instruction-new", ObservedFingerprint: fingerprint, Action: ProjectionAction{ID: "instruction:matty-guidance", Description: "write Matty guidance"}}}}
+func pendingObservation(fingerprint string) SurfaceInspection {
+	return SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{ID: "skill:ask-matt", DesiredFingerprint: "skill-new", ObservedFingerprint: fingerprint, Action: ProjectionAction{ID: "skill:ask-matt", Description: "link ask-matt skill"}}, {ID: "instruction:matty-guidance", DesiredFingerprint: "instruction-new", ObservedFingerprint: fingerprint, Action: ProjectionAction{ID: "instruction:matty-guidance", Description: "write Matty guidance"}}}}
 }
 
 func TestActivationPreviewIsPureAndProducesStableImmutablePlan(t *testing.T) {
@@ -139,7 +155,7 @@ func TestApplyRejectsNonInteractiveBeforeStateOrEffects(t *testing.T) {
 func TestApprovalIsBoundToExactPlan(t *testing.T) {
 	facade, adapter, store := activationFixture(pendingObservation("missing"), pendingObservation("missing"))
 	plan, _ := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
-	otherFacade, _, _ := activationFixture(ActivationObservation{Revision: "host-other", Projections: pendingObservation("missing").Projections})
+	otherFacade, _, _ := activationFixture(SurfaceInspection{Revision: "host-other", Projections: pendingObservation("missing").Projections})
 	other, _ := otherFacade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
 
 	_, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{otherFacade.Approve(other, ConsentReversibleLocal)}, Interactive: true})
@@ -152,7 +168,7 @@ func TestApprovalIsBoundToExactPlan(t *testing.T) {
 }
 
 func TestStalePlanExecutesZeroActions(t *testing.T) {
-	facade, adapter, store := activationFixture(pendingObservation("missing"), ActivationObservation{Revision: "host-2", Projections: pendingObservation("missing").Projections})
+	facade, adapter, store := activationFixture(pendingObservation("missing"), SurfaceInspection{Revision: "host-2", Projections: pendingObservation("missing").Projections})
 	plan, _ := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
 
 	_, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
@@ -202,12 +218,12 @@ func TestMattyApplyReportsFreshReadinessWithoutInventingRuntimeUsability(t *test
 			for i := range verified.Projections {
 				verified.Projections[i].ObservedFingerprint = verified.Projections[i].DesiredFingerprint
 			}
-			facade, _, _ := activationFixtureForSurface(surface, pendingObservation("missing"), pendingObservation("missing"), verified)
-			facade.readinessInspectors = map[Surface]ReadinessInspector{surface: &fakeReadinessInspector{observations: []ReadinessObservation{{
+			verified.Readiness = ReadinessObservation{
 				AuthorizationObserved: true,
 				Authorized:            true,
 				PendingHumanActions:   []string{"reload host and verify the capability in a new runtime session"},
-			}}}}
+			}
+			facade, _, _ := activationFixtureForSurface(surface, pendingObservation("missing"), pendingObservation("missing"), verified)
 
 			plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: surface})
 			if err != nil {
@@ -245,6 +261,7 @@ func TestAlreadyConvergedActivationIsNoOpWithoutApprovalOrApply(t *testing.T) {
 	for i := range obs.Projections {
 		obs.Projections[i].ObservedFingerprint = obs.Projections[i].DesiredFingerprint
 	}
+	obs.Readiness = ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true}
 	facade, adapter, store := activationFixture(obs)
 	store.state = ActivationState{Intent: ActivationIntent{PackID: "matty", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 7}, Ownership: []ProjectionOwnership{{ID: "skill:ask-matt", Contributors: []string{"matty"}, Fingerprint: "skill-new"}, {ID: "instruction:matty-guidance", Contributors: []string{"matty"}, Fingerprint: "instruction-new"}}}
 
@@ -254,6 +271,9 @@ func TestAlreadyConvergedActivationIsNoOpWithoutApprovalOrApply(t *testing.T) {
 	}
 	if !plan.NoOp() {
 		t.Fatalf("plan is not no-op: %+v", plan)
+	}
+	if plan.Readiness() != (ReadinessStatus{Configured: true}) {
+		t.Fatalf("preview promoted fresh host readiness: %+v", plan.Readiness())
 	}
 	if adapter.inspectCalls != 1 || len(adapter.actions) != 0 || len(store.saves) != 0 {
 		t.Fatalf("no-op caused apply/save")
@@ -307,7 +327,7 @@ func TestApprovalForCodexPlanCannotApproveOpenCodePlan(t *testing.T) {
 }
 
 func TestOpenCodeStalePlanExecutesZeroActions(t *testing.T) {
-	facade, adapter, store := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"), ActivationObservation{Revision: "changed", Projections: pendingObservation("missing").Projections})
+	facade, adapter, store := activationFixtureForSurface(SurfaceOpenCode, pendingObservation("missing"), SurfaceInspection{Revision: "changed", Projections: pendingObservation("missing").Projections})
 	plan, _ := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceOpenCode})
 	_, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
 	if !errors.Is(err, ErrStalePlan) {

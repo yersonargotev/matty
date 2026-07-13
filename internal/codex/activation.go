@@ -28,32 +28,47 @@ func NewActivationAdapterWithConfig(bundleRoot, skillsDir, promptFile, configFil
 	return &ActivationAdapter{bundleRoot: bundleRoot, skillsDir: skillsDir, promptFile: promptFile, configFile: configFile}
 }
 
+func (a *ActivationAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
+	var (
+		observation capabilitypack.SurfaceInspection
+		err         error
+	)
+	if len(transition.ResidualOwnership) > 0 {
+		observation, err = a.inspectOwnershipResidual(ctx, transition.Desired, transition.ResidualOwnership, transition.ResolvedExecutables)
+	} else if transition.Prior.ID != "" {
+		observation, err = a.inspectPriorTransition(ctx, transition.Prior, transition.Desired, transition.ResolvedExecutables)
+	} else {
+		observation, err = a.inspectDesired(ctx, transition.Desired, transition.ResolvedExecutables)
+	}
+	if err != nil {
+		return capabilitypack.SurfaceInspection{}, err
+	}
+	observation.Readiness, err = a.inspectReadiness(ctx, transition.Desired, observation, transition.ResolvedExecutables)
+	return observation, err
+}
+
 // InspectReadiness is filesystem-only and side-effect-free. The initial matty
 // pack has no authentication boundary and its file-discovered resources are
 // usable as soon as every required projection is loadable at its host path.
-func (a *ActivationAdapter) InspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.ActivationObservation, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
+func (a *ActivationAdapter) inspectReadiness(_ context.Context, pack capabilitypack.Pack, observation capabilitypack.SurfaceInspection, _ []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
 	if pack.ID != "matty" {
 		return capabilitypack.ReadinessObservation{AuthorizationObserved: true, PendingHumanActions: observation.PendingHumanActions, Evidence: []string{"Codex trust and runtime loading are not yet observed"}}, nil
 	}
 	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, PendingHumanActions: []string{"reload Codex and verify the capability in a new runtime session"}, Evidence: []string{"Codex filesystem discovery paths inspected; runtime loading is not observable without a host signal"}}, nil
 }
 
-func (a *ActivationAdapter) InspectActivation(ctx context.Context, pack capabilitypack.Pack) (capabilitypack.ActivationObservation, error) {
-	return a.InspectActivationWithResolution(ctx, pack, nil)
-}
-
-func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
+func (a *ActivationAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
 	engramOwned := hasEngramCodexSetupResources(pack)
 	if engramOwned {
 		config, err := readOptionalFile(a.configFile)
 		if err != nil {
-			return capabilitypack.ActivationObservation{}, err
+			return capabilitypack.SurfaceInspection{}, err
 		}
 		engramProjections, err := a.inspectEngramContract(config, resolutions)
 		if err != nil {
-			return capabilitypack.ActivationObservation{}, err
+			return capabilitypack.SurfaceInspection{}, err
 		}
 		projections = append(projections, engramProjections...)
 		for _, projection := range engramProjections {
@@ -69,12 +84,12 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 			source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
 			desired, err := localprojection.FingerprintTree(source)
 			if err != nil {
-				return capabilitypack.ActivationObservation{}, fmt.Errorf("fingerprint skill %q: %w", resource.ID, err)
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("fingerprint skill %q: %w", resource.ID, err)
 			}
 			target := filepath.Join(a.skillsDir, resource.ID)
 			observed, exists, err := localprojection.FingerprintPath(target)
 			if err != nil {
-				return capabilitypack.ActivationObservation{}, err
+				return capabilitypack.SurfaceInspection{}, err
 			}
 			id := "skill:" + resource.ID
 			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionSkillLink, Source: source, Target: target, Description: fmt.Sprintf("link skill %s at %s", resource.ID, target)}})
@@ -83,13 +98,13 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 			source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
 			content, err := os.ReadFile(source)
 			if err != nil {
-				return capabilitypack.ActivationObservation{}, fmt.Errorf("read instruction %q: %w", resource.ID, err)
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read instruction %q: %w", resource.ID, err)
 			}
 			start, end := instructionMarkers(resource.ID)
 			desiredBlock := start + "\n" + strings.TrimSpace(string(content)) + "\n" + end
 			current, err := os.ReadFile(a.promptFile)
 			if err != nil && !os.IsNotExist(err) {
-				return capabilitypack.ActivationObservation{}, fmt.Errorf("read Codex instructions: %w", err)
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read Codex instructions: %w", err)
 			}
 			fragment, exists := extractBlock(string(current), start, end)
 			observed := "missing"
@@ -104,7 +119,7 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 		case "mcp_server":
 			current, err := readOptionalFile(a.configFile)
 			if err != nil {
-				return capabilitypack.ActivationObservation{}, err
+				return capabilitypack.SurfaceInspection{}, err
 			}
 			command := capabilitypack.ResolvedExecutablePath(resource.Command, resolutions)
 			desiredBlock := mcpBlock(resource, command)
@@ -123,18 +138,21 @@ func (a *ActivationAdapter) InspectActivationWithResolution(_ context.Context, p
 			revisionParts = append(revisionParts, "config="+localprojection.FingerprintBytes([]byte(current)))
 		}
 	}
+	for i := range projections {
+		projections[i].Goal = capabilitypack.ProjectionPresent
+	}
 	sort.Strings(revisionParts)
-	return capabilitypack.ActivationObservation{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
+	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
 }
 
-func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
-	current, err := a.InspectActivationWithResolution(ctx, active, resolutions)
+func (a *ActivationAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+	current, err := a.inspectDesired(ctx, active, resolutions)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
-	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+	result, err := a.inspectDesired(ctx, desired, resolutions)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
 	retained := map[string]bool{}
 	for _, projection := range result.Projections {
@@ -142,12 +160,13 @@ func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, des
 	}
 	promptContent, err := readOptionalFile(a.promptFile)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
 	configContent, err := readOptionalFile(a.configFile)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
+	candidateStart := len(result.Projections)
 	for _, projection := range current.Projections {
 		if retained[projection.ID] {
 			continue
@@ -169,25 +188,25 @@ func (a *ActivationAdapter) InspectDeactivation(ctx context.Context, active, des
 			content = configContent
 		}
 		projection = capabilitypack.RemovalCandidate(projection, mode, content, fmt.Sprintf("remove Codex projection %s", projection.ID))
-		result.RemovalCandidates = append(result.RemovalCandidates, projection)
+		result.Projections = append(result.Projections, projection)
 	}
-	for i := range result.RemovalCandidates {
-		switch result.RemovalCandidates[i].Action.Target {
+	for i := candidateStart; i < len(result.Projections); i++ {
+		switch result.Projections[i].Action.Target {
 		case a.promptFile:
-			result.RemovalCandidates[i].Action.Content = promptContent
+			result.Projections[i].Action.Content = promptContent
 		case a.configFile:
-			result.RemovalCandidates[i].Action.Content = configContent
+			result.Projections[i].Action.Content = configContent
 		}
 	}
-	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	sort.Slice(result.Projections, func(i, j int) bool { return result.Projections[i].ID < result.Projections[j].ID })
 	result.Revision = localprojection.FingerprintBytes([]byte(current.Revision + "\n" + result.Revision))
 	return result, nil
 }
 
-func (a *ActivationAdapter) InspectReconcile(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.ActivationObservation, error) {
-	result, err := a.InspectActivationWithResolution(ctx, desired, resolutions)
+func (a *ActivationAdapter) inspectOwnershipResidual(ctx context.Context, desired capabilitypack.Pack, ownership []capabilitypack.ProjectionOwnership, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
+	result, err := a.inspectDesired(ctx, desired, resolutions)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
 	retained := make(map[string]bool, len(result.Projections))
 	for _, projection := range result.Projections {
@@ -195,22 +214,23 @@ func (a *ActivationAdapter) InspectReconcile(ctx context.Context, desired capabi
 	}
 	promptContent, err := readOptionalFile(a.promptFile)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
 	configContent, err := readOptionalFile(a.configFile)
 	if err != nil {
-		return capabilitypack.ActivationObservation{}, err
+		return capabilitypack.SurfaceInspection{}, err
 	}
+	candidateStart := len(result.Projections)
 	for _, owner := range ownership {
 		if retained[owner.ID] {
 			continue
 		}
 		projection, ok, inspectErr := a.inspectOwnedProjection(owner.ID, promptContent, configContent)
 		if inspectErr != nil {
-			return capabilitypack.ActivationObservation{}, inspectErr
+			return capabilitypack.SurfaceInspection{}, inspectErr
 		}
 		if ok {
-			result.RemovalCandidates = append(result.RemovalCandidates, projection)
+			result.Projections = append(result.Projections, projection)
 			switch projection.Action.Target {
 			case a.promptFile:
 				promptContent = projection.Action.Content
@@ -219,15 +239,15 @@ func (a *ActivationAdapter) InspectReconcile(ctx context.Context, desired capabi
 			}
 		}
 	}
-	for i := range result.RemovalCandidates {
-		switch result.RemovalCandidates[i].Action.Target {
+	for i := candidateStart; i < len(result.Projections); i++ {
+		switch result.Projections[i].Action.Target {
 		case a.promptFile:
-			result.RemovalCandidates[i].Action.Content = promptContent
+			result.Projections[i].Action.Content = promptContent
 		case a.configFile:
-			result.RemovalCandidates[i].Action.Content = configContent
+			result.Projections[i].Action.Content = configContent
 		}
 	}
-	sort.Slice(result.RemovalCandidates, func(i, j int) bool { return result.RemovalCandidates[i].ID < result.RemovalCandidates[j].ID })
+	sort.Slice(result.Projections, func(i, j int) bool { return result.Projections[i].ID < result.Projections[j].ID })
 	return result, nil
 }
 

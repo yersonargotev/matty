@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-func deactivationFixture(packs []Pack, state ActivationState, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
-	adapter := &fakeActivationAdapter{observations: observations}
+func deactivationFixture(packs []Pack, state ActivationState, observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
+	adapter := &fakeSurfaceAdapter{observations: observations}
 	store := &fakeActivationStore{state: state}
-	facade := NewFacade(Catalog{packs: packs}, nil, WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter}))
+	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	return facade, adapter, store
 }
 
-func deletionObservation(revision, observed string, exists bool) ActivationObservation {
-	return ActivationObservation{Revision: revision, Projections: []ObservedProjection{{
+func deletionObservation(revision, observed string, exists bool) SurfaceInspection {
+	return SurfaceInspection{Revision: revision, Projections: []ObservedProjection{{
 		ID:                  "instruction:guide",
 		Exists:              exists,
 		ObservedFingerprint: observed,
@@ -66,7 +66,7 @@ func TestDeactivateRejectsActiveDependentWithoutCascade(t *testing.T) {
 		{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2},
 		{PackID: "dependent", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 3},
 	}}
-	facade, adapter, store := deactivationFixture(packs, state, ActivationObservation{Revision: "host"})
+	facade, adapter, store := deactivationFixture(packs, state, SurfaceInspection{Revision: "host"})
 
 	plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestDeactivateRetainsSharedProjectionAndResultingContributorsWithoutRewrite
 		{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 5},
 		{PackID: "other", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 1},
 	}, Ownership: []ProjectionOwnership{{ID: "instruction:shared", Contributors: []string{"app", "other"}, Fingerprint: "same"}}}
-	observation := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	observation := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:shared"}}}}
 	facade, adapter, _ := deactivationFixture(packs, state, observation)
 
 	plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
@@ -116,7 +116,7 @@ func TestDeactivateRetainsSharedProjectionAndResultingContributorsWithoutRewrite
 func TestDeactivatePreservesAndBlocksDriftedSharedProjection(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}}, {ID: "other", Version: "1", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "shared", Source: "same"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1", Active: true, Revision: 3}, Intents: []ActivationIntent{{PackID: "app", Surface: SurfaceCodex, Version: "1", Active: true}, {PackID: "other", Surface: SurfaceCodex, Version: "1", Active: true}}, Ownership: []ProjectionOwnership{{ID: "instruction:shared", Contributors: []string{"app", "other"}, Fingerprint: "verified"}}}
-	obs := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "user-drift", DesiredFingerprint: "verified", Action: ProjectionAction{ID: "instruction:shared"}}}}
+	obs := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:shared", Exists: true, ObservedFingerprint: "user-drift", DesiredFingerprint: "verified", Action: ProjectionAction{ID: "instruction:shared"}}}}
 	facade, adapter, store := deactivationFixture(packs, state, obs)
 	plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil {
@@ -193,7 +193,7 @@ func TestDeactivateRejectsChangedIntentOwnershipCatalogAndDependentsWithZeroEffe
 func TestDeactivateAlreadyInactiveConvergedIsNoOp(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: false, Revision: 8}}
-	facade, adapter, store := deactivationFixture([]Pack{pack}, state, ActivationObservation{Revision: "host"})
+	facade, adapter, store := deactivationFixture([]Pack{pack}, state, SurfaceInspection{Revision: "host"})
 
 	plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil || !plan.NoOp() || len(plan.Phases()) != 0 {
@@ -207,7 +207,7 @@ func TestDeactivateAlreadyInactiveConvergedIsNoOp(t *testing.T) {
 func TestDeactivateInactiveConvergedPackIsNoOpWithUnrelatedSurfaceOwnership(t *testing.T) {
 	packs := []Pack{{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}}, {ID: "other", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "other"}}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: false, Revision: 8}, Intents: []ActivationIntent{{PackID: "app", Surface: SurfaceCodex, Version: "1.0.0", Active: false, Revision: 8}, {PackID: "other", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 2}}, Ownership: []ProjectionOwnership{{ID: "instruction:other", Contributors: []string{"other"}, Fingerprint: "same"}}}
-	observation := ActivationObservation{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:other", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:other"}}}}
+	observation := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "instruction:other", Exists: true, ObservedFingerprint: "same", DesiredFingerprint: "same", Action: ProjectionAction{ID: "instruction:other"}}}}
 	facade, _, store := deactivationFixture(packs, state, observation)
 	plan, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "app", Surface: SurfaceCodex})
 	if err != nil || !plan.NoOp() || len(store.saves) != 0 {

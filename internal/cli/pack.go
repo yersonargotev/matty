@@ -222,16 +222,15 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 	}
 	codexAdapter := codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)
 	openCodeAdapter := opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
-	readinessInspectors := opts.ReadinessInspectors
-	if readinessInspectors == nil {
-		readinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{
-			capabilitypack.SurfaceCodex: codexAdapter, capabilitypack.SurfaceOpenCode: openCodeAdapter,
+	adapters := opts.SurfaceAdapters
+	if adapters == nil {
+		adapters = map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
+			capabilitypack.SurfaceCodex:    codexAdapter,
+			capabilitypack.SurfaceOpenCode: openCodeAdapter,
 		}
 	}
-	return capabilitypack.NewFacade(catalog, nil,
-		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), map[capabilitypack.Surface]capabilitypack.ActivationAdapter{
-			capabilitypack.SurfaceCodex: codexAdapter, capabilitypack.SurfaceOpenCode: openCodeAdapter,
-		}), capabilitypack.WithReadinessInspectors(readinessInspectors),
+	return capabilitypack.NewFacade(catalog,
+		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), adapters),
 		capabilitypack.WithExternalEffects(
 			engrambin.NewResolver(paths.HomebrewPrefixEnv, opts.Runner.LookPath),
 			runnerExternalExecutor{runner: opts.Runner},

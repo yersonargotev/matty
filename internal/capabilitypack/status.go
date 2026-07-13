@@ -58,12 +58,6 @@ type ReadinessObservation struct {
 	Evidence              []string
 }
 
-// ReadinessInspector observes authentication/trust/permissions and runtime
-// loading without performing commands or mutations.
-type ReadinessInspector interface {
-	InspectReadiness(context.Context, Pack, ActivationObservation, []ExecutableResolution) (ReadinessObservation, error)
-}
-
 type StatusEntry struct {
 	Pack                Pack
 	Surface             Surface
@@ -77,7 +71,6 @@ type StatusEntry struct {
 	Blockers            []string
 	PendingHumanActions []string
 	Evidence            []string
-	Observation         SurfaceObservation
 }
 
 type ReadinessObservationStatus struct {
@@ -90,24 +83,16 @@ type StatusReport struct{ Entries []StatusEntry }
 
 // Facade is the single capability-pack use-case boundary consumed by the CLI.
 type Facade struct {
-	catalog             Catalog
-	activation          *activationDependencies
-	readinessInspectors map[Surface]ReadinessInspector
-	inspectors          map[Surface]SurfaceInspector
+	catalog    Catalog
+	activation *activationDependencies
 }
 
-func NewFacade(catalog Catalog, inspectors map[Surface]SurfaceInspector, options ...FacadeOption) Facade {
-	facade := Facade{catalog: catalog, inspectors: inspectors}
+func NewFacade(catalog Catalog, options ...FacadeOption) Facade {
+	facade := Facade{catalog: catalog}
 	for _, option := range options {
 		option(&facade)
 	}
 	return facade
-}
-
-// WithReadinessInspectors installs replaceable, side-effect-free host evidence
-// providers. Missing providers conservatively leave authorization/usability false.
-func WithReadinessInspectors(values map[Surface]ReadinessInspector) FacadeOption {
-	return func(f *Facade) { f.readinessInspectors = values }
 }
 
 func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport, error) {
@@ -145,18 +130,7 @@ func (f Facade) Status(ctx context.Context, request StatusRequest) (StatusReport
 
 func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (StatusEntry, error) {
 	if f.activation == nil || f.activation.store == nil {
-		inspector := f.inspectors[surface]
-		if inspector == nil {
-			return StatusEntry{}, fmt.Errorf("no inspector configured for CLI surface %q", surface)
-		}
-		observed, err := inspector.Inspect(ctx, pack)
-		if err != nil {
-			return StatusEntry{}, err
-		}
-		if !observed.Inspected {
-			return StatusEntry{}, fmt.Errorf("adapter returned no fresh observation")
-		}
-		return StatusEntry{Pack: pack, Surface: surface, Observation: observed}, nil
+		return StatusEntry{}, fmt.Errorf("surface inspection is not configured")
 	}
 	adapter := f.activation.adapters[surface]
 	if adapter == nil {
@@ -166,7 +140,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	if err != nil {
 		return StatusEntry{}, err
 	}
-	entry := StatusEntry{Pack: pack, Surface: surface, Observation: SurfaceObservation{Inspected: true}}
+	entry := StatusEntry{Pack: pack, Surface: surface}
 	if intent, ok := intentForPack(state, pack.ID, surface); ok {
 		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
 		entry.IntentPresent = true
@@ -187,7 +161,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 			}
 		}
 	}
-	observation, inspectErr := inspectActivation(ctx, adapter, relevantPack, resolutions)
+	observation, inspectErr := inspectSurface(ctx, adapter, SurfaceTransition{Desired: relevantPack, ResolvedExecutables: resolutions})
 	if inspectErr != nil {
 		return StatusEntry{}, inspectErr
 	}
@@ -200,23 +174,17 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 			entry.Blockers = append(entry.Blockers, fmt.Sprintf("%s is %s", detail.ID, detail.Health))
 		}
 	}
-	if inspector := f.readinessInspectors[surface]; inspector != nil {
-		fresh, err := inspector.InspectReadiness(ctx, pack, observation, resolutions)
-		if err != nil {
-			return StatusEntry{}, err
-		}
-		if entry.Readiness.Configured {
-			entry.PendingHumanActions = append(entry.PendingHumanActions, fresh.PendingHumanActions...)
-		}
-		entry.Evidence = append(entry.Evidence, fresh.Evidence...)
-		entry.ReadinessObserved.Authorization = fresh.AuthorizationObserved
-		entry.ReadinessObserved.Usability = fresh.UsabilityObserved
-		entry.Readiness.Authorized = entry.Readiness.Configured && fresh.AuthorizationObserved && fresh.Authorized
-		entry.Readiness.Usable = entry.Readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
-	} else {
-		if entry.Readiness.Configured {
-			entry.PendingHumanActions = append(entry.PendingHumanActions, observation.PendingHumanActions...)
-		}
+	fresh := observation.Readiness
+	if entry.Readiness.Configured {
+		entry.PendingHumanActions = append(entry.PendingHumanActions, fresh.PendingHumanActions...)
+	}
+	entry.Evidence = append(entry.Evidence, fresh.Evidence...)
+	entry.ReadinessObserved.Authorization = fresh.AuthorizationObserved
+	entry.ReadinessObserved.Usability = fresh.UsabilityObserved
+	entry.Readiness.Authorized = entry.Readiness.Configured && fresh.AuthorizationObserved && fresh.Authorized
+	entry.Readiness.Usable = entry.Readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
+	if entry.Readiness.Configured && len(fresh.PendingHumanActions) == 0 {
+		entry.PendingHumanActions = append(entry.PendingHumanActions, observation.PendingHumanActions...)
 	}
 	if entry.Readiness.Configured && !entry.Readiness.Authorized {
 		entry.Blockers = append(entry.Blockers, "authorization/trust is not freshly demonstrated")
@@ -294,9 +262,3 @@ func latestAttemptStatus(state ActivationState, packID string, surface Surface) 
 	}
 	return &AttemptStatus{Outcome: string(candidate.Outcome), PlanID: candidate.PlanID}
 }
-
-// Deprecated baseline seam retained source-compatibly for existing callers.
-type SurfaceInspector interface {
-	Inspect(context.Context, Pack) (SurfaceObservation, error)
-}
-type SurfaceObservation struct{ Inspected bool }

@@ -11,12 +11,32 @@ import (
 	"testing"
 
 	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/matty/internal/codex"
+	"github.com/yersonargotev/matty/internal/opencodeactivation"
 )
 
-type alwaysUsableInspector struct{}
+type alwaysUsableAdapter struct{ delegate capabilitypack.SurfaceAdapter }
 
-func (alwaysUsableInspector) InspectReadiness(context.Context, capabilitypack.Pack, capabilitypack.ActivationObservation, []capabilitypack.ExecutableResolution) (capabilitypack.ReadinessObservation, error) {
-	return capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true, Evidence: []string{"fake runtime loaded capability"}}, nil
+func (a alwaysUsableAdapter) InspectSurface(ctx context.Context, transition capabilitypack.SurfaceTransition) (capabilitypack.SurfaceInspection, error) {
+	inspection, err := a.delegate.InspectSurface(ctx, transition)
+	inspection.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true, Evidence: []string{"fake runtime loaded capability"}}
+	return inspection, err
+}
+
+func (a alwaysUsableAdapter) ApplyProjections(ctx context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
+	return a.delegate.ApplyProjections(ctx, actions)
+}
+
+func alwaysUsableAdapters(t *testing.T, opts Options) map[capabilitypack.Surface]capabilitypack.SurfaceAdapter {
+	t.Helper()
+	paths, err := ResolvePaths(opts.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
+		capabilitypack.SurfaceCodex:    alwaysUsableAdapter{delegate: codex.NewActivationAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)},
+		capabilitypack.SurfaceOpenCode: alwaysUsableAdapter{delegate: opencodeactivation.NewActivationAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)},
+	}
 }
 
 func TestPackHelpDocumentsSupportedRolloutCommands(t *testing.T) {
@@ -260,9 +280,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatalf("surface reconcile: %v\n%s", err, out)
 				}
 
-				opts.ReadinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{
-					capabilitypack.Surface(surface): alwaysUsableInspector{},
-				}
+				opts.SurfaceAdapters = alwaysUsableAdapters(t, opts)
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "status", packID, "--surface", surface, "--require", "usable"); err != nil || !strings.Contains(out, "usable=yes") {
 					t.Fatalf("usable readiness gate: %v\n%s", err, out)
 				}
@@ -664,7 +682,7 @@ func TestPackStatusJSONRequireEmitsDocumentBeforeGateError(t *testing.T) {
 	if json.Unmarshal([]byte(out), &report) != nil || len(report.Entries) != 1 {
 		t.Fatalf("missing JSON before gate: %s", out)
 	}
-	opts.ReadinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{capabilitypack.SurfaceCodex: alwaysUsableInspector{}}
+	opts.SurfaceAdapters = alwaysUsableAdapters(t, opts)
 	if activation, activateErr := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); activateErr != nil {
 		t.Fatalf("activate: %v\n%s", activateErr, activation)
 	}
@@ -701,7 +719,7 @@ func TestPackStatusRequiresCompleteTarget(t *testing.T) {
 func TestPackStatusRequireUsableIsIndependentNonInteractiveGate(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _ := packActivationOptions(t, terminal)
-	opts.ReadinessInspectors = map[capabilitypack.Surface]capabilitypack.ReadinessInspector{capabilitypack.SurfaceCodex: alwaysUsableInspector{}}
+	opts.SurfaceAdapters = alwaysUsableAdapters(t, opts)
 	if _, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", "codex", "--require", "usable"); err == nil || !strings.Contains(err.Error(), "not freshly observed usable") {
 		t.Fatalf("inactive gate error=%v", err)
 	}

@@ -55,14 +55,14 @@ func engramPackFixture() Pack {
 	}
 }
 
-func engramObservation(observed string) ActivationObservation {
+func engramObservation(observed string) SurfaceInspection {
 	instructionObserved, mcpObserved := observed, observed
 	if observed == "ready" {
 		instructionObserved, mcpObserved = "instruction-new", "mcp-new"
 	}
-	return ActivationObservation{
+	return SurfaceInspection{
 		Revision:            "host-1",
-		Readiness:           ReadinessStatus{Authorized: false, Usable: false},
+		Readiness:           ReadinessObservation{},
 		PendingHumanActions: []string{"review host trust", "reload host"},
 		Projections: []ObservedProjection{
 			{ID: "instruction:engram-memory", Exists: observed != "missing", ObservedFingerprint: instructionObserved, DesiredFingerprint: "instruction-new", Action: ProjectionAction{ID: "instruction:engram-memory", Kind: ActionInstructionFile, Description: "write Engram instruction"}},
@@ -71,12 +71,12 @@ func engramObservation(observed string) ActivationObservation {
 	}
 }
 
-func engramFacadeForTest(resolver ExecutableResolver, executor ExternalExecutor, observations ...ActivationObservation) (Facade, *fakeActivationAdapter, *fakeActivationStore) {
+func engramFacadeForTest(resolver ExecutableResolver, executor ExternalExecutor, observations ...SurfaceInspection) (Facade, *fakeSurfaceAdapter, *fakeActivationStore) {
 	pack := engramPackFixture()
-	adapter := &fakeActivationAdapter{observations: observations}
+	adapter := &fakeSurfaceAdapter{observations: observations}
 	store := &fakeActivationStore{}
-	facade := NewFacade(Catalog{packs: []Pack{pack}}, nil,
-		WithActivation(store, map[Surface]ActivationAdapter{SurfaceCodex: adapter, SurfaceOpenCode: adapter}),
+	facade := NewFacade(Catalog{packs: []Pack{pack}},
+		WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter, SurfaceOpenCode: adapter}),
 		WithExternalEffects(resolver, executor),
 	)
 	return facade, adapter, store
@@ -198,7 +198,7 @@ func TestEngramApplyVerifiesLocalBeforeExternalAndReportsPendingReadiness(t *tes
 }
 
 func TestExternallyManagedEngramProjectionWaitsForCodexSetup(t *testing.T) {
-	missing := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{
+	missing := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{
 		ID: "external_setup:engram:codex", Exists: false, ObservedFingerprint: "missing", DesiredFingerprint: "engram-codex-v1",
 		ExternallyManaged: true,
 		Action:            ProjectionAction{ID: "external_setup:engram:codex", Kind: ActionCodexMCPConfig},
@@ -232,7 +232,7 @@ func TestExternallyManagedEngramProjectionWaitsForCodexSetup(t *testing.T) {
 }
 
 func TestEngramCodexVerificationFailureRetriesSetupFromFreshRecoveryPlan(t *testing.T) {
-	missing := ActivationObservation{Revision: "host-1", Projections: []ObservedProjection{{
+	missing := SurfaceInspection{Revision: "host-1", Projections: []ObservedProjection{{
 		ID: "external_setup:engram:codex", ObservedFingerprint: "missing", DesiredFingerprint: "ready", ExternallyManaged: true,
 		Action: ProjectionAction{ID: "external_setup:engram:codex", Kind: ActionCodexMCPConfig},
 	}}}

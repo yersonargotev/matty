@@ -42,7 +42,7 @@ func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *tes
 		{Kind: "instruction", ID: "matty-guidance", Source: "instructions/matty.md"},
 	}}
 	adapter := NewActivationAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
-	observed, err := adapter.InspectActivation(context.Background(), pack)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestActivationAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *tes
 	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := adapter.InspectActivation(context.Background(), pack)
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T
 	}
 	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
 	active := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
-	observed, err := adapter.InspectActivation(context.Background(), active)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: active})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func TestInspectDeactivationPreservesUnmanagedOpenCodeConfiguration(t *testing.T
 	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
 		t.Fatal(err)
 	}
-	removal, err := adapter.InspectDeactivation(context.Background(), active, capabilitypack.Pack{ID: "desired"}, nil)
+	removal, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Prior: active, Desired: capabilitypack.Pack{ID: "desired"}, ResolvedExecutables: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
 	actions = nil
-	for _, projection := range removal.RemovalCandidates {
+	for _, projection := range removal.Projections {
 		actions = append(actions, projection.Action)
 	}
 	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
@@ -147,7 +147,7 @@ func TestActivationAdapterInspectDoesNotWrite(t *testing.T) {
 	prompt := filepath.Join(root, "xdg", "opencode", "matty.md")
 	adapter := NewActivationAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
 	pack := capabilitypack.Pack{ID: "matty", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "matty-guidance", Source: "instructions/matty.md"}}}
-	if _, err := adapter.InspectActivation(context.Background(), pack); err != nil {
+	if _, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Dir(config)); !os.IsNotExist(err) {
@@ -181,7 +181,7 @@ func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
 		{Kind: "mcp_server", ID: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
 	}}
 	adapter := NewActivationAdapter(root, filepath.Join(root, ".agents", "skills"), config, prompt)
-	observed, err := adapter.InspectActivation(context.Background(), pack)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
 	if _, err := os.Stat(prompt); err != nil {
 		t.Fatalf("Engram instruction file missing: %v", err)
 	}
-	verified, err := adapter.InspectActivation(context.Background(), pack)
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUn
 	}
 	adapter := NewActivationAdapter(bundle, filepath.Join(root, "skills"), config, prompt)
 	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "guide", Source: "guide.md"}}}
-	observed, err := adapter.InspectActivation(context.Background(), pack)
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUn
 	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := adapter.InspectActivation(context.Background(), pack)
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,14 +271,14 @@ func TestInspectReconcileDiscoversObsoleteOwnedOpenCodeProjectionsAndPreservesUn
 	for _, projection := range verified.Projections {
 		owners = append(owners, capabilitypack.ProjectionOwnership{ID: projection.ID, Fingerprint: projection.ObservedFingerprint, Contributors: []string{"app"}})
 	}
-	reconcile, err := adapter.InspectReconcile(context.Background(), capabilitypack.Pack{ID: "desired"}, owners, nil)
+	reconcile, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: capabilitypack.Pack{ID: "desired"}, ResidualOwnership: owners, ResolvedExecutables: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reconcile.RemovalCandidates) != 2 {
-		t.Fatalf("removal candidates = %+v", reconcile.RemovalCandidates)
+	if len(reconcile.Projections) != 2 {
+		t.Fatalf("removal candidates = %+v", reconcile.Projections)
 	}
-	for _, projection := range reconcile.RemovalCandidates {
+	for _, projection := range reconcile.Projections {
 		if err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{projection.Action}); err != nil {
 			t.Fatal(err)
 		}
