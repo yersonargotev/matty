@@ -6,10 +6,19 @@ prompt layers without becoming an always-on runtime orchestrator.
 
 ## Quick path
 
-1. Use `matty install` to apply the golden-path setup.
-2. Use `matty doctor` to inspect setup health without mutations.
-3. Use `matty update` to refresh Matty-managed artifacts.
-4. Use `matty uninstall` to remove only Matty-owned artifacts.
+The [README quickstart](../../README.md#quickstart) is the canonical first-run
+sequence. Package-installed users initialize the Installed Source with
+`matty init`, preview the setup, and then apply it. Repository checkouts and an
+explicit `MATTY_SKILLS_SOURCE` remain development source options.
+
+After installation:
+
+- use `matty doctor` for read-only setup health;
+- use `matty update` to refresh managed artifacts;
+- use `matty uninstall` to remove only Matty-owned artifacts.
+
+Capability packs have their own explicit, per-surface preview and Apply
+lifecycle.
 
 ## Problem
 
@@ -26,22 +35,25 @@ updateable, and reversible while keeping startup instructions small.
 | Platform | macOS-first. Linux may be considered later but is not promised for v0. |
 | CLI surfaces | Codex and OpenCode only. |
 | Skills | Curated global bundle exposed as symlinks under `~/.agents/skills`. |
+| Sources | One resolved Skill Source selected from an explicit override, repository checkout, or package Installed Source. |
 | Memory | Engram installed/updated through official mechanisms and configured through `engram setup`. |
-| State | Small Matty state file at `~/.matty/config.json`. |
+| Capability packs | Opt-in `matty` and `engram` packs managed independently on each supported surface. |
+| State | Small classic and capability-pack state files beneath `~/.matty`. |
 | Prompts | Small Matty-owned global prompt/config blocks only. |
 | Safety | Preserve user, Engram, and Gentle AI content outside Matty markers. |
 
 ## User outcomes
 
-- One command configures the preferred Codex/OpenCode workflow.
+- A previewable first-run sequence configures the preferred Codex/OpenCode workflow.
 - Repos are not polluted with copied skills or local prompt files by default.
 - Repeated install/update runs are idempotent.
 - `doctor` is safe and read-only.
 - `uninstall` removes Matty-owned symlinks, marker blocks, prompt entries/files, and state without uninstalling Engram or deleting Gentle AI content.
+- Capability-pack changes are explicit, surface-scoped, ownership-aware, and separately gated from host readiness.
 
-## Implemented v0 slices
+## Implemented product areas
 
-| Slice | Outcome |
+| Area | Outcome |
 | --- | --- |
 | 01 scaffold | Go+Cobra CLI with `install`, `doctor`, `update`, and `uninstall`, plus sandboxable command execution. |
 | 02 state/dry-run | Minimal Matty state and dry-run planning for file, symlink, and external-command actions. |
@@ -52,6 +64,10 @@ updateable, and reversible while keeping startup instructions small.
 | 07 doctor | Read-only health checks with actionable pass/warn/fail output. |
 | 08 lifecycle | Complete idempotent update and safe uninstall behavior. |
 | 09 hardening | README docs and end-to-end sandbox lifecycle tests. |
+| Package distribution | Versioned GitHub Release artifacts, Homebrew publication, `matty init`, and package-install smoke coverage. |
+| Capability packs | Discovery, status, activation, update, reconciliation, deactivation, recovery, and readiness gates for `matty` and `engram`. |
+| Automation | Versioned JSON output for doctor and pack status, with stable health and readiness exit behavior. |
+| Internal ownership | Deep core-lifecycle and setup-health modules plus domain-owned workstation layouts and host observations. |
 
 ## Out of scope for v0
 
@@ -72,6 +88,6 @@ The repo-level verification remains:
 go test ./...
 ```
 
-Before using Matty against a real HOME, run the lifecycle in a sandboxed
-HOME/config environment and verify `install`, `doctor`, `update`, and `uninstall`
-behavior end to end.
+Before using Matty against a real HOME, run the package lifecycle in a sandboxed
+HOME/config environment. The canonical command sequence and focused automated
+smoke test live in the [release guide](../release.md#sandboxed-package-install-smoke-expectations).

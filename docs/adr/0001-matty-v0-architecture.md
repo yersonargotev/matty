@@ -37,6 +37,19 @@ Matty runtime behavior stays in Matty-owned folders/packages.
 | Coexistence | Warn about Gentle AI conflict signals, but never delete or rewrite Gentle AI content by default. |
 | Safety | Tests and manual checks must sandbox `HOME`/`XDG_CONFIG_HOME`. |
 
+## Subsequent refinements
+
+[ADR 0002](0002-package-installed-source-model.md) introduced the
+package-installed Installed Source, and
+[ADR 0006](0006-own-workstation-layout-by-domain.md) assigned source and layout
+ownership to the relevant internal modules. The `bundle/skills` decision above
+names Matty's logical bundle, not a current-working-directory-only default.
+
+Current Skill Source selection applies one precedence order: an explicit
+`MATTY_SKILLS_SOURCE`, a Matty repository checkout, then the Installed Source.
+`bootstrap` owns the Installed Source descriptor, `skillbundle` owns that
+selection policy, and the CLI only composes the resolved values.
+
 ## Consequences
 
 - Matty is easy to reason about: every command plans or applies configuration changes rather than owning session runtime behavior.
