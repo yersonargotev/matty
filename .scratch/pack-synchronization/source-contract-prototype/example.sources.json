@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "mattpocock-skills",
+      "provider": "github",
+      "repository": "mattpocock/skills",
+      "selector": {
+        "mode": "stable-release"
+      },
+      "resources": [
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "ask-matt",
+          "upstream_path": "skills/engineering/ask-matt"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "code-review",
+          "upstream_path": "skills/engineering/code-review"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "codebase-design",
+          "upstream_path": "skills/engineering/codebase-design"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "diagnosing-bugs",
+          "upstream_path": "skills/engineering/diagnosing-bugs"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "domain-modeling",
+          "upstream_path": "skills/engineering/domain-modeling"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grill-with-docs",
+          "upstream_path": "skills/engineering/grill-with-docs"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "implement",
+          "upstream_path": "skills/engineering/implement"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "improve-codebase-architecture",
+          "upstream_path": "skills/engineering/improve-codebase-architecture"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "prototype",
+          "upstream_path": "skills/engineering/prototype"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "research",
+          "upstream_path": "skills/engineering/research"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "resolving-merge-conflicts",
+          "upstream_path": "skills/engineering/resolving-merge-conflicts"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "setup-matt-pocock-skills",
+          "upstream_path": "skills/engineering/setup-matt-pocock-skills"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "tdd",
+          "upstream_path": "skills/engineering/tdd"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "to-spec",
+          "upstream_path": "skills/engineering/to-spec"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "to-tickets",
+          "upstream_path": "skills/engineering/to-tickets"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "triage",
+          "upstream_path": "skills/engineering/triage"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "wayfinder",
+          "upstream_path": "skills/engineering/wayfinder"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "loop-me",
+          "upstream_path": "skills/in-progress/loop-me"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grill-me",
+          "upstream_path": "skills/productivity/grill-me"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grilling",
+          "upstream_path": "skills/productivity/grilling"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "handoff",
+          "upstream_path": "skills/productivity/handoff"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "teach",
+          "upstream_path": "skills/productivity/teach"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "writing-great-skills",
+          "upstream_path": "skills/productivity/writing-great-skills"
+        }
+      ]
+    }
+  ]
+}
