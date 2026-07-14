@@ -47,6 +47,12 @@ The complete logical outcome Matty computes from the active capability packs on 
 ### Pack ownership
 Matty's recorded authority over a projected resource or config fragment. Ownership determines whether Matty may update or remove it and is distinct from the host's trust, authentication, and runtime authorization.
 
+### Pack observable contract
+The complete user-visible behavior of a capability pack, including its skill content, declared resources, requirements, capabilities, and activation or update experience. A pack version describes this contract rather than its upstream source version or textual diff size.
+
+### Pack compatibility
+Whether a newer pack observable contract preserves the workflows and expectations of an active older version without an incompatible migration or newly mandatory user action.
+
 ### Reconciliation plan
 An immutable preview of the exact ordered changes needed to move one approved pack operation from freshly observed state toward pack desired state. Its identity covers the activation intent revision, relied-on observations, actions, and human-consent phases; changed inputs require a new plan and approval.
 
