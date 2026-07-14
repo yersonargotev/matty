@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # Route setup health through owner observations
 
@@ -15,18 +15,18 @@ catalog of artifact paths.
 
 ## Acceptance criteria
 
-- [ ] Setup health consumes lifecycle state and managed-skill observations from their owners.
-- [ ] Skill, Codex, OpenCode, and Engram facts come from their owning layouts, observers, or resolvers rather than setup-health path reconstruction.
-- [ ] Setup health receives directly only facts intrinsic to diagnosis and report context.
-- [ ] Report construction does not recreate the former broad layout under a new configuration type.
-- [ ] Diagnosis remains read-only and continues after individual observation failures.
-- [ ] Human context and check output remain byte-compatible.
-- [ ] JSON schema, report kind, check names and order, severities, details, remediation text, summary counts, status, and error timing remain unchanged.
-- [ ] Setup-health semantic tests remain at the report seam and use real owner observations against sandboxed filesystems where deterministic.
-- [ ] CLI doctor tests remain limited to composition, rendering, output failures, and exit adaptation.
-- [ ] Capability-pack health remains excluded.
-- [ ] No permanent forwarding configuration or duplicate observation policy remains.
-- [ ] Focused setup-health, owner, and CLI tests pass, followed by the complete repository test suite with sandboxed Home and XDG configuration.
+- [x] Setup health consumes lifecycle state and managed-skill observations from their owners.
+- [x] Skill, Codex, OpenCode, and Engram facts come from their owning layouts, observers, or resolvers rather than setup-health path reconstruction.
+- [x] Setup health receives directly only facts intrinsic to diagnosis and report context.
+- [x] Report construction does not recreate the former broad layout under a new configuration type.
+- [x] Diagnosis remains read-only and continues after individual observation failures.
+- [x] Human context and check output remain byte-compatible.
+- [x] JSON schema, report kind, check names and order, severities, details, remediation text, summary counts, status, and error timing remain unchanged.
+- [x] Setup-health semantic tests remain at the report seam and use real owner observations against sandboxed filesystems where deterministic.
+- [x] CLI doctor tests remain limited to composition, rendering, output failures, and exit adaptation.
+- [x] Capability-pack health remains excluded.
+- [x] No permanent forwarding configuration or duplicate observation policy remains.
+- [x] Focused setup-health, owner, and CLI tests pass, followed by the complete repository test suite with sandboxed Home and XDG configuration.
 
 ## Out of scope
 

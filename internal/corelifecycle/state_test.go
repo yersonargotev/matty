@@ -9,7 +9,54 @@ import (
 	"time"
 
 	"github.com/yersonargotev/matty/internal/ownedcontainer"
+	"github.com/yersonargotev/matty/internal/skillbundle"
 )
+
+func TestObserveSetupSuppliesStateAndManagedSkillFactsReadOnly(t *testing.T) {
+	home := t.TempDir()
+	stateLayout := NewLayout(filepath.Join(home, ".matty"))
+	skills := skillbundle.NewGlobalLayout(home)
+	source := skillbundle.Source{Root: filepath.Join(home, "source", "skills")}
+	managedSource := filepath.Join(source.Root, "engineering", "managed")
+	managedLink := skills.Skill("managed")
+	if err := os.MkdirAll(managedSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(managedLink), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(managedSource, managedLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(stateLayout.StateFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := DesiredState(StateConfig{StateFile: stateLayout.StateFile(), AgentSkillsDir: skills.Root()}, time.Unix(1, 0), []ManagedSkill{{Name: "managed", SourcePath: managedSource, LinkPath: managedLink}})
+	if err := SaveState(stateLayout.StateFile(), state); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(stateLayout.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := ObserveSetup(stateLayout, skills, source)
+
+	if observation.StateFile() != stateLayout.StateFile() || observation.SkillsRoot() != skills.Root() || !observation.State().Found() {
+		t.Fatalf("observation = %#v", observation)
+	}
+	links := observation.ManagedSkillLinks()
+	if len(links) != 1 || links[0].Condition() != SkillLinkManaged {
+		t.Fatalf("managed links = %#v", links)
+	}
+	after, err := os.ReadFile(stateLayout.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("setup observation mutated classic state")
+	}
+}
 
 func TestStateStorePublishesInitialState(t *testing.T) {
 	dir := t.TempDir()

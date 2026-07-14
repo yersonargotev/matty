@@ -139,8 +139,8 @@ func TestSetupHealthDeletionDoesNotRedistributeDiagnosisPolicyInCLI(t *testing.T
 		t.Fatal(err)
 	}
 	for call, want := range map[string]int{
-		"setuphealth.New(":          1,
-		"opts.SetupHealthDiagnose(": 1,
+		"setuphealth.Diagnose(":      1,
+		"opts.SetupHealthDiagnose()": 1,
 	} {
 		if got := strings.Count(string(root), call); got != want {
 			t.Fatalf("root.go has %d occurrences of %q, want %d", got, call, want)

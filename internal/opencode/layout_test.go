@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -17,5 +19,25 @@ func TestCanonicalLayoutOwnsOpenCodePaths(t *testing.T) {
 	}
 	if layout.PromptFile() != filepath.Join(configHome, "opencode", "matty.md") {
 		t.Fatalf("PromptFile = %q", layout.PromptFile())
+	}
+}
+
+func TestObserveSetupUsesCanonicalOpenCodeLayout(t *testing.T) {
+	layout := NewCanonicalLayout(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(layout.ConfigFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.PromptFile(), []byte("prompt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.ConfigFile(), []byte(fmt.Sprintf(`{"instructions":[%q]}`, layout.PromptFile())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	observation := ObserveSetup(layout)
+
+	inspection := observation.Inspection()
+	if observation.ConfigFile() != layout.ConfigFile() || observation.PromptFile() != layout.PromptFile() || observation.Err() != nil || !inspection.ConfigExists || !inspection.PromptExists || !inspection.HasMattyInstruction {
+		t.Fatalf("observation = %#v inspection = %#v", observation, inspection)
 	}
 }

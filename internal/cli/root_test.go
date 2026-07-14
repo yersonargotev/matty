@@ -24,8 +24,8 @@ import (
 func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	t.Run("healthy", func(t *testing.T) {
 		opts, _, _ := sandboxOptions(t)
-		opts.SetupHealthDiagnose = func(setuphealth.Config) setuphealth.Report {
-			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{{Severity: setuphealth.Pass, Name: "fixture", Detail: "healthy"}}, Summary: setuphealth.Summary{Status: "healthy", Passes: 1}}
+		opts.SetupHealthDiagnose = func() (setuphealth.Report, error) {
+			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{{Severity: setuphealth.Pass, Name: "fixture", Detail: "healthy"}}, Summary: setuphealth.Summary{Status: "healthy", Passes: 1}}, nil
 		}
 		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
 		if err != nil {
@@ -49,8 +49,8 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	})
 	t.Run("warnings", func(t *testing.T) {
 		opts, _, _ := sandboxOptions(t)
-		opts.SetupHealthDiagnose = func(setuphealth.Config) setuphealth.Report {
-			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{{Severity: setuphealth.Warn, Name: "fixture", Detail: "warning"}}, Summary: setuphealth.Summary{Status: "warnings", Warnings: 1}}
+		opts.SetupHealthDiagnose = func() (setuphealth.Report, error) {
+			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{{Severity: setuphealth.Warn, Name: "fixture", Detail: "warning"}}, Summary: setuphealth.Summary{Status: "warnings", Warnings: 1}}, nil
 		}
 		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
 		if err != nil {
@@ -65,11 +65,11 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	})
 	t.Run("failures emit full report before error", func(t *testing.T) {
 		opts, _, _ := sandboxOptions(t)
-		opts.SetupHealthDiagnose = func(setuphealth.Config) setuphealth.Report {
+		opts.SetupHealthDiagnose = func() (setuphealth.Report, error) {
 			return setuphealth.Report{SchemaVersion: 1, Kind: "doctor", Checks: []setuphealth.Check{
 				{Severity: setuphealth.Fail, Name: "failed", Detail: "failure"},
 				{Severity: setuphealth.Warn, Name: "later", Detail: "complete report"},
-			}, Summary: setuphealth.Summary{Status: "failures", Warnings: 1, Failures: 1}}
+			}, Summary: setuphealth.Summary{Status: "failures", Warnings: 1, Failures: 1}}, nil
 		}
 		out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
 		if !errors.Is(err, ErrDoctorUnhealthy) {

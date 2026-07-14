@@ -12,6 +12,58 @@ import (
 	"time"
 )
 
+func TestObserveSetupOwnsExecutableTopologyAndIndependentFacts(t *testing.T) {
+	home := t.TempDir()
+	prefix := filepath.Join(home, "homebrew")
+	canonical := writeVersionExecutableAt(t, filepath.Join(prefix, "bin", "engram"), "printf 'engram version 1.19.0\\n'")
+	local := writeVersionExecutableAt(t, filepath.Join(home, "bin", "engram"), "printf 'engram version 1.18.0\\n'")
+	lookups := 0
+	processErr := errors.New("process inspection failed")
+	observation := ObserveSetup(
+		NewSetupLayout(home, prefix),
+		strings.Join([]string{filepath.Dir(local), filepath.Dir(canonical)}, string(os.PathListSeparator)),
+		func(string) (string, error) { lookups++; return local, nil },
+		Facts{
+			Version: func(path string) (string, error) {
+				if path == local {
+					return "1.18.0", nil
+				}
+				return "1.19.0", nil
+			},
+			ServeProcesses: func() ([]Process, error) { return nil, processErr },
+		},
+	)
+
+	if lookups != 2 || observation.LookupErr() != nil || observation.ProcessErr() != processErr {
+		t.Fatalf("lookups=%d lookupErr=%v processErr=%v", lookups, observation.LookupErr(), observation.ProcessErr())
+	}
+	executables := observation.Executables()
+	if len(executables) != 2 || executables[0].Path != local || !executables[1].Canonical {
+		t.Fatalf("executables = %#v", executables)
+	}
+	if observation.ExpectedPath() != canonical || observation.Canonical() == nil || observation.PathExecutable() == nil {
+		t.Fatalf("observation = %#v", observation)
+	}
+	if len(observation.LocalBinDiagnoses()) != 1 {
+		t.Fatalf("local bin diagnoses = %#v", observation.LocalBinDiagnoses())
+	}
+}
+
+func TestDiagnoseExecutableSetOwnsMismatchAndHomebrewShadowing(t *testing.T) {
+	canonical := NewCanonical("/homebrew/bin/engram")
+	executables := []Executable{
+		NewExecutable("/custom/bin/engram", canonical, "1.18.0", nil),
+		NewExecutable(canonical.Path, canonical, "1.19.0", nil),
+	}
+
+	mismatch := DiagnoseVersionMismatch(executables)
+	shadowing := DiagnoseHomebrewShadowing(executables)
+
+	if mismatch == nil || !strings.Contains(mismatch.Detail, "different versions") || shadowing == nil || !strings.Contains(shadowing.Detail, "/custom/bin/engram appears before Homebrew Engram") {
+		t.Fatalf("mismatch=%#v shadowing=%#v", mismatch, shadowing)
+	}
+}
+
 func TestVersionWithContextReportsExecutableVersion(t *testing.T) {
 	path := writeVersionExecutable(t, "printf 'engram version 1.19.0\\n'")
 
@@ -137,7 +189,14 @@ func TestFindServeProcessesReportsNoProcesses(t *testing.T) {
 
 func writeVersionExecutable(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "engram")
+	return writeVersionExecutableAt(t, filepath.Join(t.TempDir(), "engram"), body)
+}
+
+func writeVersionExecutableAt(t *testing.T, path, body string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create executable directory: %v", err)
+	}
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
 		t.Fatalf("write executable: %v", err)
 	}

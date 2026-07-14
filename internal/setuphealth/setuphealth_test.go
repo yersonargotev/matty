@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yersonargotev/matty/internal/codex"
 	"github.com/yersonargotev/matty/internal/corelifecycle"
 	"github.com/yersonargotev/matty/internal/engrambin"
+	"github.com/yersonargotev/matty/internal/opencode"
+	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/matty/internal/workstation"
 )
 
 func TestDiagnoseReturnsCompleteOrderedReadOnlyReportAfterPartialFailures(t *testing.T) {
@@ -26,7 +30,7 @@ func TestDiagnoseReturnsCompleteOrderedReadOnlyReportAfterPartialFailures(t *tes
 	}
 	before := snapshot(t, config.HomeDir)
 
-	report := New(lookup, facts).Diagnose(config)
+	report := diagnose(config, lookup, facts)
 
 	want := []Check{
 		{Severity: Warn, Name: "matty-state", Detail: "missing at " + config.StateFile + "; run matty install"},
@@ -73,7 +77,7 @@ func TestDiagnoseHealthySetupReport(t *testing.T) {
 	writeFile(t, config.OpenCodePromptFile, "prompt")
 	writeFile(t, config.OpenCodeConfigFile, fmt.Sprintf(`{"instructions":[%q]}`, config.OpenCodePromptFile))
 
-	report := New(&lookupStub{path: canonical}, facts("1.19.0", nil, nil)).Diagnose(config)
+	report := diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
 
 	if report.Summary != (Summary{Status: "healthy", Passes: 8}) {
 		t.Fatalf("summary = %#v", report.Summary)
@@ -188,7 +192,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 	t.Run("canonical binary no runtime", func(t *testing.T) {
 		config := sandboxConfig(t)
 		canonical := writeExecutable(t, filepath.Join(config.HomebrewPrefix, "bin", "engram"))
-		report := New(&lookupStub{path: canonical}, facts("1.19.0", nil, nil)).Diagnose(config)
+		report := diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
 		assertCheck(t, report, Pass, "engram-binary", canonical+" version 1.19.0")
 		assertCheck(t, report, Pass, "engram-local-bin", "no ~/.local/bin/engram")
 		assertCheck(t, report, Pass, "engram-runtime", "no active")
@@ -208,7 +212,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 			},
 			ServeProcesses: func() ([]engrambin.Process, error) { return nil, nil },
 		}
-		report := New(&lookupStub{path: local}, f).Diagnose(config)
+		report := diagnose(config, &lookupStub{path: local}, f)
 		assertCheck(t, report, Warn, "engram-binary", "non-Homebrew")
 		assertCheck(t, report, Warn, "engram-version", "version failed")
 		assertCheck(t, report, Warn, "engram-path-shadowing", local+" appears before Homebrew Engram at "+canonical)
@@ -221,7 +225,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 			}
 			return "1.19.0", nil
 		}
-		report = New(&lookupStub{path: local}, f).Diagnose(config)
+		report = diagnose(config, &lookupStub{path: local}, f)
 		assertCheck(t, report, Warn, "engram-version-mismatch", "1.18.0")
 	})
 
@@ -234,13 +238,13 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		if err := os.Symlink(canonical, config.LocalBinEngram); err != nil {
 			t.Fatal(err)
 		}
-		report := New(&lookupStub{path: config.LocalBinEngram}, facts("1.19.0", nil, nil)).Diagnose(config)
+		report := diagnose(config, &lookupStub{path: config.LocalBinEngram}, facts("1.19.0", nil, nil))
 		assertCheck(t, report, Pass, "engram-local-bin", "points to Homebrew Engram")
 		if err := os.Remove(config.LocalBinEngram); err != nil {
 			t.Fatal(err)
 		}
 		writeExecutable(t, config.LocalBinEngram)
-		report = New(&lookupStub{path: canonical}, facts("1.19.0", nil, nil)).Diagnose(config)
+		report = diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
 		assertExactCheck(t, report, Check{Severity: Warn, Name: "engram-local-bin", Detail: config.LocalBinEngram + " exists but is not a symlink; Matty will not install a second Engram binary there"})
 	})
 
@@ -254,7 +258,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		if err := os.Symlink(other, config.LocalBinEngram); err != nil {
 			t.Fatal(err)
 		}
-		report := New(&lookupStub{path: canonical}, facts("1.19.0", nil, nil)).Diagnose(config)
+		report := diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
 		assertExactCheck(t, report, Check{Severity: Warn, Name: "engram-local-bin", Detail: config.LocalBinEngram + " -> " + other + " does not point to Homebrew Engram at " + canonical + "; replace it with a symlink if PATH compatibility is needed"})
 	})
 
@@ -262,11 +266,11 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		config := sandboxConfig(t)
 		canonical := writeExecutable(t, filepath.Join(config.HomebrewPrefix, "bin", "engram"))
 		matching := []engrambin.Process{{PID: 10, ExecutablePath: canonical, Command: canonical + " serve"}}
-		report := New(&lookupStub{path: canonical}, facts("1.19.0", matching, nil)).Diagnose(config)
+		report := diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", matching, nil))
 		assertCheck(t, report, Pass, "engram-runtime", "matches PATH and canonical")
 		other := writeExecutable(t, filepath.Join(config.HomeDir, "other", "engram"))
 		mismatched := []engrambin.Process{{PID: 11, ExecutablePath: other, Command: other + " serve"}}
-		report = New(&lookupStub{path: canonical}, facts("1.19.0", mismatched, nil)).Diagnose(config)
+		report = diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", mismatched, nil))
 		assertExactCheck(t, report, Check{Severity: Warn, Name: "engram-runtime", Detail: "pid 11 running " + other + "; different from PATH Engram " + canonical + "; does not match canonical Homebrew Engram " + canonical + "; safe remediation: pkill -f 'engram serve' && " + canonical + " serve"})
 	})
 }
@@ -347,29 +351,62 @@ func (lookup *lookupStub) LookPath(name string) (string, error) {
 	return lookup.path, nil
 }
 
-func sandboxConfig(t *testing.T) Config {
+type setupFixture struct {
+	HomeDir, ConfigHome, StateFile, AgentSkillsDir          string
+	SkillSourceRoot, SkillSourceMissingHint                 string
+	CodexPromptFile, OpenCodeConfigFile, OpenCodePromptFile string
+	PathEnv, LocalBinEngram, HomebrewPrefix                 string
+	state                                                   corelifecycle.Layout
+	skills                                                  skillbundle.GlobalLayout
+	source                                                  skillbundle.Source
+	codex                                                   codex.CanonicalLayout
+	openCode                                                opencode.CanonicalLayout
+	engram                                                  engrambin.SetupLayout
+}
+
+func sandboxConfig(t *testing.T) setupFixture {
 	t.Helper()
 	home := t.TempDir()
 	configHome := filepath.Join(home, "xdg")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
-	return Config{
-		HomeDir: home, ConfigHome: configHome,
-		StateFile:              filepath.Join(home, ".matty", "config.json"),
-		AgentSkillsDir:         filepath.Join(home, ".agents", "skills"),
-		SkillSourceRoot:        filepath.Join(home, "bundle", "skills"),
-		SkillSourceMissingHint: "run matty init to initialize it",
-		CodexPromptFile:        filepath.Join(home, ".codex", "AGENTS.md"),
-		OpenCodeConfigFile:     filepath.Join(configHome, "opencode", "opencode.json"),
-		OpenCodePromptFile:     filepath.Join(configHome, "opencode", "matty.md"),
-		PathEnv:                filepath.Join(home, "bin"), LocalBinEngram: filepath.Join(home, ".local", "bin", "engram"),
-		HomebrewPrefix: filepath.Join(home, "homebrew"),
+	pathEnv := filepath.Join(home, "bin")
+	homebrewPrefix := filepath.Join(home, "homebrew")
+	snapshot, err := workstation.Resolve(workstation.Inputs{Home: home, ConfigurationHome: configHome, ExecutableSearchPath: pathEnv, HomebrewPrefix: homebrewPrefix}, workstation.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := corelifecycle.NewLayout(snapshot.MattyHome())
+	skills := skillbundle.NewGlobalLayout(snapshot.Home())
+	source := skillbundle.Source{Root: filepath.Join(home, "bundle", "skills"), MissingHint: "run matty init to initialize it"}
+	codexLayout := codex.NewCanonicalLayout(snapshot.Home())
+	openCode := opencode.NewCanonicalLayout(snapshot.ConfigurationHome())
+	engram := engrambin.NewSetupLayout(snapshot.Home(), snapshot.HomebrewPrefix())
+	return setupFixture{
+		HomeDir: snapshot.Home(), ConfigHome: snapshot.ConfigurationHome(),
+		StateFile: state.StateFile(), AgentSkillsDir: skills.Root(),
+		SkillSourceRoot: source.Root, SkillSourceMissingHint: source.MissingHint,
+		CodexPromptFile:    codexLayout.PromptFile(),
+		OpenCodeConfigFile: openCode.ConfigFile(), OpenCodePromptFile: openCode.PromptFile(),
+		PathEnv: snapshot.ExecutableSearchPath(), LocalBinEngram: engram.LocalBin(), HomebrewPrefix: snapshot.HomebrewPrefix(),
+		state: state, skills: skills, source: source, codex: codexLayout, openCode: openCode, engram: engram,
 	}
 }
 
-func diagnoseWithoutEngram(t *testing.T, config Config) Report {
+func diagnose(config setupFixture, lookup *lookupStub, facts engrambin.Facts) Report {
+	return Diagnose(
+		config.HomeDir,
+		config.ConfigHome,
+		corelifecycle.ObserveSetup(config.state, config.skills, config.source),
+		engrambin.ObserveSetup(config.engram, config.PathEnv, lookup.LookPath, facts),
+		codex.ObserveSetup(config.codex),
+		opencode.ObserveSetup(config.openCode),
+	)
+}
+
+func diagnoseWithoutEngram(t *testing.T, config setupFixture) Report {
 	t.Helper()
-	return New(&lookupStub{err: errors.New("not found")}, facts("", nil, nil)).Diagnose(config)
+	return diagnose(config, &lookupStub{err: errors.New("not found")}, facts("", nil, nil))
 }
 
 func facts(version string, processes []engrambin.Process, processErr error) engrambin.Facts {
@@ -379,11 +416,11 @@ func facts(version string, processes []engrambin.Process, processErr error) engr
 	}
 }
 
-func desiredState(config Config, skills []corelifecycle.ManagedSkill) corelifecycle.State {
+func desiredState(config setupFixture, skills []corelifecycle.ManagedSkill) corelifecycle.State {
 	return corelifecycle.DesiredState(corelifecycle.StateConfig{StateFile: config.StateFile, AgentSkillsDir: config.AgentSkillsDir}, time.Unix(1, 0), skills)
 }
 
-func saveState(t *testing.T, config Config, state corelifecycle.State) {
+func saveState(t *testing.T, config setupFixture, state corelifecycle.State) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(config.StateFile), 0o700); err != nil {
 		t.Fatal(err)

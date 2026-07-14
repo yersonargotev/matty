@@ -30,7 +30,7 @@ type Options struct {
 	Terminal            Terminal
 	SurfaceAdapters     map[capabilitypack.Surface]capabilitypack.SurfaceAdapter
 	EngramFacts         engrambin.Facts
-	SetupHealthDiagnose func(setuphealth.Config) setuphealth.Report
+	SetupHealthDiagnose func() (setuphealth.Report, error)
 }
 
 func (o Options) withDefaults() Options {
@@ -47,9 +47,6 @@ func (o Options) withDefaults() Options {
 		o.Clock = time.Now
 	}
 	o.EngramFacts = o.EngramFacts.WithDefaults()
-	if o.SetupHealthDiagnose == nil {
-		o.SetupHealthDiagnose = setuphealth.New(o.Runner, o.EngramFacts).Diagnose
-	}
 	if o.Terminal == nil {
 		o.Terminal = processTerminal{}
 	}
@@ -73,7 +70,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 		newPackCommand(opts, workstationResolver),
 		newInitCommand(opts, workstationResolver),
 		newInstallCommand(opts, workstationResolver),
-		newDoctorCommand(opts),
+		newDoctorCommand(opts, workstationResolver),
 		newUpdateCommand(opts, workstationResolver),
 		newUninstallCommand(opts, workstationResolver),
 	)
@@ -197,18 +194,25 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 	return cmd
 }
 
-func newDoctorCommand(opts Options) *cobra.Command {
+func newDoctorCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check Matty setup without changing files",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			paths, err := ResolvePaths(opts.Env)
+			var (
+				report setuphealth.Report
+				err    error
+			)
+			if opts.SetupHealthDiagnose != nil {
+				report, err = opts.SetupHealthDiagnose()
+			} else {
+				report, err = diagnoseSetupHealth(opts, workstationResolver)
+			}
 			if err != nil {
 				return err
 			}
-			report := opts.SetupHealthDiagnose(setupHealthConfig(paths))
 			if jsonOutput {
 				if err := renderSetupHealthJSON(cmd.OutOrStdout(), report); err != nil {
 					return err
@@ -221,6 +225,44 @@ func newDoctorCommand(opts Options) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
 	return cmd
+}
+
+func diagnoseSetupHealth(opts Options, resolver *workstation.Resolver) (setuphealth.Report, error) {
+	snapshot, err := resolver.Resolve(workstation.Options{})
+	if err != nil {
+		return setuphealth.Report{}, err
+	}
+	installedSource, err := bootstrap.ResolveInstalledSource(snapshot, "")
+	if err != nil {
+		return setuphealth.Report{}, err
+	}
+	currentDirectory, err := snapshot.CurrentDirectory()
+	if err != nil {
+		return setuphealth.Report{}, fmt.Errorf("resolve skill source root: %w", err)
+	}
+	source, err := skillbundle.ResolveSource(skillbundle.SourceOptions{
+		ExplicitRoot:    opts.Env.Getenv("MATTY_SKILLS_SOURCE"),
+		RepositoryStart: currentDirectory,
+		InstalledRoot:   installedSource.Root(),
+	})
+	if err != nil {
+		return setuphealth.Report{}, err
+	}
+
+	state := corelifecycle.NewLayout(snapshot.MattyHome())
+	skills := skillbundle.NewGlobalLayout(snapshot.Home())
+	codexLayout := codex.NewCanonicalLayout(snapshot.Home())
+	openCodeLayout := opencode.NewCanonicalLayout(snapshot.ConfigurationHome())
+	engramLayout := engrambin.NewSetupLayout(snapshot.Home(), snapshot.HomebrewPrefix())
+
+	return setuphealth.Diagnose(
+		snapshot.Home(),
+		snapshot.ConfigurationHome(),
+		corelifecycle.ObserveSetup(state, skills, source),
+		engrambin.ObserveSetup(engramLayout, snapshot.ExecutableSearchPath(), opts.Runner.LookPath, opts.EngramFacts),
+		codex.ObserveSetup(codexLayout),
+		opencode.ObserveSetup(openCodeLayout),
+	), nil
 }
 
 func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
