@@ -9,14 +9,16 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/yersonargotev/matty/internal/bootstrap"
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
 	"github.com/yersonargotev/matty/internal/engrambin"
 	"github.com/yersonargotev/matty/internal/opencode"
 	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/matty/internal/workstation"
 )
 
-func newPackCommand(opts Options) *cobra.Command {
+func newPackCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pack",
 		Short: "Discover and manage capability packs",
@@ -42,17 +44,17 @@ automatically.`,
   matty pack reconcile --surface codex
   matty pack deactivate matty --surface codex`,
 	}
-	cmd.AddCommand(newPackListCommand(opts), newPackShowCommand(opts), newPackStatusCommand(opts), newPackActivateCommand(opts), newPackUpdateCommand(opts), newPackDeactivateCommand(opts), newPackReconcileCommand(opts))
+	cmd.AddCommand(newPackListCommand(opts, workstationResolver), newPackShowCommand(opts, workstationResolver), newPackStatusCommand(opts, workstationResolver), newPackActivateCommand(opts, workstationResolver), newPackUpdateCommand(opts, workstationResolver), newPackDeactivateCommand(opts, workstationResolver), newPackReconcileCommand(opts, workstationResolver))
 	return cmd
 }
 
-func newPackReconcileCommand(opts Options) *cobra.Command {
+func newPackReconcileCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use: "reconcile [pack]", Short: "Repair active capability packs on one CLI surface", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			facade, err := activationFacade(opts)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -76,11 +78,11 @@ func newPackReconcileCommand(opts Options) *cobra.Command {
 	return cmd
 }
 
-func newPackDeactivateCommand(opts Options) *cobra.Command {
+func newPackDeactivateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "deactivate <pack>", Short: "Deactivate a capability pack on one CLI surface", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		facade, err := activationFacade(opts)
+		facade, err := activationFacade(opts, workstationResolver)
 		if err != nil {
 			return err
 		}
@@ -99,13 +101,13 @@ func newPackDeactivateCommand(opts Options) *cobra.Command {
 	return cmd
 }
 
-func newPackUpdateCommand(opts Options) *cobra.Command {
+func newPackUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use: "update <pack>", Short: "Update an active capability pack to the catalog-current version", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			facade, err := activationFacade(opts)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -178,13 +180,13 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 	return nil
 }
 
-func newPackActivateCommand(opts Options) *cobra.Command {
+func newPackActivateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use: "activate <pack>", Short: "Activate a capability pack on one CLI surface", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			facade, err := activationFacade(opts)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -211,17 +213,13 @@ func surfaceName(surface capabilitypack.Surface) string {
 	return "Codex"
 }
 
-func activationFacade(opts Options) (capabilitypack.Facade, error) {
-	catalog, err := discoverPackCatalog(opts)
+func activationFacade(opts Options, workstationResolver *workstation.Resolver) (capabilitypack.Facade, error) {
+	composition, err := resolvePackComposition(opts, workstationResolver)
 	if err != nil {
 		return capabilitypack.Facade{}, err
 	}
-	paths, err := ResolvePaths(opts.Env)
-	if err != nil {
-		return capabilitypack.Facade{}, err
-	}
-	codexAdapter := codex.NewSurfaceAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)
-	openCodeAdapter := opencode.NewSurfaceAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)
+	codexAdapter := codex.NewSurfaceAdapterWithConfig(composition.bundleRoot, composition.skills.Root(), composition.codex.PromptFile(), composition.codex.ConfigFile())
+	openCodeAdapter := opencode.NewSurfaceAdapter(composition.bundleRoot, composition.skills.Root(), composition.openCode.ConfigFile(), composition.openCode.PromptFile())
 	adapters := opts.SurfaceAdapters
 	if adapters == nil {
 		adapters = map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
@@ -229,10 +227,10 @@ func activationFacade(opts Options) (capabilitypack.Facade, error) {
 			capabilitypack.SurfaceOpenCode: openCodeAdapter,
 		}
 	}
-	return capabilitypack.NewFacade(catalog,
-		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(paths.PackStateFile), adapters),
+	return capabilitypack.NewFacade(composition.catalog,
+		capabilitypack.WithActivation(capabilitypack.NewFileActivationStore(composition.state.File()), adapters),
 		capabilitypack.WithExternalEffects(
-			engrambin.NewResolver(paths.HomebrewPrefixEnv, opts.Runner.LookPath),
+			composition.engram,
 			runnerExternalExecutor{runner: opts.Runner},
 		),
 	), nil
@@ -388,7 +386,7 @@ func (e runnerExternalExecutor) Execute(ctx context.Context, action capabilitypa
 	return e.runner.Run(ctx, action.Command, action.Args...)
 }
 
-func newPackStatusCommand(opts Options) *cobra.Command {
+func newPackStatusCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var require string
 	var jsonOutput bool
@@ -402,7 +400,7 @@ func newPackStatusCommand(opts Options) *cobra.Command {
 			if require != "" && (require != "usable" || packID == "" || surface == "") {
 				return fmt.Errorf("--require usable is valid only for status of one pack and surface")
 			}
-			facade, err := activationFacade(opts)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -477,11 +475,11 @@ func renderPendingAction(actions []string) string {
 	return strings.Join(actions, "; ")
 }
 
-func newPackListCommand(opts Options) *cobra.Command {
+func newPackListCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	return &cobra.Command{
 		Use: "list", Short: "List available capability packs", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			catalog, err := discoverPackCatalog(opts)
+			catalog, err := discoverPackCatalog(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -499,11 +497,11 @@ func newPackListCommand(opts Options) *cobra.Command {
 	}
 }
 
-func newPackShowCommand(opts Options) *cobra.Command {
+func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	return &cobra.Command{
 		Use: "show <pack>", Short: "Show a capability pack", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			catalog, err := discoverPackCatalog(opts)
+			catalog, err := discoverPackCatalog(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
@@ -519,15 +517,62 @@ func newPackShowCommand(opts Options) *cobra.Command {
 	}
 }
 
-func discoverPackCatalog(opts Options) (capabilitypack.Catalog, error) {
-	paths, err := ResolvePaths(opts.Env)
+type packComposition struct {
+	catalog    capabilitypack.Catalog
+	state      capabilitypack.StateLayout
+	skills     skillbundle.GlobalLayout
+	bundleRoot string
+	codex      codex.CanonicalLayout
+	openCode   opencode.CanonicalLayout
+	engram     engrambin.Resolver
+}
+
+func resolvePackComposition(opts Options, workstationResolver *workstation.Resolver) (packComposition, error) {
+	snapshot, err := workstationResolver.Resolve(workstation.Options{})
+	if err != nil {
+		return packComposition{}, err
+	}
+	installedSource, err := bootstrap.ResolveInstalledSource(snapshot, "")
+	if err != nil {
+		return packComposition{}, err
+	}
+	currentDirectory, err := snapshot.CurrentDirectory()
+	if err != nil {
+		return packComposition{}, fmt.Errorf("resolve skill source root: %w", err)
+	}
+	source, err := skillbundle.ResolveSource(skillbundle.SourceOptions{
+		ExplicitRoot:    opts.Env.Getenv("MATTY_SKILLS_SOURCE"),
+		RepositoryStart: currentDirectory,
+		InstalledRoot:   installedSource.Root(),
+	})
+	if err != nil {
+		return packComposition{}, err
+	}
+	if err := skillbundle.ValidateSource(source.Root, source.MissingHint); err != nil {
+		return packComposition{}, err
+	}
+	bundleRoot := skillbundle.BundleRoot(source.Root)
+	catalog, err := capabilitypack.Discover(bundleRoot)
+	if err != nil {
+		return packComposition{}, err
+	}
+	return packComposition{
+		catalog:    catalog,
+		state:      capabilitypack.NewStateLayout(snapshot.MattyHome()),
+		skills:     skillbundle.NewGlobalLayout(snapshot.Home()),
+		bundleRoot: bundleRoot,
+		codex:      codex.NewCanonicalLayout(snapshot.Home()),
+		openCode:   opencode.NewCanonicalLayout(snapshot.ConfigurationHome()),
+		engram:     engrambin.NewResolver(snapshot.HomebrewPrefix(), opts.Runner.LookPath),
+	}, nil
+}
+
+func discoverPackCatalog(opts Options, workstationResolver *workstation.Resolver) (capabilitypack.Catalog, error) {
+	composition, err := resolvePackComposition(opts, workstationResolver)
 	if err != nil {
 		return capabilitypack.Catalog{}, err
 	}
-	if err := skillbundle.ValidateSource(paths.SkillSourceRoot, paths.SkillSourceMissingHint); err != nil {
-		return capabilitypack.Catalog{}, err
-	}
-	return capabilitypack.Discover(paths.BundleSourceRoot)
+	return composition.catalog, nil
 }
 
 func joinSurfaces(values []capabilitypack.Surface) string {

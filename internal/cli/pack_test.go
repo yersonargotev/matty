@@ -13,6 +13,8 @@ import (
 	"github.com/yersonargotev/matty/internal/capabilitypack"
 	"github.com/yersonargotev/matty/internal/codex"
 	"github.com/yersonargotev/matty/internal/opencode"
+	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/matty/internal/workstation"
 )
 
 type alwaysUsableAdapter struct{ delegate capabilitypack.SurfaceAdapter }
@@ -29,13 +31,37 @@ func (a alwaysUsableAdapter) ApplyProjections(ctx context.Context, actions []cap
 
 func alwaysUsableAdapters(t *testing.T, opts Options) map[capabilitypack.Surface]capabilitypack.SurfaceAdapter {
 	t.Helper()
-	paths, err := ResolvePaths(opts.Env)
+	layout := resolvePackTestLayout(t, opts.Env)
+	bundleRoot := skillbundle.BundleRoot(opts.Env.Getenv("MATTY_SKILLS_SOURCE"))
+	return map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
+		capabilitypack.SurfaceCodex:    alwaysUsableAdapter{delegate: codex.NewSurfaceAdapterWithConfig(bundleRoot, layout.skills.Root(), layout.codex.PromptFile(), layout.codex.ConfigFile())},
+		capabilitypack.SurfaceOpenCode: alwaysUsableAdapter{delegate: opencode.NewSurfaceAdapter(bundleRoot, layout.skills.Root(), layout.openCode.ConfigFile(), layout.openCode.PromptFile())},
+	}
+}
+
+type packTestLayout struct {
+	mattyHome string
+	state     capabilitypack.StateLayout
+	skills    skillbundle.GlobalLayout
+	codex     codex.CanonicalLayout
+	openCode  opencode.CanonicalLayout
+}
+
+func resolvePackTestLayout(t *testing.T, env Env) packTestLayout {
+	t.Helper()
+	snapshot, err := workstation.Resolve(workstation.Inputs{
+		Home:              env.Getenv("HOME"),
+		ConfigurationHome: env.Getenv("XDG_CONFIG_HOME"),
+	}, workstation.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
-		capabilitypack.SurfaceCodex:    alwaysUsableAdapter{delegate: codex.NewSurfaceAdapterWithConfig(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.CodexPromptFile, paths.CodexConfigFile)},
-		capabilitypack.SurfaceOpenCode: alwaysUsableAdapter{delegate: opencode.NewSurfaceAdapter(paths.BundleSourceRoot, paths.AgentSkillsDir, paths.OpenCodeConfigFile, paths.OpenCodePromptFile)},
+	return packTestLayout{
+		mattyHome: snapshot.MattyHome(),
+		state:     capabilitypack.NewStateLayout(snapshot.MattyHome()),
+		skills:    skillbundle.NewGlobalLayout(snapshot.Home()),
+		codex:     codex.NewCanonicalLayout(snapshot.Home()),
+		openCode:  opencode.NewCanonicalLayout(snapshot.ConfigurationHome()),
 	}
 }
 
@@ -55,6 +81,36 @@ func TestPackHelpDocumentsSupportedRolloutCommands(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("pack help missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestPackListUsesOneCapturedWorkstationForSkillSource(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	captures := 0
+	opts := Options{
+		Env: MapEnv{
+			"HOME":            home,
+			"XDG_CONFIG_HOME": filepath.Join(home, "xdg"),
+		},
+		Getwd: func() (string, error) {
+			captures++
+			return repoRoot, nil
+		},
+	}
+
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "list")
+	if err != nil {
+		t.Fatalf("pack list: %v\n%s", err, out)
+	}
+	if captures != 1 {
+		t.Fatalf("workstation captures = %d, want 1", captures)
+	}
+	if !strings.Contains(out, "matty") || !strings.Contains(out, "engram") {
+		t.Fatalf("pack list did not use repository Skill Source:\n%s", out)
 	}
 }
 
@@ -214,25 +270,22 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					configureEngramCodexSetupFixture(t, runner, env, engram)
 				}
 				opts := Options{Env: env, Runner: runner, Terminal: terminal}
-				paths, err := ResolvePaths(env)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, managedPath := range []string{paths.MattyDir, paths.AgentSkillsDir, paths.CodexConfigFile, paths.CodexPromptFile, paths.OpenCodeConfigFile, paths.OpenCodePromptFile} {
+				layout := resolvePackTestLayout(t, env)
+				for _, managedPath := range []string{layout.mattyHome, layout.skills.Root(), layout.codex.ConfigFile(), layout.codex.PromptFile(), layout.openCode.ConfigFile(), layout.openCode.PromptFile()} {
 					if !pathInside(root, managedPath) {
 						t.Fatalf("resolved path escaped sandbox: %s", managedPath)
 					}
 				}
-				if err := os.MkdirAll(filepath.Dir(paths.CodexPromptFile), 0o700); err != nil {
+				if err := os.MkdirAll(filepath.Dir(layout.codex.PromptFile()), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(paths.CodexPromptFile, []byte("operator-owned Codex guidance\n"), 0o600); err != nil {
+				if err := os.WriteFile(layout.codex.PromptFile(), []byte("operator-owned Codex guidance\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.MkdirAll(filepath.Dir(paths.OpenCodeConfigFile), 0o700); err != nil {
+				if err := os.MkdirAll(filepath.Dir(layout.openCode.ConfigFile()), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(paths.OpenCodeConfigFile, []byte("{\n  // operator-owned\n  \"model\": \"test/model\"\n}\n"), 0o600); err != nil {
+				if err := os.WriteFile(layout.openCode.ConfigFile(), []byte("{\n  // operator-owned\n  \"model\": \"test/model\"\n}\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 
@@ -255,7 +308,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 				if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", packID, "--surface", surface); err == nil || !strings.Contains(strings.ToLower(err.Error()), "stale") {
 					t.Fatalf("stale activation = %v", err)
 				}
-				if exists(paths.PackStateFile) {
+				if exists(layout.state.File()) {
 					t.Fatal("stale activation wrote pack state")
 				}
 				terminal.onApprove = nil
@@ -290,10 +343,10 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "list"); err != nil || !strings.Contains(out, "matty") {
 					t.Fatalf("Matty core unavailable after deactivation: %v\n%s", err, out)
 				}
-				if got := readFileString(t, paths.CodexPromptFile); !strings.Contains(got, "operator-owned Codex guidance") {
+				if got := readFileString(t, layout.codex.PromptFile()); !strings.Contains(got, "operator-owned Codex guidance") {
 					t.Fatalf("unmanaged Codex guidance was not preserved: %q", got)
 				}
-				if got := readFileString(t, paths.OpenCodeConfigFile); !strings.Contains(got, "operator-owned") || !strings.Contains(got, "test/model") {
+				if got := readFileString(t, layout.openCode.ConfigFile()); !strings.Contains(got, "operator-owned") || !strings.Contains(got, "test/model") {
 					t.Fatalf("unmanaged OpenCode config was not preserved: %q", got)
 				}
 				if operatorHome != "" && strings.HasPrefix(root, filepath.Clean(operatorHome)+string(os.PathSeparator)) {
@@ -1446,10 +1499,10 @@ func TestPackDeactivateRendersRemovedAndRetainedSharedContributors(t *testing.T)
 			if out, err = executeCommand(t, NewRootCommand(opts), "pack", "deactivate", "matty", "--surface", surface); err != nil || !strings.Contains(out, "Retained shared projection") {
 				t.Fatalf("contributor-safe Apply: %v\n%s", err, out)
 			}
-			paths, _ := ResolvePaths(opts.Env)
-			projection := paths.CodexPromptFile
+			layout := resolvePackTestLayout(t, opts.Env)
+			projection := layout.codex.PromptFile()
 			if surface == "opencode" {
-				projection = paths.OpenCodeConfigFile
+				projection = layout.openCode.ConfigFile()
 			}
 			if !exists(projection) || !strings.Contains(readFileString(t, projection), "shared") {
 				t.Fatalf("shared projection removed with remaining contributor: %s", projection)

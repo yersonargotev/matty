@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # Route capability packs through owning layouts
 
@@ -16,17 +16,17 @@ their layouts and observations.
 
 ## Acceptance criteria
 
-- [ ] Capability pack derives its separate pack-state location from Matty Home without acquiring classic-state ownership.
-- [ ] Pack catalog discovery and source validation use the single resolved Skill Source.
-- [ ] Pack surface adapters receive canonical host and global skill layouts from their owners.
-- [ ] Executable requirements use engrambin resolution without receiving candidate paths from CLI.
-- [ ] Pack CLI composition no longer consumes or reconstructs the broad shared layout.
-- [ ] Pack list, show, status, activate, update, deactivate, reconcile, preview, stale-plan handling, readiness, and recovery behavior remain unchanged.
-- [ ] Plans, blockers, consent, ownership protection, state schema, command execution, rendering, errors, and filesystem effects remain unchanged.
-- [ ] Codex and OpenCode adapter contracts continue using sandboxed host layouts and preserve unrelated host content.
-- [ ] No setup-health behavior is moved or changed.
-- [ ] No duplicate host, skill, source, executable, or state layout policy remains in pack composition.
-- [ ] Focused capability-pack, host, and CLI tests pass, followed by the complete repository test suite with sandboxed Home and XDG configuration.
+- [x] Capability pack derives its separate pack-state location from Matty Home without acquiring classic-state ownership.
+- [x] Pack catalog discovery and source validation use the single resolved Skill Source.
+- [x] Pack surface adapters receive canonical host and global skill layouts from their owners.
+- [x] Executable requirements use engrambin resolution without receiving candidate paths from CLI.
+- [x] Pack CLI composition no longer consumes or reconstructs the broad shared layout.
+- [x] Pack list, show, status, activate, update, deactivate, reconcile, preview, stale-plan handling, readiness, and recovery behavior remain unchanged.
+- [x] Plans, blockers, consent, ownership protection, state schema, command execution, rendering, errors, and filesystem effects remain unchanged.
+- [x] Codex and OpenCode adapter contracts continue using sandboxed host layouts and preserve unrelated host content.
+- [x] No setup-health behavior is moved or changed.
+- [x] No duplicate host, skill, source, executable, or state layout policy remains in pack composition.
+- [x] Focused capability-pack, host, and CLI tests pass, followed by the complete repository test suite with sandboxed Home and XDG configuration.
 
 ## Out of scope
 

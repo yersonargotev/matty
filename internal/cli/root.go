@@ -70,7 +70,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 	}
 
 	root.AddCommand(
-		newPackCommand(opts),
+		newPackCommand(opts, workstationResolver),
 		newInitCommand(opts, workstationResolver),
 		newInstallCommand(opts, workstationResolver),
 		newDoctorCommand(opts),
