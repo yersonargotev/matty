@@ -93,6 +93,8 @@ func TestUpdatePreviewAcceptsAlignedAnnotatedTagWithPackedObject(t *testing.T) {
 	config.SkillSource.IsDefault = true
 	config.RunningVersion = "v1.2.3"
 	prepareUpdateSourceRepository(t, &config, "", false)
+	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.name", "Matty Test")
+	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.email", "matty@example.test")
 	runUpdateTestGit(t, config.InstalledSource.Root(), "tag", "-a", config.RunningVersion, "-m", "release")
 	runUpdateTestGit(t, config.InstalledSource.Root(), "gc")
 	tagObject := runUpdateTestGitOutput(t, config.InstalledSource.Root(), "rev-parse", "refs/tags/"+config.RunningVersion)
