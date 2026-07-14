@@ -17,6 +17,12 @@ An AI coding CLI that Matty can configure or integrate with. The initial support
 ### Skill bundle
 The curated set of agent skills Matty installs or exposes for a workflow. The current candidate bundle is based on Matt Pocock's engineering skills rather than Gentle AI's SDD stack.
 
+### Skill source
+The single resolved source from which Matty reads its skill bundle. Its origin may be an explicit operator override, the current Matty repository checkout, or the Installed Source, but every consumer uses the same selection.
+
+### Installed Source
+The user-owned Matty checkout initialized for package-installed operation. It is one candidate for Skill Source selection and remains distinct from the selected Skill Source itself.
+
 ### Capability pack
 A named, composable set of AI workflow capabilities that can remain available while being activated or deactivated as a unit. A capability pack may contribute skills, memory, tools, agents, rules, or other host-supported behavior; it is not a runtime configuration profile.
 
@@ -64,3 +70,9 @@ Matty's default configuration model: install skills in `~/.agents/skills`, manag
 
 ### Matty state file
 A small global Matty-owned config/state file, expected at `~/.matty/config.json`, used to track installed Matty version, managed skill set, global skill paths, configured CLI surfaces, and doctor/update metadata. It must not become a large prompt store.
+
+### Matty Home
+The single workstation root reserved for Matty-owned state. Domains may own separate files beneath it without sharing ownership of those files.
+
+### Workstation snapshot
+The immutable, normalized view of ambient workstation facts used by one Matty command invocation. It is created only when an operation needs workstation access, and every participant in that operation observes the same snapshot.
