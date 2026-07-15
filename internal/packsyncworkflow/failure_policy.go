@@ -134,7 +134,7 @@ func ClassifyHTTPFailure(metadata HTTPFailureMetadata, err error) error {
 		}
 		return failure
 	}
-	return Failure{Kind: FailureIntegrity, Err: err}
+	return Failure{Kind: FailureProvenance, Err: err}
 }
 
 func ClassifyNetworkFailure(err error) error {
