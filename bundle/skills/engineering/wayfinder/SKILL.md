@@ -18,7 +18,7 @@ Every map and ticket is an issue, so it has a **name** — its title. In everyth
 
 ## The Map
 
-The map is the tracker's canonical artifact. On real issue trackers it is usually a single issue labelled `wayfinder:map` with child issues; on local markdown it is the map file described by this repo's tracker doc, with child ticket files.
+The map is a single issue on this repo's issue tracker, labelled `wayfinder:map` — the canonical artifact. Its tickets are child issues of the map.
 
 The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
 
@@ -54,7 +54,7 @@ The whole map at low resolution, loaded once per session. Open tickets are **not
 
 ### Tickets
 
-Each ticket is a **child** of the map in the configured tracker; use the tracker's native identity, or the local ticket file path when using markdown. Its body is the question, sized to one 100K token agent session:
+Each ticket is a **child issue** of the map; the tracker's issue id is its identity. Its body is the question, sized to one 100K token agent session:
 
 ```markdown
 ## Question
@@ -62,11 +62,11 @@ Each ticket is a **child** of the map in the configured tracker; use the tracker
 <the decision or investigation this ticket resolves>
 ```
 
-Each ticket records a type — one of `research`, `prototype`, `grilling`, `task` (see [Ticket Types](#ticket-types)). Use a `wayfinder:<type>` label on trackers with labels; use the `Type:` line defined by the local tracker doc for markdown.
+Each ticket carries a `wayfinder:<type>` label — one of `research`, `prototype`, `grilling`, `task` (see [Ticket Types](#ticket-types)).
 
-A session **claims** a ticket using the configured tracker's claim mechanism, **first**, before any work, so concurrent sessions skip it. On issue trackers that is usually assignment to the driving dev; on local markdown use `Status: claimed`.
+A session **claims** a ticket by assigning it to the dev driving the map, **first**, before any work, so concurrent sessions skip it. That assignee _is_ the claim: an open, unassigned ticket is unclaimed.
 
-Blocking uses the configured tracker's dependency representation. Prefer native dependency relationships where available because they render the frontier visually in the tracker UI; otherwise use the body convention from the tracker doc, such as a `Blocked by:` line for local markdown. A ticket is **unblocked** when every ticket blocking it is closed or resolved; the **frontier** is the open, unblocked, unclaimed children — the edge of the known.
+Blocking uses the tracker's **native** dependency relationship — essential because it renders the frontier _visually_ in the tracker's own UI, so the human sees what's takeable without opening the map. Only a tracker that lacks native blocking falls back to a body convention. A ticket is **unblocked** when every ticket blocking it is closed; the **frontier** is the open, unblocked, unclaimed children — the edge of the known.
 
 The answer isn't part of the body — it's recorded on resolution (see [Work through the map](#work-through-the-map)). Assets created while resolving a ticket are linked from the issue, not pasted in.
 

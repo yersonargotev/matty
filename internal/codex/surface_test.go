@@ -226,6 +226,35 @@ func TestPriorTransitionInspectionComposesMultipleRemovalsFromOneCodexFile(t *te
 	}
 }
 
+func TestSurfaceAdapterComposesMultipleInstructionWritesToOneCodexFile(t *testing.T) {
+	root := t.TempDir()
+	prompt := filepath.Join(root, "AGENTS.md")
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := NewSurfaceAdapterWithConfig(root, filepath.Join(root, "skills"), prompt, filepath.Join(root, "config.toml"))
+	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := []capabilitypack.ProjectionAction{observed.Projections[0].Action, observed.Projections[1].Action}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range verified.Projections {
+		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+			t.Fatalf("instruction did not converge: %+v", projection)
+		}
+	}
+}
+
 func TestOwnershipResidualInspectionDiscoversObsoleteOwnedCodexProjectionAndPreservesUnmanagedContent(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "guide.md")

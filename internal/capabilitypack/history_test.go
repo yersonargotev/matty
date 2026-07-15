@@ -13,17 +13,6 @@ import (
 
 func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T) {
 	bundleRoot := filepath.Join("..", "..", "bundle")
-	currentManifest, err := os.ReadFile(filepath.Join(bundleRoot, "packs", "matty", "pack.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	historicalManifest, err := os.ReadFile(filepath.Join(bundleRoot, "history", "matty", "1.0.0", "pack.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(historicalManifest, currentManifest) {
-		t.Fatal("historical pack manifest is not the exact matty@1.0.0 manifest")
-	}
 	pack, err := loadHistoricalArtifact(filepath.Join(bundleRoot, "history", "matty", "1.0.0"), bundleRoot, "matty", "1.0.0")
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +30,36 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 	checkedIn := readHistoricalArtifact(t, root)
 	if !reflect.DeepEqual(expected, checkedIn) {
 		t.Fatal("checked-in artifact evidence is not the deterministic construction from retained bytes")
+	}
+}
+
+func TestCheckedInMattyTwoPreservesWorkflowConventionsInOneOwnedInstruction(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	catalog, err := Discover(bundleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := catalog.Show("matty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Version != "2.0.0" {
+		t.Fatalf("matty version = %s", pack.Version)
+	}
+	var source string
+	for _, resource := range pack.Resources {
+		if resource.Kind == "instruction" && resource.ID == "matty-workflow-conventions" {
+			source = resource.Source
+		}
+	}
+	if source != "instructions/matty-workflow-conventions.md" {
+		t.Fatalf("workflow conventions source = %q", source)
+	}
+	content := string(mustRead(t, filepath.Join(bundleRoot, filepath.FromSlash(source))))
+	for _, convention := range []string{"Specs and tickets", ".scratch/<feature-slug>/", "tracker-defined wayfinding operations"} {
+		if !strings.Contains(content, convention) {
+			t.Fatalf("workflow conventions instruction omits %q", convention)
+		}
 	}
 }
 
