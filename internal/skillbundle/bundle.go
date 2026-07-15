@@ -97,8 +97,14 @@ func BundleRoot(skillSourceRoot string) string {
 }
 
 func SourceRootExists(sourceRoot string) bool {
-	info, err := os.Stat(sourceRoot)
-	return err == nil && info.IsDir()
+	exists := false
+	repositoryRoot := filepath.Dir(BundleRoot(sourceRoot))
+	err := bundletransaction.WithExclusive(context.Background(), repositoryRoot, func() error {
+		info, statErr := os.Stat(sourceRoot)
+		exists = statErr == nil && info.IsDir()
+		return nil
+	})
+	return err == nil && exists
 }
 
 // Skill is the installer's ownership metadata for one bundled skill.
