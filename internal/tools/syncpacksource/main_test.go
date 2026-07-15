@@ -56,7 +56,19 @@ func TestValidationSubprocessEnvironmentDropsCredentials(t *testing.T) {
 	}
 }
 
-func TestPublicSourceRetriesOnlyTransientFailuresAndRespectsRetryAfter(t *testing.T) {
+func TestPublicSourceRetriesRateLimit403AndContinuesAfterSuccess(t *testing.T) {
+	underlying := &sourceFailureFixture{failures: []error{githubsource.HTTPError{Operation: "test", StatusCode: http.StatusForbidden, Status: "403 Forbidden", RetryAfter: "4", RateLimitRemaining: "0"}}}
+	sleeper := &sourceSleeper{}
+	source := retryingSource{source: underlying, policy: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, Sleeper: sleeper}}
+	if _, err := source.Releases(context.Background(), packsync.SourceConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if underlying.calls != 2 || !reflect.DeepEqual(sleeper.delays, []time.Duration{4 * time.Second}) {
+		t.Fatalf("calls=%d delays=%v", underlying.calls, sleeper.delays)
+	}
+}
+
+func TestPublicSourceRetries429And503WithCanonicalDelays(t *testing.T) {
 	underlying := &sourceFailureFixture{failures: []error{githubsource.HTTPError{Operation: "test", StatusCode: http.StatusTooManyRequests, Status: "429", RetryAfter: "4"}, githubsource.HTTPError{Operation: "test", StatusCode: http.StatusServiceUnavailable, Status: "503"}}}
 	sleeper := &sourceSleeper{}
 	source := retryingSource{source: underlying, policy: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, Sleeper: sleeper}}
@@ -66,12 +78,163 @@ func TestPublicSourceRetriesOnlyTransientFailuresAndRespectsRetryAfter(t *testin
 	if underlying.calls != 3 || !reflect.DeepEqual(sleeper.delays, []time.Duration{4 * time.Second, 2 * time.Second}) {
 		t.Fatalf("calls=%d delays=%v", underlying.calls, sleeper.delays)
 	}
+}
 
-	underlying = &sourceFailureFixture{failures: []error{errors.New("moved provenance")}}
-	source = retryingSource{source: underlying, policy: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, Sleeper: sleeper}}
+func TestPublicSourceDoesNotRetryNonTransientFailures(t *testing.T) {
+	sleeper := &sourceSleeper{}
+	underlying := &sourceFailureFixture{failures: []error{errors.New("moved provenance")}}
+	source := retryingSource{source: underlying, policy: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, Sleeper: sleeper}}
 	if _, err := source.Releases(context.Background(), packsync.SourceConfig{}); err == nil || underlying.calls != 1 {
 		t.Fatalf("integrity blocker retried: calls=%d err=%v", underlying.calls, err)
 	}
+}
+
+func TestInspectBoundaryReportsNonRateLimit403AsSecretFreeAccessFailure(t *testing.T) {
+	repository := t.TempDir()
+	copyTreeForTest(t, filepath.Join(repositoryRootForTest(t), "bundle"), filepath.Join(repository, "bundle"))
+	underlying := &sourceFailureFixture{failures: []error{githubsource.HTTPError{Operation: "read GitHub API", StatusCode: http.StatusForbidden, Status: "403 Forbidden", RateLimitRemaining: "4999"}}}
+	oldFactory := workflowSourceFactory
+	workflowSourceFactory = func() packsync.Source { return newRetryingSource(underlying) }
+	t.Cleanup(func() { workflowSourceFactory = oldFactory })
+
+	t.Setenv("GITHUB_TOKEN", "inspect-secret-token")
+	t.Setenv("MATTY_SOURCE_ID", "mattpocock-skills")
+	t.Setenv("MATTY_SELECTOR", "latest-stable")
+	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("MATTY_REQUEST_REASON", "access failure fixture")
+	output := t.TempDir()
+	err := run(context.Background(), []string{"--phase", "inspect", "--repository-root", repository, "--output", output}, io.Discard)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureAccess || underlying.calls != 1 {
+		t.Fatalf("Inspect failure = %#v, calls=%d, err=%v", failure, underlying.calls, err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(output, "operational-artifact.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	artifactText := string(data)
+	for _, forbidden := range []string{"inspect-secret-token", "Authorization", "response body bytes", "provenance"} {
+		if strings.Contains(artifactText, forbidden) {
+			t.Fatalf("access artifact contains %q: %s", forbidden, artifactText)
+		}
+	}
+	if !strings.Contains(artifactText, "denied access") || !strings.Contains(artifactText, "contents: read") {
+		t.Fatalf("access artifact is not actionable: %s", artifactText)
+	}
+	if _, err := os.Stat(filepath.Join(output, "plan.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("access failure unexpectedly produced a plan: %v", err)
+	}
+}
+
+func TestWorkflowAuthenticationIsLimitedToGitHubAPIOrigin(t *testing.T) {
+	seen := map[string]string{}
+	client := newAuthenticatedGitHubHTTPClient("job-scoped-token", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		seen[request.URL.Host] = request.Header.Get("Authorization")
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header), Request: request}, nil
+	}))
+	for _, endpoint := range []string{"https://api.github.com/repos/o/r", "https://example.com/redirected-archive"} {
+		request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer attacker-controlled")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+	}
+	if seen["api.github.com"] != "Bearer job-scoped-token" || seen["example.com"] != "" {
+		t.Fatalf("authorization by origin = %#v", seen)
+	}
+}
+
+func TestInspectBoundaryRetriesRateLimit403AndContinuesSuccessfully(t *testing.T) {
+	repository, snapshot, lock := prepareInspectFixture(t)
+	stable := &sandboxSource{root: snapshot, oldRoot: snapshot, oldCandidate: lock.Candidate, candidate: lock.Candidate}
+	flaky := &releasesFailureSource{source: stable, failures: []error{githubsource.HTTPError{Operation: "read GitHub API", StatusCode: http.StatusForbidden, Status: "403 Forbidden", RetryAfter: "4", RateLimitRemaining: "0"}}}
+	sleeper := &sourceSleeper{}
+	oldFactory := workflowSourceFactory
+	workflowSourceFactory = func() packsync.Source {
+		return retryingSource{source: flaky, policy: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, Sleeper: sleeper}}
+	}
+	t.Cleanup(func() { workflowSourceFactory = oldFactory })
+
+	setInspectEnvironment(t, "rate-limit retry fixture")
+	output := t.TempDir()
+	if err := run(context.Background(), []string{"--phase", "inspect", "--repository-root", repository, "--output", output}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var plan packsync.Plan
+	readJSONForTest(t, filepath.Join(output, "plan.json"), &plan)
+	if plan.Status != "no-op" || flaky.calls != 2 || !reflect.DeepEqual(sleeper.delays, []time.Duration{4 * time.Second}) {
+		t.Fatalf("Inspect continuation = status:%s calls:%d delays:%v", plan.Status, flaky.calls, sleeper.delays)
+	}
+}
+
+func TestInspectBoundaryKeepsGenuinelyMovedTagAsProvenanceFailure(t *testing.T) {
+	repository, snapshot, lock := prepareInspectFixture(t)
+	moved := lock.Candidate
+	if len(moved.TagObjects) == 0 {
+		t.Fatal("fixture candidate has no tag object")
+	}
+	moved.TagRefSHA = strings.Repeat("d", 40)
+	moved.TagObjects = append([]packsync.TagObject(nil), moved.TagObjects...)
+	moved.TagObjects[0].SHA = moved.TagRefSHA
+	source := &sandboxSource{root: snapshot, oldRoot: snapshot, oldCandidate: lock.Candidate, candidate: moved}
+	oldFactory := workflowSourceFactory
+	workflowSourceFactory = func() packsync.Source { return source }
+	t.Cleanup(func() { workflowSourceFactory = oldFactory })
+
+	setInspectEnvironment(t, "moved tag fixture")
+	output := t.TempDir()
+	err := run(context.Background(), []string{"--phase", "inspect", "--repository-root", repository, "--output", output}, io.Discard)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureProvenance {
+		t.Fatalf("moved-tag failure = %#v, %v", failure, err)
+	}
+	var plan packsync.Plan
+	readJSONForTest(t, filepath.Join(output, "plan.json"), &plan)
+	if plan.Status != "blocked" || !strings.Contains(strings.Join(plan.Blockers, " "), "tag ref moved") {
+		t.Fatalf("moved-tag plan = %#v", plan)
+	}
+}
+
+func prepareInspectFixture(t *testing.T) (string, string, packsync.Lock) {
+	t.Helper()
+	root := repositoryRootForTest(t)
+	repository := t.TempDir()
+	copyTreeForTest(t, filepath.Join(root, "bundle"), filepath.Join(repository, "bundle"))
+	snapshot := t.TempDir()
+	var config struct {
+		Sources []packsync.SourceConfig `json:"sources"`
+	}
+	readJSONForTest(t, filepath.Join(repository, "bundle", "sources.json"), &config)
+	for _, binding := range config.Sources[0].Resources {
+		copyTreeForTest(t, filepath.Join(repository, "bundle", filepath.FromSlash(binding.UpstreamPath)), filepath.Join(snapshot, filepath.FromSlash(binding.UpstreamPath)))
+	}
+	var lock packsync.Lock
+	readJSONForTest(t, filepath.Join(repository, "bundle", "sources.lock.json"), &lock)
+	gitForTest(t, repository, "init", "-q")
+	gitForTest(t, repository, "config", "user.name", "fixture")
+	gitForTest(t, repository, "config", "user.email", "fixture@example.com")
+	gitForTest(t, repository, "add", ".")
+	gitForTest(t, repository, "commit", "-qm", "base")
+	return repository, snapshot, lock
+}
+
+func setInspectEnvironment(t *testing.T, reason string) {
+	t.Helper()
+	t.Setenv("MATTY_SOURCE_ID", "mattpocock-skills")
+	t.Setenv("MATTY_SELECTOR", "latest-stable")
+	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("MATTY_REQUEST_REASON", reason)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }
 
 func TestWorkflowAcceptsOnlyEmptyEvidenceWhenNoPackIsAffected(t *testing.T) {
@@ -181,6 +344,34 @@ func TestClassificationBoundaryProducesExactSafeArtifact(t *testing.T) {
 type sourceFailureFixture struct {
 	failures []error
 	calls    int
+}
+
+type releasesFailureSource struct {
+	source   packsync.Source
+	failures []error
+	calls    int
+}
+
+func (source *releasesFailureSource) Releases(ctx context.Context, config packsync.SourceConfig) ([]packsync.Release, error) {
+	source.calls++
+	if len(source.failures) != 0 {
+		err := source.failures[0]
+		source.failures = source.failures[1:]
+		return nil, err
+	}
+	return source.source.Releases(ctx, config)
+}
+
+func (source *releasesFailureSource) ResolveRelease(ctx context.Context, config packsync.SourceConfig, release packsync.Release) (packsync.Candidate, error) {
+	return source.source.ResolveRelease(ctx, config, release)
+}
+
+func (source *releasesFailureSource) ResolveCommit(ctx context.Context, config packsync.SourceConfig, commit string) (packsync.Candidate, error) {
+	return source.source.ResolveCommit(ctx, config, commit)
+}
+
+func (source *releasesFailureSource) WithSnapshot(ctx context.Context, candidate packsync.Candidate, temporaryRoot string, visit func(string) error) error {
+	return source.source.WithSnapshot(ctx, candidate, temporaryRoot, visit)
 }
 
 func (source *sourceFailureFixture) Releases(context.Context, packsync.SourceConfig) ([]packsync.Release, error) {

@@ -114,7 +114,7 @@ func TestRetryPolicyRetriesOnlyTransientFailuresWithBackoffAndRetryAfter(t *test
 		t.Fatalf("retry = attempts %d delays %v err %v", attempts, sleeper.delays, err)
 	}
 
-	for _, kind := range []FailureKind{FailureProvenance, FailureIntegrity, FailureClassification, FailureValidation, FailureOwnership, FailureDivergence} {
+	for _, kind := range []FailureKind{FailureAccess, FailureProvenance, FailureIntegrity, FailureClassification, FailureValidation, FailureOwnership, FailureDivergence} {
 		attempts = 0
 		sleeper.delays = nil
 		err = policy.Do(context.Background(), func() error {
@@ -123,6 +123,32 @@ func TestRetryPolicyRetriesOnlyTransientFailuresWithBackoffAndRetryAfter(t *test
 		})
 		if err == nil || attempts != 1 || len(sleeper.delays) != 0 {
 			t.Fatalf("kind %s retried: attempts %d delays %v err %v", kind, attempts, sleeper.delays, err)
+		}
+	}
+}
+
+func TestHTTP403RequiresPositiveRateLimitEvidence(t *testing.T) {
+	rateLimited := ClassifyHTTPFailure(HTTPFailureMetadata{StatusCode: 403, RetryAfter: "4", RateLimitRemaining: "0"}, errors.New("403 Forbidden"))
+	var transient Failure
+	if !errors.As(rateLimited, &transient) || transient.Kind != FailureTransient || transient.RetryAfter != 4*time.Second {
+		t.Fatalf("rate-limit 403 = %#v, %v", transient, rateLimited)
+	}
+
+	denied := ClassifyHTTPFailure(HTTPFailureMetadata{StatusCode: 403, RateLimitRemaining: "4999", RateLimitReset: "4102444800"}, errors.New("403 Forbidden"))
+	var access Failure
+	if !errors.As(denied, &access) || access.Kind != FailureAccess || strings.Contains(access.Blocker, "provenance") || !strings.Contains(access.Blocker, "did not contain rate-limit evidence") {
+		t.Fatalf("access 403 = %#v, %v", access, denied)
+	}
+}
+
+func TestRateLimitResetParsesOnlyFutureEpochSeconds(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	if got := ParseRateLimitReset("1700000009", now); got != 9*time.Second {
+		t.Fatalf("future reset = %v", got)
+	}
+	for _, value := range []string{"", "invalid", "1699999999"} {
+		if got := ParseRateLimitReset(value, now); got != 0 {
+			t.Fatalf("reset %q = %v", value, got)
 		}
 	}
 }

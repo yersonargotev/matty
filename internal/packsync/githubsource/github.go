@@ -1,6 +1,7 @@
-// Package githubsource implements unauthenticated, read-only acquisition from
-// public GitHub repositories. It parses metadata and archives as inert data and
-// never invokes Git, shells, hooks, tests, or upstream programs.
+// Package githubsource implements read-only acquisition from public GitHub
+// repositories using a caller-supplied HTTP client. It parses metadata and
+// archives as inert data and never invokes Git, shells, hooks, tests, or
+// upstream programs.
 package githubsource
 
 import (
@@ -36,10 +37,12 @@ type Client struct {
 // workflow-owned retry policy without making acquisition decide whether a
 // failure is retryable.
 type HTTPError struct {
-	Operation  string
-	StatusCode int
-	Status     string
-	RetryAfter string
+	Operation          string
+	StatusCode         int
+	Status             string
+	RetryAfter         string
+	RateLimitRemaining string
+	RateLimitReset     string
 }
 
 func (failure HTTPError) Error() string {
@@ -193,7 +196,7 @@ func (client *Client) WithSnapshot(ctx context.Context, candidate packsync.Candi
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return HTTPError{Operation: "download immutable archive", StatusCode: response.StatusCode, Status: response.Status, RetryAfter: response.Header.Get("Retry-After")}
+		return newHTTPError("download immutable archive", response)
 	}
 	snapshot := filepath.Join(temporaryRoot, "snapshot")
 	if err := os.Mkdir(snapshot, 0o755); err != nil {
@@ -309,13 +312,24 @@ func (client *Client) getJSON(ctx context.Context, endpoint string, target any) 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return HTTPError{Operation: "read GitHub API", StatusCode: response.StatusCode, Status: response.Status, RetryAfter: response.Header.Get("Retry-After")}
+		return newHTTPError("read GitHub API", response)
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 8<<20))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode GitHub response: %w", err)
 	}
 	return nil
+}
+
+func newHTTPError(operation string, response *http.Response) HTTPError {
+	return HTTPError{
+		Operation:          operation,
+		StatusCode:         response.StatusCode,
+		Status:             response.Status,
+		RetryAfter:         response.Header.Get("Retry-After"),
+		RateLimitRemaining: response.Header.Get("X-RateLimit-Remaining"),
+		RateLimitReset:     response.Header.Get("X-RateLimit-Reset"),
+	}
 }
 
 func (client *Client) request(ctx context.Context, endpoint string) (*http.Request, error) {

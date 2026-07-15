@@ -44,7 +44,8 @@ type options struct {
 }
 
 var workflowSourceFactory = func() packsync.Source {
-	return newRetryingSource(githubsource.New(nil))
+	client := newAuthenticatedGitHubHTTPClient(os.Getenv("GITHUB_TOKEN"), nil)
+	return newRetryingSource(githubsource.New(client))
 }
 
 func run(ctx context.Context, args []string, output io.Writer) error {

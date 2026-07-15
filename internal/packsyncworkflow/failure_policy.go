@@ -71,6 +71,8 @@ func publicBlocker(kind FailureKind) string {
 	switch kind {
 	case FailureTransient:
 		return "A bounded transient transport operation remained unavailable."
+	case FailureAccess:
+		return "GitHub denied access to the configured source during acquisition."
 	case FailureProvenance:
 		return "Exact configured source provenance could not be revalidated."
 	case FailureClassification:
@@ -90,6 +92,8 @@ func publicRecovery(kind FailureKind) string {
 	switch kind {
 	case FailureTransient:
 		return "Start a new dispatch pinned to the resolved exact commit; pre-resolution failures may select latest-stable again."
+	case FailureAccess:
+		return "Verify the workflow job has contents: read access to the configured source, then start a fresh dispatch."
 	case FailureProvenance:
 		return "Review and explicitly re-establish configured source provenance; never refresh moved identity automatically."
 	case FailureClassification:
@@ -103,9 +107,32 @@ func publicRecovery(kind FailureKind) string {
 	}
 }
 
-func ClassifyHTTPFailure(statusCode int, retryAfter string, err error) error {
-	if statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= 500 {
-		return Failure{Kind: FailureTransient, RetryAfter: ParseRetryAfter(retryAfter, time.Now()), Err: err}
+type HTTPFailureMetadata struct {
+	StatusCode         int
+	RetryAfter         string
+	RateLimitRemaining string
+	RateLimitReset     string
+}
+
+func ClassifyHTTPFailure(metadata HTTPFailureMetadata, err error) error {
+	now := time.Now()
+	retryAfter := ParseRetryAfter(metadata.RetryAfter, now)
+	rateLimited403 := metadata.StatusCode == http.StatusForbidden && (strings.TrimSpace(metadata.RateLimitRemaining) == "0" || retryAfter > 0)
+	if metadata.StatusCode == http.StatusTooManyRequests || rateLimited403 {
+		if resetAfter := ParseRateLimitReset(metadata.RateLimitReset, now); resetAfter > retryAfter {
+			retryAfter = resetAfter
+		}
+	}
+	if metadata.StatusCode == http.StatusRequestTimeout || metadata.StatusCode == http.StatusTooManyRequests || metadata.StatusCode >= 500 || rateLimited403 {
+		return Failure{Kind: FailureTransient, RetryAfter: retryAfter, Err: err}
+	}
+	if metadata.StatusCode == http.StatusUnauthorized || metadata.StatusCode == http.StatusForbidden {
+		failure := Failure{Kind: FailureAccess, Err: err}
+		if metadata.StatusCode == http.StatusForbidden {
+			failure.Blocker = "GitHub denied access during source acquisition with HTTP 403; the response did not contain rate-limit evidence."
+			failure.Recovery = "Verify the workflow job has contents: read access to the configured source, then start a fresh dispatch."
+		}
+		return failure
 	}
 	return Failure{Kind: FailureProvenance, Err: err}
 }
@@ -130,6 +157,17 @@ func ParseRetryAfter(value string, now time.Time) time.Duration {
 		if delay := deadline.Sub(now); delay > 0 {
 			return delay
 		}
+	}
+	return 0
+}
+
+func ParseRateLimitReset(value string, now time.Time) time.Duration {
+	seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0
+	}
+	if delay := time.Unix(seconds, 0).Sub(now); delay > 0 {
+		return delay
 	}
 	return 0
 }

@@ -68,6 +68,10 @@ Inspect checks out without persisted credentials and invokes:
 go run ./internal/tools/syncpacksource --phase inspect ...
 ```
 
+The private adapter supplies the job-scoped `GITHUB_TOKEN` to an authenticated
+read-only client that adds authorization only for the exact GitHub API origin;
+redirected archive origins and deterministic domain modules never receive it.
+
 The adapter validates the dispatch, creates an isolated acquisition directory,
 and calls canonical `packsync.Check`. Its output is a sealed, immutable
 inspection artifact. It contains identities, reasons, changes, blockers and
@@ -124,9 +128,12 @@ temporary or checkout paths.
 ## Retries and failures
 
 A single operation has at most three attempts. Attempt delays use bounded
-exponential backoff. A valid server `Retry-After` delay replaces the computed
-delay when it is longer. Only transport, rate-limit and service-unavailable
-failures classified as transient retry.
+exponential backoff. A valid server `Retry-After` delay or future
+`X-RateLimit-Reset` deadline replaces the computed delay when it is longer.
+GitHub HTTP 403 is a rate-limit failure only when safe response metadata proves
+it (`Retry-After` is valid or `X-RateLimit-Remaining` is zero); otherwise it is
+a terminal access failure with access-specific recovery. Only transport,
+rate-limit and service-unavailable failures classified as transient retry.
 
 A failed lease-protected branch push is reconciled once by reading the remote
 ref. If the target head is not already present, the run stops; it never repeats

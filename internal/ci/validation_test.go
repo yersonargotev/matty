@@ -119,6 +119,11 @@ func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T)
 	classify := workflowSection(t, workflow, "  classify:", "  validate:")
 	validate := workflowSection(t, workflow, "  validate:", "  publish:")
 	publish := workflow[strings.Index(workflow, "  publish:"):]
+	for name, section := range map[string]string{"inspect": inspect, "validate": validate, "publish": publish} {
+		if !strings.Contains(section, "GITHUB_TOKEN: ${{ github.token }}") {
+			t.Fatalf("%s acquisition does not receive the job-scoped GitHub token", name)
+		}
+	}
 	if strings.Contains(inspect, "contents: write") || strings.Contains(inspect, "pull-requests: write") || strings.Contains(classify, "contents: write") || strings.Contains(classify, "pull-requests: write") || strings.Contains(validate, "contents: write") || strings.Contains(validate, "pull-requests: write") {
 		t.Fatal("Inspect, Classify, or Validate has publication permission")
 	}

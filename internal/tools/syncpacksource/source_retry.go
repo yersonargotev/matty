@@ -56,7 +56,12 @@ func classifySourceFailure(err error) error {
 	}
 	var response githubsource.HTTPError
 	if errors.As(err, &response) {
-		return packsyncworkflow.ClassifyHTTPFailure(response.StatusCode, response.RetryAfter, err)
+		return packsyncworkflow.ClassifyHTTPFailure(packsyncworkflow.HTTPFailureMetadata{
+			StatusCode:         response.StatusCode,
+			RetryAfter:         response.RetryAfter,
+			RateLimitRemaining: response.RateLimitRemaining,
+			RateLimitReset:     response.RateLimitReset,
+		}, err)
 	}
 	return packsyncworkflow.ClassifyNetworkFailure(err)
 }

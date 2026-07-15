@@ -11,6 +11,7 @@ type FailureKind string
 
 const (
 	FailureTransient      FailureKind = "transient"
+	FailureAccess         FailureKind = "access"
 	FailureProvenance     FailureKind = "provenance"
 	FailureIntegrity      FailureKind = "integrity"
 	FailureClassification FailureKind = "classification"

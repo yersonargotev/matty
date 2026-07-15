@@ -88,6 +88,7 @@ jobs:
           cache: false
       - name: Inspect with a fresh canonical Check
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           MATTY_SOURCE_ID: ${{ inputs.source_id }}
           MATTY_SELECTOR: ${{ inputs.selector }}
           MATTY_SELECTOR_REF: ${{ inputs.selector_ref }}
@@ -229,6 +230,8 @@ jobs:
           name: pack-source-classification-${{ github.run_id }}
           path: ${{ runner.temp }}/matty-sync/classification
       - name: Apply in sandbox and run the complete Matty-owned suite
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           export HOME="$RUNNER_TEMP/matty-home"
           export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
@@ -291,6 +294,7 @@ jobs:
       - name: Reacquire, Apply, validate, reobserve, then publish
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           export HOME="$RUNNER_TEMP/matty-home"
           export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
