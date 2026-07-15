@@ -19,10 +19,13 @@ readonly packages=(
   ./internal/localprojection
   ./internal/opencode
   ./internal/ownedcontainer
+  ./internal/packsync
+  ./internal/packsync/githubsource
   ./internal/prompt
   ./internal/release
   ./internal/setuphealth
   ./internal/skillbundle
+  ./internal/tools/syncpacksource
   ./internal/version
   ./internal/workstation
 )
