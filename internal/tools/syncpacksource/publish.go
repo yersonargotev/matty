@@ -88,6 +88,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	}
 	builder.brief.PullRequest = result.PullRequest.Number
 	builder.brief.HeadSHA = result.PullRequest.HeadSHA
+	builder.brief.ResultTreeSHA = result.Proposal.ResultTreeSHA
 	builder.brief.Validation = result.Readiness.Gates
 	builder.brief.DecisionReady = result.Readiness.DecisionReady
 	builder.brief.Blockers = nil
@@ -322,6 +323,7 @@ func newGitHubGateway(repositoryRoot string, plan packsync.Plan) *githubGateway 
 }
 
 func (gateway *githubGateway) Prepare(proposal packsyncworkflow.Proposal) (packsyncworkflow.Proposal, error) {
+	gateway.brief.ResultTreeSHA = proposal.ResultTreeSHA
 	gateway.brief.Validation = proposal.Validation
 	gateway.brief.DecisionReady = false
 	gateway.brief.Blockers = []string{"Publication remains blocked until the exact post-write pull request identity is reobserved."}
@@ -367,14 +369,19 @@ func (gateway *githubGateway) Observe(ctx context.Context, sourceID string) (pac
 	if len(prs) == 1 {
 		pr := prs[0]
 		state.PR = packsyncworkflow.PRState{Exists: true, Number: pr.Number, Open: pr.State == "OPEN", BaseBranch: pr.BaseRefName, HeadBranch: pr.HeadRefName, HeadSHA: pr.HeadRefOID, MetadataHash: packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body), Owner: pr.Author.Login, Draft: pr.IsDraft, AutoMerge: pr.AutoMergeRequest != nil}
+		lastEditor, editorErr := gateway.lastPREditor(ctx, pr.Number)
+		if editorErr != nil {
+			return state, editorErr
+		}
+		state.PR.LastEditor = lastEditor
 		record, ok := packsyncworkflow.ParsePublicationRecord(pr.Body)
 		if ok {
 			state.Record = record
 			state.Branch.ManagedMetadataHash = record.MetadataHash
 		}
 	}
-	if state.PR.Exists && state.PR.Owner == "app/github-actions" {
-		state.PR.Owner = packsyncworkflow.AutomationOwner
+	if state.PR.Exists {
+		state.PR.Owner = normalizedAutomationLogin(state.PR.Owner)
 	}
 	commitOwned := false
 	if state.Branch.Exists && state.Record.HeadSHA == state.Branch.HeadSHA {
@@ -397,7 +404,7 @@ func (gateway *githubGateway) Observe(ctx context.Context, sourceID string) (pac
 		}
 		commitOwned = identity.Author == packsyncworkflow.AutomationOwner && identity.Committer == packsyncworkflow.AutomationOwner && identity.Message == expectedMessage && len(identity.Parents) == 1 && identity.Parents[0] == state.Record.BaseSHA
 	}
-	if state.Branch.Exists && commitOwned && state.PR.Owner == packsyncworkflow.AutomationOwner && state.Record.HeadSHA != "" && state.Record.HeadSHA == state.Branch.HeadSHA && state.PR.HeadSHA == state.Branch.HeadSHA && state.Record.MetadataHash == state.PR.MetadataHash {
+	if state.Branch.Exists && commitOwned && state.PR.Owner == packsyncworkflow.AutomationOwner && (state.PR.LastEditor == "" || state.PR.LastEditor == packsyncworkflow.AutomationOwner) && state.Record.HeadSHA != "" && state.Record.HeadSHA == state.Branch.HeadSHA && state.PR.HeadSHA == state.Branch.HeadSHA && state.Record.MetadataHash == state.PR.MetadataHash {
 		state.Branch.Owner = packsyncworkflow.AutomationOwner
 	}
 	if state.Record.HeadSHA != "" && state.Branch.HeadSHA != state.Record.HeadSHA {
@@ -463,21 +470,31 @@ func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncwork
 
 func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncworkflow.Proposal, decision packsyncworkflow.PublicationDecision, observed packsyncworkflow.PRState) (string, error) {
 	if decision.Action == packsyncworkflow.PublicationCreate {
+		beforeReady := gateway.last.PR
+		afterReady := beforeReady
+		afterReady.Draft = false
+		readyRecord := gateway.last.Record
 		if err := gateway.retry.Do(ctx, func() error {
-			current, observeErr := gateway.Observe(ctx, proposal.SourceID)
+			current, observeErr := gateway.observeMutationOnce(ctx, proposal)
 			if observeErr != nil {
-				return observeErr
+				return packsyncworkflow.ClassifyNetworkFailure(observeErr)
 			}
-			if !current.PR.Exists || current.PR.Number != observed.Number || !current.PR.Open || !current.PR.Draft || current.PR.BaseBranch != "main" || current.PR.HeadBranch != decision.Branch || current.PR.HeadSHA != proposal.HeadSHA || current.PR.MetadataHash != observed.MetadataHash || current.PR.Owner != packsyncworkflow.AutomationOwner || current.Branch.HeadSHA != proposal.HeadSHA || current.Branch.Owner != packsyncworkflow.AutomationOwner {
-				return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "draft pull request state changed before the ready transition", Recovery: "Preserve the reviewer change and leave the pull request blocked; start a fresh Check.", Err: errors.New("draft readiness compare-and-swap failed")}
+			if current.matchesPR(proposal, afterReady, readyRecord) {
+				return nil
+			}
+			if !current.matchesPR(proposal, beforeReady, readyRecord) {
+				return publicationCASFailure("draft pull request state changed before the ready transition")
 			}
 			_, readyErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "ready", fmt.Sprint(observed.Number), "--repo", gateway.repository)
 			if readyErr == nil {
 				return nil
 			}
-			state, observeErr := gateway.Observe(ctx, proposal.SourceID)
-			if observeErr == nil && !state.PR.Draft {
+			after, observeErr := gateway.observeMutationOnce(ctx, proposal)
+			if observeErr == nil && after.matchesPR(proposal, afterReady, readyRecord) {
 				return nil
+			}
+			if observeErr == nil && !after.matchesPR(proposal, beforeReady, readyRecord) {
+				return publicationCASFailure("draft pull request state changed during an ambiguous ready transition")
 			}
 			return packsyncworkflow.ClassifyNetworkFailure(readyErr)
 		}); err != nil {
@@ -567,6 +584,7 @@ type mutationObservation struct {
 	BranchHead string
 	PRs        []ghPR
 	Commit     commitIdentity
+	LastEditor string
 }
 
 func (gateway *githubGateway) observeMutationOnce(ctx context.Context, proposal packsyncworkflow.Proposal) (mutationObservation, error) {
@@ -587,6 +605,13 @@ func (gateway *githubGateway) observeMutationOnce(ctx context.Context, proposal 
 	if err != nil {
 		return mutationObservation{}, err
 	}
+	lastEditor := ""
+	if len(prs) == 1 {
+		lastEditor, err = gateway.lastPREditorOnce(ctx, prs[0].Number)
+		if err != nil {
+			return mutationObservation{}, err
+		}
+	}
 	identityJSON, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "repos/"+gateway.repository+"/commits/"+fields[0], "--jq", "{author:.author.login,committer:.committer.login,message:.commit.message,parents:[.parents[].sha]}")
 	if err != nil {
 		return mutationObservation{}, err
@@ -595,7 +620,7 @@ func (gateway *githubGateway) observeMutationOnce(ctx context.Context, proposal 
 	if err := json.Unmarshal([]byte(identityJSON), &identity); err != nil {
 		return mutationObservation{}, errors.New("commit ownership identity is malformed")
 	}
-	return mutationObservation{BaseSHA: strings.TrimSpace(base), BranchHead: fields[0], PRs: prs, Commit: identity}, nil
+	return mutationObservation{BaseSHA: strings.TrimSpace(base), BranchHead: fields[0], PRs: prs, Commit: identity, LastEditor: lastEditor}, nil
 }
 
 func (state mutationObservation) matchesCommon(proposal packsyncworkflow.Proposal) bool {
@@ -608,12 +633,9 @@ func (state mutationObservation) matchesPR(proposal packsyncworkflow.Proposal, e
 		return false
 	}
 	pr := state.PRs[0]
-	owner := pr.Author.Login
-	if owner == "app/github-actions" {
-		owner = packsyncworkflow.AutomationOwner
-	}
+	owner := normalizedAutomationLogin(pr.Author.Login)
 	parsed, ok := packsyncworkflow.ParsePublicationRecord(pr.Body)
-	return ok && parsed == record && pr.Number == expected.Number && pr.State == "OPEN" && expected.Open && pr.BaseRefName == expected.BaseBranch && pr.HeadRefName == expected.HeadBranch && pr.HeadRefOID == proposal.HeadSHA && pr.IsDraft == expected.Draft && (pr.AutoMergeRequest != nil) == expected.AutoMerge && owner == packsyncworkflow.AutomationOwner && packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body) == record.MetadataHash
+	return ok && parsed == record && pr.Number == expected.Number && pr.State == "OPEN" && expected.Open && pr.BaseRefName == expected.BaseBranch && pr.HeadRefName == expected.HeadBranch && pr.HeadRefOID == proposal.HeadSHA && pr.IsDraft == expected.Draft && (pr.AutoMergeRequest != nil) == expected.AutoMerge && owner == packsyncworkflow.AutomationOwner && (state.LastEditor == "" || state.LastEditor == packsyncworkflow.AutomationOwner) && packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body) == record.MetadataHash
 }
 
 func (state mutationObservation) matchesCreated(proposal packsyncworkflow.Proposal, record packsyncworkflow.PublicationRecord) (int, bool) {
@@ -640,6 +662,39 @@ func (gateway *githubGateway) pullRequests(ctx context.Context, branch string) (
 		return packsyncworkflow.ClassifyNetworkFailure(err)
 	})
 	return prs, err
+}
+
+func (gateway *githubGateway) lastPREditor(ctx context.Context, number int) (editor string, err error) {
+	err = gateway.retry.Do(ctx, func() error {
+		editor, err = gateway.lastPREditorOnce(ctx, number)
+		if err == nil {
+			return nil
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(err)
+	})
+	return editor, err
+}
+
+func (gateway *githubGateway) lastPREditorOnce(ctx context.Context, number int) (string, error) {
+	owner, name, ok := strings.Cut(gateway.repository, "/")
+	if !ok || owner == "" || name == "" {
+		return "", errors.New("publication repository identity is invalid")
+	}
+	query := `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){userContentEdits(last:1){nodes{editor{login}}}}}}`
+	output, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "graphql", "-f", "query="+query, "-F", "owner="+owner, "-F", "name="+name, "-F", fmt.Sprintf("number=%d", number), "--jq", ".data.repository.pullRequest.userContentEdits.nodes[0].editor.login // \"\"")
+	if err != nil {
+		return "", err
+	}
+	return normalizedAutomationLogin(strings.TrimSpace(output)), nil
+}
+
+func normalizedAutomationLogin(login string) string {
+	switch login {
+	case "app/github-actions", "github-actions", packsyncworkflow.AutomationOwner:
+		return packsyncworkflow.AutomationOwner
+	default:
+		return login
+	}
 }
 
 func (gateway *githubGateway) pullRequestsOnce(ctx context.Context, branch string) ([]ghPR, error) {

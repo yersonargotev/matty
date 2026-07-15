@@ -146,7 +146,8 @@ Immediately before writing, Publish revalidates all of the following together:
 - exact source provenance and proposed provenance digest;
 - automation identity and the ownership record;
 - stable branch name, head, ancestry and commit authorship;
-- sole open PR identity, base/head/state, managed metadata and content; and
+- sole open PR identity, base/head/state, managed metadata, content and
+  authenticated last-editor identity; and
 - the exact validated result tree and every decision-readiness gate.
 
 Publish fails closed, without a force-push, metadata overwrite or competing
@@ -185,7 +186,8 @@ Publish renders one canonical JSON proposal into Markdown without recomputing
 domain facts. The JSON and brief carry the same information:
 
 1. request actor and reason, source, selector, workflow run and attempt,
-   candidate, plan ID, base/result head and branch/PR identity;
+   candidate, plan ID, base, commit head, validated result tree and branch/PR
+   identity;
 2. repository and owner identity, release, exact tag-to-commit resolution,
    verification, tree and parent identity, and provenance hashes;
 3. selected resource and file additions, modifications, removals and moves,

@@ -67,6 +67,7 @@ type PRState struct {
 	HeadSHA      string
 	MetadataHash string
 	Owner        string
+	LastEditor   string
 	Draft        bool
 	AutoMerge    bool
 }
@@ -138,6 +139,9 @@ func EvaluatePublication(proposal Proposal, state PublicationState) (Publication
 	}
 	if state.Branch.Owner != AutomationOwner || state.PR.Owner != AutomationOwner {
 		return blocked(decision, "automation ownership is absent or ambiguous")
+	}
+	if state.PR.LastEditor != "" && state.PR.LastEditor != AutomationOwner {
+		return blocked(decision, "managed pull request metadata was edited")
 	}
 	if state.Branch.HumanCommits {
 		return blocked(decision, "source branch contains human commits")

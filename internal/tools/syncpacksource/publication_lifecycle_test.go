@@ -84,6 +84,36 @@ func TestGitHubGatewayNeverOverwritesEditedMetadata(t *testing.T) {
 	}
 }
 
+func TestGitHubGatewayRejectsReviewerSelfAuthenticatedMetadata(t *testing.T) {
+	proposal := lifecycleProposal()
+	pr := managedFakePR(t, proposal, proposal.ManagedTitle, "managed evidence", false)
+	newTitle, newPrefix := "reviewer title", "reviewer evidence"
+	record, ok := packsyncworkflow.ParsePublicationRecord(pr.body)
+	if !ok {
+		t.Fatal("missing managed record")
+	}
+	record.MetadataHash = packsyncworkflow.ManagedMetadataHash(newTitle, newPrefix)
+	pr.title = newTitle
+	pr.body, _ = packsyncworkflow.ManagedBody(newPrefix, record)
+	fake := &fakeGitHubCommands{branchHead: headA, pr: pr, lastEditor: "reviewer"}
+	gateway := lifecycleGateway(t, fake)
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	if state.PR.MetadataHash != state.Record.MetadataHash {
+		t.Fatal("fixture did not self-authenticate edited metadata")
+	}
+	if _, err := packsyncworkflow.EvaluatePublication(prepared, state); err == nil || fake.pushCalls != 0 || fake.editCalls != 0 {
+		t.Fatalf("reviewer-authored metadata was admitted: state=%#v err=%v", state, err)
+	}
+}
+
 func TestGitHubGatewayObservationFailureNeverBecomesBranchAbsence(t *testing.T) {
 	fake := &fakeGitHubCommands{lsRemoteErr: errors.New("HTTP 503 Retry-After: 1")}
 	gateway := lifecycleGateway(t, fake)
@@ -174,6 +204,34 @@ func TestGitHubGatewayUndraftRetryReobservesReviewerEdits(t *testing.T) {
 	}
 	if fake.readyCalls != 1 || !fake.pr.draft || !strings.Contains(fake.pr.title, "reviewer edit") {
 		t.Fatalf("retry crossed stale state: ready=%d pr=%#v", fake.readyCalls, fake.pr)
+	}
+}
+
+func TestGitHubGatewayAmbiguousUndraftRejectsConcurrentMetadataEdit(t *testing.T) {
+	fake := &fakeGitHubCommands{readyErr: errors.New("HTTP 503"), readyAppliesAndReviewerEdits: true}
+	gateway := lifecycleGateway(t, fake)
+	proposal, err := gateway.Prepare(lifecycleProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(proposal, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Publish(context.Background(), proposal, decision); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Finalize(context.Background(), proposal, decision, draft.PR); err == nil || fake.readyCalls != 1 || fake.editCalls != 0 {
+		t.Fatalf("ambiguous ready adopted concurrent metadata: ready=%d edits=%d err=%v", fake.readyCalls, fake.editCalls, err)
 	}
 }
 
@@ -434,7 +492,7 @@ func lifecycleProposal() packsyncworkflow.Proposal {
 }
 
 func lifecycleBrief() packsyncworkflow.ReviewBrief {
-	return packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: "maintainer", RunID: "1", RunAttempt: "1", RunURL: "https://github.com/owner/repo/actions/runs/1", Request: packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "mattpocock-skills", Selector: packsyncworkflow.SelectorCommit, SelectorRef: candidateA, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "test"}, Candidate: packsync.Candidate{Commit: candidateA}, PlanID: "plan-1", BaseSHA: baseA, HeadSHA: headA, Branch: "sync/mattpocock-skills", SelectedResources: []packsync.ResourceEvidence{{SHA256: strings.Repeat("4", 64)}}, PreviousSnapshotSHA256: strings.Repeat("3", 64), ProposedSnapshotSHA256: strings.Repeat("5", 64), ApplyStatus: "applied", ManualMergeRequired: true}
+	return packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: "maintainer", RunID: "1", RunAttempt: "1", RunURL: "https://github.com/owner/repo/actions/runs/1", Request: packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "mattpocock-skills", Selector: packsyncworkflow.SelectorCommit, SelectorRef: candidateA, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "test"}, Candidate: packsync.Candidate{Commit: candidateA}, PlanID: "plan-1", BaseSHA: baseA, HeadSHA: headA, ResultTreeSHA: headA, Branch: "sync/mattpocock-skills", SelectedResources: []packsync.ResourceEvidence{{SHA256: strings.Repeat("4", 64)}}, PreviousSnapshotSHA256: strings.Repeat("3", 64), ProposedSnapshotSHA256: strings.Repeat("5", 64), ApplyStatus: "applied", ManualMergeRequired: true}
 }
 
 type noWaitSleeper struct{}
@@ -463,10 +521,12 @@ type fakeGitHubCommands struct {
 	createErr                    error
 	editErr                      error
 	editAfterReadyFailure        bool
+	readyAppliesAndReviewerEdits bool
 	closedPRAfterCreateFailure   bool
 	mutateBranchAfterPush        bool
 	mutateBranchAfterEditFailure bool
 	commitOwner                  string
+	lastEditor                   string
 	pushCalls                    int
 	createCalls                  int
 	editCalls                    int
@@ -481,6 +541,8 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 			return fake.baseHead + "\n", nil
 		}
 		return baseA + "\n", nil
+	case strings.HasPrefix(joined, "gh api graphql"):
+		return fake.lastEditor + "\n", nil
 	case strings.HasPrefix(joined, "git ls-remote"):
 		if fake.lsRemoteErr != nil {
 			return "", fake.lsRemoteErr
@@ -581,6 +643,11 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 	case strings.HasPrefix(joined, "gh pr ready"):
 		fake.readyCalls++
 		if fake.readyErr != nil {
+			if fake.readyAppliesAndReviewerEdits {
+				fake.pr.draft = false
+				fake.pr.title += " reviewer edit"
+				fake.lastEditor = "reviewer"
+			}
 			if fake.editAfterReadyFailure {
 				fake.pr.title += " reviewer edit"
 			}

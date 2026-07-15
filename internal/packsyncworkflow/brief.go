@@ -28,6 +28,7 @@ type ReviewBrief struct {
 	PlanID                  string                            `json:"plan_id"`
 	BaseSHA                 string                            `json:"base_sha"`
 	HeadSHA                 string                            `json:"head_sha"`
+	ResultTreeSHA           string                            `json:"result_tree_sha"`
 	Branch                  string                            `json:"branch"`
 	PullRequest             int                               `json:"pull_request,omitempty"`
 	Changes                 []packsync.Change                 `json:"changes"`
@@ -49,7 +50,7 @@ type ReviewBrief struct {
 }
 
 func (brief ReviewBrief) CanonicalJSON() ([]byte, error) {
-	if brief.SchemaVersion != 1 || brief.Request.Validate() != nil || brief.PlanID == "" || brief.Branch != "sync/"+brief.Request.SourceID || len(brief.SelectedResources) == 0 || len(brief.PreviousSnapshotSHA256) != 64 || len(brief.ProposedSnapshotSHA256) != 64 || !brief.Validation.Complete() || brief.UpstreamContentExecuted || brief.AutoMerge || !brief.ManualMergeRequired {
+	if brief.SchemaVersion != 1 || brief.Request.Validate() != nil || brief.PlanID == "" || brief.Branch != "sync/"+brief.Request.SourceID || requireFullSHA("base", brief.BaseSHA) != nil || requireFullSHA("head", brief.HeadSHA) != nil || requireFullSHA("result tree", brief.ResultTreeSHA) != nil || len(brief.SelectedResources) == 0 || len(brief.PreviousSnapshotSHA256) != 64 || len(brief.ProposedSnapshotSHA256) != 64 || !brief.Validation.Complete() || brief.UpstreamContentExecuted || brief.AutoMerge || !brief.ManualMergeRequired {
 		return nil, fmt.Errorf("review brief is incomplete or contradicts synchronization policy")
 	}
 	data, err := json.Marshal(brief)
@@ -75,5 +76,5 @@ func (brief ReviewBrief) Markdown() (string, error) {
 	if brief.DecisionReady {
 		status = "decision-ready"
 	}
-	return fmt.Sprintf("## Matty pack synchronization\n\n- Source: `%s`\n- Candidate: `%s`\n- Plan: `%s`\n- Base/head: `%s` / `%s`\n- State: **%s**\n- Auto-merge: disabled; manual merge required.\n\n<details><summary>Canonical synchronization evidence</summary>\n\n```json\n%s```\n</details>\n", brief.Request.SourceID, brief.Candidate.Commit, brief.PlanID, brief.BaseSHA, brief.HeadSHA, status, strings.TrimSuffix(string(canonical), "\n")+"\n"), nil
+	return fmt.Sprintf("## Matty pack synchronization\n\n- Source: `%s`\n- Candidate: `%s`\n- Plan: `%s`\n- Base/head/tree: `%s` / `%s` / `%s`\n- State: **%s**\n- Auto-merge: disabled; manual merge required.\n\n<details><summary>Canonical synchronization evidence</summary>\n\n```json\n%s```\n</details>\n", brief.Request.SourceID, brief.Candidate.Commit, brief.PlanID, brief.BaseSHA, brief.HeadSHA, brief.ResultTreeSHA, status, strings.TrimSuffix(string(canonical), "\n")+"\n"), nil
 }
