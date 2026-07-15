@@ -44,40 +44,65 @@ type Binding struct {
 
 type Release struct {
 	ID          int64     `json:"id"`
+	NodeID      string    `json:"node_id"`
 	Tag         string    `json:"tag"`
+	Name        string    `json:"name"`
+	Target      string    `json:"target_commitish"`
+	Immutable   bool      `json:"immutable"`
+	CreatedAt   time.Time `json:"created_at"`
 	PublishedAt time.Time `json:"published_at"`
 	Draft       bool      `json:"draft"`
 	Prerelease  bool      `json:"prerelease"`
+	Author      Actor     `json:"author"`
+}
+
+type Actor struct {
+	Login  string `json:"login"`
+	ID     int64  `json:"id"`
+	NodeID string `json:"node_id"`
 }
 
 type Verification struct {
-	Verified bool   `json:"verified"`
-	Reason   string `json:"reason"`
+	Verified        bool       `json:"verified"`
+	Reason          string     `json:"reason"`
+	VerifiedAt      *time.Time `json:"verified_at"`
+	SignatureSHA256 *string    `json:"signature_sha256"`
+	PayloadSHA256   *string    `json:"payload_sha256"`
 }
 
 type TagObject struct {
 	SHA          string       `json:"sha"`
+	Name         string       `json:"name"`
 	TargetSHA    string       `json:"target_sha"`
 	TargetType   string       `json:"target_type"`
 	Verification Verification `json:"verification"`
 }
 
 type Candidate struct {
-	Repository    string       `json:"repository"`
-	RepositoryID  int64        `json:"repository_id"`
-	Owner         string       `json:"owner"`
-	OwnerID       int64        `json:"owner_id"`
-	Public        bool         `json:"public"`
-	Archived      bool         `json:"archived"`
-	Disabled      bool         `json:"disabled"`
-	Release       *Release     `json:"release,omitempty"`
-	TagRefSHA     string       `json:"tag_ref_sha,omitempty"`
-	TagObjects    []TagObject  `json:"tag_objects,omitempty"`
-	Commit        string       `json:"commit"`
-	Tree          string       `json:"tree"`
-	Parents       []string     `json:"parents"`
-	CommitVerify  Verification `json:"commit_verification"`
-	ArchiveSHA256 string       `json:"archive_sha256,omitempty"`
+	Repository       string       `json:"repository"`
+	RepositoryID     int64        `json:"repository_id"`
+	RepositoryNodeID string       `json:"repository_node_id"`
+	RepositoryHTML   string       `json:"repository_html_url"`
+	RepositoryClone  string       `json:"repository_clone_url"`
+	RepositoryAPI    string       `json:"repository_api_url"`
+	Visibility       string       `json:"visibility"`
+	Owner            string       `json:"owner"`
+	OwnerID          int64        `json:"owner_id"`
+	OwnerNodeID      string       `json:"owner_node_id"`
+	Public           bool         `json:"public"`
+	Archived         bool         `json:"archived"`
+	Disabled         bool         `json:"disabled"`
+	Release          *Release     `json:"release,omitempty"`
+	TagRefName       string       `json:"tag_ref_name,omitempty"`
+	TagRefType       string       `json:"tag_ref_type,omitempty"`
+	TagRefSHA        string       `json:"tag_ref_sha,omitempty"`
+	TagObjects       []TagObject  `json:"tag_objects,omitempty"`
+	Commit           string       `json:"commit"`
+	CommitNodeID     string       `json:"commit_node_id"`
+	Tree             string       `json:"tree"`
+	Parents          []string     `json:"parents"`
+	CommitVerify     Verification `json:"commit_verification"`
+	ArchiveSHA256    string       `json:"archive_sha256,omitempty"`
 }
 
 // Source is the acquisition boundary. WithSnapshot must accept an empty,

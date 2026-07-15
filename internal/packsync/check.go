@@ -234,13 +234,16 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 func validateCandidate(source SourceConfig, candidate Candidate, selector Selector) []string {
 	var blockers []string
 	owner := strings.Split(source.Repository, "/")[0]
-	if !strings.EqualFold(candidate.Repository, source.Repository) || !strings.EqualFold(candidate.Owner, owner) || candidate.RepositoryID == 0 || candidate.OwnerID == 0 {
+	if !strings.EqualFold(candidate.Repository, source.Repository) || !strings.EqualFold(candidate.Owner, owner) || candidate.RepositoryID == 0 || candidate.OwnerID == 0 || candidate.RepositoryNodeID == "" || candidate.OwnerNodeID == "" {
 		blockers = append(blockers, "repository or owner identity does not match the configured source")
+	}
+	if candidate.RepositoryHTML == "" || candidate.RepositoryClone == "" || candidate.RepositoryAPI == "" || candidate.Visibility == "" {
+		blockers = append(blockers, "repository provenance evidence is incomplete")
 	}
 	if !candidate.Public || candidate.Archived || candidate.Disabled {
 		blockers = append(blockers, "configured repository is not an active public source")
 	}
-	if !fullSHA(candidate.Commit) || !fullSHA(candidate.Tree) {
+	if !fullSHA(candidate.Commit) || candidate.CommitNodeID == "" || !fullSHA(candidate.Tree) {
 		blockers = append(blockers, "candidate did not resolve to a complete immutable commit and tree")
 	}
 	for _, parent := range candidate.Parents {
@@ -271,6 +274,15 @@ func validateCandidate(source SourceConfig, candidate Candidate, selector Select
 	}
 	if selector.Mode != SelectorStableRelease && invalidVerification(candidate) {
 		blockers = append(blockers, "manual candidate carries invalid verification evidence")
+	}
+	if !completeVerification(candidate.CommitVerify) {
+		blockers = append(blockers, "commit verification evidence is incomplete")
+	}
+	for _, tag := range candidate.TagObjects {
+		if !completeVerification(tag.Verification) {
+			blockers = append(blockers, "tag verification evidence is incomplete")
+			break
+		}
 	}
 	return blockers
 }
@@ -309,17 +321,17 @@ func continuousTagChain(candidate Candidate) bool {
 	if candidate.Release == nil || candidate.TagRefSHA == "" {
 		return false
 	}
-	if !fullSHA(candidate.TagRefSHA) || candidate.Release.ID <= 0 || candidate.Release.Tag == "" || candidate.Release.PublishedAt.IsZero() || candidate.Release.Draft {
+	if !fullSHA(candidate.TagRefSHA) || candidate.TagRefName != "refs/tags/"+candidate.Release.Tag || candidate.Release.ID <= 0 || candidate.Release.NodeID == "" || candidate.Release.Tag == "" || candidate.Release.Target == "" || candidate.Release.CreatedAt.IsZero() || candidate.Release.PublishedAt.IsZero() || candidate.Release.Draft || !validActor(candidate.Release.Author) {
 		return false
 	}
 	if len(candidate.TagObjects) == 0 {
-		return candidate.TagRefSHA == candidate.Commit
+		return candidate.TagRefType == "commit" && candidate.TagRefSHA == candidate.Commit
 	}
-	if candidate.TagRefSHA != candidate.TagObjects[0].SHA {
+	if candidate.TagRefType != "tag" || candidate.TagRefSHA != candidate.TagObjects[0].SHA {
 		return false
 	}
 	for i, tag := range candidate.TagObjects {
-		if !fullSHA(tag.SHA) || !fullSHA(tag.TargetSHA) {
+		if !fullSHA(tag.SHA) || tag.Name != candidate.Release.Tag || !fullSHA(tag.TargetSHA) {
 			return false
 		}
 		want := candidate.Commit
@@ -361,6 +373,21 @@ func invalidVerification(candidate Candidate) bool {
 		}
 	}
 	return false
+}
+
+func completeVerification(value Verification) bool {
+	switch {
+	case value.Verified && value.Reason == "valid":
+		return value.VerifiedAt != nil && value.SignatureSHA256 != nil && value.PayloadSHA256 != nil && fullDigest(*value.SignatureSHA256) && fullDigest(*value.PayloadSHA256)
+	case !value.Verified && value.Reason == "unsigned":
+		return value.VerifiedAt == nil && value.SignatureSHA256 == nil && value.PayloadSHA256 == nil
+	default:
+		return value.Reason != ""
+	}
+}
+
+func validActor(value Actor) bool {
+	return value.Login != "" && value.ID > 0 && value.NodeID != ""
 }
 
 func validateLockedResources(resources []ResourceEvidence) []string {
@@ -441,7 +468,11 @@ func loadManifests(root string) (map[string]packManifest, string, error) {
 			return nil, "", fmt.Errorf("invalid or duplicate runtime manifest %s", name)
 		}
 		result[manifest.ID] = manifest
-		framed = append(framed, []byte(filepath.ToSlash(name)+"\x00"+hashBytes(data)+"\n")...)
+		relative, err := filepath.Rel(root, name)
+		if err != nil {
+			return nil, "", err
+		}
+		framed = append(framed, []byte(filepath.ToSlash(relative)+"\x00"+hashBytes(data)+"\n")...)
 	}
 	return result, hashBytes(framed), nil
 }

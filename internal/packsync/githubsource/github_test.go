@@ -36,15 +36,15 @@ func TestPublicGitHubAcquisitionUsesNoCredentialsNeverExecutesAndCleans(t *testi
 		}
 		switch request.URL.Path {
 		case "/repos/mattpocock/skills":
-			writeJSON(writer, map[string]any{"id": 1148788086, "full_name": "mattpocock/skills", "visibility": "public", "private": false, "archived": false, "disabled": false, "owner": map[string]any{"id": 28293365, "login": "mattpocock"}})
+			writeJSON(writer, map[string]any{"id": 1148788086, "node_id": "repo-node", "full_name": "mattpocock/skills", "html_url": "https://github.com/mattpocock/skills", "clone_url": "https://github.com/mattpocock/skills.git", "url": "https://api.github.com/repos/mattpocock/skills", "visibility": "public", "private": false, "archived": false, "disabled": false, "owner": map[string]any{"id": 28293365, "node_id": "owner-node", "login": "mattpocock"}})
 		case "/repos/mattpocock/skills/releases":
-			writeJSON(writer, []map[string]any{{"id": 1, "tag_name": "v1.1.0", "published_at": "2026-07-08T13:20:57Z", "draft": false, "prerelease": false}})
+			writeJSON(writer, []map[string]any{{"id": 1, "node_id": "release-node", "tag_name": "v1.1.0", "name": "v1.1.0", "target_commitish": "main", "immutable": false, "created_at": "2026-07-08T13:20:55Z", "published_at": "2026-07-08T13:20:57Z", "draft": false, "prerelease": false, "author": map[string]any{"login": "bot", "id": 7, "node_id": "author-node"}}})
 		case "/repos/mattpocock/skills/git/ref/tags/v1.1.0":
 			writeJSON(writer, map[string]any{"object": map[string]any{"sha": tagSHA, "type": "tag"}})
 		case "/repos/mattpocock/skills/git/tags/" + tagSHA:
-			writeJSON(writer, map[string]any{"sha": tagSHA, "object": map[string]any{"sha": commitSHA, "type": "commit"}, "verification": map[string]any{"verified": false, "reason": "unsigned"}})
+			writeJSON(writer, map[string]any{"sha": tagSHA, "tag": "v1.1.0", "object": map[string]any{"sha": commitSHA, "type": "commit"}, "verification": map[string]any{"verified": false, "reason": "unsigned"}})
 		case "/repos/mattpocock/skills/git/commits/" + commitSHA:
-			writeJSON(writer, map[string]any{"sha": commitSHA, "tree": map[string]any{"sha": strings.Repeat("f", 40)}, "parents": []map[string]any{{"sha": strings.Repeat("a", 40)}}, "verification": map[string]any{"verified": true, "reason": "valid"}})
+			writeJSON(writer, map[string]any{"sha": commitSHA, "node_id": "commit-node", "tree": map[string]any{"sha": strings.Repeat("f", 40)}, "parents": []map[string]any{{"sha": strings.Repeat("a", 40)}}, "verification": map[string]any{"verified": true, "reason": "valid", "verified_at": "2026-07-08T13:20:40Z", "signature": "signature", "payload": "payload"}})
 		case "/repos/mattpocock/skills/tarball/" + commitSHA:
 			writer.WriteHeader(http.StatusOK)
 			_, _ = writer.Write(archive)
@@ -64,7 +64,7 @@ func TestPublicGitHubAcquisitionUsesNoCredentialsNeverExecutesAndCleans(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.RepositoryID != 1148788086 || candidate.OwnerID != 28293365 || candidate.Commit != commitSHA || candidate.TagRefSHA != tagSHA {
+	if candidate.RepositoryID != 1148788086 || candidate.RepositoryNodeID != "repo-node" || candidate.OwnerID != 28293365 || candidate.OwnerNodeID != "owner-node" || candidate.Commit != commitSHA || candidate.CommitNodeID != "commit-node" || candidate.TagRefSHA != tagSHA || candidate.CommitVerify.SignatureSHA256 == nil || candidate.CommitVerify.PayloadSHA256 == nil {
 		t.Fatalf("candidate = %#v", candidate)
 	}
 	temporary := t.TempDir()

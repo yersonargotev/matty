@@ -7,6 +7,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,10 +46,16 @@ func newClient(httpClient *http.Client, apiBase string) *Client {
 func (client *Client) Releases(ctx context.Context, source packsync.SourceConfig) ([]packsync.Release, error) {
 	type releaseResponse struct {
 		ID          int64  `json:"id"`
+		NodeID      string `json:"node_id"`
 		Tag         string `json:"tag_name"`
+		Name        string `json:"name"`
+		Target      string `json:"target_commitish"`
+		Immutable   bool   `json:"immutable"`
+		CreatedAt   string `json:"created_at"`
 		PublishedAt string `json:"published_at"`
 		Draft       bool   `json:"draft"`
 		Prerelease  bool   `json:"prerelease"`
+		Author      actor  `json:"author"`
 	}
 	var releases []packsync.Release
 	for page := 1; ; page++ {
@@ -57,7 +65,14 @@ func (client *Client) Releases(ctx context.Context, source packsync.SourceConfig
 			return nil, err
 		}
 		for _, item := range response {
-			var published time.Time
+			var created, published time.Time
+			if item.CreatedAt != "" {
+				parsed, err := time.Parse(time.RFC3339, item.CreatedAt)
+				if err != nil {
+					return nil, fmt.Errorf("release %s has invalid created_at: %w", item.Tag, err)
+				}
+				created = parsed
+			}
 			if item.PublishedAt != "" {
 				parsed, err := time.Parse(time.RFC3339, item.PublishedAt)
 				if err != nil {
@@ -65,7 +80,7 @@ func (client *Client) Releases(ctx context.Context, source packsync.SourceConfig
 				}
 				published = parsed
 			}
-			releases = append(releases, packsync.Release{ID: item.ID, Tag: item.Tag, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease})
+			releases = append(releases, packsync.Release{ID: item.ID, NodeID: item.NodeID, Tag: item.Tag, Name: item.Name, Target: item.Target, Immutable: item.Immutable, CreatedAt: created, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease, Author: item.Author.pack()})
 		}
 		if len(response) < 100 {
 			break
@@ -90,6 +105,8 @@ func (client *Client) ResolveRelease(ctx context.Context, source packsync.Source
 		return packsync.Candidate{}, fmt.Errorf("resolve exact tag ref: %w", err)
 	}
 	candidate.Release = &release
+	candidate.TagRefName = "refs/tags/" + release.Tag
+	candidate.TagRefType = ref.Object.Type
 	candidate.TagRefSHA = ref.Object.SHA
 	object := ref.Object
 	seen := map[string]bool{}
@@ -100,13 +117,18 @@ func (client *Client) ResolveRelease(ctx context.Context, source packsync.Source
 		seen[object.SHA] = true
 		var tag struct {
 			SHA          string       `json:"sha"`
+			Name         string       `json:"tag"`
 			Object       gitObject    `json:"object"`
 			Verification verification `json:"verification"`
 		}
 		if err := client.getJSON(ctx, client.repoURL(source)+"/git/tags/"+object.SHA, &tag); err != nil {
 			return packsync.Candidate{}, fmt.Errorf("peel tag object: %w", err)
 		}
-		candidate.TagObjects = append(candidate.TagObjects, packsync.TagObject{SHA: tag.SHA, TargetSHA: tag.Object.SHA, TargetType: tag.Object.Type, Verification: tag.Verification.pack()})
+		verification, err := tag.Verification.pack()
+		if err != nil {
+			return packsync.Candidate{}, fmt.Errorf("decode tag verification: %w", err)
+		}
+		candidate.TagObjects = append(candidate.TagObjects, packsync.TagObject{SHA: tag.SHA, Name: tag.Name, TargetSHA: tag.Object.SHA, TargetType: tag.Object.Type, Verification: verification})
 		object = tag.Object
 	}
 	if object.Type != "commit" || len(object.SHA) != 40 {
@@ -175,36 +197,59 @@ type gitObject struct {
 }
 
 type verification struct {
-	Verified bool   `json:"verified"`
-	Reason   string `json:"reason"`
+	Verified   bool    `json:"verified"`
+	Reason     string  `json:"reason"`
+	VerifiedAt *string `json:"verified_at"`
+	Signature  *string `json:"signature"`
+	Payload    *string `json:"payload"`
 }
 
-func (value verification) pack() packsync.Verification {
-	return packsync.Verification{Verified: value.Verified, Reason: value.Reason}
+func (value verification) pack() (packsync.Verification, error) {
+	result := packsync.Verification{Verified: value.Verified, Reason: value.Reason, SignatureSHA256: hashOptional(value.Signature), PayloadSHA256: hashOptional(value.Payload)}
+	if value.VerifiedAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *value.VerifiedAt)
+		if err != nil {
+			return packsync.Verification{}, err
+		}
+		result.VerifiedAt = &parsed
+	}
+	return result, nil
+}
+
+type actor struct {
+	Login  string `json:"login"`
+	ID     int64  `json:"id"`
+	NodeID string `json:"node_id"`
+}
+
+func (value actor) pack() packsync.Actor {
+	return packsync.Actor{Login: value.Login, ID: value.ID, NodeID: value.NodeID}
 }
 
 func (client *Client) repositoryCandidate(ctx context.Context, source packsync.SourceConfig) (packsync.Candidate, error) {
 	var repository struct {
 		ID         int64  `json:"id"`
+		NodeID     string `json:"node_id"`
 		FullName   string `json:"full_name"`
+		HTMLURL    string `json:"html_url"`
+		CloneURL   string `json:"clone_url"`
+		APIURL     string `json:"url"`
 		Archived   bool   `json:"archived"`
 		Disabled   bool   `json:"disabled"`
 		Visibility string `json:"visibility"`
 		Private    bool   `json:"private"`
-		Owner      struct {
-			ID    int64  `json:"id"`
-			Login string `json:"login"`
-		} `json:"owner"`
+		Owner      actor  `json:"owner"`
 	}
 	if err := client.getJSON(ctx, client.repoURL(source), &repository); err != nil {
 		return packsync.Candidate{}, fmt.Errorf("observe repository identity: %w", err)
 	}
-	return packsync.Candidate{Repository: repository.FullName, RepositoryID: repository.ID, Owner: repository.Owner.Login, OwnerID: repository.Owner.ID, Public: !repository.Private && repository.Visibility == "public", Archived: repository.Archived, Disabled: repository.Disabled}, nil
+	return packsync.Candidate{Repository: repository.FullName, RepositoryID: repository.ID, RepositoryNodeID: repository.NodeID, RepositoryHTML: repository.HTMLURL, RepositoryClone: repository.CloneURL, RepositoryAPI: repository.APIURL, Visibility: repository.Visibility, Owner: repository.Owner.Login, OwnerID: repository.Owner.ID, OwnerNodeID: repository.Owner.NodeID, Public: !repository.Private && repository.Visibility == "public", Archived: repository.Archived, Disabled: repository.Disabled}, nil
 }
 
 func (client *Client) addCommit(ctx context.Context, source packsync.SourceConfig, sha string, candidate *packsync.Candidate) error {
 	var commit struct {
 		SHA          string       `json:"sha"`
+		NodeID       string       `json:"node_id"`
 		Tree         gitObject    `json:"tree"`
 		Parents      []gitObject  `json:"parents"`
 		Verification verification `json:"verification"`
@@ -213,12 +258,26 @@ func (client *Client) addCommit(ctx context.Context, source packsync.SourceConfi
 		return fmt.Errorf("observe exact commit: %w", err)
 	}
 	candidate.Commit = commit.SHA
+	candidate.CommitNodeID = commit.NodeID
 	candidate.Tree = commit.Tree.SHA
-	candidate.CommitVerify = commit.Verification.pack()
+	verification, err := commit.Verification.pack()
+	if err != nil {
+		return fmt.Errorf("decode commit verification: %w", err)
+	}
+	candidate.CommitVerify = verification
 	for _, parent := range commit.Parents {
 		candidate.Parents = append(candidate.Parents, parent.SHA)
 	}
 	return nil
+}
+
+func hashOptional(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(*value))
+	encoded := hex.EncodeToString(sum[:])
+	return &encoded
 }
 
 func (client *Client) repoURL(source packsync.SourceConfig) string {

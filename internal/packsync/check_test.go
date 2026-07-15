@@ -116,6 +116,18 @@ func TestByteIdenticalBootstrapIsSealedAndOneByteInvalidatesIt(t *testing.T) {
 	}
 }
 
+func TestPlanIDIsIndependentOfAbsoluteCheckoutPath(t *testing.T) {
+	firstRoot, snapshot := tinyRepository(t)
+	secondRoot := t.TempDir()
+	copyTree(t, firstRoot, secondRoot)
+	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+	first := checkWith(t, firstRoot, provider)
+	second := checkWith(t, secondRoot, provider)
+	if first.PlanID != second.PlanID {
+		t.Fatalf("byte-identical checkouts produced %s and %s", first.PlanID, second.PlanID)
+	}
+}
+
 func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 	repository, snapshot := tinyRepository(t)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
@@ -359,19 +371,31 @@ func (source *selectorSource) ResolveRelease(_ context.Context, _ SourceConfig, 
 }
 
 func acceptedCandidate() Candidate {
+	verifiedAt := time.Date(2026, 7, 8, 13, 20, 40, 0, time.UTC)
+	signatureHash := strings.Repeat("a", 64)
+	payloadHash := strings.Repeat("b", 64)
 	return Candidate{
-		Repository:   "mattpocock/skills",
-		RepositoryID: 1148788086,
-		Owner:        "mattpocock",
-		OwnerID:      28293365,
-		Public:       true,
-		Release:      &Release{ID: 350942193, Tag: "v1.1.0", PublishedAt: time.Date(2026, 7, 8, 13, 20, 57, 0, time.UTC)},
-		TagRefSHA:    "eabea89380927aadb93abf6e290a19334d249292",
-		TagObjects:   []TagObject{{SHA: "eabea89380927aadb93abf6e290a19334d249292", TargetSHA: "d574778f94cf620fcc8ce741584093bc650a61d3", TargetType: "commit", Verification: Verification{Reason: "unsigned"}}},
-		Commit:       "d574778f94cf620fcc8ce741584093bc650a61d3",
-		Tree:         "fa3f8882cef6fa6d9960283a49db0a58636af3ca",
-		Parents:      []string{"cc1e24891df515a43a034cd91d3f64e17d1c9ffb", "47845ac1e15d048c2bbb20413a44de8681209601"},
-		CommitVerify: Verification{Verified: true, Reason: "valid"},
+		Repository:       "mattpocock/skills",
+		RepositoryID:     1148788086,
+		RepositoryNodeID: "R_kgDORHkddg",
+		RepositoryHTML:   "https://github.com/mattpocock/skills",
+		RepositoryClone:  "https://github.com/mattpocock/skills.git",
+		RepositoryAPI:    "https://api.github.com/repos/mattpocock/skills",
+		Visibility:       "public",
+		Owner:            "mattpocock",
+		OwnerID:          28293365,
+		OwnerNodeID:      "MDQ6VXNlcjI4MjkzMzY1",
+		Public:           true,
+		Release:          &Release{ID: 350942193, NodeID: "RE_kwDORHkdds4U6vPx", Tag: "v1.1.0", Name: "v1.1.0", Target: "main", CreatedAt: time.Date(2026, 7, 8, 13, 20, 55, 0, time.UTC), PublishedAt: time.Date(2026, 7, 8, 13, 20, 57, 0, time.UTC), Author: Actor{Login: "github-actions[bot]", ID: 41898282, NodeID: "MDM6Qm90NDE4OTgyODI="}},
+		TagRefName:       "refs/tags/v1.1.0",
+		TagRefType:       "tag",
+		TagRefSHA:        "eabea89380927aadb93abf6e290a19334d249292",
+		TagObjects:       []TagObject{{SHA: "eabea89380927aadb93abf6e290a19334d249292", Name: "v1.1.0", TargetSHA: "d574778f94cf620fcc8ce741584093bc650a61d3", TargetType: "commit", Verification: Verification{Reason: "unsigned"}}},
+		Commit:           "d574778f94cf620fcc8ce741584093bc650a61d3",
+		CommitNodeID:     "C_kwDORHkddtoAKGQ1",
+		Tree:             "fa3f8882cef6fa6d9960283a49db0a58636af3ca",
+		Parents:          []string{"cc1e24891df515a43a034cd91d3f64e17d1c9ffb", "47845ac1e15d048c2bbb20413a44de8681209601"},
+		CommitVerify:     Verification{Verified: true, Reason: "valid", VerifiedAt: &verifiedAt, SignatureSHA256: &signatureHash, PayloadSHA256: &payloadHash},
 	}
 }
 
