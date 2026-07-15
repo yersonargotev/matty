@@ -41,7 +41,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	defer os.RemoveAll(acquisition)
 	request := packsync.CheckRequest{RepositoryRoot: *repositoryRoot, SourceID: *sourceID, AcquisitionDir: acquisition}
 	if *selectorMode != "" {
-		request.Selector = &packsync.Selector{Mode: *selectorMode, Ref: *selectorRef}
+		request.Selector = &packsync.Selector{Mode: packsync.SelectorMode(*selectorMode), Ref: *selectorRef}
 	}
 	plan, err := (packsync.Engine{Source: githubsource.New(nil)}).Check(ctx, request)
 	if err != nil {

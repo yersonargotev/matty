@@ -54,7 +54,7 @@ func TestPublicGitHubAcquisitionUsesNoCredentialsNeverExecutesAndCleans(t *testi
 	}))
 	defer server.Close()
 
-	client := NewForTest(server.Client(), server.URL)
+	client := newClient(server.Client(), server.URL)
 	source := packsync.SourceConfig{Repository: "mattpocock/skills"}
 	releases, err := client.Releases(context.Background(), source)
 	if err != nil || len(releases) != 1 {
@@ -114,7 +114,7 @@ func TestAcquisitionRejectsUnsafeArchiveAndCleansEveryFailure(t *testing.T) {
 			archive := archiveBytes(t, test.entries)
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write(archive) }))
 			defer server.Close()
-			client := NewForTest(server.Client(), server.URL)
+			client := newClient(server.Client(), server.URL)
 			temporary := t.TempDir()
 			candidate := packsync.Candidate{Repository: "o/r", Commit: commitSHA}
 			if err := client.WithSnapshot(context.Background(), candidate, temporary, func(string) error { return nil }); err == nil {
@@ -132,6 +132,36 @@ func TestResolveCommitRequiresFullExactSHA(t *testing.T) {
 	client := New(nil)
 	if _, err := client.ResolveCommit(context.Background(), packsync.SourceConfig{}, "abc"); err == nil {
 		t.Fatal("abbreviated SHA accepted")
+	}
+}
+
+func TestReleasesFollowsEveryPageNeededForStableDiscovery(t *testing.T) {
+	requestedSecondPage := false
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		if page == "1" {
+			items := make([]map[string]any, 100)
+			for i := range items {
+				items[i] = map[string]any{"id": i + 1, "tag_name": "preview", "published_at": "2026-07-14T00:00:00Z", "draft": false, "prerelease": true}
+			}
+			writeJSON(writer, items)
+			return
+		}
+		if page == "2" {
+			requestedSecondPage = true
+			writeJSON(writer, []map[string]any{{"id": 101, "tag_name": "v1.0.0", "published_at": "2026-07-01T00:00:00Z", "draft": false, "prerelease": false}})
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+	client := newClient(server.Client(), server.URL)
+	releases, err := client.Releases(context.Background(), packsync.SourceConfig{Repository: "o/r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 101 || !requestedSecondPage || releases[100].Tag != "v1.0.0" {
+		t.Fatalf("complete releases = %d, second-page=%t, last=%#v", len(releases), requestedSecondPage, releases[len(releases)-1])
 	}
 }
 

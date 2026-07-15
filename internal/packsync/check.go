@@ -88,7 +88,7 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		plan.Preconditions.LockSHA256 = ""
 		plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
 	} else {
-		plan.Blockers = append(plan.Blockers, validateLockIdentity(lock, source, candidate, selector)...)
+		plan.Blockers = append(plan.Blockers, validateLock(lock, source, candidate, selector)...)
 	}
 	plan.Blockers = append(plan.Blockers, validateCandidate(source, candidate, selector)...)
 
@@ -125,7 +125,7 @@ func (engine Engine) resolve(ctx context.Context, source SourceConfig, selector 
 		return Candidate{}, fmt.Errorf("list published releases: %w", err)
 	}
 	switch selector.Mode {
-	case "stable-release":
+	case SelectorStableRelease:
 		var stable []Release
 		for _, release := range releases {
 			if !release.Draft && !release.Prerelease && !release.PublishedAt.IsZero() {
@@ -142,14 +142,14 @@ func (engine Engine) resolve(ctx context.Context, source SourceConfig, selector 
 			return stable[i].PublishedAt.After(stable[j].PublishedAt)
 		})
 		return engine.Source.ResolveRelease(ctx, source, stable[0])
-	case "prerelease":
+	case SelectorPrerelease:
 		for _, release := range releases {
 			if release.Tag == selector.Ref && release.Prerelease && !release.Draft && !release.PublishedAt.IsZero() {
 				return engine.Source.ResolveRelease(ctx, source, release)
 			}
 		}
 		return Candidate{}, fmt.Errorf("exact published prerelease %q was not found", selector.Ref)
-	case "commit":
+	case SelectorCommit:
 		candidate, err := engine.Source.ResolveCommit(ctx, source, selector.Ref)
 		if err != nil {
 			return Candidate{}, err
@@ -224,7 +224,7 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 		resources = append(resources, resource)
 	}
 	sort.Slice(resources, func(i, j int) bool { return bindingKey(resources[i].Binding) < bindingKey(resources[j].Binding) })
-	plan.ProposedLock = Lock{SchemaVersion: 1, SourceID: source.ID, Repository: candidateRepository(plan.Candidate), RepositoryID: plan.Candidate.RepositoryID, Owner: plan.Candidate.Owner, OwnerID: plan.Candidate.OwnerID, Selector: plan.Selector, Candidate: plan.Candidate, Resources: resources}
+	plan.ProposedLock = Lock{SchemaVersion: 1, SourceID: source.ID, Repository: plan.Candidate.Repository, RepositoryID: plan.Candidate.RepositoryID, Owner: plan.Candidate.Owner, OwnerID: plan.Candidate.OwnerID, Selector: plan.Selector, Candidate: plan.Candidate, Resources: resources}
 	plan.ProposedLock.Snapshot = snapshotHash(resources)
 	plan.Discoveries = discoverUnselected(snapshotRoot, bindings)
 	plan.Counts.Discoveries = len(plan.Discoveries)
@@ -240,22 +240,42 @@ func validateCandidate(source SourceConfig, candidate Candidate, selector Select
 	if !candidate.Public || candidate.Archived || candidate.Disabled {
 		blockers = append(blockers, "configured repository is not an active public source")
 	}
-	if len(candidate.Commit) != 40 || candidate.Tree == "" {
+	if !fullSHA(candidate.Commit) || !fullSHA(candidate.Tree) {
 		blockers = append(blockers, "candidate did not resolve to a complete immutable commit and tree")
 	}
-	if selector.Mode != "commit" && !continuousTagChain(candidate) {
+	for _, parent := range candidate.Parents {
+		if !fullSHA(parent) {
+			blockers = append(blockers, "candidate contains an invalid parent commit SHA")
+			break
+		}
+	}
+	if selector.Mode != SelectorCommit && !continuousTagChain(candidate) {
 		blockers = append(blockers, "release tag-to-commit provenance is incomplete or ambiguous")
 	}
-	if selector.Mode == "stable-release" && !eligibleAutomaticEvidence(candidate) {
+	switch selector.Mode {
+	case SelectorStableRelease:
+		if candidate.Release == nil || candidate.Release.Prerelease {
+			blockers = append(blockers, "automatic selection did not retain a published stable release")
+		}
+	case SelectorPrerelease:
+		if candidate.Release == nil || !candidate.Release.Prerelease || candidate.Release.Tag != selector.Ref {
+			blockers = append(blockers, "manual prerelease did not retain the exact published prerelease")
+		}
+	case SelectorCommit:
+		if candidate.Release != nil || candidate.Commit != selector.Ref {
+			blockers = append(blockers, "manual commit provenance is not the exact requested SHA")
+		}
+	}
+	if selector.Mode == SelectorStableRelease && !eligibleAutomaticEvidence(candidate) {
 		blockers = append(blockers, "stable release lacks eligible verification evidence")
 	}
-	if selector.Mode != "stable-release" && invalidVerification(candidate) {
+	if selector.Mode != SelectorStableRelease && invalidVerification(candidate) {
 		blockers = append(blockers, "manual candidate carries invalid verification evidence")
 	}
 	return blockers
 }
 
-func validateLockIdentity(lock Lock, source SourceConfig, candidate Candidate, selector Selector) []string {
+func validateLock(lock Lock, source SourceConfig, candidate Candidate, selector Selector) []string {
 	var blockers []string
 	if lock.SchemaVersion != 1 || lock.SourceID != source.ID {
 		blockers = append(blockers, "production lock schema or source identity is invalid")
@@ -263,13 +283,23 @@ func validateLockIdentity(lock Lock, source SourceConfig, candidate Candidate, s
 	if lock.Repository != source.Repository || lock.RepositoryID != candidate.RepositoryID || lock.OwnerID != candidate.OwnerID || !strings.EqualFold(lock.Owner, candidate.Owner) {
 		blockers = append(blockers, "repository or owner numeric identity moved from the authoritative lock")
 	}
+	if lock.Candidate.Repository != lock.Repository || lock.Candidate.RepositoryID != lock.RepositoryID || !strings.EqualFold(lock.Candidate.Owner, lock.Owner) || lock.Candidate.OwnerID != lock.OwnerID {
+		blockers = append(blockers, "production lock candidate identity disagrees with its retained repository evidence")
+	}
+	if err := validateSelector(lock.Selector); err != nil {
+		blockers = append(blockers, "production lock selector is invalid: "+err.Error())
+	}
+	for _, blocker := range validateCandidate(source, lock.Candidate, lock.Selector) {
+		blockers = append(blockers, "production lock retained provenance is invalid: "+blocker)
+	}
 	if lock.Candidate.Release != nil && candidate.Release != nil && lock.Candidate.Release.Tag == candidate.Release.Tag && lock.Candidate.TagRefSHA != "" && lock.Candidate.TagRefSHA != candidate.TagRefSHA {
 		blockers = append(blockers, "release tag ref moved for the locked candidate")
 	}
 	if lock.Snapshot != snapshotHash(lock.Resources) {
 		blockers = append(blockers, "production lock snapshot hash is invalid")
 	}
-	if selector.Mode == "commit" && candidate.Commit != selector.Ref {
+	blockers = append(blockers, validateLockedResources(lock.Resources)...)
+	if selector.Mode == SelectorCommit && candidate.Commit != selector.Ref {
 		blockers = append(blockers, "manual commit does not equal the requested full SHA")
 	}
 	return blockers
@@ -279,6 +309,9 @@ func continuousTagChain(candidate Candidate) bool {
 	if candidate.Release == nil || candidate.TagRefSHA == "" {
 		return false
 	}
+	if !fullSHA(candidate.TagRefSHA) || candidate.Release.ID <= 0 || candidate.Release.Tag == "" || candidate.Release.PublishedAt.IsZero() || candidate.Release.Draft {
+		return false
+	}
 	if len(candidate.TagObjects) == 0 {
 		return candidate.TagRefSHA == candidate.Commit
 	}
@@ -286,11 +319,16 @@ func continuousTagChain(candidate Candidate) bool {
 		return false
 	}
 	for i, tag := range candidate.TagObjects {
+		if !fullSHA(tag.SHA) || !fullSHA(tag.TargetSHA) {
+			return false
+		}
 		want := candidate.Commit
+		wantType := "commit"
 		if i+1 < len(candidate.TagObjects) {
 			want = candidate.TagObjects[i+1].SHA
+			wantType = "tag"
 		}
-		if tag.TargetSHA != want {
+		if tag.TargetSHA != want || tag.TargetType != wantType {
 			return false
 		}
 	}
@@ -323,6 +361,42 @@ func invalidVerification(candidate Candidate) bool {
 		}
 	}
 	return false
+}
+
+func validateLockedResources(resources []ResourceEvidence) []string {
+	var blockers []string
+	seenResources := map[string]bool{}
+	for _, resource := range resources {
+		key := bindingKey(resource.Binding)
+		if resource.PackID == "" || resource.Kind == "" || resource.ResourceID == "" || seenResources[key] {
+			blockers = append(blockers, "production lock has an incomplete or duplicate selected resource: "+key)
+			continue
+		}
+		seenResources[key] = true
+		if !safeSlashPath(resource.UpstreamPath) || !safeSlashPath(resource.VendoredPath) || !strings.HasPrefix(resource.VendoredPath, "bundle/") {
+			blockers = append(blockers, "production lock has unsafe selected-resource paths: "+key)
+		}
+		if len(resource.Files) == 0 || resource.SHA256 != resourceHash(resource.Files) {
+			blockers = append(blockers, "production lock has invalid selected-resource bytes: "+key)
+		}
+		seenFiles := map[string]bool{}
+		for _, file := range resource.Files {
+			if !safeSlashPath(file.Path) || seenFiles[file.Path] || file.Size < 0 || !fullDigest(file.SHA256) || file.Mode&0o600 != 0o600 || file.Mode&0o022 != 0 || file.Mode&^uint32(0o777) != 0 {
+				blockers = append(blockers, "production lock has unsafe or invalid file evidence: "+key+"/"+file.Path)
+				break
+			}
+			seenFiles[file.Path] = true
+		}
+	}
+	return blockers
+}
+
+func fullSHA(value string) bool {
+	return len(value) == 40 && strings.Trim(value, "0123456789abcdef") == ""
+}
+
+func fullDigest(value string) bool {
+	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
 }
 
 func diffFiles(binding Binding, local, candidate []FileEvidence) []Change {
@@ -511,8 +585,6 @@ func unique(values []string) []string {
 	}
 	return result
 }
-
-func candidateRepository(candidate Candidate) string { return candidate.Repository }
 
 func fileExists(name string) bool {
 	_, err := os.Stat(name)

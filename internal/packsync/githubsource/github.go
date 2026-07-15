@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,34 +37,39 @@ func New(httpClient *http.Client) *Client {
 	return &Client{httpClient: httpClient, apiBase: "https://api.github.com"}
 }
 
-// NewForTest supplies a GitHub-compatible API root without changing any trust
-// or selection policy in packsync.
-func NewForTest(httpClient *http.Client, apiBase string) *Client {
+func newClient(httpClient *http.Client, apiBase string) *Client {
 	return &Client{httpClient: httpClient, apiBase: strings.TrimRight(apiBase, "/")}
 }
 
 func (client *Client) Releases(ctx context.Context, source packsync.SourceConfig) ([]packsync.Release, error) {
-	var response []struct {
+	type releaseResponse struct {
 		ID          int64  `json:"id"`
 		Tag         string `json:"tag_name"`
 		PublishedAt string `json:"published_at"`
 		Draft       bool   `json:"draft"`
 		Prerelease  bool   `json:"prerelease"`
 	}
-	if err := client.getJSON(ctx, client.repoURL(source)+"/releases?per_page=100", &response); err != nil {
-		return nil, err
-	}
-	releases := make([]packsync.Release, 0, len(response))
-	for _, item := range response {
-		var published time.Time
-		if item.PublishedAt != "" {
-			parsed, err := time.Parse(time.RFC3339, item.PublishedAt)
-			if err != nil {
-				return nil, fmt.Errorf("release %s has invalid published_at: %w", item.Tag, err)
-			}
-			published = parsed
+	var releases []packsync.Release
+	for page := 1; ; page++ {
+		var response []releaseResponse
+		endpoint := client.repoURL(source) + "/releases?per_page=100&page=" + strconv.Itoa(page)
+		if err := client.getJSON(ctx, endpoint, &response); err != nil {
+			return nil, err
 		}
-		releases = append(releases, packsync.Release{ID: item.ID, Tag: item.Tag, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease})
+		for _, item := range response {
+			var published time.Time
+			if item.PublishedAt != "" {
+				parsed, err := time.Parse(time.RFC3339, item.PublishedAt)
+				if err != nil {
+					return nil, fmt.Errorf("release %s has invalid published_at: %w", item.Tag, err)
+				}
+				published = parsed
+			}
+			releases = append(releases, packsync.Release{ID: item.ID, Tag: item.Tag, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease})
+		}
+		if len(response) < 100 {
+			break
+		}
 	}
 	return releases, nil
 }

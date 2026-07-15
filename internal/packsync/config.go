@@ -77,15 +77,15 @@ func ensureEOF(decoder *json.Decoder) error {
 
 func validateSelector(selector Selector) error {
 	switch selector.Mode {
-	case "stable-release":
+	case SelectorStableRelease:
 		if selector.Ref != "" {
 			return errors.New("stable-release selector cannot carry a ref")
 		}
-	case "prerelease":
+	case SelectorPrerelease:
 		if selector.Ref == "" || strings.HasPrefix(selector.Ref, "refs/") {
 			return errors.New("prerelease selector requires one exact published tag")
 		}
-	case "commit":
+	case SelectorCommit:
 		if len(selector.Ref) != 40 || strings.Trim(selector.Ref, "0123456789abcdef") != "" {
 			return errors.New("commit selector requires a full lowercase 40-character SHA")
 		}

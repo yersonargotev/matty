@@ -8,9 +8,17 @@ import (
 	"time"
 )
 
+type SelectorMode string
+
+const (
+	SelectorStableRelease SelectorMode = "stable-release"
+	SelectorPrerelease    SelectorMode = "prerelease"
+	SelectorCommit        SelectorMode = "commit"
+)
+
 type Selector struct {
-	Mode string `json:"mode"`
-	Ref  string `json:"ref,omitempty"`
+	Mode SelectorMode `json:"mode"`
+	Ref  string       `json:"ref,omitempty"`
 }
 
 type Config struct {

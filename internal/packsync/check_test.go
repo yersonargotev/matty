@@ -153,6 +153,29 @@ func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 		plan := checkWith(t, copyRoot, provider)
 		assertBlocker(t, plan, "local selected-resource drift")
 	})
+	t.Run("malformed resolved provenance", func(t *testing.T) {
+		malformed := *provider
+		malformed.candidate.TagObjects = append([]TagObject(nil), provider.candidate.TagObjects...)
+		malformed.candidate.Commit = strings.Repeat("z", 40)
+		malformed.candidate.Tree = "x"
+		malformed.candidate.TagObjects[0].TargetType = "blob"
+		plan := checkWith(t, repository, &malformed)
+		assertBlocker(t, plan, "complete immutable commit and tree")
+		assertBlocker(t, plan, "incomplete or ambiguous")
+	})
+	t.Run("malformed authoritative lock provenance", func(t *testing.T) {
+		copyRoot := t.TempDir()
+		copyTree(t, repository, copyRoot)
+		lock := bootstrap.ProposedLock
+		lock.Candidate.Commit = ""
+		lock.Candidate.Tree = ""
+		lock.Resources = append(lock.Resources, lock.Resources[0])
+		lock.Snapshot = snapshotHash(lock.Resources)
+		writeJSON(t, filepath.Join(copyRoot, "bundle", "sources.lock.json"), lock)
+		plan := checkWith(t, copyRoot, provider)
+		assertBlocker(t, plan, "retained provenance is invalid")
+		assertBlocker(t, plan, "duplicate selected resource")
+	})
 }
 
 func TestAuthoritativeDiffReportsResourceAddRemoveAndMove(t *testing.T) {
