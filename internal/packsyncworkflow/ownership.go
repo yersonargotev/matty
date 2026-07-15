@@ -53,5 +53,5 @@ func HashText(value string) string {
 }
 
 func NewPublicationRecord(proposal Proposal, head, metadataHash string) PublicationRecord {
-	return PublicationRecord{PlanID: proposal.PlanID, BaseSHA: proposal.BaseSHA, CandidateSHA: proposal.CandidateSHA, HeadSHA: head, ProvenanceSHA256: proposal.ProvenanceSHA256, MetadataHash: metadataHash}
+	return PublicationRecord{PlanID: proposal.PlanID, BaseSHA: proposal.BaseSHA, CandidateSHA: proposal.CandidateSHA, HeadSHA: head, ResultTreeSHA: proposal.ResultTreeSHA, ProvenanceSHA256: proposal.ProvenanceSHA256, MetadataHash: metadataHash}
 }

@@ -36,6 +36,7 @@ type Proposal struct {
 	BaseSHA                string
 	CandidateSHA           string
 	ResultTreeSHA          string
+	HeadSHA                string
 	ProvenanceSHA256       string
 	ManagedTitle           string
 	ManagedMetadataHash    string
@@ -75,6 +76,7 @@ type PublicationRecord struct {
 	BaseSHA          string `json:"base_sha"`
 	CandidateSHA     string `json:"candidate_sha"`
 	HeadSHA          string `json:"head_sha"`
+	ResultTreeSHA    string `json:"result_tree_sha"`
 	ProvenanceSHA256 string `json:"provenance_sha256"`
 	MetadataHash     string `json:"metadata_hash"`
 }
@@ -149,7 +151,7 @@ func EvaluatePublication(proposal Proposal, state PublicationState) (Publication
 	if state.Record.BaseSHA != proposal.BaseSHA || state.Record.ProvenanceSHA256 == "" {
 		return blocked(decision, "publication record base or provenance is stale")
 	}
-	exact := state.Record.PlanID == proposal.PlanID && state.Record.CandidateSHA == proposal.CandidateSHA && state.Record.HeadSHA == proposal.ResultTreeSHA && state.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256
+	exact := state.Record.PlanID == proposal.PlanID && state.Record.CandidateSHA == proposal.CandidateSHA && state.Record.HeadSHA == proposal.HeadSHA && state.Record.ResultTreeSHA == proposal.ResultTreeSHA && state.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256
 	if exact {
 		decision.Action = PublicationNoop
 		return decision, nil
@@ -168,7 +170,7 @@ func validateProposal(proposal Proposal) error {
 	if !sourceIDPattern.MatchString(proposal.SourceID) || proposal.PlanID == "" || proposal.ManagedTitle == "" || !proposal.Validation.Complete() || len(proposal.InvalidationConditions) == 0 {
 		return errors.New("proposal is incomplete or validation is not complete")
 	}
-	for name, value := range map[string]string{"base": proposal.BaseSHA, "candidate": proposal.CandidateSHA, "result tree": proposal.ResultTreeSHA} {
+	for name, value := range map[string]string{"base": proposal.BaseSHA, "candidate": proposal.CandidateSHA, "result tree": proposal.ResultTreeSHA, "head": proposal.HeadSHA} {
 		if err := requireFullSHA(name, value); err != nil {
 			return err
 		}

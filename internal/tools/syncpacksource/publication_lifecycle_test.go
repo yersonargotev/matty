@@ -96,7 +96,7 @@ func TestGitHubGatewayCompareFailureRemainsTransient(t *testing.T) {
 	oldCandidate := strings.Repeat("d", 40)
 	prefix, title := "managed evidence", "managed"
 	hash := packsyncworkflow.ManagedMetadataHash(title, prefix)
-	record := packsyncworkflow.PublicationRecord{PlanID: "old-plan", BaseSHA: baseA, CandidateSHA: oldCandidate, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: hash}
+	record := packsyncworkflow.PublicationRecord{PlanID: "old-plan", BaseSHA: baseA, CandidateSHA: oldCandidate, HeadSHA: headA, ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: hash}
 	body, err := packsyncworkflow.ManagedBody(prefix, record)
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +143,37 @@ func TestGitHubGatewayFailedUndraftKeepsBlockedMetadata(t *testing.T) {
 	}
 }
 
+func TestGitHubGatewayUndraftRetryReobservesReviewerEdits(t *testing.T) {
+	fake := &fakeGitHubCommands{readyErr: errors.New("HTTP 503"), editAfterReadyFailure: true}
+	gateway := lifecycleGateway(t, fake)
+	proposal, err := gateway.Prepare(lifecycleProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(proposal, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Publish(context.Background(), proposal, decision); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.Finalize(context.Background(), proposal, decision, draft.PR); err == nil {
+		t.Fatal("reviewer edit between undraft attempts was overwritten")
+	}
+	if fake.readyCalls != 1 || !fake.pr.draft || !strings.Contains(fake.pr.title, "reviewer edit") {
+		t.Fatalf("retry crossed stale state: ready=%d pr=%#v", fake.readyCalls, fake.pr)
+	}
+}
+
 func TestGitHubGatewayFailedFirstPRCreationReportsExactOrphanRecovery(t *testing.T) {
 	fake := &fakeGitHubCommands{createErr: errors.New("HTTP 503")}
 	gateway := lifecycleGateway(t, fake)
@@ -163,6 +194,56 @@ func TestGitHubGatewayFailedFirstPRCreationReportsExactOrphanRecovery(t *testing
 	artifact := packsyncworkflow.NewFailureArtifact(packsyncworkflow.FailureArtifactContext{SourceID: proposal.SourceID}, err)
 	if err == nil || !strings.Contains(artifact.Blockers[0], "stable branch was pushed") || !strings.Contains(artifact.Recovery[0], "delete only that exact orphan branch") {
 		t.Fatalf("orphan recovery = %#v err=%v", artifact, err)
+	}
+}
+
+func TestGitHubGatewayFirstPRRetryNeverCompetesWithClosedPR(t *testing.T) {
+	fake := &fakeGitHubCommands{createErr: errors.New("HTTP 503"), closedPRAfterCreateFailure: true}
+	gateway := lifecycleGateway(t, fake)
+	proposal, err := gateway.Prepare(lifecycleProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(proposal, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = gateway.Publish(context.Background(), proposal, decision)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureOwnership || fake.createCalls != 1 {
+		t.Fatalf("closed PR did not stop create retry: calls=%d err=%T %v", fake.createCalls, err, err)
+	}
+}
+
+func TestGitHubGatewayFirstPRRetryReobservesAfterAmbiguousFailure(t *testing.T) {
+	fake := &fakeGitHubCommands{
+		createErr:                  errors.New("HTTP 503"),
+		closedPRAfterCreateFailure: true,
+		prListErrs:                 []error{nil, nil, errors.New("HTTP 503"), nil},
+	}
+	gateway := lifecycleGateway(t, fake)
+	proposal, err := gateway.Prepare(lifecycleProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(proposal, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = gateway.Publish(context.Background(), proposal, decision)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureOwnership || fake.createCalls != 1 {
+		t.Fatalf("ambiguous create retried before reobservation: calls=%d err=%T %v", fake.createCalls, err, err)
 	}
 }
 
@@ -227,7 +308,7 @@ func TestGitHubGatewayLifecycleBlockersNeverWrite(t *testing.T) {
 		"spoofed bot commit author": func(fake *fakeGitHubCommands) { fake.pr.author = "reviewer" },
 		"human commit identity":     func(fake *fakeGitHubCommands) { fake.commitOwner = "reviewer" },
 		"regressive candidate": func(fake *fakeGitHubCommands) {
-			fake.pr = managedFakePR(t, packsyncworkflow.Proposal{SourceID: proposal.SourceID, PlanID: "newer", BaseSHA: baseA, CandidateSHA: strings.Repeat("d", 40), ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("8", 64)}, "old managed", "old evidence", false)
+			fake.pr = managedFakePR(t, packsyncworkflow.Proposal{SourceID: proposal.SourceID, PlanID: "newer", BaseSHA: baseA, CandidateSHA: strings.Repeat("d", 40), ResultTreeSHA: headA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("8", 64)}, "old managed", "old evidence", false)
 			fake.compareStatus = "behind"
 		},
 	} {
@@ -257,12 +338,12 @@ func TestGitHubGatewayLifecycleBlockersNeverWrite(t *testing.T) {
 func managedFakePR(t *testing.T, proposal packsyncworkflow.Proposal, title, prefix string, draft bool) *fakePR {
 	t.Helper()
 	hash := packsyncworkflow.ManagedMetadataHash(title, prefix)
-	record := packsyncworkflow.NewPublicationRecord(proposal, proposal.ResultTreeSHA, hash)
+	record := packsyncworkflow.NewPublicationRecord(proposal, proposal.HeadSHA, hash)
 	body, err := packsyncworkflow.ManagedBody(prefix, record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fakePR{number: 7, open: true, head: proposal.ResultTreeSHA, title: title, body: body, draft: draft}
+	return &fakePR{number: 7, open: true, head: proposal.HeadSHA, title: title, body: body, draft: draft}
 }
 
 func lifecycleGateway(t *testing.T, fake *fakeGitHubCommands) *githubGateway {
@@ -271,7 +352,7 @@ func lifecycleGateway(t *testing.T, fake *fakeGitHubCommands) *githubGateway {
 }
 
 func lifecycleProposal() packsyncworkflow.Proposal {
-	return packsyncworkflow.Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", Validation: packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions()}
+	return packsyncworkflow.Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", Validation: packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions()}
 }
 
 func lifecycleBrief() packsyncworkflow.ReviewBrief {
@@ -293,19 +374,22 @@ type fakePR struct {
 }
 
 type fakeGitHubCommands struct {
-	baseHead      string
-	branchHead    string
-	pr            *fakePR
-	lsRemoteErr   error
-	compareErr    error
-	compareStatus string
-	readyErr      error
-	createErr     error
-	commitOwner   string
-	pushCalls     int
-	createCalls   int
-	editCalls     int
-	readyCalls    int
+	baseHead                   string
+	branchHead                 string
+	pr                         *fakePR
+	lsRemoteErr                error
+	compareErr                 error
+	compareStatus              string
+	prListErrs                 []error
+	readyErr                   error
+	createErr                  error
+	editAfterReadyFailure      bool
+	closedPRAfterCreateFailure bool
+	commitOwner                string
+	pushCalls                  int
+	createCalls                int
+	editCalls                  int
+	readyCalls                 int
 }
 
 func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name string, args ...string) (string, error) {
@@ -325,6 +409,13 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 		}
 		return fake.branchHead + "\trefs/heads/sync/mattpocock-skills\n", nil
 	case strings.HasPrefix(joined, "gh pr list"):
+		if len(fake.prListErrs) > 0 {
+			err := fake.prListErrs[0]
+			fake.prListErrs = fake.prListErrs[1:]
+			if err != nil {
+				return "", err
+			}
+		}
 		if fake.pr == nil {
 			return "[]", nil
 		}
@@ -368,6 +459,9 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 	case strings.HasPrefix(joined, "gh pr create"):
 		fake.createCalls++
 		if fake.createErr != nil {
+			if fake.closedPRAfterCreateFailure {
+				fake.pr = &fakePR{number: 7, open: false, head: fake.branchHead, title: "closed", body: "closed"}
+			}
 			return "", fake.createErr
 		}
 		fake.pr = &fakePR{number: 7, open: true, head: fake.branchHead, title: argumentAfter(args, "--title"), body: argumentAfter(args, "--body"), draft: true}
@@ -382,6 +476,9 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 	case strings.HasPrefix(joined, "gh pr ready"):
 		fake.readyCalls++
 		if fake.readyErr != nil {
+			if fake.editAfterReadyFailure {
+				fake.pr.title += " reviewer edit"
+			}
 			return "", fake.readyErr
 		}
 		fake.pr.draft = false

@@ -18,6 +18,7 @@ const (
 	candidateB = "2222222222222222222222222222222222222222"
 	headA      = "3333333333333333333333333333333333333333"
 	headB      = "4444444444444444444444444444444444444444"
+	treeA      = "5555555555555555555555555555555555555555"
 )
 
 func TestDispatchRequestAcceptsOnlyCanonicalManualInputs(t *testing.T) {
@@ -107,6 +108,7 @@ func TestPublicationLifecycleCreatesUpdatesAndNoOpsOnlyForPristineOwnership(t *t
 	updated.CandidateSHA = candidateB
 	updated.PlanID = "plan-2"
 	updated.ResultTreeSHA = headB
+	updated.HeadSHA = headB
 	pristine.CandidateRelation = CandidateAdvancing
 	decision, err := EvaluatePublication(updated, pristine)
 	if err != nil || decision.Action != PublicationUpdate || decision.PRNumber != 7 {
@@ -242,7 +244,7 @@ func TestMarkdownBriefRendersTheSameCanonicalEvidenceWithoutUpstreamBytes(t *tes
 }
 
 func TestManagedPublicationRecordDetectsEditedMetadata(t *testing.T) {
-	record := PublicationRecord{PlanID: "plan", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, MetadataHash: strings.Repeat("5", 64)}
+	record := PublicationRecord{PlanID: "plan", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, ResultTreeSHA: headA, MetadataHash: strings.Repeat("5", 64)}
 	body, err := ManagedBody("canonical brief", record)
 	if err != nil {
 		t.Fatal(err)
@@ -353,6 +355,16 @@ func TestValidatorOrBuilderCannotChangeSealedApplyDiff(t *testing.T) {
 	}
 }
 
+func TestPublisherKeepsValidatedTreeDistinctFromCommitHead(t *testing.T) {
+	events := []string{}
+	diff := &recordingDiff{seal: treeA, commitErr: errors.New("stop after recording")}
+	github := &fakePublicationGateway{events: &events}
+	_, err := (Publisher{Applier: fakeApplier{events: &events}, Validator: fakeValidator{events: &events}, Builder: fakeProposalBuilder{events: &events}, Diff: diff, Provenance: fakeProvenance{events: &events}, GitHub: github}).Run(context.Background(), PublishRequest{RepositoryRoot: t.TempDir()})
+	if err == nil || diff.verifiedTree != treeA || diff.verifiedHead != headA || github.publishCalls != 0 {
+		t.Fatalf("tree/head verification = tree:%s head:%s writes:%d err:%v", diff.verifiedTree, diff.verifiedHead, github.publishCalls, err)
+	}
+}
+
 type recordingSleeper struct{ delays []time.Duration }
 
 func (s *recordingSleeper) Sleep(_ context.Context, delay time.Duration) error {
@@ -391,9 +403,23 @@ type fakeDiff struct {
 	commitErr    error
 }
 
-func (fakeDiff) Seal(context.Context, string) (string, error)               { return "sealed-tree", nil }
+func (fakeDiff) Seal(context.Context, string) (string, error)               { return headA, nil }
 func (fake fakeDiff) VerifyWorkspace(context.Context, string, string) error { return fake.workspaceErr }
 func (fake fakeDiff) VerifyCommit(context.Context, string, string, string) error {
+	return fake.commitErr
+}
+
+type recordingDiff struct {
+	seal         string
+	commitErr    error
+	verifiedTree string
+	verifiedHead string
+}
+
+func (fake *recordingDiff) Seal(context.Context, string) (string, error)     { return fake.seal, nil }
+func (*recordingDiff) VerifyWorkspace(context.Context, string, string) error { return nil }
+func (fake *recordingDiff) VerifyCommit(_ context.Context, _ string, tree, head string) error {
+	fake.verifiedTree, fake.verifiedHead = tree, head
 	return fake.commitErr
 }
 
@@ -470,13 +496,13 @@ func contains(values []string, value string) bool {
 }
 
 func validProposal() Proposal {
-	return Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", ManagedMetadataHash: strings.Repeat("6", 64), Validation: ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}, InvalidationConditions: DecisionReadyInvalidationConditions()}
+	return Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", ManagedMetadataHash: strings.Repeat("6", 64), Validation: ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}, InvalidationConditions: DecisionReadyInvalidationConditions()}
 }
 
 func pristineState() PublicationState {
-	return PublicationState{BaseSHA: baseA, ProvenanceCurrent: true, CandidateRelation: CandidateSame, Branch: BranchState{Exists: true, Name: "sync/mattpocock-skills", HeadSHA: headA, Owner: AutomationOwner, ManagedMetadataHash: strings.Repeat("6", 64)}, PR: PRState{Exists: true, Number: 7, Open: true, BaseBranch: "main", HeadBranch: "sync/mattpocock-skills", HeadSHA: headA, MetadataHash: strings.Repeat("6", 64), Owner: AutomationOwner}, Record: PublicationRecord{PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: strings.Repeat("6", 64)}}
+	return PublicationState{BaseSHA: baseA, ProvenanceCurrent: true, CandidateRelation: CandidateSame, Branch: BranchState{Exists: true, Name: "sync/mattpocock-skills", HeadSHA: headA, Owner: AutomationOwner, ManagedMetadataHash: strings.Repeat("6", 64)}, PR: PRState{Exists: true, Number: 7, Open: true, BaseBranch: "main", HeadBranch: "sync/mattpocock-skills", HeadSHA: headA, MetadataHash: strings.Repeat("6", 64), Owner: AutomationOwner}, Record: PublicationRecord{PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: strings.Repeat("6", 64)}}
 }
 
 func publishedState(draft bool, metadataHash string) PublicationState {
-	return PublicationState{BaseSHA: baseA, ProvenanceCurrent: true, CandidateRelation: CandidateSame, Branch: BranchState{Exists: true, Name: "sync/mattpocock-skills", HeadSHA: headA, Owner: AutomationOwner, ManagedMetadataHash: metadataHash}, PR: PRState{Exists: true, Number: 7, Open: true, BaseBranch: "main", HeadBranch: "sync/mattpocock-skills", HeadSHA: headA, MetadataHash: metadataHash, Owner: AutomationOwner, Draft: draft}, Record: PublicationRecord{PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: metadataHash}}
+	return PublicationState{BaseSHA: baseA, ProvenanceCurrent: true, CandidateRelation: CandidateSame, Branch: BranchState{Exists: true, Name: "sync/mattpocock-skills", HeadSHA: headA, Owner: AutomationOwner, ManagedMetadataHash: metadataHash}, PR: PRState{Exists: true, Number: 7, Open: true, BaseBranch: "main", HeadBranch: "sync/mattpocock-skills", HeadSHA: headA, MetadataHash: metadataHash, Owner: AutomationOwner, Draft: draft}, Record: PublicationRecord{PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, HeadSHA: headA, ResultTreeSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), MetadataHash: metadataHash}}
 }

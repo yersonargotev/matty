@@ -49,6 +49,36 @@ type DispatchRequest struct {
 	HumanEvidence      json.RawMessage    `json:"human_evidence,omitempty"`
 }
 
+func (request *DispatchRequest) UnmarshalJSON(data []byte) error {
+	type dispatchRequest DispatchRequest
+	var decoded dispatchRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]bool{"schema_version": true, "source_id": true, "selector": true, "selector_ref": true, "classification_mode": true, "request_reason": true, "retry_of_run": true, "expected_plan_id": true, "expected_base_sha": true, "human_evidence": true}
+	for name := range fields {
+		if !allowed[name] {
+			return fmt.Errorf("dispatch contains unknown field %q", name)
+		}
+	}
+	for _, name := range []string{"selector_ref", "retry_of_run", "expected_plan_id", "expected_base_sha"} {
+		value, present := fields[name]
+		if !present {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil || text == "" {
+			return fmt.Errorf("dispatch field %s must be a non-empty string when present", name)
+		}
+	}
+	*request = DispatchRequest(decoded)
+	return nil
+}
+
 type ValidationArtifact struct {
 	SchemaVersion int    `json:"schema_version"`
 	SourceID      string `json:"source_id"`

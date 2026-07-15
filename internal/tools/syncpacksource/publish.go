@@ -67,7 +67,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
 	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
 	if plan.Status == "no-op" {
-		return writeCanonical(filepath.Join(option.outputDir, "publication.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "candidate_sha": plan.Candidate.Commit})
+		return writeCanonical(filepath.Join(option.outputDir, "no-op.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "contains_secrets": false, "contains_upstream_bytes": false})
 	}
 	if err := os.MkdirAll(option.outputDir, 0o755); err != nil {
 		return err
@@ -95,7 +95,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	if err := writeCanonical(filepath.Join(option.outputDir, "proposal-brief.json"), builder.brief); err != nil {
 		return err
 	}
-	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.PullRequest.HeadSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
+	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.Proposal.ResultTreeSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
 	if err := writeCanonical(filepath.Join(option.outputDir, "publication.json"), artifact); err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ func (builder *publicationBuilder) Build(ctx context.Context, repositoryRoot str
 	_ = readJSON(filepath.Join(filepath.Dir(builder.evidencePath), "classifier-trace.json"), &traces)
 	brief := packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: os.Getenv("GITHUB_ACTOR"), RunID: os.Getenv("GITHUB_RUN_ID"), RunAttempt: os.Getenv("GITHUB_RUN_ATTEMPT"), RunURL: actionsRunURL(), Request: builder.dispatch, Candidate: builder.plan.Candidate, PlanID: builder.plan.PlanID, BaseSHA: builder.plan.Preconditions.BaseCommit, HeadSHA: head, Branch: "sync/" + builder.dispatch.SourceID, Changes: builder.plan.Changes, Discoveries: builder.plan.Discoveries, SelectedResources: builder.plan.ProposedLock.Resources, PreviousSnapshotSHA256: builder.plan.PreviousSnapshotSHA256, ProposedSnapshotSHA256: builder.plan.ProposedLock.Snapshot, Classification: builder.evidence.Evidence, ClassifierTrace: traces, ApplyStatus: applyResult.Status, UpstreamContentExecuted: false, DecisionReady: false, AutoMerge: false, ManualMergeRequired: true, Recovery: []string{"Review the canonical evidence and diff, then merge manually only while readiness remains valid."}}
 	title := fmt.Sprintf("sync(%s): %s", builder.dispatch.SourceID, builder.plan.Candidate.Commit[:12])
-	proposal := packsyncworkflow.Proposal{SourceID: builder.dispatch.SourceID, PlanID: builder.plan.PlanID, BaseSHA: builder.plan.Preconditions.BaseCommit, CandidateSHA: builder.plan.Candidate.Commit, ResultTreeSHA: head, ProvenanceSHA256: provenance, ManagedTitle: title}
+	proposal := packsyncworkflow.Proposal{SourceID: builder.dispatch.SourceID, PlanID: builder.plan.PlanID, BaseSHA: builder.plan.Preconditions.BaseCommit, CandidateSHA: builder.plan.Candidate.Commit, HeadSHA: head, ProvenanceSHA256: provenance, ManagedTitle: title}
 	builder.proposal, builder.brief, builder.provenance = proposal, brief, provenance
 	builder.github.title, builder.github.brief = title, brief
 	return proposal, nil
@@ -425,7 +425,7 @@ func (gateway *githubGateway) Observe(ctx context.Context, sourceID string) (pac
 func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncworkflow.Proposal, decision packsyncworkflow.PublicationDecision) (packsyncworkflow.PRState, error) {
 	expectedState := gateway.last
 	branch := decision.Branch
-	head := proposal.ResultTreeSHA
+	head := proposal.HeadSHA
 	expected := gateway.last.Branch.HeadSHA
 	lease := "--force-with-lease=refs/heads/" + branch + ":" + expected
 	if err := gateway.pushWithRetry(ctx, lease, branch, head); err != nil {
@@ -473,6 +473,13 @@ func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncwork
 func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncworkflow.Proposal, decision packsyncworkflow.PublicationDecision, observed packsyncworkflow.PRState) (string, error) {
 	if decision.Action == packsyncworkflow.PublicationCreate {
 		if err := gateway.retry.Do(ctx, func() error {
+			current, observeErr := gateway.Observe(ctx, proposal.SourceID)
+			if observeErr != nil {
+				return observeErr
+			}
+			if !current.PR.Exists || current.PR.Number != observed.Number || !current.PR.Open || !current.PR.Draft || current.PR.BaseBranch != "main" || current.PR.HeadBranch != decision.Branch || current.PR.HeadSHA != proposal.HeadSHA || current.PR.MetadataHash != observed.MetadataHash || current.PR.Owner != packsyncworkflow.AutomationOwner || current.Branch.HeadSHA != proposal.HeadSHA || current.Branch.Owner != packsyncworkflow.AutomationOwner {
+				return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "draft pull request state changed before the ready transition", Recovery: "Preserve the reviewer change and leave the pull request blocked; start a fresh Check.", Err: errors.New("draft readiness compare-and-swap failed")}
+			}
 			_, readyErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "ready", fmt.Sprint(observed.Number), "--repo", gateway.repository)
 			if readyErr == nil {
 				return nil
@@ -497,7 +504,7 @@ func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncwor
 		return "", err
 	}
 	finalHash := packsyncworkflow.ManagedMetadataHash(gateway.title, finalPrefix)
-	record := packsyncworkflow.NewPublicationRecord(proposal, proposal.ResultTreeSHA, finalHash)
+	record := packsyncworkflow.NewPublicationRecord(proposal, proposal.HeadSHA, finalHash)
 	body, err := packsyncworkflow.ManagedBody(finalPrefix, record)
 	if err != nil {
 		return "", err
@@ -551,7 +558,20 @@ type ghPR struct {
 }
 
 func (gateway *githubGateway) pullRequests(ctx context.Context, branch string) ([]ghPR, error) {
-	data, err := gateway.retryCommand(ctx, "gh", "pr", "list", "--repo", gateway.repository, "--state", "all", "--head", branch, "--json", "number,state,baseRefName,headRefName,headRefOid,isDraft,autoMergeRequest,title,body,author")
+	var prs []ghPR
+	err := gateway.retry.Do(ctx, func() error {
+		var err error
+		prs, err = gateway.pullRequestsOnce(ctx, branch)
+		if err == nil {
+			return nil
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(err)
+	})
+	return prs, err
+}
+
+func (gateway *githubGateway) pullRequestsOnce(ctx context.Context, branch string) ([]ghPR, error) {
+	data, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "list", "--repo", gateway.repository, "--state", "all", "--head", branch, "--json", "number,state,baseRefName,headRefName,headRefOid,isDraft,autoMergeRequest,title,body,author")
 	if err != nil {
 		return nil, err
 	}
@@ -598,21 +618,35 @@ func (gateway *githubGateway) pushWithRetry(ctx context.Context, lease, branch, 
 
 func (gateway *githubGateway) createPRWithRetry(ctx context.Context, branch, body string) (url string, err error) {
 	err = gateway.retry.Do(ctx, func() error {
+		before, observeErr := gateway.pullRequestsOnce(ctx, branch)
+		if observeErr != nil {
+			return packsyncworkflow.ClassifyNetworkFailure(observeErr)
+		}
+		if len(before) != 0 {
+			return competingPRFailure(before)
+		}
 		url, err = gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "create", "--repo", gateway.repository, "--base", "main", "--head", branch, "--title", gateway.title, "--body", body, "--draft")
 		if err == nil {
 			return nil
 		}
-		prs, observeErr := gateway.pullRequests(ctx, branch)
+		prs, observeErr := gateway.pullRequestsOnce(ctx, branch)
 		if observeErr == nil && len(prs) == 1 && prs[0].State == "OPEN" {
 			url = fmt.Sprintf("https://github.com/%s/pull/%d", gateway.repository, prs[0].Number)
 			return nil
 		}
-		if observeErr == nil && len(prs) > 1 {
-			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Err: errors.New("ambiguous PR creation produced multiple source PRs")}
+		if observeErr == nil && len(prs) != 0 {
+			return competingPRFailure(prs)
 		}
 		return packsyncworkflow.ClassifyNetworkFailure(err)
 	})
 	return url, err
+}
+
+func competingPRFailure(prs []ghPR) error {
+	if len(prs) == 1 && prs[0].State != "OPEN" {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "the stable source branch already has a closed pull request", Recovery: "A maintainer must decide whether to reopen that exact pull request; automation must not create a competitor.", Err: errors.New("closed pull request blocks first publication")}
+	}
+	return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Err: errors.New("ambiguous PR creation produced multiple source PRs")}
 }
 
 func fileHash(name string) (string, error) {

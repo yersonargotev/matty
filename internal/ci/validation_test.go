@@ -1,6 +1,9 @@
 package ci_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -9,6 +12,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/yersonargotev/matty/internal/packsyncworkflow"
 )
 
 var mattyOwnedPackages = []string{
@@ -122,7 +128,7 @@ func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T)
 
 func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing.T) {
 	root := filepath.Join(repositoryRoot(t), "workflows", "schemas")
-	for _, name := range []string{"pack-source-dispatch.schema.json", "pack-source-operational-artifact.schema.json", "pack-source-publication.schema.json", "pack-source-validation.schema.json"} {
+	for _, name := range []string{"pack-source-dispatch.schema.json", "pack-source-operational-artifact.schema.json", "pack-source-publication.schema.json", "pack-source-validation.schema.json", "pack-source-noop.schema.json"} {
 		contents := readFile(t, filepath.Join(root, name))
 		for _, required := range []string{`"$schema"`, `"additionalProperties": false`, `"schema_version"`} {
 			if !strings.Contains(contents, required) {
@@ -135,6 +141,92 @@ func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing
 			}
 		}
 	}
+}
+
+func TestDispatchSchemaMatchesRuntimeValidation(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	cases := []packsyncworkflow.DispatchRequest{
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "inspect"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: sha, ClassificationMode: packsyncworkflow.ClassificationHuman, RequestReason: "inspect"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: sha, ClassificationMode: packsyncworkflow.ClassificationHuman, RequestReason: "evidence", ExpectedPlanID: "plan", ExpectedBaseSHA: sha, HumanEvidence: json.RawMessage(`{"schema_version":1}`)},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, SelectorRef: "unexpected", ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "invalid"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: sha, ClassificationMode: packsyncworkflow.ClassificationHuman, RequestReason: "partial", ExpectedPlanID: "plan"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: " \t\n"},
+	}
+	for _, request := range cases {
+		data, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemaErr := validateSchemaInstance(t, "pack-source-dispatch.schema.json", data)
+		if (request.Validate() == nil) != (schemaErr == nil) {
+			t.Fatalf("runtime/schema dispatch disagreement for %s: runtime=%v schema=%v", data, request.Validate(), schemaErr)
+		}
+	}
+}
+
+func TestDispatchSchemaMatchesRuntimeFieldPresence(t *testing.T) {
+	base := `{"schema_version":1,"source_id":"source","selector":"latest-stable","classification_mode":"ai","request_reason":"inspect"}`
+	cases := []string{
+		base,
+		strings.TrimSuffix(base, "}") + `,"selector_ref":""}`,
+		strings.TrimSuffix(base, "}") + `,"retry_of_run":""}`,
+		strings.TrimSuffix(base, "}") + `,"expected_plan_id":""}`,
+		strings.TrimSuffix(base, "}") + `,"unexpected":true}`,
+		fmt.Sprintf(`{"schema_version":1,"source_id":"source","selector":"commit","selector_ref":"%s","classification_mode":"human","request_reason":"evidence","expected_plan_id":"plan","expected_base_sha":"%s","human_evidence":{"schema_version":1}}`, strings.Repeat("a", 40), strings.Repeat("b", 40)),
+	}
+	for _, document := range cases {
+		var request packsyncworkflow.DispatchRequest
+		runtimeErr := json.Unmarshal([]byte(document), &request)
+		if runtimeErr == nil {
+			runtimeErr = request.Validate()
+		}
+		schemaErr := validateSchemaInstance(t, "pack-source-dispatch.schema.json", []byte(document))
+		if (runtimeErr == nil) != (schemaErr == nil) {
+			t.Fatalf("runtime/schema presence disagreement for %s: runtime=%v schema=%v", document, runtimeErr, schemaErr)
+		}
+	}
+}
+
+func TestSynchronizationSchemasAcceptCanonicalRuntimeArtifacts(t *testing.T) {
+	sha, hash := strings.Repeat("a", 40), strings.Repeat("b", 64)
+	instances := map[string]any{
+		"pack-source-operational-artifact.schema.json": packsyncworkflow.FailureArtifact{SchemaVersion: 1, State: "blocked", SourceID: "source", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, Blockers: []string{"blocked"}, Recovery: []string{"retry safely"}},
+		"pack-source-validation.schema.json":           packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: "source", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, MattySuite: true, Apply: true},
+		"pack-source-publication.schema.json":          map[string]any{"schema_version": 1, "source_id": "source", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "result_tree_sha": sha, "provenance_sha256": hash, "branch_name": "sync/source", "pr_number": 7, "pr_state_sha256": hash, "managed_title": "managed", "managed_metadata_hash": hash, "validation": map[string]bool{"provenance": true, "classification": true, "reacquisition": true, "apply": true, "diff": true, "ownership": true, "matty_suite": true}, "decision_ready": true, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": packsyncworkflow.DecisionReadyInvalidationConditions()},
+		"pack-source-noop.schema.json":                 map[string]any{"schema_version": 1, "state": "no-op", "source_id": "source", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "contains_secrets": false, "contains_upstream_bytes": false},
+	}
+	for name, instance := range instances {
+		data, err := json.Marshal(instance)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateSchemaInstance(t, name, data); err != nil {
+			t.Fatalf("%s rejected canonical runtime artifact: %v", name, err)
+		}
+	}
+}
+
+func validateSchemaInstance(t *testing.T, name string, instance []byte) error {
+	t.Helper()
+	root := filepath.Join(repositoryRoot(t), "workflows", "schemas")
+	document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(readFile(t, filepath.Join(root, name)))))
+	if err != nil {
+		t.Fatalf("parse schema %s: %v", name, err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(name, document); err != nil {
+		t.Fatalf("add schema %s: %v", name, err)
+	}
+	schema, err := compiler.Compile(name)
+	if err != nil {
+		t.Fatalf("compile schema %s: %v", name, err)
+	}
+	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(instance))
+	if err != nil {
+		return err
+	}
+	return schema.Validate(value)
 }
 
 func workflowSection(t *testing.T, workflow, start, end string) string {

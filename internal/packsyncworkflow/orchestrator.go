@@ -104,7 +104,8 @@ func (publisher Publisher) Run(ctx context.Context, request PublishRequest) (Pub
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if err := publisher.Diff.VerifyCommit(ctx, request.RepositoryRoot, diffSeal, proposal.ResultTreeSHA); err != nil {
+	proposal.ResultTreeSHA = diffSeal
+	if err := publisher.Diff.VerifyCommit(ctx, request.RepositoryRoot, diffSeal, proposal.HeadSHA); err != nil {
 		return PublishResult{}, Failure{Kind: FailureIntegrity, Err: errors.New("publication commit does not match the sealed Apply diff")}
 	}
 	// These gates are derived here from the completed owner-controlled sequence,
@@ -173,8 +174,8 @@ func (publisher Publisher) Run(ctx context.Context, request PublishRequest) (Pub
 		return PublishResult{}, err
 	}
 	final.ProvenanceCurrent = true
-	exactRecord := final.Record.PlanID == proposal.PlanID && final.Record.BaseSHA == proposal.BaseSHA && final.Record.CandidateSHA == proposal.CandidateSHA && final.Record.HeadSHA == proposal.ResultTreeSHA && final.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256 && final.Record.MetadataHash == finalHash
-	if final.BaseSHA != proposal.BaseSHA || final.CandidateRelation == CandidateRegressive || !final.Branch.Exists || final.Branch.Name != "sync/"+proposal.SourceID || final.Branch.HeadSHA != proposal.ResultTreeSHA || final.Branch.Owner != AutomationOwner || final.Branch.Diverged || final.Branch.HumanCommits || !final.PR.Exists || !final.PR.Open || final.PR.Number != published.PR.Number || final.PR.BaseBranch != "main" || final.PR.HeadBranch != "sync/"+proposal.SourceID || final.PR.HeadSHA != proposal.ResultTreeSHA || final.PR.MetadataHash != finalHash || final.PR.Owner != AutomationOwner || final.PR.Draft || final.PR.AutoMerge || !exactRecord {
+	exactRecord := final.Record.PlanID == proposal.PlanID && final.Record.BaseSHA == proposal.BaseSHA && final.Record.CandidateSHA == proposal.CandidateSHA && final.Record.HeadSHA == proposal.HeadSHA && final.Record.ResultTreeSHA == proposal.ResultTreeSHA && final.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256 && final.Record.MetadataHash == finalHash
+	if final.BaseSHA != proposal.BaseSHA || final.CandidateRelation == CandidateRegressive || !final.Branch.Exists || final.Branch.Name != "sync/"+proposal.SourceID || final.Branch.HeadSHA != proposal.HeadSHA || final.Branch.Owner != AutomationOwner || final.Branch.Diverged || final.Branch.HumanCommits || !final.PR.Exists || !final.PR.Open || final.PR.Number != published.PR.Number || final.PR.BaseBranch != "main" || final.PR.HeadBranch != "sync/"+proposal.SourceID || final.PR.HeadSHA != proposal.HeadSHA || final.PR.MetadataHash != finalHash || final.PR.Owner != AutomationOwner || final.PR.Draft || final.PR.AutoMerge || !exactRecord {
 		return PublishResult{}, Failure{Kind: FailureOwnership, Blocker: "final pull request identity changed before readiness could be established", Recovery: "Preserve the observed pull request for manual review; do not overwrite it or open a competitor.", Err: errors.New("final pull request identity failed closed")}
 	}
 	ready, err := readinessFor(proposal, final.PR)
@@ -185,7 +186,7 @@ func (publisher Publisher) Run(ctx context.Context, request PublishRequest) (Pub
 }
 
 func validatePublishedState(proposal Proposal, decision PublicationDecision, returned PRState, state PublicationState) error {
-	if !state.Branch.Exists || !state.PR.Exists || !state.PR.Open || state.PR.Number != returned.Number || state.PR.HeadSHA != proposal.ResultTreeSHA || state.Branch.HeadSHA != proposal.ResultTreeSHA || state.PR.MetadataHash != proposal.ManagedMetadataHash || state.Record.MetadataHash != proposal.ManagedMetadataHash || state.PR.Owner != AutomationOwner || state.Branch.Owner != AutomationOwner || state.PR.AutoMerge {
+	if !state.Branch.Exists || !state.PR.Exists || !state.PR.Open || state.PR.Number != returned.Number || state.PR.HeadSHA != proposal.HeadSHA || state.Branch.HeadSHA != proposal.HeadSHA || state.PR.MetadataHash != proposal.ManagedMetadataHash || state.Record.MetadataHash != proposal.ManagedMetadataHash || state.PR.Owner != AutomationOwner || state.Branch.Owner != AutomationOwner || state.PR.AutoMerge {
 		return Failure{Kind: FailureOwnership, Blocker: "draft publication state did not match the exact automation-owned proposal", Recovery: "Inspect the stable branch and pull request manually; never overwrite changed reviewer state or open a competitor.", Err: errors.New("published state failed exact reobservation")}
 	}
 	if decision.Action == PublicationCreate && !state.PR.Draft {
