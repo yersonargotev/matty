@@ -11,6 +11,7 @@
     "base_sha",
     "candidate_sha",
     "result_tree_sha",
+    "head_sha",
     "provenance_sha256",
     "branch_name",
     "pr_number",
@@ -34,6 +35,7 @@
     "base_sha": { "$ref": "#/$defs/full_sha" },
     "candidate_sha": { "$ref": "#/$defs/full_sha" },
     "result_tree_sha": { "$ref": "#/$defs/full_sha" },
+    "head_sha": { "$ref": "#/$defs/full_sha" },
     "provenance_sha256": { "$ref": "#/$defs/sha256" },
     "branch_name": {
       "type": "string",

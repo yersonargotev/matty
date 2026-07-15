@@ -121,6 +121,9 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 	if result["decision_ready"] != true || result["auto_merge"] != false {
 		t.Fatalf("publication result = %#v", result)
 	}
+	if result["head_sha"] == "" || result["result_tree_sha"] == "" || result["head_sha"] == result["result_tree_sha"] {
+		t.Fatalf("publication did not preserve distinct commit/tree identity: %#v", result)
+	}
 }
 
 type sandboxSource struct {

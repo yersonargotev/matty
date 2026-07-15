@@ -62,6 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       continue: ${{ steps.route.outputs.continue }}
+      noop: ${{ steps.route.outputs.noop }}
     permissions:
       contents: read
     steps:
@@ -109,6 +110,11 @@ jobs:
           else
             echo "continue=false" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "$status" == "no-op" ]]; then
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "noop=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upload sealed inspection
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -116,6 +122,14 @@ jobs:
           path: ${{ runner.temp }}/matty-sync/inspect/
           if-no-files-found: error
           retention-days: 1
+      - name: Upload canonical no-op result
+        if: ${{ steps.route.outputs.noop == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-noop-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect/no-op.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload pre-publication operational artifact
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

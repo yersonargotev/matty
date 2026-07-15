@@ -67,7 +67,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
 	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
 	if plan.Status == "no-op" {
-		return writeCanonical(filepath.Join(option.outputDir, "no-op.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "contains_secrets": false, "contains_upstream_bytes": false})
+		return writeNoopArtifact(option.outputDir, dispatch.SourceID, plan)
 	}
 	if err := os.MkdirAll(option.outputDir, 0o755); err != nil {
 		return err
@@ -95,7 +95,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	if err := writeCanonical(filepath.Join(option.outputDir, "proposal-brief.json"), builder.brief); err != nil {
 		return err
 	}
-	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.Proposal.ResultTreeSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
+	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.Proposal.ResultTreeSHA, "head_sha": result.Proposal.HeadSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
 	if err := writeCanonical(filepath.Join(option.outputDir, "publication.json"), artifact); err != nil {
 		return err
 	}
@@ -438,32 +438,23 @@ func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncwork
 	}
 	var number int
 	if decision.Action == packsyncworkflow.PublicationCreate {
-		url, err := gateway.createPRWithRetry(ctx, branch, body)
+		number, err = gateway.createPRWithRetry(ctx, proposal, body, record)
 		if err != nil {
 			kind := packsyncworkflow.FailureIntegrity
 			var failure packsyncworkflow.Failure
 			if errors.As(err, &failure) {
+				if failure.Blocker != "" && failure.Recovery != "" {
+					return packsyncworkflow.PRState{}, err
+				}
 				kind = failure.Kind
 			}
 			return packsyncworkflow.PRState{}, packsyncworkflow.Failure{Kind: kind, Blocker: "The automation-owned stable branch was pushed but first pull-request creation did not complete.", Recovery: fmt.Sprintf("Verify refs/heads/%s still equals %s and has no pull request, delete only that exact orphan branch, then start a fresh Check.", branch, head), Err: err}
 		}
-		if _, err := fmt.Sscanf(strings.TrimSpace(url), "https://github.com/%*s/pull/%d", &number); err != nil {
-			listed, listErr := gateway.pullRequests(ctx, branch)
-			if listErr != nil || len(listed) != 1 {
-				return packsyncworkflow.PRState{}, errors.New("created PR identity is ambiguous")
-			}
-			number = listed[0].Number
-		}
 	} else {
 		number = decision.PRNumber
-		observed, err := gateway.Observe(ctx, proposal.SourceID)
-		if err != nil {
-			return packsyncworkflow.PRState{}, err
-		}
-		if observed.PR.Number != expectedState.PR.Number || observed.PR.MetadataHash != expectedState.PR.MetadataHash || observed.PR.Owner != packsyncworkflow.AutomationOwner {
-			return packsyncworkflow.PRState{}, packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed after the publication lease was acquired", Recovery: "Preserve the reviewer change and restart with a fresh Check; automation must not overwrite it.", Err: errors.New("pull request changed before update")}
-		}
-		if err := gateway.editPRWithReobserve(ctx, proposal.SourceID, number, expectedState.PR.MetadataHash, body, proposal.ManagedMetadataHash); err != nil {
+		beforePR := expectedState.PR
+		beforePR.HeadSHA = proposal.HeadSHA
+		if err := gateway.editPRWithReobserve(ctx, proposal, beforePR, expectedState.Record, record, body); err != nil {
 			return packsyncworkflow.PRState{}, err
 		}
 	}
@@ -509,34 +500,41 @@ func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncwor
 	if err != nil {
 		return "", err
 	}
-	if err := gateway.editPRWithReobserve(ctx, proposal.SourceID, observed.Number, observed.MetadataHash, body, finalHash); err != nil {
+	beforePR := gateway.last.PR
+	beforePR.Number = observed.Number
+	beforePR.HeadSHA = proposal.HeadSHA
+	beforePR.MetadataHash = observed.MetadataHash
+	if decision.Action == packsyncworkflow.PublicationCreate {
+		beforePR.Draft = false
+	}
+	if err := gateway.editPRWithReobserve(ctx, proposal, beforePR, gateway.last.Record, record, body); err != nil {
 		return "", err
 	}
 	return finalHash, nil
 }
 
-func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, sourceID string, number int, expectedHash, body, targetHash string) error {
+func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, proposal packsyncworkflow.Proposal, beforePR packsyncworkflow.PRState, beforeRecord, targetRecord packsyncworkflow.PublicationRecord, body string) error {
 	return gateway.retry.Do(ctx, func() error {
-		state, err := gateway.Observe(ctx, sourceID)
+		state, err := gateway.observeMutationOnce(ctx, proposal)
 		if err != nil {
-			return err
+			return packsyncworkflow.ClassifyNetworkFailure(err)
 		}
-		if state.PR.Number != number || state.PR.MetadataHash != expectedHash {
-			if state.PR.Number == number && state.PR.MetadataHash == targetHash {
-				return nil
-			}
-			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed before an automation edit", Recovery: "Preserve the reviewer edit and start a fresh Check; automation must not overwrite it.", Err: errors.New("pull request metadata compare-and-swap failed")}
+		if state.matchesPR(proposal, beforePR, targetRecord) {
+			return nil
 		}
-		_, editErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "edit", fmt.Sprint(number), "--repo", gateway.repository, "--title", gateway.title, "--body", body)
+		if !state.matchesPR(proposal, beforePR, beforeRecord) {
+			return publicationCASFailure("branch or pull request state changed before an automation edit")
+		}
+		_, editErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "edit", fmt.Sprint(beforePR.Number), "--repo", gateway.repository, "--title", gateway.title, "--body", body)
 		if editErr == nil {
 			return nil
 		}
-		after, observeErr := gateway.Observe(ctx, sourceID)
-		if observeErr == nil && after.PR.Number == number && after.PR.MetadataHash == targetHash {
+		after, observeErr := gateway.observeMutationOnce(ctx, proposal)
+		if observeErr == nil && after.matchesPR(proposal, beforePR, targetRecord) {
 			return nil
 		}
-		if observeErr == nil && after.PR.MetadataHash != expectedHash {
-			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed during an ambiguous edit", Recovery: "Preserve the observed metadata and inspect manually; automation must not retry over reviewer work.", Err: errors.New("ambiguous pull request edit changed metadata")}
+		if observeErr == nil && !after.matchesPR(proposal, beforePR, beforeRecord) {
+			return publicationCASFailure("branch or pull request state changed during an ambiguous edit")
 		}
 		return packsyncworkflow.ClassifyNetworkFailure(editErr)
 	})
@@ -555,6 +553,80 @@ type ghPR struct {
 	Author           struct {
 		Login string `json:"login"`
 	} `json:"author"`
+}
+
+type commitIdentity struct {
+	Author    string   `json:"author"`
+	Committer string   `json:"committer"`
+	Message   string   `json:"message"`
+	Parents   []string `json:"parents"`
+}
+
+type mutationObservation struct {
+	BaseSHA    string
+	BranchHead string
+	PRs        []ghPR
+	Commit     commitIdentity
+}
+
+func (gateway *githubGateway) observeMutationOnce(ctx context.Context, proposal packsyncworkflow.Proposal) (mutationObservation, error) {
+	branch := "sync/" + proposal.SourceID
+	base, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "repos/"+gateway.repository+"/git/ref/heads/main", "--jq", ".object.sha")
+	if err != nil {
+		return mutationObservation{}, err
+	}
+	remote, err := gateway.run(ctx, gateway.repositoryRoot, "git", "ls-remote", "origin", "refs/heads/"+branch)
+	if err != nil {
+		return mutationObservation{}, err
+	}
+	fields := strings.Fields(remote)
+	if len(fields) != 2 || fields[1] != "refs/heads/"+branch {
+		return mutationObservation{}, errors.New("stable publication branch is absent or ambiguous")
+	}
+	prs, err := gateway.pullRequestsOnce(ctx, branch)
+	if err != nil {
+		return mutationObservation{}, err
+	}
+	identityJSON, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "repos/"+gateway.repository+"/commits/"+fields[0], "--jq", "{author:.author.login,committer:.committer.login,message:.commit.message,parents:[.parents[].sha]}")
+	if err != nil {
+		return mutationObservation{}, err
+	}
+	var identity commitIdentity
+	if err := json.Unmarshal([]byte(identityJSON), &identity); err != nil {
+		return mutationObservation{}, errors.New("commit ownership identity is malformed")
+	}
+	return mutationObservation{BaseSHA: strings.TrimSpace(base), BranchHead: fields[0], PRs: prs, Commit: identity}, nil
+}
+
+func (state mutationObservation) matchesCommon(proposal packsyncworkflow.Proposal) bool {
+	expectedMessage := fmt.Sprintf("sync(%s): %s [%s]", proposal.SourceID, proposal.CandidateSHA[:12], proposal.PlanID)
+	return state.BaseSHA == proposal.BaseSHA && state.BranchHead == proposal.HeadSHA && state.Commit.Author == packsyncworkflow.AutomationOwner && state.Commit.Committer == packsyncworkflow.AutomationOwner && state.Commit.Message == expectedMessage && len(state.Commit.Parents) == 1 && state.Commit.Parents[0] == proposal.BaseSHA
+}
+
+func (state mutationObservation) matchesPR(proposal packsyncworkflow.Proposal, expected packsyncworkflow.PRState, record packsyncworkflow.PublicationRecord) bool {
+	if !state.matchesCommon(proposal) || len(state.PRs) != 1 {
+		return false
+	}
+	pr := state.PRs[0]
+	owner := pr.Author.Login
+	if owner == "app/github-actions" {
+		owner = packsyncworkflow.AutomationOwner
+	}
+	parsed, ok := packsyncworkflow.ParsePublicationRecord(pr.Body)
+	return ok && parsed == record && pr.Number == expected.Number && pr.State == "OPEN" && expected.Open && pr.BaseRefName == expected.BaseBranch && pr.HeadRefName == expected.HeadBranch && pr.HeadRefOID == proposal.HeadSHA && pr.IsDraft == expected.Draft && (pr.AutoMergeRequest != nil) == expected.AutoMerge && owner == packsyncworkflow.AutomationOwner && packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body) == record.MetadataHash
+}
+
+func (state mutationObservation) matchesCreated(proposal packsyncworkflow.Proposal, record packsyncworkflow.PublicationRecord) (int, bool) {
+	if len(state.PRs) != 1 {
+		return 0, false
+	}
+	pr := state.PRs[0]
+	expected := packsyncworkflow.PRState{Number: pr.Number, Open: true, BaseBranch: "main", HeadBranch: "sync/" + proposal.SourceID, HeadSHA: proposal.HeadSHA, Owner: packsyncworkflow.AutomationOwner, Draft: true}
+	return pr.Number, pr.Number > 0 && state.matchesPR(proposal, expected, record)
+}
+
+func publicationCASFailure(message string) error {
+	return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: message, Recovery: "Preserve the observed branch and pull request for manual inspection; start a fresh Check before any automation write.", Err: errors.New("publication compare-and-swap failed")}
 }
 
 func (gateway *githubGateway) pullRequests(ctx context.Context, branch string) ([]ghPR, error) {
@@ -616,37 +688,48 @@ func (gateway *githubGateway) pushWithRetry(ctx context.Context, lease, branch, 
 	})
 }
 
-func (gateway *githubGateway) createPRWithRetry(ctx context.Context, branch, body string) (url string, err error) {
+func (gateway *githubGateway) createPRWithRetry(ctx context.Context, proposal packsyncworkflow.Proposal, body string, record packsyncworkflow.PublicationRecord) (number int, err error) {
+	branch := "sync/" + proposal.SourceID
 	err = gateway.retry.Do(ctx, func() error {
-		before, observeErr := gateway.pullRequestsOnce(ctx, branch)
+		before, observeErr := gateway.observeMutationOnce(ctx, proposal)
 		if observeErr != nil {
 			return packsyncworkflow.ClassifyNetworkFailure(observeErr)
 		}
-		if len(before) != 0 {
-			return competingPRFailure(before)
-		}
-		url, err = gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "create", "--repo", gateway.repository, "--base", "main", "--head", branch, "--title", gateway.title, "--body", body, "--draft")
-		if err == nil {
+		if createdNumber, ok := before.matchesCreated(proposal, record); ok {
+			number = createdNumber
 			return nil
 		}
-		prs, observeErr := gateway.pullRequestsOnce(ctx, branch)
-		if observeErr == nil && len(prs) == 1 && prs[0].State == "OPEN" {
-			url = fmt.Sprintf("https://github.com/%s/pull/%d", gateway.repository, prs[0].Number)
+		if !before.matchesCommon(proposal) || len(before.PRs) != 0 {
+			if len(before.PRs) != 0 {
+				return competingPRFailure(before.PRs)
+			}
+			return publicationCASFailure("stable branch identity changed before pull-request creation")
+		}
+		_, createErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "create", "--repo", gateway.repository, "--base", "main", "--head", branch, "--title", gateway.title, "--body", body, "--draft")
+		after, observeErr := gateway.observeMutationOnce(ctx, proposal)
+		if observeErr != nil {
+			return packsyncworkflow.ClassifyNetworkFailure(observeErr)
+		}
+		if createdNumber, ok := after.matchesCreated(proposal, record); ok {
+			number = createdNumber
 			return nil
 		}
-		if observeErr == nil && len(prs) != 0 {
-			return competingPRFailure(prs)
+		if !after.matchesCommon(proposal) || len(after.PRs) != 0 {
+			return publicationCASFailure("branch or pull request state changed during ambiguous creation")
 		}
-		return packsyncworkflow.ClassifyNetworkFailure(err)
+		if createErr == nil {
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureIntegrity, Err: errors.New("pull-request creation returned success without exact created state")}
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(createErr)
 	})
-	return url, err
+	return number, err
 }
 
 func competingPRFailure(prs []ghPR) error {
 	if len(prs) == 1 && prs[0].State != "OPEN" {
 		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "the stable source branch already has a closed pull request", Recovery: "A maintainer must decide whether to reopen that exact pull request; automation must not create a competitor.", Err: errors.New("closed pull request blocks first publication")}
 	}
-	return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Err: errors.New("ambiguous PR creation produced multiple source PRs")}
+	return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "the stable source branch has an unexpected or ambiguous pull request", Recovery: "Preserve every observed pull request and resolve ownership manually; automation must not create a competitor.", Err: errors.New("ambiguous PR creation state")}
 }
 
 func fileHash(name string) (string, error) {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,6 +92,25 @@ func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing
 	request, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
 	if err != nil || request.SourceID != "source" || check.Selector == nil || check.Selector.Mode != packsync.SelectorCommit {
 		t.Fatalf("normalized request = %#v, %#v, %v", request, check, err)
+	}
+}
+
+func TestInspectBoundaryEmitsCanonicalNoopArtifact(t *testing.T) {
+	output := t.TempDir()
+	plan := packsync.Plan{SchemaVersion: 1, PlanID: "plan-noop", Status: "no-op", SourceID: "source", Candidate: packsync.Candidate{Commit: strings.Repeat("a", 40)}, Preconditions: packsync.Preconditions{BaseCommit: strings.Repeat("b", 40)}}
+	if err := writeNoopArtifact(output, plan.SourceID, plan); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "no-op.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact map[string]any
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact["state"] != "no-op" || artifact["base_sha"] != plan.Preconditions.BaseCommit || artifact["candidate_sha"] != plan.Candidate.Commit || artifact["contains_secrets"] != false || artifact["contains_upstream_bytes"] != false {
+		t.Fatalf("no-op artifact = %#v", artifact)
 	}
 }
 

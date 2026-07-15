@@ -155,6 +155,11 @@ func inspect(ctx context.Context, option options, output io.Writer) error {
 	if err := os.WriteFile(filepath.Join(option.outputDir, "plan.json"), planJSON, 0o600); err != nil {
 		return err
 	}
+	if plan.Status == "no-op" {
+		if err := writeNoopArtifact(option.outputDir, request.SourceID, plan); err != nil {
+			return err
+		}
+	}
 	if request.ClassificationMode == packsyncworkflow.ClassificationHuman && len(request.HumanEvidence) == 0 && plan.Status == "review-required" {
 		inspection, err := packclassification.InspectHuman(plan)
 		if err != nil {
@@ -169,6 +174,10 @@ func inspect(ctx context.Context, option options, output io.Writer) error {
 	}
 	_, err = fmt.Fprintf(output, "%s\n", filepath.Join(option.outputDir, "plan.json"))
 	return err
+}
+
+func writeNoopArtifact(outputDir, sourceID string, plan packsync.Plan) error {
+	return writeCanonical(filepath.Join(outputDir, "no-op.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": sourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "contains_secrets": false, "contains_upstream_bytes": false})
 }
 
 func inspectRequest(option options) (packsyncworkflow.DispatchRequest, packsync.CheckRequest, error) {

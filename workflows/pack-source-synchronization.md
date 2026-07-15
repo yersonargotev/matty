@@ -65,6 +65,9 @@ and calls canonical `packsync.Check`. Its output is a sealed, immutable
 inspection artifact. It contains identities, reasons, changes, blockers and
 digests, not copied upstream resources or credentials.
 
+An exact Check-level no-op emits `pack-source-noop.schema.json` from Inspect
+and stops before classification, validation, or publication permissions.
+
 ### Classify — `contents: read`, `models: read`
 
 Classify downloads that exact inspection artifact and invokes:
@@ -159,6 +162,9 @@ The publication record conforms to
 `pack-source-publication.schema.json`. A PR may be non-draft and marked
 decision-ready only when these gates passed for one exact plan/base/head/
 candidate/provenance/PR-state identity:
+
+The record binds `result_tree_sha` as the validated content identity and
+`head_sha` as the distinct branch and pull-request commit identity.
 
 1. provenance;
 2. classification;
