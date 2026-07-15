@@ -435,7 +435,7 @@ func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncwork
 	head := proposal.HeadSHA
 	expected := gateway.last.Branch.HeadSHA
 	lease := "--force-with-lease=refs/heads/" + branch + ":" + expected
-	if err := gateway.pushWithRetry(ctx, lease, branch, head); err != nil {
+	if err := gateway.pushOnce(ctx, lease, branch, head); err != nil {
 		return packsyncworkflow.PRState{}, err
 	}
 	record := packsyncworkflow.NewPublicationRecord(proposal, head, proposal.ManagedMetadataHash)
@@ -681,11 +681,21 @@ func (gateway *githubGateway) lastPREditorOnce(ctx context.Context, number int) 
 		return "", errors.New("publication repository identity is invalid")
 	}
 	query := `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){userContentEdits(last:1){nodes{editor{login}}}}}}`
-	output, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "graphql", "-f", "query="+query, "-F", "owner="+owner, "-F", "name="+name, "-F", fmt.Sprintf("number=%d", number), "--jq", ".data.repository.pullRequest.userContentEdits.nodes[0].editor.login // \"\"")
+	output, err := gateway.run(ctx, gateway.repositoryRoot, "gh", "api", "graphql", "-f", "query="+query, "-F", "owner="+owner, "-F", "name="+name, "-F", fmt.Sprintf("number=%d", number), "--jq", `.data.repository.pullRequest.userContentEdits.nodes | if length == 0 then {present:false,editor:""} else {present:true,editor:(.[0].editor.login // "")} end`)
 	if err != nil {
 		return "", err
 	}
-	return normalizedAutomationLogin(strings.TrimSpace(output)), nil
+	var edit struct {
+		Present bool   `json:"present"`
+		Editor  string `json:"editor"`
+	}
+	if err := json.Unmarshal([]byte(output), &edit); err != nil {
+		return "", errors.New("pull-request edit identity is malformed")
+	}
+	if edit.Present && strings.TrimSpace(edit.Editor) == "" {
+		return "unavailable-edit-actor", nil
+	}
+	return normalizedAutomationLogin(strings.TrimSpace(edit.Editor)), nil
 }
 
 func normalizedAutomationLogin(login string) string {
@@ -720,27 +730,25 @@ func (gateway *githubGateway) retryCommand(ctx context.Context, name string, arg
 	return output, err
 }
 
-func (gateway *githubGateway) pushWithRetry(ctx context.Context, lease, branch, localHead string) error {
-	return gateway.retry.Do(ctx, func() error {
-		_, err := gateway.run(ctx, gateway.repositoryRoot, "git", "push", lease, "origin", "HEAD:refs/heads/"+branch)
-		if err == nil {
+func (gateway *githubGateway) pushOnce(ctx context.Context, lease, branch, localHead string) error {
+	_, err := gateway.run(ctx, gateway.repositoryRoot, "git", "push", lease, "origin", "HEAD:refs/heads/"+branch)
+	if err == nil {
+		return nil
+	}
+	remote, observeErr := gateway.run(ctx, gateway.repositoryRoot, "git", "ls-remote", "origin", "refs/heads/"+branch)
+	if observeErr == nil {
+		fields := strings.Fields(remote)
+		if len(fields) > 0 && fields[0] == localHead {
 			return nil
 		}
-		remote, observeErr := gateway.retryCommand(ctx, "git", "ls-remote", "origin", "refs/heads/"+branch)
-		if observeErr == nil {
-			fields := strings.Fields(remote)
-			if len(fields) > 0 && fields[0] == localHead {
-				return nil
-			}
-			if len(fields) > 0 && fields[0] != gateway.last.Branch.HeadSHA {
-				return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("source branch changed during ambiguous push")}
-			}
+		if (len(fields) > 0 && fields[0] != gateway.last.Branch.HeadSHA) || (len(fields) == 0 && gateway.last.Branch.HeadSHA != "") {
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("source branch changed during ambiguous push")}
 		}
-		if strings.Contains(strings.ToLower(err.Error()), "rejected") || strings.Contains(strings.ToLower(err.Error()), "stale info") {
-			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("force-with-lease rejected changed source branch")}
-		}
-		return packsyncworkflow.ClassifyNetworkFailure(err)
-	})
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "rejected") || strings.Contains(strings.ToLower(err.Error()), "stale info") {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("force-with-lease rejected changed source branch")}
+	}
+	return packsyncworkflow.ClassifyNetworkFailure(err)
 }
 
 func (gateway *githubGateway) createPRWithRetry(ctx context.Context, proposal packsyncworkflow.Proposal, body string, record packsyncworkflow.PublicationRecord) (number int, err error) {

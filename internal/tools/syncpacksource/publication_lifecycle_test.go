@@ -114,6 +114,27 @@ func TestGitHubGatewayRejectsReviewerSelfAuthenticatedMetadata(t *testing.T) {
 	}
 }
 
+func TestGitHubGatewayRejectsEditWithUnavailableActor(t *testing.T) {
+	proposal := lifecycleProposal()
+	fake := &fakeGitHubCommands{branchHead: headA, pr: managedFakePR(t, proposal, "managed", "evidence", false), lastEditUnavailable: true}
+	gateway := lifecycleGateway(t, fake)
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	if state.PR.LastEditor == "" {
+		t.Fatal("present edit with unavailable actor was collapsed into no edit history")
+	}
+	if _, err := packsyncworkflow.EvaluatePublication(prepared, state); err == nil || fake.pushCalls != 0 {
+		t.Fatalf("unattributed edit was admitted: state=%#v err=%v", state, err)
+	}
+}
+
 func TestGitHubGatewayObservationFailureNeverBecomesBranchAbsence(t *testing.T) {
 	fake := &fakeGitHubCommands{lsRemoteErr: errors.New("HTTP 503 Retry-After: 1")}
 	gateway := lifecycleGateway(t, fake)
@@ -122,6 +143,32 @@ func TestGitHubGatewayObservationFailureNeverBecomesBranchAbsence(t *testing.T) 
 	}
 	if fake.pushCalls != 0 || fake.createCalls != 0 {
 		t.Fatalf("observation failure wrote state: pushes=%d creates=%d", fake.pushCalls, fake.createCalls)
+	}
+}
+
+func TestGitHubGatewayTransientPushFailureIsNotRetriedWithoutFreshFullState(t *testing.T) {
+	fake := &fakeGitHubCommands{pushErr: errors.New("HTTP 503 Retry-After: 1")}
+	gateway := lifecycleGateway(t, fake)
+	proposal, err := gateway.Prepare(lifecycleProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(proposal, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = gateway.Publish(context.Background(), proposal, decision)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureTransient {
+		t.Fatalf("push failure = %T %v", err, err)
+	}
+	if fake.pushCalls != 1 || fake.createCalls != 0 || fake.editCalls != 0 {
+		t.Fatalf("ambiguous push crossed a second write boundary: pushes=%d creates=%d edits=%d", fake.pushCalls, fake.createCalls, fake.editCalls)
 	}
 }
 
@@ -527,6 +574,8 @@ type fakeGitHubCommands struct {
 	mutateBranchAfterEditFailure bool
 	commitOwner                  string
 	lastEditor                   string
+	lastEditUnavailable          bool
+	pushErr                      error
 	pushCalls                    int
 	createCalls                  int
 	editCalls                    int
@@ -542,7 +591,9 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 		}
 		return baseA + "\n", nil
 	case strings.HasPrefix(joined, "gh api graphql"):
-		return fake.lastEditor + "\n", nil
+		edit := map[string]any{"present": fake.lastEditor != "" || fake.lastEditUnavailable, "editor": fake.lastEditor}
+		data, _ := json.Marshal(edit)
+		return string(data), nil
 	case strings.HasPrefix(joined, "git ls-remote"):
 		if fake.lsRemoteErr != nil {
 			return "", fake.lsRemoteErr
@@ -603,6 +654,9 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 		return string(data), nil
 	case strings.HasPrefix(joined, "git push"):
 		fake.pushCalls++
+		if fake.pushErr != nil {
+			return "", fake.pushErr
+		}
 		fake.branchHead = headA
 		if output, err := exec.Command("git", "-C", directory, "rev-parse", "HEAD").Output(); err == nil {
 			fake.branchHead = strings.TrimSpace(string(output))

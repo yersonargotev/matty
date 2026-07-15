@@ -104,10 +104,10 @@ transaction evidence requires it), renders the diff, runs the complete
 Matty-owned validation suite again, evaluates ownership, and freshly reobserves
 the repository and GitHub state. Only a proposal whose exact identity passes
 all gates can reach the write operation. A first PR is created as a blocked
-draft, reobserved, finalized, converted to ready, and reobserved again before
-decision readiness is recorded. Validation and publication permission
-are separated by job, and publication logic remains a narrow adapter around
-Matty-owned domain behavior.
+draft, reobserved, converted to ready, finalized with decision-ready metadata,
+and reobserved again before readiness is recorded. Validation and publication
+permission are separated by job, and publication logic remains a narrow adapter
+around Matty-owned domain behavior.
 
 All phases set sandboxed `HOME` and `XDG_CONFIG_HOME`. Acquisitions, staged
 checkouts, generated state and filesystem writes remain under runner-owned
@@ -119,6 +119,10 @@ A single operation has at most three attempts. Attempt delays use bounded
 exponential backoff. A valid server `Retry-After` delay replaces the computed
 delay when it is longer. Only transport, rate-limit and service-unavailable
 failures classified as transient retry.
+
+A failed lease-protected branch push is reconciled once by reading the remote
+ref. If the target head is not already present, the run stops; it never repeats
+the write without a fresh Check and full publication revalidation.
 
 Provenance, integrity, classification, validation, ownership and divergence
 failures are terminal. Invalid evidence and AI unavailability after the bound
@@ -147,7 +151,8 @@ Immediately before writing, Publish revalidates all of the following together:
 - automation identity and the ownership record;
 - stable branch name, head, ancestry and commit authorship;
 - sole open PR identity, base/head/state, managed metadata, content and
-  authenticated last-editor identity; and
+  authenticated last-editor identity (a present edit with an unavailable actor
+  is ambiguous); and
 - the exact validated result tree and every decision-readiness gate.
 
 Publish fails closed, without a force-push, metadata overwrite or competing
