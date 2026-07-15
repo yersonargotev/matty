@@ -311,6 +311,95 @@ func TestStagedSuiteFailureLeavesRepositoryUntouched(t *testing.T) {
 	assertNoTransactionEvidence(t, repository)
 }
 
+func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
+	repository, oldSnapshot := tinyRepository(t)
+	oldCandidate := acceptedCandidate()
+	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: oldCandidate}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+
+	newSnapshot := t.TempDir()
+	writeFile(t, filepath.Join(newSnapshot, "skills", "engineering", "one", "SKILL.md"), "updated\n")
+	newCandidate := advancedCandidate(oldCandidate)
+	source := &multiReleaseSource{root: newSnapshot, candidates: map[string]Candidate{oldCandidate.Release.Tag: oldCandidate, newCandidate.Release.Tag: newCandidate}}
+	plan := checkWith(t, repository, source)
+	if plan.Status != "review-required" || !plan.Authoritative || plan.Counts.Modified != 1 {
+		t.Fatalf("authoritative update plan = %#v", plan)
+	}
+	engine.Source = source
+	result, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan})
+	if err != nil || result.Status != "applied" {
+		t.Fatalf("Apply = %#v, %v", result, err)
+	}
+	updated := mustReadFile(t, filepath.Join(repository, "bundle", "skills", "engineering", "one", "SKILL.md"))
+	if string(updated) != "updated\n" {
+		t.Fatalf("selected candidate was not materialized: %q", updated)
+	}
+	lock, _, present, err := readLock(filepath.Join(repository, "bundle", "sources.lock.json"))
+	if err != nil || !present || lock.Candidate.Commit != newCandidate.Commit {
+		t.Fatalf("updated lock = %#v, present=%t, err=%v", lock, present, err)
+	}
+	repeated := checkWith(t, repository, source)
+	if repeated.Status != "no-op" || len(repeated.Changes) != 0 || len(repeated.Blockers) != 0 {
+		t.Fatalf("repeated Check = %#v", repeated)
+	}
+}
+
+func TestRecoverResumesAfterItsOwnRollbackAndCleanupEffects(t *testing.T) {
+	t.Run("rollback rename already completed", func(t *testing.T) {
+		repository, snapshot := tinyRepository(t)
+		writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
+		provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+		plan := checkWith(t, repository, provider)
+		engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterFirstRename)}
+		if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
+			t.Fatal("faulted Apply unexpectedly succeeded")
+		}
+		marker, err := readRecoveryMarker(recoveryMarkerPath(repository))
+		if err != nil {
+			t.Fatal(err)
+		}
+		marker.Phase = "rolling-back"
+		if err := writeRecoveryMarker(recoveryMarkerPath(repository), &marker); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(marker.Backup, marker.Bundle); err != nil {
+			t.Fatal(err)
+		}
+		result, err := engine.Recover(context.Background(), RecoverRequest{RepositoryRoot: repository})
+		if err != nil || result.Status != "rolled-back" {
+			t.Fatalf("Recover = %#v, %v", result, err)
+		}
+		assertNoTransactionEvidence(t, repository)
+	})
+
+	t.Run("new bundle cleanup already completed", func(t *testing.T) {
+		repository, snapshot := tinyRepository(t)
+		writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
+		provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+		plan := checkWith(t, repository, provider)
+		engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterSecondRename)}
+		if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
+			t.Fatal("faulted Apply unexpectedly succeeded")
+		}
+		marker, err := readRecoveryMarker(recoveryMarkerPath(repository))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cleanupCommitted(marker); err != nil {
+			t.Fatal(err)
+		}
+		result, err := engine.Recover(context.Background(), RecoverRequest{RepositoryRoot: repository})
+		if err != nil || result.Status != "completed" {
+			t.Fatalf("Recover = %#v, %v", result, err)
+		}
+		assertNoTransactionEvidence(t, repository)
+	})
+}
+
 func acceptingBundleValidator() BundleValidator {
 	return BundleValidatorFunc(func(context.Context, string, string) error { return nil })
 }
@@ -323,6 +412,29 @@ func resealPlan(t *testing.T, plan *Plan) {
 		t.Fatal(err)
 	}
 	plan.PlanID = id
+}
+
+func advancedCandidate(previous Candidate) Candidate {
+	next := previous
+	release := *previous.Release
+	release.ID++
+	release.NodeID = "new-release-node"
+	release.Tag = "v1.2.0"
+	release.Name = "v1.2.0"
+	release.CreatedAt = release.CreatedAt.Add(time.Hour)
+	release.PublishedAt = release.PublishedAt.Add(time.Hour)
+	next.Release = &release
+	next.TagRefName = "refs/tags/" + release.Tag
+	next.TagRefSHA = strings.Repeat("c", 40)
+	next.TagObjects = append([]TagObject(nil), previous.TagObjects...)
+	next.TagObjects[0].SHA = next.TagRefSHA
+	next.TagObjects[0].Name = release.Tag
+	next.Commit = strings.Repeat("d", 40)
+	next.CommitNodeID = "new-commit-node"
+	next.Tree = strings.Repeat("e", 40)
+	next.Parents = []string{previous.Commit}
+	next.TagObjects[0].TargetSHA = next.Commit
+	return next
 }
 
 func failOnce(point FaultPoint) FaultInjector {

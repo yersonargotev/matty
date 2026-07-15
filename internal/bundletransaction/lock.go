@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -18,10 +17,6 @@ type Guard struct {
 	file *os.File
 }
 
-func LockPath(repositoryRoot string) string {
-	return filepath.Clean(repositoryRoot)
-}
-
 func Acquire(ctx context.Context, repositoryRoot string) (*Guard, error) {
 	if ctx == nil {
 		return nil, errors.New("bundle transaction lock requires a context")
@@ -30,7 +25,7 @@ func Acquire(ctx context.Context, repositoryRoot string) (*Guard, error) {
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("bundle transaction repository root is unavailable: %w", err)
 	}
-	file, err := os.Open(LockPath(repositoryRoot))
+	file, err := os.Open(repositoryRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open bundle transaction repository directory: %w", err)
 	}

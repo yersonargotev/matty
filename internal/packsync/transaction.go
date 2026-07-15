@@ -65,7 +65,7 @@ func (engine Engine) Apply(ctx context.Context, request ApplyRequest) (ApplyResu
 			return err
 		}
 		defer guard.Release()
-		result, err = engine.applyLocked(ctx, request, snapshotRoot)
+		result, err = engine.applyLocked(ctx, request, candidate, snapshotRoot)
 		return err
 	})
 	if err != nil {
@@ -102,8 +102,14 @@ func (engine Engine) reacquireCandidate(ctx context.Context, plan Plan) (Candida
 	return Candidate{}, errors.New("sealed release is no longer published")
 }
 
-func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, snapshotRoot string) (ApplyResult, error) {
+func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, candidate Candidate, snapshotRoot string) (ApplyResult, error) {
 	plan := request.Plan
+	if !plan.VerifySeal() || !reflect.DeepEqual(plan.Candidate, candidate) {
+		return ApplyResult{}, errors.New("sealed plan identity changed while acquiring the transaction lock")
+	}
+	if err := verifySnapshot(snapshotRoot, plan.ProposedLock); err != nil {
+		return ApplyResult{}, fmt.Errorf("exact candidate changed while acquiring the transaction lock: %w", err)
+	}
 	bundle := filepath.Join(request.RepositoryRoot, "bundle")
 	legacy := filepath.Join(request.RepositoryRoot, "skills-lock.json")
 	if converged, err := convergedBootstrap(bundle, legacy, plan); err != nil {
@@ -139,6 +145,13 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, snap
 			_ = os.RemoveAll(staged)
 		}
 	}()
+	currentLock, _, currentLockPresent, err := readLock(filepath.Join(bundle, "sources.lock.json"))
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := materializeSelectedResources(staged, snapshotRoot, currentLock, currentLockPresent, plan.ProposedLock); err != nil {
+		return ApplyResult{}, err
+	}
 	if err := writeCanonicalLock(filepath.Join(staged, "sources.lock.json"), plan.ProposedLock); err != nil {
 		return ApplyResult{}, err
 	}
@@ -286,47 +299,53 @@ func (engine Engine) Recover(ctx context.Context, request RecoverRequest) (Apply
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	rollback := !bundlePresent && backupPresent && backupHash == marker.OldSHA256 && stagedPresent && stagedHash == marker.NewSHA256 && (marker.Phase == "prepared" || marker.Phase == "old-renamed")
+	rollbackPending := !bundlePresent && backupPresent && backupHash == marker.OldSHA256 && stagedPresent && stagedHash == marker.NewSHA256 && (marker.Phase == "prepared" || marker.Phase == "old-renamed" || marker.Phase == "rolling-back")
 	prepared := bundlePresent && bundleHash == marker.OldSHA256 && !backupPresent && stagedPresent && stagedHash == marker.NewSHA256 && marker.Phase == "prepared"
+	rollbackInstalled := bundlePresent && bundleHash == marker.OldSHA256 && !backupPresent && (!stagedPresent || stagedHash == marker.NewSHA256) && (marker.Phase == "rolling-back" || marker.Phase == "rolled-back")
 	completed := bundlePresent && bundleHash == marker.NewSHA256 && backupPresent && backupHash == marker.OldSHA256 && !stagedPresent && (marker.Phase == "prepared" || marker.Phase == "old-renamed" || marker.Phase == "new-installed" || marker.Phase == "cleanup")
-	cleaned := bundlePresent && bundleHash == marker.NewSHA256 && !backupPresent && !stagedPresent && marker.Phase == "cleanup" && legacyClean(marker)
+	cleaned := bundlePresent && bundleHash == marker.NewSHA256 && !backupPresent && !stagedPresent && (marker.Phase == "new-installed" || marker.Phase == "cleanup") && legacyClean(marker)
 	switch {
 	case prepared:
-		if err := engine.Validate.ValidateBundle(ctx, request.RepositoryRoot, marker.Bundle); err != nil {
+		marker.Phase = "rolled-back"
+		if err := writeRecoveryMarker(markerPath, &marker); err != nil {
 			return ApplyResult{}, err
 		}
-		if err := os.RemoveAll(marker.Staged); err != nil {
+		return engine.finishRollback(ctx, request.RepositoryRoot, markerPath, marker)
+	case rollbackPending:
+		marker.Phase = "rolling-back"
+		if err := writeRecoveryMarker(markerPath, &marker); err != nil {
 			return ApplyResult{}, err
 		}
-		if err := os.Remove(markerPath); err != nil {
-			return ApplyResult{}, err
-		}
-		return ApplyResult{Status: "rolled-back", PlanID: marker.PlanID, Recovered: true}, nil
-	case rollback:
 		if err := os.Rename(marker.Backup, marker.Bundle); err != nil {
 			return ApplyResult{}, fmt.Errorf("restore old bundle: %w", err)
 		}
 		if err := syncDirectory(request.RepositoryRoot); err != nil {
 			return ApplyResult{}, err
 		}
-		if err := verifyTreeHash(marker.Bundle, marker.OldSHA256); err != nil {
+		marker.Phase = "rolled-back"
+		if err := writeRecoveryMarker(markerPath, &marker); err != nil {
 			return ApplyResult{}, err
 		}
+		return engine.finishRollback(ctx, request.RepositoryRoot, markerPath, marker)
+	case rollbackInstalled:
+		return engine.finishRollback(ctx, request.RepositoryRoot, markerPath, marker)
+	case completed:
 		if err := engine.Validate.ValidateBundle(ctx, request.RepositoryRoot, marker.Bundle); err != nil {
 			return ApplyResult{}, err
 		}
-		if err := os.RemoveAll(marker.Staged); err != nil {
+		marker.Phase = "cleanup"
+		if err := writeRecoveryMarker(markerPath, &marker); err != nil {
+			return ApplyResult{}, err
+		}
+		if err := cleanupCommitted(marker); err != nil {
 			return ApplyResult{}, err
 		}
 		if err := os.Remove(markerPath); err != nil {
 			return ApplyResult{}, err
 		}
-		return ApplyResult{Status: "rolled-back", PlanID: marker.PlanID, Recovered: true}, nil
-	case completed, cleaned:
+		return ApplyResult{Status: "completed", PlanID: marker.PlanID, Changed: true, Recovered: true}, nil
+	case cleaned:
 		if err := engine.Validate.ValidateBundle(ctx, request.RepositoryRoot, marker.Bundle); err != nil {
-			return ApplyResult{}, err
-		}
-		if err := cleanupCommitted(marker); err != nil {
 			return ApplyResult{}, err
 		}
 		if err := os.Remove(markerPath); err != nil {
@@ -338,8 +357,73 @@ func (engine Engine) Recover(ctx context.Context, request RecoverRequest) (Apply
 	}
 }
 
+func (engine Engine) finishRollback(ctx context.Context, repositoryRoot, markerPath string, marker recoveryMarker) (ApplyResult, error) {
+	if err := verifyTreeHash(marker.Bundle, marker.OldSHA256); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := engine.Validate.ValidateBundle(ctx, repositoryRoot, marker.Bundle); err != nil {
+		return ApplyResult{}, err
+	}
+	if marker.Phase != "rolled-back" {
+		marker.Phase = "rolled-back"
+		if err := writeRecoveryMarker(markerPath, &marker); err != nil {
+			return ApplyResult{}, err
+		}
+	}
+	if err := os.RemoveAll(marker.Staged); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := os.Remove(markerPath); err != nil {
+		return ApplyResult{}, err
+	}
+	return ApplyResult{Status: "rolled-back", PlanID: marker.PlanID, Recovered: true}, nil
+}
+
 func applicablePlan(plan Plan) bool {
+	if plan.Status == "review-required" && plan.Authoritative && len(plan.Blockers) == 0 {
+		return true
+	}
 	return plan.Status == "blocked" && !plan.Authoritative && len(plan.Changes) == 0 && len(plan.Blockers) == 1 && strings.Contains(plan.Blockers[0], "production provenance lock is absent")
+}
+
+func materializeSelectedResources(staged, snapshotRoot string, current Lock, currentPresent bool, next Lock) error {
+	nextByKey := mapResources(next.Resources)
+	if currentPresent {
+		for _, resource := range current.Resources {
+			if _, retained := nextByKey[bindingKey(resource.Binding)]; retained {
+				continue
+			}
+			target, err := stagedResourcePath(staged, resource.VendoredPath)
+			if err != nil {
+				return err
+			}
+			if err := os.RemoveAll(target); err != nil {
+				return err
+			}
+		}
+	}
+	for _, resource := range next.Resources {
+		target, err := stagedResourcePath(staged, resource.VendoredPath)
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(target); err != nil {
+			return err
+		}
+		source := filepath.Join(snapshotRoot, filepath.FromSlash(resource.UpstreamPath))
+		if err := copyTreeExact(source, target); err != nil {
+			return fmt.Errorf("materialize selected resource %s: %w", bindingKey(resource.Binding), err)
+		}
+	}
+	return nil
+}
+
+func stagedResourcePath(staged, vendoredPath string) (string, error) {
+	prefix := "bundle/"
+	if !strings.HasPrefix(vendoredPath, prefix) || !safeSlashPath(vendoredPath) {
+		return "", fmt.Errorf("unsafe staged resource path %q", vendoredPath)
+	}
+	return filepath.Join(staged, filepath.FromSlash(strings.TrimPrefix(vendoredPath, prefix))), nil
 }
 
 func convergedBootstrap(bundle, legacy string, plan Plan) (bool, error) {

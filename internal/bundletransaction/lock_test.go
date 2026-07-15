@@ -2,7 +2,6 @@ package bundletransaction
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -42,9 +41,6 @@ func TestExclusiveSerializesRepositoryBundleObservers(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("waiting observer did not acquire released bundle transaction lock")
-	}
-	if got := LockPath(repository); got != filepath.Clean(repository) {
-		t.Fatalf("LockPath() = %s", got)
 	}
 }
 
