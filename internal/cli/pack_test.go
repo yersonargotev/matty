@@ -1354,6 +1354,9 @@ func TestRuntimePackCompositionCanLoadHistoryWhenCurrentResourceIsMissing(t *tes
 	if _, err := composition.catalog.Show("matty"); err == nil {
 		t.Fatal("fresh catalog-current selection ignored the missing resource")
 	}
+	if _, err := composition.catalog.ListCurrent(); err == nil {
+		t.Fatal("catalog-current listing advertised a pack with a missing resource")
+	}
 }
 
 func writeUpdateBundle(t *testing.T, version string) string {

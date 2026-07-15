@@ -499,9 +499,13 @@ func newPackListCommand(opts Options, workstationResolver *workstation.Resolver)
 			if err != nil {
 				return err
 			}
+			packs, err := catalog.ListCurrent()
+			if err != nil {
+				return err
+			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(writer, "PACK\tVERSION\tDESCRIPTION\tAVAILABLE ON")
-			for _, pack := range catalog.List() {
+			for _, pack := range packs {
 				surfaces := make([]string, len(pack.Surfaces))
 				for i, surface := range pack.Surfaces {
 					surfaces[i] = string(surface)

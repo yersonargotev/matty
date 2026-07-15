@@ -147,6 +147,20 @@ func (c Catalog) List() []Pack {
 	return packs
 }
 
+// ListCurrent returns only after every advertised catalog-current pack has
+// passed the same source validation as direct current selection.
+func (c Catalog) ListCurrent() ([]Pack, error) {
+	packs := make([]Pack, 0, len(c.packs))
+	for _, metadata := range c.packs {
+		pack, err := c.Show(metadata.ID)
+		if err != nil {
+			return nil, err
+		}
+		packs = append(packs, pack)
+	}
+	return packs, nil
+}
+
 func (c Catalog) Show(id string) (Pack, error) {
 	for _, pack := range c.packs {
 		if pack.ID == id {
