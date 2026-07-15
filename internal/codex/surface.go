@@ -60,6 +60,8 @@ func (a *SurfaceAdapter) inspectReadiness(_ context.Context, pack capabilitypack
 func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
 	var projections []capabilitypack.ObservedProjection
 	var revisionParts []string
+	var desiredPrompt string
+	promptLoaded := false
 	engramOwned := hasEngramCodexSetupResources(pack)
 	if engramOwned {
 		config, err := readOptionalFile(a.configFile)
@@ -106,15 +108,19 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 			if err != nil && !os.IsNotExist(err) {
 				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read Codex instructions: %w", err)
 			}
+			if !promptLoaded {
+				desiredPrompt = string(current)
+				promptLoaded = true
+			}
 			fragment, exists := extractBlock(string(current), start, end)
 			observed := "missing"
 			if exists {
 				observed = localprojection.FingerprintBytes([]byte(fragment))
 			}
 			desired := localprojection.FingerprintBytes([]byte(desiredBlock))
-			merged := mergeBlock(string(current), desiredBlock, start, end)
+			desiredPrompt = mergeBlock(desiredPrompt, desiredBlock, start, end)
 			id := "instruction:" + resource.ID
-			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionInstructionFile, Target: a.promptFile, Content: merged, Description: fmt.Sprintf("write instruction %s in %s", resource.ID, a.promptFile)}})
+			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionInstructionFile, Target: a.promptFile, Content: desiredPrompt, Description: fmt.Sprintf("write instruction %s in %s", resource.ID, a.promptFile)}})
 			revisionParts = append(revisionParts, "prompt="+localprojection.FingerprintBytes(current))
 		case "mcp_server":
 			current, err := readOptionalFile(a.configFile)

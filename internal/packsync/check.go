@@ -283,6 +283,7 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 	}
 	plan.Discoveries = discoverUnselected(snapshotRoot, bindings)
 	plan.Counts.Discoveries = len(plan.Discoveries)
+	plan.Blockers = append(plan.Blockers, compatibilityBlockers(repositoryRoot, snapshotRoot, source, bindings, manifests)...)
 	return nil
 }
 

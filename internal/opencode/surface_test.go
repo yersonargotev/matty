@@ -83,6 +83,42 @@ func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testin
 	}
 }
 
+func TestSurfaceAdapterComposesMultipleInstructionReferences(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(bundle, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := filepath.Join(root, "opencode.json")
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, "skills"), config, filepath.Join(root, "matty.md"))
+	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
+	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []capabilitypack.ProjectionAction
+	for _, projection := range observed.Projections {
+		actions = append(actions, projection.Action)
+	}
+	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range verified.Projections {
+		if projection.ObservedFingerprint != projection.DesiredFingerprint {
+			t.Fatalf("instruction projection did not converge: %+v", projection)
+		}
+	}
+}
+
 func TestPriorTransitionInspectionPreservesUnmanagedOpenCodeConfiguration(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")

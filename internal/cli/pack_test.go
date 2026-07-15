@@ -301,8 +301,12 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 
 				manifestPath := filepath.Join(source, "packs", packID, "pack.json")
 				originalManifest := readFileString(t, manifestPath)
+				currentVersion, staleVersion, updateVersion := "1.0.0", "1.0.1", "2.0.0"
+				if packID == "matty" {
+					currentVersion, staleVersion, updateVersion = "2.0.0", "2.0.1", "3.0.0"
+				}
 				terminal.onApprove = func() {
-					changed := strings.Replace(originalManifest, `"version": "1.0.0"`, `"version": "1.0.1"`, 1)
+					changed := strings.Replace(originalManifest, `"version": "`+currentVersion+`"`, `"version": "`+staleVersion+`"`, 1)
 					_ = os.WriteFile(manifestPath, []byte(changed), 0o600)
 				}
 				if _, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", packID, "--surface", surface); err == nil || !strings.Contains(strings.ToLower(err.Error()), "stale") {
@@ -319,7 +323,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatalf("pending readiness gate: err=%v\n%s", err, out)
 				}
 
-				manifest := strings.Replace(readFileString(t, manifestPath), `"version": "1.0.1"`, `"version": "2.0.0"`, 1)
+				manifest := strings.Replace(readFileString(t, manifestPath), `"version": "`+staleVersion+`"`, `"version": "`+updateVersion+`"`, 1)
 				if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -539,14 +543,14 @@ func TestPackActivateCodexAppliesApprovedPlanAndRepeatIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activate failed: %v\n%s", err, out)
 	}
-	if terminal.calls != 1 || !strings.Contains(out, "Verified plan") || !strings.Contains(out, "24 Codex projections") {
+	if terminal.calls != 1 || !strings.Contains(out, "Verified plan") || !strings.Contains(out, "25 Codex projections") {
 		t.Fatalf("unexpected interaction/output: calls=%d\n%s", terminal.calls, out)
 	}
 	if target, err := os.Readlink(filepath.Join(home, ".agents", "skills", "ask-matt")); err != nil || !strings.HasSuffix(target, "bundle/skills/engineering/ask-matt") {
 		t.Fatalf("ask-matt link = %q err=%v", target, err)
 	}
 	prompt, err := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
-	if err != nil || !strings.Contains(string(prompt), "matty:pack:matty-guidance:start") {
+	if err != nil || !strings.Contains(string(prompt), "matty:pack:matty-guidance:start") || !strings.Contains(string(prompt), "matty:pack:matty-workflow-conventions:start") {
 		t.Fatalf("prompt = %q err=%v", prompt, err)
 	}
 	state, err := os.ReadFile(filepath.Join(home, ".matty", "packs.json"))
@@ -890,14 +894,14 @@ func TestPackActivateOpenCodePreservesUnmanagedContentAndDoesNotMutateCodex(t *t
 	if err != nil {
 		t.Fatalf("activate failed: %v\n%s", err, out)
 	}
-	if terminal.calls != 1 || !strings.Contains(out, "25 OpenCode projections") {
+	if terminal.calls != 1 || !strings.Contains(out, "27 OpenCode projections") {
 		t.Fatalf("interaction/output calls=%d\n%s", terminal.calls, out)
 	}
 	updated, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"// keep host syntax", `"model": "anthropic/test"`, `"jira"`, `"CONTRIBUTING.md"`, filepath.Join(xdg, "matty.md")} {
+	for _, want := range []string{"// keep host syntax", `"model": "anthropic/test"`, `"jira"`, `"CONTRIBUTING.md"`, filepath.Join(xdg, "matty.md"), filepath.Join(xdg, "matty-workflow-conventions.md")} {
 		if !strings.Contains(string(updated), want) {
 			t.Fatalf("OpenCode config lost %q:\n%s", want, updated)
 		}
@@ -1432,7 +1436,7 @@ func TestPackDeactivateDryRunApplyAndInactiveNoOpOnBothSurfaces(t *testing.T) {
 			if err != nil {
 				t.Fatalf("dry-run: %v\n%s", err, out)
 			}
-			for _, want := range []string{"Deactivation dry-run plan plan-", "Active version: 1.0.0", "Intent revision:", "Contributor removed:", "Phase: destructive-cleanup"} {
+			for _, want := range []string{"Deactivation dry-run plan plan-", "Active version: 2.0.0", "Intent revision:", "Contributor removed:", "Phase: destructive-cleanup"} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("missing %q:\n%s", want, out)
 				}

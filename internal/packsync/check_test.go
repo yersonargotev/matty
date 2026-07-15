@@ -33,7 +33,7 @@ var acceptedDiscoveries = []string{
 	"skills/personal/obsidian-vault",
 }
 
-func TestCheckReproducesAcceptedRealTracerWithoutWritingRepository(t *testing.T) {
+func TestCheckValidatesAcceptedMattyMajorMigrationWithoutWritingRepository(t *testing.T) {
 	repository := repositoryRoot(t)
 	snapshot := realSnapshot(t, repository, true)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
@@ -49,7 +49,7 @@ func TestCheckReproducesAcceptedRealTracerWithoutWritingRepository(t *testing.T)
 	if before != after {
 		t.Fatal("Check modified repository bundle state")
 	}
-	wantCounts := Counts{Resources: 23, Files: 45, Modified: 5, Discoveries: 15}
+	wantCounts := Counts{Resources: 23, Files: 45, Discoveries: 15}
 	if !reflect.DeepEqual(plan.Counts, wantCounts) {
 		t.Fatalf("counts = %#v, want %#v", plan.Counts, wantCounts)
 	}
@@ -59,21 +59,8 @@ func TestCheckReproducesAcceptedRealTracerWithoutWritingRepository(t *testing.T)
 	if !reflect.DeepEqual(plan.Discoveries, acceptedDiscoveries) {
 		t.Fatalf("discoveries = %#v", plan.Discoveries)
 	}
-	wantChanges := []string{
-		"bundle/skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md",
-		"bundle/skills/engineering/setup-matt-pocock-skills/issue-tracker-gitlab.md",
-		"bundle/skills/engineering/setup-matt-pocock-skills/issue-tracker-local.md",
-		"bundle/skills/engineering/to-tickets/SKILL.md",
-		"bundle/skills/engineering/wayfinder/SKILL.md",
-	}
-	var gotChanges []string
-	for _, change := range plan.Changes {
-		if change.Kind == "file-modified" {
-			gotChanges = append(gotChanges, change.Path)
-		}
-	}
-	if !reflect.DeepEqual(gotChanges, wantChanges) {
-		t.Fatalf("modified paths = %#v", gotChanges)
+	if len(plan.Blockers) != 1 || !strings.Contains(plan.Blockers[0], "production provenance lock is absent") {
+		t.Fatalf("migration blockers = %#v", plan.Blockers)
 	}
 	if !plan.LegacyEvidence {
 		t.Fatal("legacy root lock should be reported only as evidence")
@@ -89,6 +76,140 @@ func TestCheckReproducesAcceptedRealTracerWithoutWritingRepository(t *testing.T)
 	if repeated.PlanID != plan.PlanID || repeated.Human() != plan.Human() {
 		t.Fatal("identical inputs did not produce an identical canonical plan")
 	}
+}
+
+func TestCheckFailsClosedWhenMajorMigrationEvidenceIsMissing(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	copyRoot := t.TempDir()
+	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	if err := os.Remove(filepath.Join(copyRoot, "bundle", "compatibility", "matty", "1.0.0-to-2.0.0.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	assertBlocker(t, plan, "compatibility evidence is missing")
+}
+
+func TestCheckFailsClosedWhenMajorMigrationEvidenceIsIncomplete(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	copyRoot := t.TempDir()
+	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	mutateCompatibilityEvidence(t, copyRoot, func(evidence map[string]any) {
+		migration := evidence["migration"].(map[string]any)
+		files := migration["divergent_files"].([]any)
+		migration["divergent_files"] = files[:len(files)-1]
+	})
+
+	plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	assertBlocker(t, plan, "divergent-file mapping")
+}
+
+func TestCheckFailsClosedWhenAcceptedMigrationHistoryIsMissing(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	copyRoot := t.TempDir()
+	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	if err := os.RemoveAll(filepath.Join(copyRoot, "bundle", "history", "matty", "1.0.0")); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	assertBlocker(t, plan, "accepted compatibility history is missing")
+}
+
+func TestCheckRejectsCoordinatedReplacementEvidenceAndInstructionDrift(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	copyRoot := t.TempDir()
+	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	mutateCompatibilityEvidence(t, copyRoot, func(evidence map[string]any) {
+		rule := evidence["migration"].(map[string]any)["replacement_rules"].([]any)[0].(map[string]any)
+		rule["semantics"] = "Use arbitrary replacement vocabulary."
+	})
+	instruction := filepath.Join(copyRoot, "bundle", "instructions", "matty-workflow-conventions.md")
+	writeFile(t, instruction, strings.Replace(string(mustReadFile(t, instruction)), "Use **Specs and tickets** as the workflow vocabulary.", "Use arbitrary replacement vocabulary.", 1))
+
+	plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	assertBlocker(t, plan, "trusted digest")
+}
+
+func TestCheckFailsClosedWhenMajorMigrationEvidenceOrReplacementSemanticsDrift(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   string
+	}{
+		{name: "classification", want: "human major classification", mutate: func(t *testing.T, root string) {
+			mutateCompatibilityEvidence(t, root, func(evidence map[string]any) { evidence["classification"].(map[string]any)["level"] = "minor" })
+		}},
+		{name: "replacement semantics", want: "replacement semantics", mutate: func(t *testing.T, root string) {
+			mutateCompatibilityEvidence(t, root, func(evidence map[string]any) {
+				evidence["migration"].(map[string]any)["replacement_rules"].([]any)[0].(map[string]any)["semantics"] = ""
+			})
+		}},
+		{name: "instruction bytes", want: "replacement semantics", mutate: func(t *testing.T, root string) {
+			name := filepath.Join(root, "bundle", "instructions", "matty-workflow-conventions.md")
+			writeFile(t, name, strings.Replace(string(mustReadFile(t, name)), "Specs and tickets", "PRDs and issues", 2))
+		}},
+		{name: "historical artifact hash", want: "historical-artifact hash", mutate: func(t *testing.T, root string) {
+			name := filepath.Join(root, "bundle", "history", "matty", "1.0.0", "artifact.json")
+			writeFile(t, name, string(mustReadFile(t, name))+" ")
+		}},
+		{name: "selection evidence", want: "selection evidence", mutate: func(t *testing.T, root string) {
+			mutateCompatibilityEvidence(t, root, func(evidence map[string]any) {
+				selection := evidence["selection"].(map[string]any)
+				bindings := selection["bindings"].([]any)
+				selection["bindings"] = bindings[:len(bindings)-1]
+			})
+		}},
+		{name: "upstream provenance claim", want: "must not claim upstream provenance", mutate: func(t *testing.T, root string) {
+			mutateCompatibilityEvidence(t, root, func(evidence map[string]any) { evidence["claims_upstream_provenance"] = true })
+		}},
+		{name: "source lock replacement", want: "replace the source lock", mutate: func(t *testing.T, root string) {
+			mutateCompatibilityEvidence(t, root, func(evidence map[string]any) { evidence["replaces_source_lock"] = true })
+		}},
+		{name: "configured selection", want: "selection evidence", mutate: func(t *testing.T, root string) {
+			name := filepath.Join(root, "bundle", "sources.json")
+			var config map[string]any
+			if err := json.Unmarshal(mustReadFile(t, name), &config); err != nil {
+				t.Fatal(err)
+			}
+			resources := config["sources"].([]any)[0].(map[string]any)["resources"].([]any)
+			config["sources"].([]any)[0].(map[string]any)["resources"] = resources[:len(resources)-1]
+			writeJSON(t, name, config)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			copyRoot := t.TempDir()
+			copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+			writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+			test.mutate(t, copyRoot)
+			plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+			assertBlocker(t, plan, test.want)
+		})
+	}
+}
+
+func TestCheckFailsClosedWhenRestoredSelectedByteDrifts(t *testing.T) {
+	repository := repositoryRoot(t)
+	snapshot := realSnapshot(t, repository, true)
+	copyRoot := t.TempDir()
+	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
+	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	name := filepath.Join(copyRoot, "bundle", "skills", "engineering", "wayfinder", "SKILL.md")
+	writeFile(t, name, string(mustReadFile(t, name))+"drift\n")
+
+	plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	assertBlocker(t, plan, "bootstrap selected bytes differ from the exact candidate")
 }
 
 func TestByteIdenticalBootstrapIsSealedAndOneByteInvalidatesIt(t *testing.T) {
@@ -640,6 +761,21 @@ func writeJSON(t *testing.T, name string, value any) {
 	writeFile(t, name, string(data)+"\n")
 }
 
+func mutateCompatibilityEvidence(t *testing.T, repository string, mutate func(map[string]any)) {
+	t.Helper()
+	name := filepath.Join(repository, "bundle", "compatibility", "matty", "1.0.0-to-2.0.0.json")
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal(data, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	mutate(evidence)
+	writeJSON(t, name, evidence)
+}
+
 func writeFile(t *testing.T, name, value string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
@@ -648,6 +784,15 @@ func writeFile(t *testing.T, name, value string) {
 	if err := os.WriteFile(name, []byte(value), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustReadFile(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func copyTree(t *testing.T, source, destination string) {
