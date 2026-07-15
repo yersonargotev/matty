@@ -14,6 +14,7 @@ type StatusRequest struct {
 type IntentStatus struct {
 	Active   bool
 	Revision int
+	Version  string
 }
 
 type AttemptStatus struct {
@@ -63,6 +64,7 @@ type StatusEntry struct {
 	Surface             Surface
 	Intent              IntentStatus
 	IntentPresent       bool
+	UpdateAvailable     bool
 	LatestAttempt       *AttemptStatus
 	Readiness           ReadinessStatus
 	ReadinessObserved   ReadinessObservationStatus
@@ -88,6 +90,11 @@ type Facade struct {
 }
 
 func NewFacade(catalog Catalog, options ...FacadeOption) Facade {
+	// Package tests use in-memory catalogs to isolate lifecycle policy from
+	// filesystem provenance. Discover always supplies a bundle root in runtime.
+	if catalog.bundleRoot == "" && len(catalog.packs) > 0 {
+		catalog.allowSyntheticHistory = true
+	}
 	facade := Facade{catalog: catalog}
 	for _, option := range options {
 		option(&facade)
@@ -141,13 +148,31 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 		return StatusEntry{}, err
 	}
 	entry := StatusEntry{Pack: pack, Surface: surface}
+	evidencePack := pack
 	if intent, ok := intentForPack(state, pack.ID, surface); ok {
-		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
+		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision, Version: intent.Version}
 		entry.IntentPresent = true
+		entry.UpdateAvailable = intent.Active && intent.Version != pack.Version
+		if intent.Active {
+			evidencePack, err = f.catalog.resolveIntentPack(intent.PackID, intent.Version)
+			if err != nil {
+				return StatusEntry{}, err
+			}
+		} else if evidencePack, err = f.catalog.Show(pack.ID); err != nil {
+			return StatusEntry{}, err
+		}
+	} else if evidencePack, err = f.catalog.Show(pack.ID); err != nil {
+		return StatusEntry{}, err
 	}
 	entry.LatestAttempt = latestAttemptStatus(state, pack.ID, surface)
-	surfaceComposition := f.compose(pack, state, surface)
-	relevantPack := f.statusEvidencePack(pack, surface)
+	surfaceComposition, err := f.compose(evidencePack, state, surface, true)
+	if err != nil {
+		return StatusEntry{}, err
+	}
+	relevantPack, err := f.statusEvidencePack(evidencePack, surface)
+	if err != nil {
+		return StatusEntry{}, err
+	}
 	resolutions, err := f.resolveExecutables(ctx, relevantPack)
 	if err != nil {
 		entry.Blockers = append(entry.Blockers, err.Error())
@@ -200,8 +225,12 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 
 // statusEvidencePack excludes unrelated active packs while retaining the
 // requested pack's dependency closure.
-func (f Facade) statusEvidencePack(pack Pack, surface Surface) Pack {
-	return f.compose(pack, ActivationState{}, surface).combinedPack()
+func (f Facade) statusEvidencePack(pack Pack, surface Surface) (Pack, error) {
+	composition, err := f.compose(pack, ActivationState{}, surface, false)
+	if err != nil {
+		return Pack{}, err
+	}
+	return composition.combinedPack(), nil
 }
 
 func deriveProjectionStatus(packID string, observed []ObservedProjection, ownership []ProjectionOwnership, c composition) ([]ProjectionStatus, ProjectionSummary) {

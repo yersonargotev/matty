@@ -501,18 +501,29 @@ func (f Facade) PreviewUpdate(ctx context.Context, request UpdateRequest) (Recon
 
 func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationRequest) (ReconciliationPlan, error) {
 	activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface}
-	requested, adapter, state, err := f.activationInputs(ctx, activation)
+	requested, adapter, state, err := f.activationInputsForOperation(ctx, activation, OperationDeactivate)
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
 	intent, active := intentForPack(state, request.PackID, request.Surface)
 	recovery := recoveryAttempt(state, OperationDeactivate, request.PackID, request.Surface)
+	currentRequested := requested
 	oldVersion := requested.Version
 	if active && intent.Version != "" {
 		oldVersion = intent.Version
+		requested, err = f.catalog.resolveIntentPack(request.PackID, intent.Version)
+		if err != nil {
+			return ReconciliationPlan{}, err
+		}
 	}
-	before := f.compose(requested, state, request.Surface)
-	target, dependents := f.composeWithout(requested, state, request.Surface)
+	before, err := f.compose(requested, state, request.Surface, true)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	target, dependents, err := f.composeWithout(requested, state, request.Surface)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
 	combined := target.combinedPack()
 	resolutions, err := f.resolveExecutables(ctx, before.combinedPack())
 	if err != nil {
@@ -522,7 +533,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	if err != nil {
 		return ReconciliationPlan{}, fmt.Errorf("inspect deactivation of pack %q on %s: %w", requested.ID, request.Surface, err)
 	}
-	plan := ReconciliationPlan{pack: requested, operation: OperationDeactivate, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, contributors: target.contributors, compositionFacts: target.packs, beforeCompositionFacts: before.packs, intentFacts: target.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), activeDependents: dependents, removedContributors: map[string]string{}}
+	plan := ReconciliationPlan{pack: currentRequested, operation: OperationDeactivate, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, contributors: target.contributors, compositionFacts: target.packs, beforeCompositionFacts: before.packs, intentFacts: target.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), activeDependents: dependents, removedContributors: map[string]string{}}
 	for id, contributors := range before.contributors {
 		for _, contributor := range contributors {
 			if contributor == requested.ID {
@@ -590,11 +601,23 @@ func hasContributor(values []ProjectionOwnership, packID string) bool {
 }
 
 func (f Facade) preview(ctx context.Context, request ActivationRequest, operation Operation, oldVersion string) (ReconciliationPlan, error) {
-	requested, adapter, state, err := f.activationInputs(ctx, request)
+	requested, adapter, state, err := f.activationInputsForOperation(ctx, request, operation)
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
-	composition := f.compose(requested, state, request.Surface)
+	useRequestedIntent := operation == OperationReconcile
+	composition, err := f.compose(requested, state, request.Surface, useRequestedIntent)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	var beforeCompositionFacts []Pack
+	if operation == OperationUpdate && hasTrustedHistoricalArtifact(requested.ID, oldVersion) {
+		before, err := f.compose(requested, state, request.Surface, true)
+		if err != nil {
+			return ReconciliationPlan{}, err
+		}
+		beforeCompositionFacts = before.packs
+	}
 	pack := composition.combinedPack()
 	resolutions, err := f.resolveExecutables(ctx, pack)
 	if err != nil {
@@ -623,7 +646,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 				continue
 			}
 			if managedDrift {
-				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to catalog-current content: " + projection.Action.Description
+				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to intent-selected content: " + projection.Action.Description
 			}
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				destructiveActions = append(destructiveActions, projection.Action)
@@ -651,7 +674,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	}
 	pendingHumanActions := append([]string(nil), observation.PendingHumanActions...)
 	sort.Strings(pendingHumanActions)
-	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership)}
+	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), beforeCompositionFacts: beforeCompositionFacts}
 	recovery := recoveryAttempt(state, operation, request.PackID, request.Surface)
 	plan.attachRecovery(state, recovery)
 	for _, resource := range pack.Resources {
@@ -751,7 +774,11 @@ func (f Facade) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	if request.Plan.operation != OperationReconcile && !request.Plan.recovery {
 		previousIntents := activeIntents(state)
 		activeTarget := request.Plan.operation != OperationDeactivate
-		state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: pack.Version, Active: activeTarget, Revision: state.Intent.Revision + 1}
+		targetVersion := pack.Version
+		if request.Plan.operation == OperationDeactivate && request.Plan.oldVersion != "" {
+			targetVersion = request.Plan.oldVersion
+		}
+		state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: targetVersion, Active: activeTarget, Revision: state.Intent.Revision + 1}
 		byID := map[string]ActivationIntent{}
 		for _, intent := range previousIntents {
 			byID[intent.PackID] = intent
@@ -1013,9 +1040,21 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or manifest changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
 	}
 	f.catalog = freshCatalog
-	pack, adapter, state, err := f.activationInputs(ctx, ActivationRequest{PackID: plan.pack.ID, Surface: plan.surface})
+	pack, adapter, state, err := f.activationInputsForOperation(ctx, ActivationRequest{PackID: plan.pack.ID, Surface: plan.surface}, plan.operation)
 	if err != nil {
 		return planPreflight{}, err
+	}
+	if digestJSON(pack) != digestJSON(plan.pack) {
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog-current pack changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
+	}
+	if plan.operation == OperationDeactivate {
+		intent, ok := intentForPack(state, plan.pack.ID, plan.surface)
+		if ok && intent.Version != "" {
+			pack, err = f.catalog.resolveIntentPack(intent.PackID, intent.Version)
+			if err != nil {
+				return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("historical artifact changed after Preview: %v; rerun deactivate to preview a fresh plan", err)}
+			}
+		}
 	}
 	if plan.operation == OperationReconcile && state.Intent.Revision != plan.intentRevision {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d; rerun %s to preview a fresh plan", plan.intentRevision, state.Intent.Revision, plan.operation)}
@@ -1026,10 +1065,23 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("recovery attempt history changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
 		}
 	}
-	current := f.compose(pack, state, plan.surface)
+	useRequestedIntent := plan.operation == OperationReconcile || plan.operation == OperationDeactivate
+	current, err := f.compose(pack, state, plan.surface, useRequestedIntent)
+	if err != nil {
+		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or historical artifact changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
+	}
+	if plan.operation == OperationUpdate && len(plan.beforeCompositionFacts) > 0 {
+		before, beforeErr := f.compose(pack, state, plan.surface, true)
+		if beforeErr != nil || digestJSON(before.packs) != digestJSON(plan.beforeCompositionFacts) {
+			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("historical update comparison changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
+		}
+	}
 	if plan.operation == OperationDeactivate {
 		before := current
-		target, dependents := f.composeWithout(pack, state, plan.surface)
+		target, dependents, targetErr := f.composeWithout(pack, state, plan.surface)
+		if targetErr != nil {
+			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("historical deactivation comparison changed after Preview: %v; rerun deactivate to preview a fresh plan", targetErr)}
+		}
 		if digestJSON(before.packs) != digestJSON(plan.beforeCompositionFacts) || digestJSON(dependents) != digestJSON(plan.activeDependents) {
 			return planPreflight{}, StalePlanError{Precondition: "dependency closure or active dependents changed after Preview; rerun deactivate to preview a fresh plan"}
 		}
@@ -1081,13 +1133,17 @@ func appendCompleted(completed []string, id string) []string {
 }
 
 func (f Facade) activationInputs(ctx context.Context, request ActivationRequest) (Pack, SurfaceAdapter, ActivationState, error) {
+	return f.activationInputsForOperation(ctx, request, OperationActivate)
+}
+
+func (f Facade) activationInputsForOperation(ctx context.Context, request ActivationRequest, operation Operation) (Pack, SurfaceAdapter, ActivationState, error) {
 	if f.activation == nil || f.activation.store == nil {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation is not configured")
 	}
 	if request.Surface != SurfaceCodex && request.Surface != SurfaceOpenCode {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation does not support CLI surface %q", request.Surface)
 	}
-	pack, err := f.catalog.Show(request.PackID)
+	pack, err := f.catalog.catalogMetadata(request.PackID)
 	if err != nil {
 		return Pack{}, nil, ActivationState{}, err
 	}
@@ -1096,7 +1152,18 @@ func (f Facade) activationInputs(ctx context.Context, request ActivationRequest)
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("no activation adapter configured for CLI surface %q", request.Surface)
 	}
 	state, err := f.activation.store.Load(ctx, request.Surface)
-	return pack, adapter, state, err
+	if err != nil {
+		return Pack{}, nil, ActivationState{}, err
+	}
+	intent, hasIntent := intentForPack(state, request.PackID, request.Surface)
+	usesHistory := (operation == OperationReconcile || operation == OperationDeactivate) && hasIntent && intent.Active && hasTrustedHistoricalArtifact(intent.PackID, intent.Version)
+	if !usesHistory {
+		pack, err = f.catalog.Show(request.PackID)
+		if err != nil {
+			return Pack{}, nil, ActivationState{}, err
+		}
+	}
+	return pack, adapter, state, nil
 }
 
 func (p *ReconciliationPlan) seal() {

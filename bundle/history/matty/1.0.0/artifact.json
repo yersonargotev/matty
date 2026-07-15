@@ -1,0 +1,482 @@
+{
+  "schema_version": 1,
+  "pack_id": "matty",
+  "pack_version": "1.0.0",
+  "manifest": {
+    "path": "pack.json",
+    "size": 2950,
+    "mode": 420,
+    "sha256": "e0167e7193b3967f57a162e23fe7971547fac5c439bff55a270bec9c8b917bbd"
+  },
+  "resources": [
+    {
+      "kind": "skill",
+      "id": "ask-matt",
+      "source": "skills/engineering/ask-matt",
+      "files": [
+        {
+          "path": "skills/engineering/ask-matt/SKILL.md",
+          "size": 7814,
+          "mode": 420,
+          "sha256": "b7dbb3249695841cf28f87555acc77dc630dafba0f1d544ecce252ff63b0933e"
+        }
+      ],
+      "sha256": "a2811e8a4faab686f6ea2f02a0f60e38e48218c2aa2510bca6389dc396808c94"
+    },
+    {
+      "kind": "skill",
+      "id": "code-review",
+      "source": "skills/engineering/code-review",
+      "files": [
+        {
+          "path": "skills/engineering/code-review/SKILL.md",
+          "size": 6740,
+          "mode": 420,
+          "sha256": "6a65cc61114f96db07ec41e3920e67c9c5bf70dd6e0901eb9460ebcb2bdc209f"
+        }
+      ],
+      "sha256": "1275f10e13c31c5cc7e3ffc21376542786044af5da0ea44337552eaca32faa56"
+    },
+    {
+      "kind": "skill",
+      "id": "codebase-design",
+      "source": "skills/engineering/codebase-design",
+      "files": [
+        {
+          "path": "skills/engineering/codebase-design/DEEPENING.md",
+          "size": 2559,
+          "mode": 420,
+          "sha256": "125e6b77413ad2bc7cf7a772bc74336d580a50f9e797db2178ed133d62333d06"
+        },
+        {
+          "path": "skills/engineering/codebase-design/DESIGN-IT-TWICE.md",
+          "size": 2712,
+          "mode": 420,
+          "sha256": "21c3264953bd30ee87b181a3ccaf0e70649f461e5ffd7dc654acee4ba1788b31"
+        },
+        {
+          "path": "skills/engineering/codebase-design/SKILL.md",
+          "size": 6488,
+          "mode": 420,
+          "sha256": "a8d50abac5a4018f60e1d911d4b6f4e36454ca14d6c390c0695a578c7de65dad"
+        }
+      ],
+      "sha256": "df475d3f447dd7d2030c275d038da3f7f4a2070975114bb9914890d55ddb9e07"
+    },
+    {
+      "kind": "skill",
+      "id": "diagnosing-bugs",
+      "source": "skills/engineering/diagnosing-bugs",
+      "files": [
+        {
+          "path": "skills/engineering/diagnosing-bugs/SKILL.md",
+          "size": 8536,
+          "mode": 420,
+          "sha256": "7a0779480f323a66d109404646bcc1a14bf0232b45b3e3ea93b652a035718acb"
+        },
+        {
+          "path": "skills/engineering/diagnosing-bugs/scripts/hitl-loop.template.sh",
+          "size": 1164,
+          "mode": 420,
+          "sha256": "b2932630950e5210075bcd6f850e5accf30c101c5367b29eac3a29b4dd8084c8"
+        }
+      ],
+      "sha256": "63be53f4b247f914f4c9eac09a9dfce91c0f91ee37b0dc7cf1e682b28770cb5a"
+    },
+    {
+      "kind": "skill",
+      "id": "domain-modeling",
+      "source": "skills/engineering/domain-modeling",
+      "files": [
+        {
+          "path": "skills/engineering/domain-modeling/ADR-FORMAT.md",
+          "size": 2766,
+          "mode": 420,
+          "sha256": "f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2"
+        },
+        {
+          "path": "skills/engineering/domain-modeling/CONTEXT-FORMAT.md",
+          "size": 2299,
+          "mode": 420,
+          "sha256": "b8cc318f2a4285b530e908b6bc43901c3c5cd11100362636bbc4216639bef597"
+        },
+        {
+          "path": "skills/engineering/domain-modeling/SKILL.md",
+          "size": 3427,
+          "mode": 420,
+          "sha256": "152e2c97239affb12a60c5f4a7e74ab546a49ae169688c81f4e2ccc42dafa579"
+        }
+      ],
+      "sha256": "b2214c6021eba9bd72e176a5bc649307ec9dc79d661140b826c83b48cac10240"
+    },
+    {
+      "kind": "skill",
+      "id": "grill-with-docs",
+      "source": "skills/engineering/grill-with-docs",
+      "files": [
+        {
+          "path": "skills/engineering/grill-with-docs/SKILL.md",
+          "size": 245,
+          "mode": 420,
+          "sha256": "610d091047bcfb9db0f75c057d15538481a721111579fc5ec7f83ad9131a2165"
+        }
+      ],
+      "sha256": "5d04bb6c10d4601dd6a808db9cebff1b53912cafaa67ab84456832a436681529"
+    },
+    {
+      "kind": "skill",
+      "id": "implement",
+      "source": "skills/engineering/implement",
+      "files": [
+        {
+          "path": "skills/engineering/implement/SKILL.md",
+          "size": 433,
+          "mode": 420,
+          "sha256": "6d3fd9e83b8f36e5213854779db49b256a457a7ebb4a503e53fa7dcff696adc3"
+        }
+      ],
+      "sha256": "c4dd84b8c6fa3a0b648aa156dd7f509fa11a4280f4794096afc3a12d0dab491a"
+    },
+    {
+      "kind": "skill",
+      "id": "improve-codebase-architecture",
+      "source": "skills/engineering/improve-codebase-architecture",
+      "files": [
+        {
+          "path": "skills/engineering/improve-codebase-architecture/HTML-REPORT.md",
+          "size": 6685,
+          "mode": 420,
+          "sha256": "0b0936104158abeef7246ff6cbabefa4dc055f17589f2833f2d93001421910a1"
+        },
+        {
+          "path": "skills/engineering/improve-codebase-architecture/SKILL.md",
+          "size": 5421,
+          "mode": 420,
+          "sha256": "0026900866ed2a542af0559cef11dd7ae707633b75cc6f668c2e7c0a33e35032"
+        }
+      ],
+      "sha256": "f539bbdd3f0b7a5d37f8ebe9b71f6a9af6023f192114f07d6230914bb0980530"
+    },
+    {
+      "kind": "skill",
+      "id": "prototype",
+      "source": "skills/engineering/prototype",
+      "files": [
+        {
+          "path": "skills/engineering/prototype/LOGIC.md",
+          "size": 5594,
+          "mode": 420,
+          "sha256": "da91dc92195c00d5dc33863b8c1a030998025a0f8583ebf2babd770825b7f70c"
+        },
+        {
+          "path": "skills/engineering/prototype/SKILL.md",
+          "size": 3002,
+          "mode": 420,
+          "sha256": "efa2a92a2f0f8e7d9d0ecb0cfc65ffd5748c73fa3a25fe164e1c8f426938fb52"
+        },
+        {
+          "path": "skills/engineering/prototype/UI.md",
+          "size": 6789,
+          "mode": 420,
+          "sha256": "d76d565149ee50456c5ddc5e29c27fec8737637874fe5c37d970db085a200b27"
+        }
+      ],
+      "sha256": "b259516f9098b1b9e9cac255b9628e6093014e80dd966ef8cff95ce6380249b5"
+    },
+    {
+      "kind": "skill",
+      "id": "research",
+      "source": "skills/engineering/research",
+      "files": [
+        {
+          "path": "skills/engineering/research/SKILL.md",
+          "size": 799,
+          "mode": 420,
+          "sha256": "af378829f015775a3bcd65ff466826722e99359017ae6bae227ca4c9bd14049c"
+        }
+      ],
+      "sha256": "812244cee147eb5d745456aabda4157dbdf5948db899a1bf8687c33e6385c9d0"
+    },
+    {
+      "kind": "skill",
+      "id": "resolving-merge-conflicts",
+      "source": "skills/engineering/resolving-merge-conflicts",
+      "files": [
+        {
+          "path": "skills/engineering/resolving-merge-conflicts/SKILL.md",
+          "size": 921,
+          "mode": 420,
+          "sha256": "c7c9ba81362a786aac05d2223123bf1bd2f8a99c3243a72882ede9c68bedfb24"
+        }
+      ],
+      "sha256": "34ba35b00b707c88bb4c031bf72a98e3b224a49cd2c9f0f88468e1e271bfc62a"
+    },
+    {
+      "kind": "skill",
+      "id": "setup-matt-pocock-skills",
+      "source": "skills/engineering/setup-matt-pocock-skills",
+      "files": [
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+          "size": 7309,
+          "mode": 420,
+          "sha256": "8cd1fa43ff89492320404e5b18fb06d9488256be5dffc291ff038fc98bb98fb9"
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/domain.md",
+          "size": 2045,
+          "mode": 420,
+          "sha256": "25be404b58798b3cb2d51c93dba2ab052fc3a425632185726ac3f5fcff193b99"
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md",
+          "size": 3747,
+          "mode": 420,
+          "sha256": "273c1d57c36426d80df362b20288d8575d3d9ba5aeb7334bd4c966cd73eae863"
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+          "size": 3828,
+          "mode": 420,
+          "sha256": "07fc81c40f529e5574f1d9cc20bb6196679efe910c66ffc3217d4ed65031c1e3"
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-local.md",
+          "size": 1815,
+          "mode": 420,
+          "sha256": "1ad2ce603d6bdb7b8db99417a8e1b4b8a32837369a87d525fec696d12322fcad"
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/triage-labels.md",
+          "size": 1045,
+          "mode": 420,
+          "sha256": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d"
+        }
+      ],
+      "sha256": "3b611946f8c56334a54d09172523840395f28511b81b863a4cb50f0c22003f21"
+    },
+    {
+      "kind": "skill",
+      "id": "tdd",
+      "source": "skills/engineering/tdd",
+      "files": [
+        {
+          "path": "skills/engineering/tdd/SKILL.md",
+          "size": 3213,
+          "mode": 420,
+          "sha256": "5363bb2775679fe9311fbb67947f95359169c6e7f1fac77c0f25e190bca6cf2f"
+        },
+        {
+          "path": "skills/engineering/tdd/mocking.md",
+          "size": 1481,
+          "mode": 420,
+          "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef"
+        },
+        {
+          "path": "skills/engineering/tdd/tests.md",
+          "size": 2214,
+          "mode": 420,
+          "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a"
+        }
+      ],
+      "sha256": "2d72e2001bbe426d82330b59ccde763c15b83667120e510c2d79a8b5f3368919"
+    },
+    {
+      "kind": "skill",
+      "id": "to-spec",
+      "source": "skills/engineering/to-spec",
+      "files": [
+        {
+          "path": "skills/engineering/to-spec/SKILL.md",
+          "size": 3073,
+          "mode": 420,
+          "sha256": "267638edd513b5918de626ad5605d261952abb7428cb308869c663ca924e93e7"
+        }
+      ],
+      "sha256": "73525197c9098f0411d184a5ae7351cff7f3d5ec8d0fab39ebba7a2358e23553"
+    },
+    {
+      "kind": "skill",
+      "id": "to-tickets",
+      "source": "skills/engineering/to-tickets",
+      "files": [
+        {
+          "path": "skills/engineering/to-tickets/SKILL.md",
+          "size": 5795,
+          "mode": 420,
+          "sha256": "87376aa0b0e0f2e5bcfe51d8686b27637bfe0a42ba6430943602dc3f14c20823"
+        }
+      ],
+      "sha256": "8f722a9c2501b7bdbe1d8c591c034e60429fce96c8df9990b46a4daad4f45b57"
+    },
+    {
+      "kind": "skill",
+      "id": "triage",
+      "source": "skills/engineering/triage",
+      "files": [
+        {
+          "path": "skills/engineering/triage/AGENT-BRIEF.md",
+          "size": 7972,
+          "mode": 420,
+          "sha256": "5b78d347cc53f6bcf7b875106005ccf5315055fa4cf75eb28d41e96ee426d27b"
+        },
+        {
+          "path": "skills/engineering/triage/OUT-OF-SCOPE.md",
+          "size": 4712,
+          "mode": 420,
+          "sha256": "2526f998fd7ca5e956d3f6f234bcc2431a5971ee769f1148ddc60b92f04d5914"
+        },
+        {
+          "path": "skills/engineering/triage/SKILL.md",
+          "size": 6574,
+          "mode": 420,
+          "sha256": "d45827c299c021f77b0f146fefa3ee679b13f99e9a2ffdf48e8de2347adeefe1"
+        }
+      ],
+      "sha256": "ae166ac62b01fdd354411175492dc806e8a0190e08d591aa00848db3afe64e17"
+    },
+    {
+      "kind": "skill",
+      "id": "wayfinder",
+      "source": "skills/engineering/wayfinder",
+      "files": [
+        {
+          "path": "skills/engineering/wayfinder/SKILL.md",
+          "size": 11823,
+          "mode": 420,
+          "sha256": "6ea93ad3760821ca8f21e8d5f2c7eeb2a812eb8c4d7ed6349494787fc5e7f522"
+        }
+      ],
+      "sha256": "fc539b07782f8a3070fad031aa432ed1b464ad85b7eaff33fcebcfe09ffb9a6f"
+    },
+    {
+      "kind": "skill",
+      "id": "loop-me",
+      "source": "skills/in-progress/loop-me",
+      "files": [
+        {
+          "path": "skills/in-progress/loop-me/SKILL.md",
+          "size": 2552,
+          "mode": 420,
+          "sha256": "2b2c725f8b6e8b8f3f6e6bc2c18f0cf3ab029a270b5ac23132fbebdeb6b443aa"
+        }
+      ],
+      "sha256": "4613f5afe0e0292d88c0a594ab8567bca1d86b3b4ae6b418059d9f00b7d4a367"
+    },
+    {
+      "kind": "skill",
+      "id": "grill-me",
+      "source": "skills/productivity/grill-me",
+      "files": [
+        {
+          "path": "skills/productivity/grill-me/SKILL.md",
+          "size": 147,
+          "mode": 420,
+          "sha256": "6189dfceb7304a6e5558f75d87e68fa3bc7fcf7ba120e44f21f8a61fe01eba54"
+        }
+      ],
+      "sha256": "f7eb329820296c8ad5bb604873966168551433fde5662555c6bf44ff341637e4"
+    },
+    {
+      "kind": "skill",
+      "id": "grilling",
+      "source": "skills/productivity/grilling",
+      "files": [
+        {
+          "path": "skills/productivity/grilling/SKILL.md",
+          "size": 821,
+          "mode": 420,
+          "sha256": "5a35925d03a391bcfa46940868b649b72dba89ec9c19525e785bbb6bd3a7f478"
+        }
+      ],
+      "sha256": "3bb3b5d7e2d81e2c6ab5e7cf80ddd6272ec83e2df58f0418d7693053f42a4016"
+    },
+    {
+      "kind": "skill",
+      "id": "handoff",
+      "source": "skills/productivity/handoff",
+      "files": [
+        {
+          "path": "skills/productivity/handoff/SKILL.md",
+          "size": 879,
+          "mode": 420,
+          "sha256": "57c9f1f392d7352cdc85b1e39ca49eddc70ce1dc278bd9653fb4f23dfc2560fc"
+        }
+      ],
+      "sha256": "07793be3967375d6edf2e2a674e561e15b17caab491c4fedf0d0d86c9d19020c"
+    },
+    {
+      "kind": "skill",
+      "id": "teach",
+      "source": "skills/productivity/teach",
+      "files": [
+        {
+          "path": "skills/productivity/teach/GLOSSARY-FORMAT.md",
+          "size": 2131,
+          "mode": 420,
+          "sha256": "d177def491519d97873291f2e860d8f1d60ead78feecb82eee022177958069c6"
+        },
+        {
+          "path": "skills/productivity/teach/LEARNING-RECORD-FORMAT.md",
+          "size": 2777,
+          "mode": 420,
+          "sha256": "855f81017625256584bbf62bd5edb9b0c86605c4cc1139c56acc36b802595d17"
+        },
+        {
+          "path": "skills/productivity/teach/MISSION-FORMAT.md",
+          "size": 1553,
+          "mode": 420,
+          "sha256": "8da6d3ac84eb2eb19f17c260b6acf01c560d3ac7a4501c415eea0e985602f4d7"
+        },
+        {
+          "path": "skills/productivity/teach/RESOURCES-FORMAT.md",
+          "size": 1926,
+          "mode": 420,
+          "sha256": "2bc634a64b0d0daa10904f9222e7aa0d361420dfacabbf092fbe3a72222edc08"
+        },
+        {
+          "path": "skills/productivity/teach/SKILL.md",
+          "size": 9507,
+          "mode": 420,
+          "sha256": "6d2dbe5e03084cf26fef66b535127b36cd1bcbe9478e26b0626029cd51dc2259"
+        }
+      ],
+      "sha256": "84e71b2668945b9c68c911247daf25805cdaf6f3784f2302a6bc07f4266208aa"
+    },
+    {
+      "kind": "skill",
+      "id": "writing-great-skills",
+      "source": "skills/productivity/writing-great-skills",
+      "files": [
+        {
+          "path": "skills/productivity/writing-great-skills/GLOSSARY.md",
+          "size": 18488,
+          "mode": 420,
+          "sha256": "cccd684c73fb7a06f523497b0121765f92d2b33d6ef9c51602294849233451d6"
+        },
+        {
+          "path": "skills/productivity/writing-great-skills/SKILL.md",
+          "size": 9414,
+          "mode": 420,
+          "sha256": "4d6ccbc3760b1bd4107c495a79872286ea69494003f3b0a719fc95b147457061"
+        }
+      ],
+      "sha256": "14f1b391ee0758e6fad4f68b5fb6591e64d61128554a31f2c4aa9c00fd9e0f0e"
+    },
+    {
+      "kind": "instruction",
+      "id": "matty-guidance",
+      "source": "instructions/matty-guidance.md",
+      "files": [
+        {
+          "path": "instructions/matty-guidance.md",
+          "size": 103,
+          "mode": 420,
+          "sha256": "3d07c86288aa58dd4989db7dd3d146e705158c374062d7e47a47fb1b55ee6fb7"
+        }
+      ],
+      "sha256": "3b1bce76a1331c7cc7d8394553efe525315fedbd558ab18a82e4904b0512bb97"
+    }
+  ],
+  "aggregate_sha256": "9f19a157532a3ee607938a4ec83a8f0bfc745d60d5fd0101b72c456988f800c0"
+}

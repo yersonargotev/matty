@@ -1101,7 +1101,7 @@ func TestPackUpdateRendersVersionsAndRetainedSharedResourcesOnBothSurfaces(t *te
 		t.Run(surface, func(t *testing.T) {
 			terminal := &fakeTerminal{interactive: true, approve: true}
 			opts, home, _ := packActivationOptions(t, terminal)
-			bundle := writeUpdateBundle(t, "1.0.0")
+			bundle := writeUpdateBundle(t, "1.0.1")
 			opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
 				t.Fatalf("seed activation: %v\n%s", err, out)
@@ -1113,7 +1113,7 @@ func TestPackUpdateRendersVersionsAndRetainedSharedResourcesOnBothSurfaces(t *te
 			if err != nil {
 				t.Fatalf("update dry-run: %v\n%s", err, out)
 			}
-			for _, want := range []string{"Update dry-run plan plan-", "Version: 1.0.0 -> 2.0.0 (catalog-current)", "Intent revision:", "Retained shared projection:", "engram, matty", "no rewrite"} {
+			for _, want := range []string{"Update dry-run plan plan-", "Version: 1.0.1 -> 2.0.0 (catalog-current)", "Intent revision:", "Retained shared projection:", "engram, matty", "no rewrite"} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("missing %q:\n%s", want, out)
 				}
@@ -1145,7 +1145,7 @@ func TestPackUpdateCancellationNonTTYAndStalePlanHaveZeroEffects(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts, home, _ := packActivationOptions(t, &fakeTerminal{interactive: true, approve: true})
-			bundle := writeUpdateBundle(t, "1.0.0")
+			bundle := writeUpdateBundle(t, "1.0.1")
 			opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 			if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex"); err != nil {
 				t.Fatalf("seed: %v\n%s", err, out)
@@ -1174,6 +1174,11 @@ func TestPackUpdateRendersConsolidatedBlockersWithoutPrompts(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _ := packActivationOptions(t, terminal)
 	bundle := writeCompositionBundle(t, false)
+	manifestPath := filepath.Join(bundle, "packs", "matty", "pack.json")
+	manifest := strings.Replace(readFileString(t, manifestPath), `"version":"1.0.0"`, `"version":"1.0.1"`, 1)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 	for _, pack := range []string{"engram", "matty"} {
 		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {
@@ -1181,7 +1186,7 @@ func TestPackUpdateRendersConsolidatedBlockersWithoutPrompts(t *testing.T) {
 		}
 	}
 	blocked := `{"schema_version":1,"id":"matty","version":"2.0.0","provides":[],"requires":{"capabilities":["cap:missing"],"tools":[]},"conflicts":["cap:dep"],"resources":[{"kind":"instruction","id":"matty","source":"instructions/app.md"}]}`
-	if err := os.WriteFile(filepath.Join(bundle, "packs/matty/pack.json"), []byte(blocked), 0600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte(blocked), 0600); err != nil {
 		t.Fatal(err)
 	}
 	prompts := terminal.calls
@@ -1203,7 +1208,7 @@ func TestPackUpdateRendersConsolidatedBlockersWithoutPrompts(t *testing.T) {
 func TestPackUpdateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _ := packActivationOptions(t, terminal)
-	bundle := writeUpdateBundle(t, "1.0.0")
+	bundle := writeUpdateBundle(t, "1.0.1")
 	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 	for _, surface := range []string{"codex", "opencode"} {
 		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", surface); err != nil {
@@ -1221,13 +1226,13 @@ func TestPackUpdateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *testi
 		t.Fatal("Codex update mutated OpenCode configuration")
 	}
 	state := readFileString(t, statePath)
-	if !strings.Contains(state, `"version": "2.0.0"`) || !strings.Contains(state, `"version": "1.0.0"`) || !strings.Contains(state, `"surface": "opencode"`) {
+	if !strings.Contains(state, `"version": "2.0.0"`) || !strings.Contains(state, `"version": "1.0.1"`) || !strings.Contains(state, `"surface": "opencode"`) {
 		t.Fatalf("surface intents were not independent:\n%s", state)
 	}
 	if got := ownershipForSurface(t, statePath, "opencode"); got != openCodeOwnership {
 		t.Fatalf("Codex update mutated OpenCode ownership:\nbefore=%s\nafter=%s", openCodeOwnership, got)
 	}
-	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "opencode", "--dry-run"); err != nil || !strings.Contains(out, "Version: 1.0.0 -> 2.0.0") {
+	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", "matty", "--surface", "opencode", "--dry-run"); err != nil || !strings.Contains(out, "Version: 1.0.1 -> 2.0.0") {
 		t.Fatalf("OpenCode intent was unexpectedly changed: %v\n%s", err, out)
 	}
 }
@@ -1322,6 +1327,36 @@ func copyPackBundleForUpdate(t *testing.T, repoRoot string) string {
 		}
 	}
 	return root
+}
+
+func TestRuntimePackCompositionCanLoadHistoryWhenCurrentResourceIsMissing(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := copyPackBundleForUpdate(t, repoRoot)
+	if err := os.CopyFS(filepath.Join(bundle, "history"), os.DirFS(filepath.Join(repoRoot, "bundle", "history"))); err != nil {
+		t.Fatal(err)
+	}
+	writeUpdateManifest(t, bundle, "2.0.0")
+	if err := os.Remove(filepath.Join(bundle, "instructions", "matty-guidance.md")); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	opts := Options{Env: MapEnv{
+		"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg"), "PATH": "",
+		"MATTY_SKILLS_SOURCE": filepath.Join(bundle, "skills"),
+	}, Runner: &fakeRunner{}, Terminal: &fakeTerminal{}}.withDefaults()
+	composition, err := resolvePackComposition(opts, newWorkstationResolver(opts))
+	if err != nil {
+		t.Fatalf("runtime composition still required catalog-current resource bytes: %v", err)
+	}
+	if _, err := composition.catalog.Show("matty"); err == nil {
+		t.Fatal("fresh catalog-current selection ignored the missing resource")
+	}
+	if _, err := composition.catalog.ListCurrent(); err == nil {
+		t.Fatal("catalog-current listing advertised a pack with a missing resource")
+	}
 }
 
 func writeUpdateBundle(t *testing.T, version string) string {
@@ -1475,7 +1510,7 @@ func TestPackDeactivateRendersRemovedAndRetainedSharedContributors(t *testing.T)
 		t.Run(surface, func(t *testing.T) {
 			terminal := &fakeTerminal{interactive: true, approve: true}
 			opts, home, _ := packActivationOptions(t, terminal)
-			bundle := writeUpdateBundle(t, "1.0.0")
+			bundle := writeUpdateBundle(t, "1.0.1")
 			opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 			for _, pack := range []string{"engram", "matty"} {
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", surface); err != nil {
@@ -1539,7 +1574,7 @@ func TestPackDeactivateKeepsOtherSurfaceIntentOwnershipAndConfigIndependent(t *t
 func TestPackReconcileTargetedAndSurfaceWideRenderSealedDesiredState(t *testing.T) {
 	terminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, _ := packActivationOptions(t, terminal)
-	bundle := writeUpdateBundle(t, "1.0.0")
+	bundle := writeUpdateBundle(t, "1.0.1")
 	opts.Env.(MapEnv)["MATTY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 	for _, pack := range []string{"engram", "matty"} {
 		if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", pack, "--surface", "codex"); err != nil {

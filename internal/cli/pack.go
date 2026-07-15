@@ -433,21 +433,38 @@ func renderPackStatusOverview(cmd *cobra.Command, report capabilitypack.StatusRe
 	fmt.Fprintln(writer, "PACK\tSURFACE\tINTENT\tATTEMPT\tCONFIGURED\tAUTHORIZED\tUSABLE\tACTION")
 	for _, entry := range report.Entries {
 		configured, authorized, usable := yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable)
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", entry.Pack.ID, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), configured, authorized, usable, renderPendingAction(entry.PendingHumanActions))
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", entry.Pack.ID, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), configured, authorized, usable, renderStatusAction(entry))
 	}
 	return writer.Flush()
 }
 
 func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry) error {
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence))
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nUpdate available: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderUpdateAvailability(entry), renderAttempt(entry.LatestAttempt), yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence))
 	return err
+}
+
+func renderStatusAction(entry capabilitypack.StatusEntry) string {
+	if entry.UpdateAvailable {
+		return "update to " + entry.Pack.Version
+	}
+	return renderPendingAction(entry.PendingHumanActions)
+}
+
+func renderUpdateAvailability(entry capabilitypack.StatusEntry) string {
+	if !entry.UpdateAvailable {
+		return "no"
+	}
+	return fmt.Sprintf("yes (%s -> %s)", entry.Intent.Version, entry.Pack.Version)
 }
 
 func renderIntent(intent capabilitypack.IntentStatus) string {
 	if !intent.Active {
 		return "inactive"
 	}
-	return fmt.Sprintf("active at revision %d", intent.Revision)
+	if intent.Version == "" {
+		return fmt.Sprintf("active at revision %d", intent.Revision)
+	}
+	return fmt.Sprintf("active at version %s, revision %d", intent.Version, intent.Revision)
 }
 
 func renderAttempt(attempt *capabilitypack.AttemptStatus) string {
@@ -482,9 +499,13 @@ func newPackListCommand(opts Options, workstationResolver *workstation.Resolver)
 			if err != nil {
 				return err
 			}
+			packs, err := catalog.ListCurrent()
+			if err != nil {
+				return err
+			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(writer, "PACK\tVERSION\tDESCRIPTION\tAVAILABLE ON")
-			for _, pack := range catalog.List() {
+			for _, pack := range packs {
 				surfaces := make([]string, len(pack.Surfaces))
 				for i, surface := range pack.Surfaces {
 					surfaces[i] = string(surface)
@@ -539,7 +560,7 @@ func resolvePackComposition(opts Options, workstationResolver *workstation.Resol
 		return packComposition{}, err
 	}
 	bundleRoot := skillbundle.BundleRoot(sources.skills.Root)
-	catalog, err := capabilitypack.Discover(bundleRoot)
+	catalog, err := capabilitypack.DiscoverForDurableIntents(bundleRoot)
 	if err != nil {
 		return packComposition{}, err
 	}
