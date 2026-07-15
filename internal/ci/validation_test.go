@@ -31,24 +31,6 @@ var mattyOwnedPackages = []string{
 	"./internal/workstation",
 }
 
-var mattyOwnedBuildPackages = []string{
-	"./cmd/matty",
-	"./internal/bootstrap",
-	"./internal/capabilitypack",
-	"./internal/cli",
-	"./internal/codex",
-	"./internal/corelifecycle",
-	"./internal/engrambin",
-	"./internal/localprojection",
-	"./internal/opencode",
-	"./internal/ownedcontainer",
-	"./internal/prompt",
-	"./internal/setuphealth",
-	"./internal/skillbundle",
-	"./internal/version",
-	"./internal/workstation",
-}
-
 func TestValidationEntrypointOwnsTheExactPackageAllowlist(t *testing.T) {
 	root := repositoryRoot(t)
 	script := readFile(t, filepath.Join(root, "scripts", "validate-matty.sh"))
@@ -57,18 +39,6 @@ func TestValidationEntrypointOwnsTheExactPackageAllowlist(t *testing.T) {
 	if !reflect.DeepEqual(packages, mattyOwnedPackages) {
 		t.Fatalf("validation package allowlist = %#v, want %#v", packages, mattyOwnedPackages)
 	}
-	if packages := shellArray(t, script, "readonly build_packages=("); !reflect.DeepEqual(packages, mattyOwnedBuildPackages) {
-		t.Fatalf("validation build allowlist = %#v, want %#v", packages, mattyOwnedBuildPackages)
-	}
-
-	wantDirs := make([]string, len(mattyOwnedPackages))
-	for i, pkg := range mattyOwnedPackages {
-		wantDirs[i] = strings.TrimPrefix(pkg, "./")
-	}
-	if dirs := shellArray(t, script, "readonly go_dirs=("); !reflect.DeepEqual(dirs, wantDirs) {
-		t.Fatalf("formatting path allowlist = %#v, want %#v", dirs, wantDirs)
-	}
-
 	for _, forbidden := range []string{"./" + "...", "bundle/", ".scratch/"} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("validation entrypoint contains non-allowlisted discovery path %q", forbidden)
@@ -78,6 +48,19 @@ func TestValidationEntrypointOwnsTheExactPackageAllowlist(t *testing.T) {
 		if !strings.Contains(script, command) {
 			t.Fatalf("validation entrypoint missing %q", command)
 		}
+	}
+	wantCommands := []string{
+		`go_cache="${GOCACHE:-$(go env GOCACHE)}"`,
+		`go_mod_cache="${GOMODCACHE:-$(go env GOMODCACHE)}"`,
+		`go_path="${GOPATH:-$(go env GOPATH)}"`,
+		`unformatted="$(gofmt -l "${go_files[@]}")"`,
+		`go build "${build_packages[@]}"`,
+		`go vet "${packages[@]}"`,
+		`go test "${packages[@]}"`,
+		`go test -race -timeout 10m "${packages[@]}"`,
+	}
+	if commands := validationCommands(script); !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("validation commands = %#v, want only %#v", commands, wantCommands)
 	}
 }
 
@@ -189,6 +172,17 @@ func shellArray(t *testing.T, script, opening string) []string {
 		t.Fatalf("validation entrypoint has unterminated %q", opening)
 	}
 	return strings.Fields(body)
+}
+
+func validationCommands(script string) []string {
+	var commands []string
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "go ") || strings.Contains(line, "$(go ") || strings.Contains(line, "gofmt ") {
+			commands = append(commands, line)
+		}
+	}
+	return commands
 }
 
 func copyRepository(t *testing.T, sourceRoot, destinationRoot string) {

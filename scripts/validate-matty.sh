@@ -27,47 +27,18 @@ readonly packages=(
   ./internal/workstation
 )
 
-# Test-only contract packages remain in the suite above but have no production
-# archive for `go build` to emit.
-readonly build_packages=(
-  ./cmd/matty
-  ./internal/bootstrap
-  ./internal/capabilitypack
-  ./internal/cli
-  ./internal/codex
-  ./internal/corelifecycle
-  ./internal/engrambin
-  ./internal/localprojection
-  ./internal/opencode
-  ./internal/ownedcontainer
-  ./internal/prompt
-  ./internal/setuphealth
-  ./internal/skillbundle
-  ./internal/version
-  ./internal/workstation
-)
-
-# Formatting is likewise limited to the package directories above. The glob is
-# intentionally non-recursive so an unapproved nested package is not discovered.
-readonly go_dirs=(
-  cmd/matty
-  internal/bootstrap
-  internal/capabilitypack
-  internal/ci
-  internal/cli
-  internal/codex
-  internal/corelifecycle
-  internal/engrambin
-  internal/localprojection
-  internal/opencode
-  internal/ownedcontainer
-  internal/prompt
-  internal/release
-  internal/setuphealth
-  internal/skillbundle
-  internal/version
-  internal/workstation
-)
+# Derive formatting paths and the build subset from the one package authority.
+# The glob below is intentionally non-recursive. Test-only contract packages
+# remain in vet/test/race but have no production archive for `go build` to emit.
+go_dirs=()
+build_packages=()
+for package in "${packages[@]}"; do
+  go_dirs+=("${package#./}")
+  case "$package" in
+    ./internal/ci | ./internal/release) ;;
+    *) build_packages+=("$package") ;;
+  esac
+done
 
 # Tests that exercise workstation behavior must never inherit the operator's
 # real configuration roots. Preserve only Go's caches across the sandbox.
