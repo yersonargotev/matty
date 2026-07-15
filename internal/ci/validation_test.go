@@ -24,6 +24,7 @@ var mattyOwnedPackages = []string{
 	"./internal/localprojection",
 	"./internal/opencode",
 	"./internal/ownedcontainer",
+	"./internal/packclassification",
 	"./internal/packsync",
 	"./internal/packsync/githubsource",
 	"./internal/prompt",

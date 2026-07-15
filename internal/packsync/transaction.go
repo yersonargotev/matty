@@ -45,6 +45,9 @@ func (engine Engine) Apply(ctx context.Context, request ApplyRequest) (ApplyResu
 	if !request.Plan.VerifySeal() {
 		return ApplyResult{}, errors.New("sealed plan identity is invalid")
 	}
+	if err := validateApplyClassification(request.Plan, request.ClassificationEvidence); err != nil {
+		return ApplyResult{}, fmt.Errorf("validate classification evidence: %w", err)
+	}
 	if err := requireEmptyDirectory(request.AcquisitionDir); err != nil {
 		return ApplyResult{}, fmt.Errorf("acquisition directory: %w", err)
 	}
@@ -107,6 +110,9 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 	if !plan.VerifySeal() || !reflect.DeepEqual(plan.Candidate, candidate) {
 		return ApplyResult{}, errors.New("sealed plan identity changed while acquiring the transaction lock")
 	}
+	if err := validateApplyClassification(plan, request.ClassificationEvidence); err != nil {
+		return ApplyResult{}, fmt.Errorf("fresh classification evidence: %w", err)
+	}
 	if err := verifySnapshot(snapshotRoot, plan.ProposedLock); err != nil {
 		return ApplyResult{}, fmt.Errorf("exact candidate changed while acquiring the transaction lock: %w", err)
 	}
@@ -115,6 +121,11 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 	if converged, err := convergedBootstrap(bundle, legacy, plan); err != nil {
 		return ApplyResult{}, err
 	} else if converged {
+		if ok, err := classifiedVersionsConverged(bundle, plan, request.ClassificationEvidence); err != nil {
+			return ApplyResult{}, err
+		} else if !ok {
+			return ApplyResult{}, errors.New("stale classified pack versions contradict the sealed evidence")
+		}
 		if err := engine.validateStaged(ctx, request.RepositoryRoot, bundle, snapshotRoot, plan); err != nil {
 			return ApplyResult{}, fmt.Errorf("validate converged bundle: %w", err)
 		}
@@ -150,6 +161,9 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 		return ApplyResult{}, err
 	}
 	if err := materializeSelectedResources(staged, snapshotRoot, currentLock, currentLockPresent, plan.ProposedLock); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := materializeClassifiedVersions(staged, plan, request.ClassificationEvidence); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := writeCanonicalLock(filepath.Join(staged, "sources.lock.json"), plan.ProposedLock); err != nil {
@@ -223,6 +237,68 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 		return ApplyResult{}, fmt.Errorf("remove recovery marker: %w", err)
 	}
 	return ApplyResult{Status: "applied", PlanID: plan.PlanID, Changed: true}, nil
+}
+
+func classifiedVersionsConverged(bundle string, plan Plan, set ClassificationEvidenceSet) (bool, error) {
+	versions := make(map[string]string, len(set.Evidence))
+	for _, evidence := range set.Evidence {
+		versions[evidence.PackID] = evidence.ProposedVersion
+	}
+	for _, impact := range plan.AffectedPacks {
+		data, err := os.ReadFile(filepath.Join(bundle, "packs", impact.PackID, "pack.json"))
+		if err != nil {
+			return false, err
+		}
+		var manifest map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		if err := decoder.Decode(&manifest); err != nil {
+			return false, err
+		}
+		if err := ensureEOF(decoder); err != nil {
+			return false, err
+		}
+		if manifest["id"] != impact.PackID || manifest["version"] != versions[impact.PackID] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func materializeClassifiedVersions(staged string, plan Plan, set ClassificationEvidenceSet) error {
+	if len(plan.AffectedPacks) == 0 {
+		return nil
+	}
+	versions := make(map[string]string, len(set.Evidence))
+	for _, evidence := range set.Evidence {
+		versions[evidence.PackID] = evidence.ProposedVersion
+	}
+	for _, impact := range plan.AffectedPacks {
+		if !safeSlashPath(impact.PackID) || strings.Contains(impact.PackID, "/") {
+			return fmt.Errorf("unsafe affected pack identity %q", impact.PackID)
+		}
+		name := filepath.Join(staged, "packs", impact.PackID, "pack.json")
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("read affected pack manifest: %w", err)
+		}
+		var manifest map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		if err := decoder.Decode(&manifest); err != nil {
+			return fmt.Errorf("decode affected pack manifest: %w", err)
+		}
+		if err := ensureEOF(decoder); err != nil || manifest["id"] != impact.PackID || manifest["version"] != impact.CurrentVersion {
+			return fmt.Errorf("affected pack manifest contradicts sealed classification impact %s", impact.PackID)
+		}
+		manifest["version"] = versions[impact.PackID]
+		encoded, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(name, append(encoded, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write affected pack manifest: %w", err)
+		}
+	}
+	return nil
 }
 
 func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged, snapshotRoot string, plan Plan) error {

@@ -323,8 +323,55 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 	}
 	plan.Discoveries = discoverUnselected(snapshotRoot, bindings)
 	plan.Counts.Discoveries = len(plan.Discoveries)
+	plan.AffectedPacks = derivePackImpacts(plan.Changes, manifests, &plan.Blockers)
 	plan.Blockers = append(plan.Blockers, compatibilityBlockers(repositoryRoot, snapshotRoot, source, bindings, manifests)...)
 	return nil
+}
+
+func derivePackImpacts(changes []Change, manifests map[string]packManifest, blockers *[]string) []PackImpact {
+	impacts := map[string]*PackImpact{}
+	for _, change := range changes {
+		var floor ClassificationLevel
+		var semantic bool
+		var reason string
+		switch change.Kind {
+		case "resource-added":
+			floor, reason = LevelMinor, "selected resource added"
+		case "resource-removed":
+			floor, reason = LevelMajor, "selected resource removed"
+		case "file-added", "file-removed", "file-modified":
+			floor, semantic, reason = LevelNone, true, "upstream-owned content changed"
+		default:
+			continue
+		}
+		manifest, ok := manifests[change.PackID]
+		if !ok || manifest.Version == "" {
+			*blockers = append(*blockers, "affected pack manifest is missing or versionless: "+change.PackID)
+			continue
+		}
+		impact := impacts[change.PackID]
+		if impact == nil {
+			impact = &PackImpact{PackID: change.PackID, CurrentVersion: manifest.Version, MechanicalFloor: floor}
+			impacts[change.PackID] = impact
+		}
+		if classificationRank(floor) > classificationRank(impact.MechanicalFloor) {
+			impact.MechanicalFloor = floor
+		}
+		impact.SemanticEvidenceRequired = impact.SemanticEvidenceRequired || semantic
+		impact.Reasons = append(impact.Reasons, reason)
+	}
+	result := make([]PackImpact, 0, len(impacts))
+	for _, impact := range impacts {
+		sort.Strings(impact.Reasons)
+		impact.Reasons = unique(impact.Reasons)
+		result = append(result, *impact)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].PackID < result[j].PackID })
+	return result
+}
+
+func classificationRank(level ClassificationLevel) int {
+	return map[ClassificationLevel]int{LevelNone: 0, LevelPatch: 1, LevelMinor: 2, LevelMajor: 3}[level]
 }
 
 func validateCandidate(source SourceConfig, candidate Candidate, selector Selector) []string {
@@ -692,6 +739,11 @@ func sortPlan(plan *Plan) {
 		return a.Kind+a.PackID+a.ResourceID+a.Path+a.Before+a.After < b.Kind+b.PackID+b.ResourceID+b.Path+b.Before+b.After
 	})
 	sort.Strings(plan.Discoveries)
+	sort.Slice(plan.AffectedPacks, func(i, j int) bool { return plan.AffectedPacks[i].PackID < plan.AffectedPacks[j].PackID })
+	for i := range plan.AffectedPacks {
+		sort.Strings(plan.AffectedPacks[i].Reasons)
+		plan.AffectedPacks[i].Reasons = unique(plan.AffectedPacks[i].Reasons)
+	}
 	sort.Strings(plan.Blockers)
 	plan.Blockers = unique(plan.Blockers)
 }

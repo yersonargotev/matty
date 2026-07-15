@@ -114,6 +114,38 @@ func TestCheckValidatesAcceptedMattyMajorMigrationWithoutWritingRepository(t *te
 	}
 }
 
+func TestCheckSealsOneClassificationImpactPerAffectedPack(t *testing.T) {
+	repository, oldSnapshot := tinyRepository(t)
+	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+
+	newSnapshot := t.TempDir()
+	writeFile(t, filepath.Join(newSnapshot, "skills", "engineering", "one", "SKILL.md"), "updated\n")
+	newCandidate := advancedCandidate(acceptedCandidate())
+	source := &multiReleaseSource{root: newSnapshot, candidates: map[string]Candidate{
+		acceptedCandidate().Release.Tag: acceptedCandidate(),
+		newCandidate.Release.Tag:        newCandidate,
+	}}
+	plan := checkWith(t, repository, source)
+	want := []PackImpact{{
+		PackID:                   "matty",
+		CurrentVersion:           "1.0.0",
+		MechanicalFloor:          LevelNone,
+		SemanticEvidenceRequired: true,
+		Reasons:                  []string{"upstream-owned content changed"},
+	}}
+	if !reflect.DeepEqual(plan.AffectedPacks, want) {
+		t.Fatalf("affected packs = %#v, want %#v", plan.AffectedPacks, want)
+	}
+	if !plan.VerifySeal() {
+		t.Fatal("classification impacts are not part of the canonical plan seal")
+	}
+}
+
 func TestCheckFailsClosedWhenMajorMigrationEvidenceIsMissing(t *testing.T) {
 	repository := repositoryRoot(t)
 	snapshot := realSnapshot(t, repository, true)

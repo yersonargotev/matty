@@ -313,6 +313,7 @@ func TestStagedSuiteFailureLeavesRepositoryUntouched(t *testing.T) {
 
 func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 	repository, oldSnapshot := tinyRepository(t)
+	initializeFixtureGit(t, repository)
 	oldCandidate := acceptedCandidate()
 	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: oldCandidate}
 	bootstrap := checkWith(t, repository, bootstrapSource)
@@ -330,13 +331,18 @@ func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 		t.Fatalf("authoritative update plan = %#v", plan)
 	}
 	engine.Source = source
-	result, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan})
+	evidence := classificationEvidenceForPlan(t, plan, ClassifierAI, "fixture-model", LevelPatch)
+	result, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan, ClassificationEvidence: evidence})
 	if err != nil || result.Status != "applied" {
 		t.Fatalf("Apply = %#v, %v", result, err)
 	}
 	updated := mustReadFile(t, filepath.Join(repository, "bundle", "skills", "engineering", "one", "SKILL.md"))
 	if string(updated) != "updated\n" {
 		t.Fatalf("selected candidate was not materialized: %q", updated)
+	}
+	manifest := mustReadFile(t, filepath.Join(repository, "bundle", "packs", "matty", "pack.json"))
+	if !strings.Contains(string(manifest), `"version": "1.0.1"`) {
+		t.Fatalf("classified exact version was not materialized: %s", manifest)
 	}
 	lock, _, present, err := readLock(filepath.Join(repository, "bundle", "sources.lock.json"))
 	if err != nil || !present || lock.Candidate.Commit != newCandidate.Commit {
@@ -345,6 +351,43 @@ func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 	repeated := checkWith(t, repository, source)
 	if repeated.Status != "no-op" || len(repeated.Changes) != 0 || len(repeated.Blockers) != 0 {
 		t.Fatalf("repeated Check = %#v", repeated)
+	}
+	retryRequest := ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan, ClassificationEvidence: evidence}
+	if retry, err := engine.Apply(context.Background(), retryRequest); err != nil || retry.Status != "no-op" || retry.Changed {
+		t.Fatalf("idempotent classified Apply = %#v, %v", retry, err)
+	}
+	writeFile(t, filepath.Join(repository, "bundle", "packs", "matty", "pack.json"), strings.Replace(string(manifest), `"version": "1.0.1"`, `"version": "9.9.9"`, 1))
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan, ClassificationEvidence: evidence}); err == nil || !strings.Contains(err.Error(), "classified pack versions") {
+		t.Fatalf("tampered classified version error = %v", err)
+	}
+}
+
+func TestApplyRejectsAffectedPlanWithoutCompleteClassificationEvidence(t *testing.T) {
+	repository, oldSnapshot := tinyRepository(t)
+	initializeFixtureGit(t, repository)
+	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+
+	newSnapshot := t.TempDir()
+	writeFile(t, filepath.Join(newSnapshot, "skills", "engineering", "one", "SKILL.md"), "updated\n")
+	newCandidate := advancedCandidate(acceptedCandidate())
+	source := &multiReleaseSource{root: newSnapshot, candidates: map[string]Candidate{acceptedCandidate().Release.Tag: acceptedCandidate(), newCandidate.Release.Tag: newCandidate}}
+	plan := checkWith(t, repository, source)
+	before, err := treeHash(filepath.Join(repository, "bundle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Source = source
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil || !strings.Contains(err.Error(), "complete evidence coverage") {
+		t.Fatalf("Apply error = %v", err)
+	}
+	after, err := treeHash(filepath.Join(repository, "bundle"))
+	if err != nil || after != before {
+		t.Fatalf("rejected classification changed bundle: %s -> %s, %v", before, after, err)
 	}
 }
 

@@ -158,6 +158,23 @@ type Change struct {
 	After      string `json:"after,omitempty"`
 }
 
+type ClassificationLevel string
+
+const (
+	LevelNone  ClassificationLevel = "none"
+	LevelPatch ClassificationLevel = "patch"
+	LevelMinor ClassificationLevel = "minor"
+	LevelMajor ClassificationLevel = "major"
+)
+
+type PackImpact struct {
+	PackID                   string              `json:"pack_id"`
+	CurrentVersion           string              `json:"current_version"`
+	MechanicalFloor          ClassificationLevel `json:"mechanical_floor"`
+	SemanticEvidenceRequired bool                `json:"semantic_evidence_required"`
+	Reasons                  []string            `json:"reasons"`
+}
+
 type Counts struct {
 	Resources   int `json:"resources"`
 	Files       int `json:"files"`
@@ -186,6 +203,7 @@ type Plan struct {
 	Candidate      Candidate     `json:"candidate"`
 	Counts         Counts        `json:"counts"`
 	Changes        []Change      `json:"changes"`
+	AffectedPacks  []PackImpact  `json:"affected_packs"`
 	Discoveries    []string      `json:"unselected_discoveries"`
 	Blockers       []string      `json:"blockers"`
 	Preconditions  Preconditions `json:"preconditions"`
@@ -229,7 +247,8 @@ type FaultInjector func(FaultPoint) error
 
 type ApplyRequest struct {
 	CheckRequest
-	Plan Plan
+	Plan                   Plan
+	ClassificationEvidence ClassificationEvidenceSet
 }
 
 type ApplyResult struct {
