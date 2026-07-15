@@ -179,6 +179,24 @@
       "operation": "monitor"
     },
     {
+      "name": "terminal-stale-base",
+      "same_digest": true,
+      "run_status": "completed",
+      "artifact": "stale-base-publication",
+      "dispatches": 0,
+      "state": "bloqueada",
+      "operation": "monitor"
+    },
+    {
+      "name": "terminal-edited-metadata",
+      "same_digest": true,
+      "run_status": "completed",
+      "artifact": "edited-publication",
+      "dispatches": 0,
+      "state": "bloqueada",
+      "operation": "monitor"
+    },
+    {
       "name": "terminal-failure",
       "same_digest": true,
       "run_status": "completed",

@@ -256,8 +256,8 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 		} else if dispatches == 0 {
 			runPath := filepath.Join(workspace, "run.json")
 			writeFile(t, runPath, fmt.Sprintf(`{"status":%q}`, fixture.RunStatus))
-			prPath := writeMaintainerArtifactFixture(t, artifacts, fixture.Artifact)
-			output, err := exec.Command(resultScript, runPath, artifacts, prPath).CombinedOutput()
+			prPath, mainPath := writeMaintainerArtifactFixture(t, artifacts, fixture.Artifact)
+			output, err := exec.Command(resultScript, runPath, artifacts, prPath, mainPath).CombinedOutput()
 			if err != nil {
 				t.Fatalf("monitoring fixture %s: %v: %s", fixture.Name, err, output)
 			}
@@ -269,26 +269,28 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 	}
 }
 
-func writeMaintainerArtifactFixture(t *testing.T, artifacts, kind string) string {
+func writeMaintainerArtifactFixture(t *testing.T, artifacts, kind string) (string, string) {
 	t.Helper()
 	sha, head, hash := strings.Repeat("a", 40), strings.Repeat("c", 40), strings.Repeat("b", 64)
+	title, body := "managed", "managed body\n<!-- matty-pack-sync:fixture -->\n"
+	metadataHash := packsyncworkflow.ManagedMetadataHash(title, body)
 	var name string
 	var instance any
 	switch kind {
 	case "noop":
 		name = "pack-source-noop.schema.json"
 		instance = map[string]any{"schema_version": 1, "state": "no-op", "source_id": "mattpocock-skills", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "contains_secrets": false, "contains_upstream_bytes": false}
-	case "publication", "stale-publication":
+	case "publication", "stale-publication", "stale-base-publication", "edited-publication":
 		name = "pack-source-publication.schema.json"
-		instance = map[string]any{"schema_version": 1, "source_id": "mattpocock-skills", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "result_tree_sha": sha, "head_sha": head, "provenance_sha256": hash, "branch_name": "sync/mattpocock-skills", "pr_number": 7, "pr_state_sha256": hash, "managed_title": "managed", "managed_metadata_hash": hash, "validation": map[string]bool{"provenance": true, "classification": true, "reacquisition": true, "apply": true, "diff": true, "ownership": true, "matty_suite": true}, "decision_ready": true, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": packsyncworkflow.DecisionReadyInvalidationConditions()}
+		instance = map[string]any{"schema_version": 1, "source_id": "mattpocock-skills", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "result_tree_sha": sha, "head_sha": head, "provenance_sha256": hash, "branch_name": "sync/mattpocock-skills", "pr_number": 7, "pr_state_sha256": metadataHash, "managed_title": title, "managed_metadata_hash": metadataHash, "validation": map[string]bool{"provenance": true, "classification": true, "reacquisition": true, "apply": true, "diff": true, "ownership": true, "matty_suite": true}, "decision_ready": true, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": packsyncworkflow.DecisionReadyInvalidationConditions()}
 	case "operational":
 		name = "pack-source-operational-artifact.schema.json"
 		instance = packsyncworkflow.FailureArtifact{SchemaVersion: 1, State: "blocked", SourceID: "mattpocock-skills", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, Blockers: []string{"blocked"}, Recovery: []string{"retry safely"}}
 	case "inspection":
 		writeFile(t, filepath.Join(artifacts, "inspection.json"), `{"schema_version":1}`)
-		return ""
+		return "", ""
 	default:
-		return ""
+		return "", ""
 	}
 	data, err := json.Marshal(instance)
 	if err != nil {
@@ -297,18 +299,29 @@ func writeMaintainerArtifactFixture(t *testing.T, artifacts, kind string) string
 	if err := validateSchemaInstance(t, name, data); err != nil {
 		t.Fatalf("fixture %s rejected: %v", kind, err)
 	}
-	artifactName := map[string]string{"noop": "no-op.json", "publication": "publication.json", "stale-publication": "publication.json", "operational": "operational-artifact.json"}[kind]
+	artifactName := map[string]string{"noop": "no-op.json", "publication": "publication.json", "stale-publication": "publication.json", "stale-base-publication": "publication.json", "edited-publication": "publication.json", "operational": "operational-artifact.json"}[kind]
 	writeFile(t, filepath.Join(artifacts, artifactName), string(data))
-	if kind != "publication" && kind != "stale-publication" {
-		return ""
+	if !strings.Contains(kind, "publication") {
+		return "", ""
 	}
 	prPath := filepath.Join(artifacts, "live-pr.json")
 	prHead := head
 	if kind == "stale-publication" {
 		prHead = strings.Repeat("d", 40)
 	}
-	writeFile(t, prPath, fmt.Sprintf(`{"number":7,"headRefOid":%q,"headRefName":"sync/mattpocock-skills","state":"OPEN","isDraft":false}`, prHead))
-	return prPath
+	prBase := sha
+	if kind == "stale-base-publication" {
+		prBase = strings.Repeat("d", 40)
+	}
+	prBody := body
+	if kind == "edited-publication" {
+		prBody = "reviewer edit\n" + body
+	}
+	prJSON, _ := json.Marshal(map[string]any{"number": 7, "baseRefOid": prBase, "headRefOid": prHead, "headRefName": "sync/mattpocock-skills", "state": "OPEN", "isDraft": false, "title": title, "body": prBody})
+	writeFile(t, prPath, string(prJSON))
+	mainPath := filepath.Join(artifacts, "remote-main.json")
+	writeFile(t, mainPath, fmt.Sprintf(`{"sha":%q}`, sha))
+	return prPath, mainPath
 }
 
 func testMaintainerDispatchRenderer(t *testing.T, request json.RawMessage) {

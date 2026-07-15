@@ -16,9 +16,10 @@ Download artifacts by exact run ID into a fresh temporary directory. Validate
 each claimed terminal artifact against its canonical schema fetched from remote
 `main`. Logs are diagnostic only and never substitute for an artifact.
 After validation, use the remote-main `result-state.sh` with the exact run
-observation, artifact directory, and freshly observed live PR JSON to preserve
-the fixed presentation-state mapping. Publication is decision-ready only when
-the artifact's PR number, head, and branch match that open, non-draft PR.
+observation, artifact directory, freshly observed live PR JSON, and the current
+remote-main SHA. Publication is decision-ready only when its base is still
+remote `main` and the PR's number, base, head, branch, managed metadata, open
+state, and non-draft state all match the artifact.
 
 ## Terminal truth
 
