@@ -1,16 +1,51 @@
 package skillbundle
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
 
 type installedSourceStub struct{ bundleRoot string }
 
 func (source installedSourceStub) BundleRoot() string { return source.bundleRoot }
+
+func TestDiscoverWaitsForCompleteBundleTransaction(t *testing.T) {
+	repository := t.TempDir()
+	source := SourceRoot(repository)
+	writeValidSkillSource(t, source)
+	guard, err := bundletransaction.Acquire(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Discover(source, t.TempDir(), "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Discover completed outside the shared lock: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Discover did not resume after the bundle transaction")
+	}
+}
 
 func TestResolveSourcePrecedenceAndFallbacks(t *testing.T) {
 	repositoryRoot := t.TempDir()

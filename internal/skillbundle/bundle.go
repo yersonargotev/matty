@@ -1,10 +1,13 @@
 package skillbundle
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
 
 var defaultGroups = []string{"engineering", "productivity"}
@@ -140,6 +143,16 @@ func (err MalformedSourceError) Unwrap() error {
 // source-selection context to a MissingSourceError without moving validation out
 // of this package.
 func Discover(sourceRoot, linkDir, missingSourceHint string) ([]Skill, error) {
+	var skills []Skill
+	err := bundletransaction.WithExclusive(context.Background(), transactionRoot(sourceRoot), func() error {
+		var err error
+		skills, err = discover(sourceRoot, linkDir, missingSourceHint)
+		return err
+	})
+	return skills, err
+}
+
+func discover(sourceRoot, linkDir, missingSourceHint string) ([]Skill, error) {
 	if err := requireSourceRoot(sourceRoot, missingSourceHint); err != nil {
 		return nil, err
 	}
@@ -174,6 +187,24 @@ func Discover(sourceRoot, linkDir, missingSourceHint string) ([]Skill, error) {
 
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, nil
+}
+
+func transactionRoot(sourceRoot string) string {
+	bundleRoot := BundleRoot(sourceRoot)
+	root := bundleRoot
+	if filepath.Base(bundleRoot) == "bundle" {
+		root = filepath.Dir(bundleRoot)
+	}
+	for {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return root
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return root
+		}
+		root = parent
+	}
 }
 
 // ValidateSource verifies that a selected root contains the complete Matty v0

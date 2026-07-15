@@ -10,6 +10,7 @@ cd "$root"
 readonly packages=(
   ./cmd/matty
   ./internal/bootstrap
+  ./internal/bundletransaction
   ./internal/capabilitypack
   ./internal/ci
   ./internal/cli

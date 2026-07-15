@@ -1,12 +1,46 @@
 package capabilitypack
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
+
+func TestDiscoverWaitsForCompleteBundleTransaction(t *testing.T) {
+	bundle := writeCatalogFixture(t)
+	repository := filepath.Dir(bundle)
+	guard, err := bundletransaction.Acquire(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Discover(bundle)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Discover completed outside the shared lock: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Discover did not resume after the bundle transaction")
+	}
+}
 
 func TestDiscoverLoadsInitialStrictCatalog(t *testing.T) {
 	bundleRoot := writeCatalogFixture(t)

@@ -1,4 +1,5 @@
-// Package packsync owns deterministic, repository-local source inspection.
+// Package packsync owns deterministic repository-local source inspection and
+// transactional replacement of the complete Matty bundle.
 // Upstream content is data only: this package inventories, hashes, and compares
 // it, but never executes it.
 package packsync
@@ -168,6 +169,7 @@ type Counts struct {
 }
 
 type Preconditions struct {
+	BaseCommit      string `json:"base_commit,omitempty"`
 	ConfigSHA256    string `json:"config_sha256"`
 	ManifestsSHA256 string `json:"manifests_sha256"`
 	BundleSHA256    string `json:"bundle_sha256"`
@@ -199,5 +201,44 @@ type CheckRequest struct {
 }
 
 type Engine struct {
-	Source Source
+	Source   Source
+	Validate BundleValidator
+	Fault    FaultInjector
+}
+
+type BundleValidator interface {
+	ValidateBundle(context.Context, string, string) error
+}
+
+type BundleValidatorFunc func(context.Context, string, string) error
+
+func (validate BundleValidatorFunc) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
+	return validate(ctx, repositoryRoot, bundleRoot)
+}
+
+type FaultPoint string
+
+const (
+	FaultBeforeSwap        FaultPoint = "before-swap"
+	FaultAfterFirstRename  FaultPoint = "after-first-rename"
+	FaultAfterSecondRename FaultPoint = "after-second-rename"
+	FaultDuringCleanup     FaultPoint = "during-cleanup"
+)
+
+type FaultInjector func(FaultPoint) error
+
+type ApplyRequest struct {
+	CheckRequest
+	Plan Plan
+}
+
+type ApplyResult struct {
+	Status    string `json:"status"`
+	PlanID    string `json:"plan_id,omitempty"`
+	Changed   bool   `json:"changed"`
+	Recovered bool   `json:"recovered,omitempty"`
+}
+
+type RecoverRequest struct {
+	RepositoryRoot string
 }

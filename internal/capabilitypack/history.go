@@ -2,6 +2,7 @@ package capabilitypack
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
 
 const historicalArtifactSchemaVersion = 1
@@ -65,7 +68,12 @@ func (c Catalog) resolveIntentPack(id, version string) (Pack, error) {
 		return Pack{}, fmt.Errorf("capability pack %q targets invalid historical version %q", id, version)
 	}
 	root := filepath.Join(c.bundleRoot, "history", id, version)
-	pack, err := loadHistoricalArtifact(root, c.bundleRoot, id, version)
+	var pack Pack
+	err = bundletransaction.WithExclusive(context.Background(), filepath.Dir(filepath.Clean(c.bundleRoot)), func() error {
+		var err error
+		pack, err = loadHistoricalArtifact(root, c.bundleRoot, id, version)
+		return err
+	})
 	if err != nil {
 		return Pack{}, fmt.Errorf("load historical capability pack %s@%s: %w", id, version, err)
 	}

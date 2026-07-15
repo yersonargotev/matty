@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
 
 type packManifest struct {
@@ -36,82 +38,70 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 	if err := requireEmptyDirectory(request.AcquisitionDir); err != nil {
 		return Plan{}, fmt.Errorf("acquisition directory: %w", err)
 	}
-	configPath := filepath.Join(request.RepositoryRoot, "bundle", "sources.json")
-	configBytes, err := os.ReadFile(configPath)
-	if err != nil {
-		return Plan{}, fmt.Errorf("read source configuration: %w", err)
-	}
-	config, err := LoadConfig(strings.NewReader(string(configBytes)))
-	if err != nil {
-		return Plan{}, err
-	}
-	source, err := selectSource(config, request.SourceID)
-	if err != nil {
-		return Plan{}, err
-	}
-	selector := source.Selector
-	if request.Selector != nil {
-		selector = *request.Selector
-	}
-	if err := validateSelector(selector); err != nil {
-		return Plan{}, err
-	}
-	lock, lockBytes, lockPresent, err := readLock(filepath.Join(request.RepositoryRoot, "bundle", "sources.lock.json"))
+	initial, err := readCheckInputs(ctx, request)
 	if err != nil {
 		return Plan{}, err
 	}
 	var releases []Release
-	if selector.Mode != SelectorCommit || (lockPresent && lock.Candidate.Release != nil) {
-		releases, err = engine.Source.Releases(ctx, source)
+	if initial.selector.Mode != SelectorCommit || (initial.lockPresent && initial.lock.Candidate.Release != nil) {
+		releases, err = engine.Source.Releases(ctx, initial.source)
 		if err != nil {
 			return Plan{}, fmt.Errorf("list published releases: %w", err)
 		}
 	}
-	candidate, err := engine.resolveFromReleases(ctx, source, selector, releases)
+	candidate, err := engine.resolveFromReleases(ctx, initial.source, initial.selector, releases)
 	if err != nil {
 		return Plan{}, err
 	}
-
-	manifests, manifestsHash, err := loadManifests(request.RepositoryRoot)
-	if err != nil {
-		return Plan{}, err
-	}
-	bindings, bindingBlockers := deriveDestinations(source.Resources, manifests)
-	bundleHash, err := treeHash(filepath.Join(request.RepositoryRoot, "bundle"))
-	if err != nil {
-		return Plan{}, fmt.Errorf("hash bundle: %w", err)
-	}
-	plan := Plan{
-		SchemaVersion:  1,
-		Status:         "blocked",
-		Authoritative:  lockPresent,
-		SourceID:       source.ID,
-		Selector:       selector,
-		Candidate:      candidate,
-		Blockers:       append([]string(nil), bindingBlockers...),
-		Preconditions:  Preconditions{ConfigSHA256: hashBytes(configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, LockSHA256: hashBytes(lockBytes)},
-		LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json")),
-	}
-	if !lockPresent {
-		plan.Preconditions.LockSHA256 = ""
-		plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
-	} else {
-		plan.Blockers = append(plan.Blockers, validateLock(lock, source, candidate, selector)...)
-		continuityBlockers, err := engine.lockedContinuity(ctx, source, lock, releases)
+	var continuityBlockers []string
+	if initial.lockPresent {
+		continuityBlockers, err = engine.lockedContinuity(ctx, initial.source, initial.lock, releases)
 		if err != nil {
 			return Plan{}, err
 		}
-		plan.Blockers = append(plan.Blockers, continuityBlockers...)
 	}
-	plan.Blockers = append(plan.Blockers, validateCandidate(source, candidate, selector)...)
-
+	var plan Plan
 	err = engine.Source.WithSnapshot(ctx, candidate, request.AcquisitionDir, func(snapshotRoot string) error {
-		return buildPlan(snapshotRoot, request.RepositoryRoot, source, bindings, manifests, lock, lockPresent, &plan)
+		guard, err := bundletransaction.Acquire(ctx, request.RepositoryRoot)
+		if err != nil {
+			return err
+		}
+		defer guard.Release()
+		fresh, err := readCheckInputsUnlocked(request)
+		if err != nil {
+			return err
+		}
+		if !bytesEqual(initial.configBytes, fresh.configBytes) || !bytesEqual(initial.lockBytes, fresh.lockBytes) || initial.lockPresent != fresh.lockPresent || !reflect.DeepEqual(initial.source, fresh.source) || initial.selector != fresh.selector {
+			return errors.New("local source configuration or provenance lock changed during Check; retry")
+		}
+		manifests, manifestsHash, err := loadManifests(request.RepositoryRoot)
+		if err != nil {
+			return err
+		}
+		bindings, bindingBlockers := deriveDestinations(fresh.source.Resources, manifests)
+		bundleHash, err := treeHash(filepath.Join(request.RepositoryRoot, "bundle"))
+		if err != nil {
+			return fmt.Errorf("hash bundle: %w", err)
+		}
+		baseCommit, err := repositoryBase(request.RepositoryRoot)
+		if err != nil {
+			return fmt.Errorf("resolve repository base: %w", err)
+		}
+		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, LockSHA256: hashBytes(fresh.lockBytes)}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json"))}
+		if !fresh.lockPresent {
+			plan.Preconditions.LockSHA256 = ""
+			plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
+		} else {
+			plan.Blockers = append(plan.Blockers, validateLock(fresh.lock, fresh.source, candidate, fresh.selector)...)
+			plan.Blockers = append(plan.Blockers, continuityBlockers...)
+		}
+		plan.Blockers = append(plan.Blockers, validateCandidate(fresh.source, candidate, fresh.selector)...)
+		return buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, &plan)
 	})
 	if err != nil {
 		return Plan{}, fmt.Errorf("inspect acquired snapshot: %w", err)
 	}
-	if !lockPresent && len(plan.Changes) > 0 {
+	if !plan.Authoritative && len(plan.Changes) > 0 {
 		plan.Blockers = append(plan.Blockers, "bootstrap selected bytes differ from the exact candidate")
 	}
 	if err := requireEmptyDirectory(request.AcquisitionDir); err != nil {
@@ -131,6 +121,53 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 	}
 	return plan, nil
 }
+
+type checkInputs struct {
+	configBytes []byte
+	source      SourceConfig
+	selector    Selector
+	lock        Lock
+	lockBytes   []byte
+	lockPresent bool
+}
+
+func readCheckInputs(ctx context.Context, request CheckRequest) (checkInputs, error) {
+	guard, err := bundletransaction.Acquire(ctx, request.RepositoryRoot)
+	if err != nil {
+		return checkInputs{}, err
+	}
+	defer guard.Release()
+	return readCheckInputsUnlocked(request)
+}
+
+func readCheckInputsUnlocked(request CheckRequest) (checkInputs, error) {
+	configBytes, err := os.ReadFile(filepath.Join(request.RepositoryRoot, "bundle", "sources.json"))
+	if err != nil {
+		return checkInputs{}, fmt.Errorf("read source configuration: %w", err)
+	}
+	config, err := LoadConfig(strings.NewReader(string(configBytes)))
+	if err != nil {
+		return checkInputs{}, err
+	}
+	source, err := selectSource(config, request.SourceID)
+	if err != nil {
+		return checkInputs{}, err
+	}
+	selector := source.Selector
+	if request.Selector != nil {
+		selector = *request.Selector
+	}
+	if err := validateSelector(selector); err != nil {
+		return checkInputs{}, err
+	}
+	lock, lockBytes, lockPresent, err := readLock(filepath.Join(request.RepositoryRoot, "bundle", "sources.lock.json"))
+	if err != nil {
+		return checkInputs{}, err
+	}
+	return checkInputs{configBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent}, nil
+}
+
+func bytesEqual(left, right []byte) bool { return string(left) == string(right) }
 
 func (engine Engine) resolve(ctx context.Context, source SourceConfig, selector Selector) (Candidate, error) {
 	var releases []Release

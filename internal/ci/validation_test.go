@@ -14,6 +14,7 @@ import (
 var mattyOwnedPackages = []string{
 	"./cmd/matty",
 	"./internal/bootstrap",
+	"./internal/bundletransaction",
 	"./internal/capabilitypack",
 	"./internal/ci",
 	"./internal/cli",

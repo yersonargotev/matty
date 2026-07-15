@@ -1,0 +1,582 @@
+{
+  "schema_version": 1,
+  "generator": "matty-packsync",
+  "generator_version": "1",
+  "provider": "github",
+  "provider_api_version": "2022-11-28",
+  "source_id": "mattpocock-skills",
+  "repository": "mattpocock/skills",
+  "repository_id": 1148788086,
+  "owner": "mattpocock",
+  "owner_id": 28293365,
+  "selector": {
+    "mode": "stable-release"
+  },
+  "candidate": {
+    "repository": "mattpocock/skills",
+    "repository_id": 1148788086,
+    "repository_node_id": "R_kgDORHkddg",
+    "repository_html_url": "https://github.com/mattpocock/skills",
+    "repository_clone_url": "https://github.com/mattpocock/skills.git",
+    "repository_api_url": "https://api.github.com/repos/mattpocock/skills",
+    "visibility": "public",
+    "owner": "mattpocock",
+    "owner_id": 28293365,
+    "owner_node_id": "MDQ6VXNlcjI4MjkzMzY1",
+    "public": true,
+    "archived": false,
+    "disabled": false,
+    "release": {
+      "id": 350942193,
+      "node_id": "RE_kwDORHkdds4U6vPx",
+      "tag": "v1.1.0",
+      "name": "v1.1.0",
+      "target_commitish": "main",
+      "immutable": false,
+      "created_at": "2026-07-08T13:20:55Z",
+      "published_at": "2026-07-08T13:20:57Z",
+      "draft": false,
+      "prerelease": false,
+      "author": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "node_id": "MDM6Qm90NDE4OTgyODI="
+      }
+    },
+    "tag_ref_name": "refs/tags/v1.1.0",
+    "tag_ref_type": "tag",
+    "tag_ref_sha": "eabea89380927aadb93abf6e290a19334d249292",
+    "tag_objects": [
+      {
+        "sha": "eabea89380927aadb93abf6e290a19334d249292",
+        "name": "v1.1.0",
+        "target_sha": "d574778f94cf620fcc8ce741584093bc650a61d3",
+        "target_type": "commit",
+        "verification": {
+          "verified": false,
+          "reason": "unsigned",
+          "verified_at": null,
+          "signature_sha256": null,
+          "payload_sha256": null
+        }
+      }
+    ],
+    "commit": "d574778f94cf620fcc8ce741584093bc650a61d3",
+    "commit_node_id": "C_kwDORHkddtoAKGQ1NzQ3NzhmOTRjZjYyMGZjYzhjZTc0MTU4NDA5M2JjNjUwYTYxZDM",
+    "tree": "fa3f8882cef6fa6d9960283a49db0a58636af3ca",
+    "parents": [
+      "cc1e24891df515a43a034cd91d3f64e17d1c9ffb",
+      "47845ac1e15d048c2bbb20413a44de8681209601"
+    ],
+    "commit_verification": {
+      "verified": true,
+      "reason": "valid",
+      "verified_at": "2026-07-08T13:20:40Z",
+      "signature_sha256": "2d12f8881214d8e40558a76886e6fbafa78508888b7c8eb377fa7794aae7c2b1",
+      "payload_sha256": "8292c30a3eb94e77de63680172fe1ab6d6e5663eb01e3965401c0cf794992614"
+    }
+  },
+  "snapshot_sha256": "e3ad291eed3bed9640a8f4d8a72c437e39760a891531e413aa8ec04fe9c0432a",
+  "resources": [
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "ask-matt",
+      "upstream_path": "skills/engineering/ask-matt",
+      "vendored_path": "bundle/skills/engineering/ask-matt",
+      "sha256": "a4f32ca3e8c2e51d0d47a30b3e3ad8e7d43c6954368e40279132b109ba700097",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 7814,
+          "mode": 420,
+          "sha256": "b7dbb3249695841cf28f87555acc77dc630dafba0f1d544ecce252ff63b0933e"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "code-review",
+      "upstream_path": "skills/engineering/code-review",
+      "vendored_path": "bundle/skills/engineering/code-review",
+      "sha256": "0c756b326300fdf48600385e2191d891fb3d78ae4c2418d33e4012a54834c3e5",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 6740,
+          "mode": 420,
+          "sha256": "6a65cc61114f96db07ec41e3920e67c9c5bf70dd6e0901eb9460ebcb2bdc209f"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "codebase-design",
+      "upstream_path": "skills/engineering/codebase-design",
+      "vendored_path": "bundle/skills/engineering/codebase-design",
+      "sha256": "c44d7db3b61cf59051ea555ef9df5544d8d38f077561df673bcb1a95eb3cb087",
+      "files": [
+        {
+          "path": "DEEPENING.md",
+          "size": 2559,
+          "mode": 420,
+          "sha256": "125e6b77413ad2bc7cf7a772bc74336d580a50f9e797db2178ed133d62333d06"
+        },
+        {
+          "path": "DESIGN-IT-TWICE.md",
+          "size": 2712,
+          "mode": 420,
+          "sha256": "21c3264953bd30ee87b181a3ccaf0e70649f461e5ffd7dc654acee4ba1788b31"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 6488,
+          "mode": 420,
+          "sha256": "a8d50abac5a4018f60e1d911d4b6f4e36454ca14d6c390c0695a578c7de65dad"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "diagnosing-bugs",
+      "upstream_path": "skills/engineering/diagnosing-bugs",
+      "vendored_path": "bundle/skills/engineering/diagnosing-bugs",
+      "sha256": "faac96bf5622333b7e13e37ba83dc40a0975a8336e19eee5ed6fea0f6d6e8a18",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 8536,
+          "mode": 420,
+          "sha256": "7a0779480f323a66d109404646bcc1a14bf0232b45b3e3ea93b652a035718acb"
+        },
+        {
+          "path": "scripts/hitl-loop.template.sh",
+          "size": 1164,
+          "mode": 420,
+          "sha256": "b2932630950e5210075bcd6f850e5accf30c101c5367b29eac3a29b4dd8084c8"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "domain-modeling",
+      "upstream_path": "skills/engineering/domain-modeling",
+      "vendored_path": "bundle/skills/engineering/domain-modeling",
+      "sha256": "61a17d8ab1e6550ecde1e7b966858eabe3e152517b0efbeca38b15593a195bdb",
+      "files": [
+        {
+          "path": "ADR-FORMAT.md",
+          "size": 2766,
+          "mode": 420,
+          "sha256": "f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2"
+        },
+        {
+          "path": "CONTEXT-FORMAT.md",
+          "size": 2299,
+          "mode": 420,
+          "sha256": "b8cc318f2a4285b530e908b6bc43901c3c5cd11100362636bbc4216639bef597"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 3427,
+          "mode": 420,
+          "sha256": "152e2c97239affb12a60c5f4a7e74ab546a49ae169688c81f4e2ccc42dafa579"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "grill-me",
+      "upstream_path": "skills/productivity/grill-me",
+      "vendored_path": "bundle/skills/productivity/grill-me",
+      "sha256": "a7fa61718f8fdb4f98c57145c9b744c73d2b2d0880ff9d69140d8c9cf780fb48",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 147,
+          "mode": 420,
+          "sha256": "6189dfceb7304a6e5558f75d87e68fa3bc7fcf7ba120e44f21f8a61fe01eba54"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "grill-with-docs",
+      "upstream_path": "skills/engineering/grill-with-docs",
+      "vendored_path": "bundle/skills/engineering/grill-with-docs",
+      "sha256": "32845230de7b8c3fc0c64c2216ed1f90e1a6a63bb83ac0825dcd3654add25df8",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 245,
+          "mode": 420,
+          "sha256": "610d091047bcfb9db0f75c057d15538481a721111579fc5ec7f83ad9131a2165"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "grilling",
+      "upstream_path": "skills/productivity/grilling",
+      "vendored_path": "bundle/skills/productivity/grilling",
+      "sha256": "74977516becf3242f6ce69e84af3066783ec9b19eaae354de69f88bdd9a7c94b",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 821,
+          "mode": 420,
+          "sha256": "5a35925d03a391bcfa46940868b649b72dba89ec9c19525e785bbb6bd3a7f478"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "handoff",
+      "upstream_path": "skills/productivity/handoff",
+      "vendored_path": "bundle/skills/productivity/handoff",
+      "sha256": "031eae391aef879c782f4d7127aeac1af0886c4397a1b4993c7236c1ce9179e4",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 879,
+          "mode": 420,
+          "sha256": "57c9f1f392d7352cdc85b1e39ca49eddc70ce1dc278bd9653fb4f23dfc2560fc"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "implement",
+      "upstream_path": "skills/engineering/implement",
+      "vendored_path": "bundle/skills/engineering/implement",
+      "sha256": "b452c505927480118ba51ebcef5da69135c6c3a1836ee756803e506cc1cf4c59",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 433,
+          "mode": 420,
+          "sha256": "6d3fd9e83b8f36e5213854779db49b256a457a7ebb4a503e53fa7dcff696adc3"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "improve-codebase-architecture",
+      "upstream_path": "skills/engineering/improve-codebase-architecture",
+      "vendored_path": "bundle/skills/engineering/improve-codebase-architecture",
+      "sha256": "64aff5ec2e1ba9167069c55d0471485820e5049ba72016d0d02295e2a83e159a",
+      "files": [
+        {
+          "path": "HTML-REPORT.md",
+          "size": 6685,
+          "mode": 420,
+          "sha256": "0b0936104158abeef7246ff6cbabefa4dc055f17589f2833f2d93001421910a1"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 5421,
+          "mode": 420,
+          "sha256": "0026900866ed2a542af0559cef11dd7ae707633b75cc6f668c2e7c0a33e35032"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "loop-me",
+      "upstream_path": "skills/in-progress/loop-me",
+      "vendored_path": "bundle/skills/in-progress/loop-me",
+      "sha256": "2aac7eb0d6342324df40b86ba4ac2ad7eb2d564e2d31a6b09da64bbe4b778077",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 2552,
+          "mode": 420,
+          "sha256": "2b2c725f8b6e8b8f3f6e6bc2c18f0cf3ab029a270b5ac23132fbebdeb6b443aa"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "prototype",
+      "upstream_path": "skills/engineering/prototype",
+      "vendored_path": "bundle/skills/engineering/prototype",
+      "sha256": "94f53d71fd0b0ca0c14f4fd3666ce96efbc1c31e19a6b5fb688f2826e6367869",
+      "files": [
+        {
+          "path": "LOGIC.md",
+          "size": 5594,
+          "mode": 420,
+          "sha256": "da91dc92195c00d5dc33863b8c1a030998025a0f8583ebf2babd770825b7f70c"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 3002,
+          "mode": 420,
+          "sha256": "efa2a92a2f0f8e7d9d0ecb0cfc65ffd5748c73fa3a25fe164e1c8f426938fb52"
+        },
+        {
+          "path": "UI.md",
+          "size": 6789,
+          "mode": 420,
+          "sha256": "d76d565149ee50456c5ddc5e29c27fec8737637874fe5c37d970db085a200b27"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "research",
+      "upstream_path": "skills/engineering/research",
+      "vendored_path": "bundle/skills/engineering/research",
+      "sha256": "481e480e9d0033216d1662c3b4f3a6f4566c3a28febfd8d8415ab489f1b76d2f",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 799,
+          "mode": 420,
+          "sha256": "af378829f015775a3bcd65ff466826722e99359017ae6bae227ca4c9bd14049c"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "resolving-merge-conflicts",
+      "upstream_path": "skills/engineering/resolving-merge-conflicts",
+      "vendored_path": "bundle/skills/engineering/resolving-merge-conflicts",
+      "sha256": "43162d0f200998d790f4839ebf2e52d524fd41ed979251ab75b1bc669ac62d15",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 921,
+          "mode": 420,
+          "sha256": "c7c9ba81362a786aac05d2223123bf1bd2f8a99c3243a72882ede9c68bedfb24"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "setup-matt-pocock-skills",
+      "upstream_path": "skills/engineering/setup-matt-pocock-skills",
+      "vendored_path": "bundle/skills/engineering/setup-matt-pocock-skills",
+      "sha256": "f501ac8c96954f57ae43380b80f9884ab81924229229b356b1cd78bf9b774ce8",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 7309,
+          "mode": 420,
+          "sha256": "8cd1fa43ff89492320404e5b18fb06d9488256be5dffc291ff038fc98bb98fb9"
+        },
+        {
+          "path": "domain.md",
+          "size": 2045,
+          "mode": 420,
+          "sha256": "25be404b58798b3cb2d51c93dba2ab052fc3a425632185726ac3f5fcff193b99"
+        },
+        {
+          "path": "issue-tracker-github.md",
+          "size": 3745,
+          "mode": 420,
+          "sha256": "52e9f9f1ec0f6d47c6785ac500708ac0521f34abb4cc5475b5dc747165dab17e"
+        },
+        {
+          "path": "issue-tracker-gitlab.md",
+          "size": 3826,
+          "mode": 420,
+          "sha256": "4470f2f64d015fba01af877233296b401bb0d44b5acb9572ffc3ff6b30e8de88"
+        },
+        {
+          "path": "issue-tracker-local.md",
+          "size": 1748,
+          "mode": 420,
+          "sha256": "e0dd9835e3658909132058e9a5fdd851e972220bbadaf78a57e3c6220d470922"
+        },
+        {
+          "path": "triage-labels.md",
+          "size": 1045,
+          "mode": 420,
+          "sha256": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "tdd",
+      "upstream_path": "skills/engineering/tdd",
+      "vendored_path": "bundle/skills/engineering/tdd",
+      "sha256": "b523a659f6b1f135bf69fb7cc06e0286b6bd5d0eb4c9977d14e3ac7f3a589406",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 3213,
+          "mode": 420,
+          "sha256": "5363bb2775679fe9311fbb67947f95359169c6e7f1fac77c0f25e190bca6cf2f"
+        },
+        {
+          "path": "mocking.md",
+          "size": 1481,
+          "mode": 420,
+          "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef"
+        },
+        {
+          "path": "tests.md",
+          "size": 2214,
+          "mode": 420,
+          "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "teach",
+      "upstream_path": "skills/productivity/teach",
+      "vendored_path": "bundle/skills/productivity/teach",
+      "sha256": "4b2a077547b83fea15f4782e854a2de91be1bee3f0b0158aaaaff5dea73d960e",
+      "files": [
+        {
+          "path": "GLOSSARY-FORMAT.md",
+          "size": 2131,
+          "mode": 420,
+          "sha256": "d177def491519d97873291f2e860d8f1d60ead78feecb82eee022177958069c6"
+        },
+        {
+          "path": "LEARNING-RECORD-FORMAT.md",
+          "size": 2777,
+          "mode": 420,
+          "sha256": "855f81017625256584bbf62bd5edb9b0c86605c4cc1139c56acc36b802595d17"
+        },
+        {
+          "path": "MISSION-FORMAT.md",
+          "size": 1553,
+          "mode": 420,
+          "sha256": "8da6d3ac84eb2eb19f17c260b6acf01c560d3ac7a4501c415eea0e985602f4d7"
+        },
+        {
+          "path": "RESOURCES-FORMAT.md",
+          "size": 1926,
+          "mode": 420,
+          "sha256": "2bc634a64b0d0daa10904f9222e7aa0d361420dfacabbf092fbe3a72222edc08"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 9507,
+          "mode": 420,
+          "sha256": "6d2dbe5e03084cf26fef66b535127b36cd1bcbe9478e26b0626029cd51dc2259"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "to-spec",
+      "upstream_path": "skills/engineering/to-spec",
+      "vendored_path": "bundle/skills/engineering/to-spec",
+      "sha256": "6aa7734ca3b66ef59b12976306c9717f89d2124be82f801f0104bbbe307d02fa",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 3073,
+          "mode": 420,
+          "sha256": "267638edd513b5918de626ad5605d261952abb7428cb308869c663ca924e93e7"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "to-tickets",
+      "upstream_path": "skills/engineering/to-tickets",
+      "vendored_path": "bundle/skills/engineering/to-tickets",
+      "sha256": "2aa5b6adced2cf5466aa6bf7b889b4a0bf062a097b3978997b2506825d1d9f25",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 5788,
+          "mode": 420,
+          "sha256": "918bdefab9313100cb1f7ccb412e2a773fe2f2801dd20d44f6b2acf7a42ca456"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "triage",
+      "upstream_path": "skills/engineering/triage",
+      "vendored_path": "bundle/skills/engineering/triage",
+      "sha256": "c33341915b75f63e4cf2fa55b2f625cbe46d8a1ac110456abac0deec0012a2cb",
+      "files": [
+        {
+          "path": "AGENT-BRIEF.md",
+          "size": 7972,
+          "mode": 420,
+          "sha256": "5b78d347cc53f6bcf7b875106005ccf5315055fa4cf75eb28d41e96ee426d27b"
+        },
+        {
+          "path": "OUT-OF-SCOPE.md",
+          "size": 4712,
+          "mode": 420,
+          "sha256": "2526f998fd7ca5e956d3f6f234bcc2431a5971ee769f1148ddc60b92f04d5914"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 6574,
+          "mode": 420,
+          "sha256": "d45827c299c021f77b0f146fefa3ee679b13f99e9a2ffdf48e8de2347adeefe1"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "wayfinder",
+      "upstream_path": "skills/engineering/wayfinder",
+      "vendored_path": "bundle/skills/engineering/wayfinder",
+      "sha256": "e662dcc06fa3c7283792bb5cd7eb835c4921db9ed01e2547077bfb7e7b38d9b4",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 11503,
+          "mode": 420,
+          "sha256": "bef437de697fb6984a8a90b7fd82f128609148d6e02f635ce419d03555b351e1"
+        }
+      ]
+    },
+    {
+      "pack_id": "matty",
+      "kind": "skill",
+      "resource_id": "writing-great-skills",
+      "upstream_path": "skills/productivity/writing-great-skills",
+      "vendored_path": "bundle/skills/productivity/writing-great-skills",
+      "sha256": "167d669abbf2b876e8c5f97b3df0e5478d8da7dcf141e178d4d3b0c9662a6785",
+      "files": [
+        {
+          "path": "GLOSSARY.md",
+          "size": 18488,
+          "mode": 420,
+          "sha256": "cccd684c73fb7a06f523497b0121765f92d2b33d6ef9c51602294849233451d6"
+        },
+        {
+          "path": "SKILL.md",
+          "size": 9414,
+          "mode": 420,
+          "sha256": "4d6ccbc3760b1bd4107c495a79872286ea69494003f3b0a719fc95b147457061"
+        }
+      ]
+    }
+  ]
+}

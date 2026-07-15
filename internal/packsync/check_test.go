@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yersonargotev/matty/internal/bundletransaction"
 )
 
 var acceptedDiscoveries = []string{
@@ -33,9 +35,43 @@ var acceptedDiscoveries = []string{
 	"skills/personal/obsidian-vault",
 }
 
+func TestCheckAcquiresCandidateOutsideLockThenLocksLocalObservation(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	provider := &gatedSnapshotSource{fixtureSource: fixtureSource{root: snapshot, candidate: acceptedCandidate()}, acquired: make(chan struct{}), proceed: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		acquisition, err := os.MkdirTemp("", "check-lock-test-")
+		if err != nil {
+			done <- err
+			return
+		}
+		defer os.RemoveAll(acquisition)
+		_, err = (Engine{Source: provider}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, AcquisitionDir: acquisition})
+		done <- err
+	}()
+	<-provider.acquired
+	guard, err := bundletransaction.Acquire(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("candidate acquisition held repository lock: %v", err)
+	}
+	close(provider.proceed)
+	select {
+	case err := <-done:
+		t.Fatalf("local observation completed outside the repository lock: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckValidatesAcceptedMattyMajorMigrationWithoutWritingRepository(t *testing.T) {
-	repository := repositoryRoot(t)
-	snapshot := realSnapshot(t, repository, true)
+	sourceRepository := repositoryRoot(t)
+	snapshot := realSnapshot(t, sourceRepository, true)
+	repository := bootstrapRepository(t, sourceRepository)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	before, err := treeHash(filepath.Join(repository, "bundle"))
 	if err != nil {
@@ -84,6 +120,7 @@ func TestCheckFailsClosedWhenMajorMigrationEvidenceIsMissing(t *testing.T) {
 	copyRoot := t.TempDir()
 	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, copyRoot)
 	if err := os.Remove(filepath.Join(copyRoot, "bundle", "compatibility", "matty", "1.0.0-to-2.0.0.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +135,7 @@ func TestCheckFailsClosedWhenMajorMigrationEvidenceIsIncomplete(t *testing.T) {
 	copyRoot := t.TempDir()
 	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, copyRoot)
 	mutateCompatibilityEvidence(t, copyRoot, func(evidence map[string]any) {
 		migration := evidence["migration"].(map[string]any)
 		files := migration["divergent_files"].([]any)
@@ -114,6 +152,7 @@ func TestCheckFailsClosedWhenAcceptedMigrationHistoryIsMissing(t *testing.T) {
 	copyRoot := t.TempDir()
 	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, copyRoot)
 	if err := os.RemoveAll(filepath.Join(copyRoot, "bundle", "history", "matty", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +167,7 @@ func TestCheckRejectsCoordinatedReplacementEvidenceAndInstructionDrift(t *testin
 	copyRoot := t.TempDir()
 	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, copyRoot)
 	mutateCompatibilityEvidence(t, copyRoot, func(evidence map[string]any) {
 		rule := evidence["migration"].(map[string]any)["replacement_rules"].([]any)[0].(map[string]any)
 		rule["semantics"] = "Use arbitrary replacement vocabulary."
@@ -192,6 +232,7 @@ func TestCheckFailsClosedWhenMajorMigrationEvidenceOrReplacementSemanticsDrift(t
 			copyRoot := t.TempDir()
 			copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 			writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+			removeProductionLock(t, copyRoot)
 			test.mutate(t, copyRoot)
 			plan := checkWith(t, copyRoot, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
 			assertBlocker(t, plan, test.want)
@@ -205,6 +246,7 @@ func TestCheckFailsClosedWhenRestoredSelectedByteDrifts(t *testing.T) {
 	copyRoot := t.TempDir()
 	copyTree(t, filepath.Join(repository, "bundle"), filepath.Join(copyRoot, "bundle"))
 	writeFile(t, filepath.Join(copyRoot, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, copyRoot)
 	name := filepath.Join(copyRoot, "bundle", "skills", "engineering", "wayfinder", "SKILL.md")
 	writeFile(t, name, string(mustReadFile(t, name))+"drift\n")
 
@@ -213,8 +255,9 @@ func TestCheckFailsClosedWhenRestoredSelectedByteDrifts(t *testing.T) {
 }
 
 func TestByteIdenticalBootstrapIsSealedAndOneByteInvalidatesIt(t *testing.T) {
-	repository := repositoryRoot(t)
-	identicalRoot := realSnapshot(t, repository, false)
+	sourceRepository := repositoryRoot(t)
+	repository := bootstrapRepository(t, sourceRepository)
+	identicalRoot := realSnapshot(t, sourceRepository, false)
 	identical := checkWith(t, repository, &fixtureSource{root: identicalRoot, candidate: acceptedCandidate()})
 	if identical.Counts.Modified != 0 || !identical.VerifySeal() || identical.PlanID == "" {
 		t.Fatalf("byte-identical bootstrap plan = %#v", identical)
@@ -544,6 +587,27 @@ type fixtureSource struct {
 	candidate Candidate
 }
 
+type gatedSnapshotSource struct {
+	fixtureSource
+	acquired chan struct{}
+	proceed  chan struct{}
+}
+
+func (source *gatedSnapshotSource) WithSnapshot(_ context.Context, _ Candidate, temporaryRoot string, visit func(string) error) error {
+	snapshot := filepath.Join(temporaryRoot, "snapshot")
+	if err := copyTreeError(source.root, snapshot); err != nil {
+		return err
+	}
+	close(source.acquired)
+	<-source.proceed
+	err := visit(snapshot)
+	cleanupErr := os.RemoveAll(snapshot)
+	if err != nil {
+		return err
+	}
+	return cleanupErr
+}
+
 func (source *fixtureSource) Releases(context.Context, SourceConfig) ([]Release, error) {
 	if source.candidate.Release == nil {
 		return nil, nil
@@ -750,6 +814,23 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("locate repository")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func bootstrapRepository(t *testing.T, source string) string {
+	t.Helper()
+	repository := t.TempDir()
+	copyTree(t, filepath.Join(source, "bundle"), filepath.Join(repository, "bundle"))
+	writeFile(t, filepath.Join(repository, "skills-lock.json"), "{}\n")
+	removeProductionLock(t, repository)
+	return repository
+}
+
+func removeProductionLock(t *testing.T, repository string) {
+	t.Helper()
+	err := os.Remove(filepath.Join(repository, "bundle", "sources.lock.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
 }
 
 func writeJSON(t *testing.T, name string, value any) {
