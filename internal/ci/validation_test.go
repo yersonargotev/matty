@@ -97,8 +97,9 @@ func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T)
 	}
 	for _, required := range []string{
 		"workflow_dispatch:", "permissions: {}", "group: sync-pack-source-${{ inputs.source_id }}", "cancel-in-progress: false",
+		"run-name: sync-pack-source / ${{ inputs.source_id }} / ${{ inputs.request_digest }}", "MATTY_REQUEST_DIGEST: ${{ inputs.request_digest }}",
 		"inspect:", "classify:", "validate:", "publish:", "needs: [inspect, classify, validate]", "contents: write", "pull-requests: write",
-		"--phase validate", "steps.route.outputs.noop", "matty-sync/inspect/no-op.json", "retention-days: 30",
+		"--phase validate", "steps.route.outputs.noop", "matty-sync/inspect/no-op.json", "pack-source-publication-${{ github.run_id }}", "retention-days: 30",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("synchronization workflow missing %q", required)
@@ -161,6 +162,71 @@ func TestDispatchSchemaMatchesRuntimeValidation(t *testing.T) {
 		schemaErr := validateSchemaInstance(t, "pack-source-dispatch.schema.json", data)
 		if (request.Validate() == nil) != (schemaErr == nil) {
 			t.Fatalf("runtime/schema dispatch disagreement for %s: runtime=%v schema=%v", data, request.Validate(), schemaErr)
+		}
+	}
+}
+
+func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T) {
+	type requestFixture struct {
+		Name    string          `json:"name"`
+		Intent  string          `json:"intent"`
+		Valid   bool            `json:"valid"`
+		Request json.RawMessage `json:"request"`
+	}
+	type monitoringFixture struct {
+		Name       string `json:"name"`
+		SameDigest bool   `json:"same_digest"`
+		RunStatus  string `json:"run_status"`
+		Artifact   string `json:"artifact"`
+		Dispatches int    `json:"dispatches"`
+		State      string `json:"state"`
+	}
+	var fixtures struct {
+		Requests   []requestFixture    `json:"requests"`
+		Monitoring []monitoringFixture `json:"monitoring"`
+	}
+	path := filepath.Join(repositoryRoot(t), "internal", "ci", "testdata", "sync-pack-source-skill.json")
+	if err := json.Unmarshal([]byte(readFile(t, path)), &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures.Requests {
+		var request packsyncworkflow.DispatchRequest
+		runtimeErr := json.Unmarshal(fixture.Request, &request)
+		if runtimeErr == nil {
+			runtimeErr = request.Validate()
+		}
+		schemaErr := validateSchemaInstance(t, "pack-source-dispatch.schema.json", fixture.Request)
+		if (runtimeErr == nil) != fixture.Valid || (schemaErr == nil) != fixture.Valid {
+			t.Fatalf("request fixture %s valid=%t runtime=%v schema=%v", fixture.Name, fixture.Valid, runtimeErr, schemaErr)
+		}
+		if fixture.Intent == "" {
+			t.Fatalf("request fixture %s has no maintainer intent", fixture.Name)
+		}
+	}
+	wantMonitoring := map[string]struct {
+		dispatches int
+		state      string
+	}{
+		"identical-active":     {0, "ejecución iniciada"},
+		"identical-pending":    {0, "pendiente"},
+		"distinct-pending":     {1, "solicitud aceptada"},
+		"url-only":             {1, "solicitud aceptada"},
+		"interrupted":          {0, "pendiente"},
+		"terminal-noop":        {0, "sin cambios"},
+		"terminal-publication": {0, "decision-ready"},
+		"terminal-failure":     {0, "bloqueada"},
+		"unexplained-success":  {0, "bloqueada"},
+	}
+	if len(fixtures.Monitoring) != len(wantMonitoring) {
+		t.Fatalf("monitoring fixtures = %d, want %d", len(fixtures.Monitoring), len(wantMonitoring))
+	}
+	for _, fixture := range fixtures.Monitoring {
+		want, ok := wantMonitoring[fixture.Name]
+		if !ok || fixture.Dispatches != want.dispatches || fixture.State != want.state {
+			t.Fatalf("monitoring fixture %s = dispatches %d state %q", fixture.Name, fixture.Dispatches, fixture.State)
+		}
+		if fixture.SameDigest && fixture.RunStatus != "none" && fixture.Dispatches != 0 {
+			t.Fatalf("identical fixture %s duplicates a run", fixture.Name)
 		}
 	}
 }

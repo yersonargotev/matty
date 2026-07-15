@@ -6,6 +6,7 @@ package packsyncworkflow
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +49,31 @@ type DispatchRequest struct {
 	ExpectedPlanID     string             `json:"expected_plan_id,omitempty"`
 	ExpectedBaseSHA    string             `json:"expected_base_sha,omitempty"`
 	HumanEvidence      json.RawMessage    `json:"human_evidence,omitempty"`
+}
+
+// Digest returns the stable request identity used only to attach maintainers to
+// an existing workflow run. It does not add authority or become a dispatch
+// field; the canonical request remains the source of truth.
+func (request DispatchRequest) Digest() (string, error) {
+	if err := request.Validate(); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append(canonical, '\n'))
+	return fmt.Sprintf("%x", sum), nil
 }
 
 func (request *DispatchRequest) UnmarshalJSON(data []byte) error {

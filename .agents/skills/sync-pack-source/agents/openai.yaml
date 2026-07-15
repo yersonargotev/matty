@@ -1,0 +1,4 @@
+interface:
+  display_name: "Synchronize Pack Source"
+  short_description: "Dispatch and monitor Matty's pack-source workflow."
+  default_prompt: "Use $sync-pack-source to normalize this maintainer request, preflight remote main, dispatch once, and monitor the canonical result."

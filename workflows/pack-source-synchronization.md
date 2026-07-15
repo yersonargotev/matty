@@ -23,6 +23,14 @@ Every request conforms to
 `source_id`, an explicit candidate selector, an explicit `ai` or `human`
 classification mode, and an operator reason. There are no automatic triggers.
 
+The workflow transport additionally requires `request_digest`, the lowercase
+SHA-256 of the sorted compact canonical request JSON including its trailing
+newline. This derived value is not a request field or synchronization authority.
+It is exposed with `source_id` in the run name so the repository-local
+maintainer skill can identify an identical pending run without exposing the
+reason or human evidence. Inspect recomputes and verifies it before admitting
+the request; a started run's `request.json` remains the owner-produced proof.
+
 `latest-stable` has no selector reference. `prerelease` carries one exact
 published prerelease tag. `commit` carries one full lowercase commit SHA. An
 AI request cannot carry human evidence and never changes modes automatically.
@@ -208,6 +216,11 @@ domain facts. The JSON and brief carry the same information:
 The managed title/body markers and their canonical hash form part of ownership
 revalidation. Logs are not the operational record, and the Markdown renderer
 cannot add authority absent from the sealed JSON inputs.
+
+Successful publication uploads `publication.json`, `proposal-brief.json`, and
+the rendered brief as one 30-day run artifact. The maintainer skill validates
+that artifact and the live PR before reporting decision readiness; neither the
+workflow conclusion nor a PR alone establishes success.
 
 ## Sandboxed acceptance tracer
 

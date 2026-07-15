@@ -1,0 +1,57 @@
+{
+  "requests": [
+    {
+      "name": "stable",
+      "intent": "Actualiza Matty desde los cambios estables recientes de mattpocock/skills.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"latest-stable","classification_mode":"ai","request_reason":"Actualiza Matty desde los cambios estables recientes de mattpocock/skills."}
+    },
+    {
+      "name": "prerelease",
+      "intent": "Sincroniza mattpocock-skills desde la prerelease exacta v1.2.0-beta.1.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"prerelease","selector_ref":"v1.2.0-beta.1","classification_mode":"ai","request_reason":"Sincroniza mattpocock-skills desde la prerelease exacta v1.2.0-beta.1."}
+    },
+    {
+      "name": "full-sha",
+      "intent": "Actualiza mattpocock-skills al commit completo.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"commit","selector_ref":"1111111111111111111111111111111111111111","classification_mode":"ai","request_reason":"Actualiza mattpocock-skills al commit completo."}
+    },
+    {
+      "name": "exact-retry",
+      "intent": "Reintenta el run 42 conservando el candidato resuelto.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"commit","selector_ref":"1111111111111111111111111111111111111111","classification_mode":"ai","request_reason":"Reintenta el run 42 conservando el candidato resuelto.","retry_of_run":"42"}
+    },
+    {
+      "name": "human-inspection",
+      "intent": "Actualiza mattpocock-skills usando clasificación humana.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"latest-stable","classification_mode":"human","request_reason":"Actualiza mattpocock-skills usando clasificación humana."}
+    },
+    {
+      "name": "human-evidence",
+      "intent": "Publica la evidencia humana ligada a la inspección.",
+      "valid": true,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"commit","selector_ref":"1111111111111111111111111111111111111111","classification_mode":"human","request_reason":"Publica la evidencia humana ligada a la inspección.","expected_plan_id":"plan-1","expected_base_sha":"2222222222222222222222222222222222222222","human_evidence":{"schema_version":1}}
+    },
+    {
+      "name": "floating-branch",
+      "intent": "Actualiza desde main.",
+      "valid": false,
+      "request": {"schema_version":1,"source_id":"mattpocock-skills","selector":"commit","selector_ref":"main","classification_mode":"ai","request_reason":"Actualiza desde main."}
+    }
+  ],
+  "monitoring": [
+    {"name":"identical-active","same_digest":true,"run_status":"in_progress","artifact":"request","dispatches":0,"state":"ejecución iniciada"},
+    {"name":"identical-pending","same_digest":true,"run_status":"queued","artifact":"none","dispatches":0,"state":"pendiente"},
+    {"name":"distinct-pending","same_digest":false,"run_status":"queued","artifact":"none","dispatches":1,"state":"solicitud aceptada"},
+    {"name":"url-only","same_digest":false,"run_status":"none","artifact":"none","dispatches":1,"state":"solicitud aceptada"},
+    {"name":"interrupted","same_digest":true,"run_status":"in_progress","artifact":"request","dispatches":0,"state":"pendiente"},
+    {"name":"terminal-noop","same_digest":true,"run_status":"completed","artifact":"noop","dispatches":0,"state":"sin cambios"},
+    {"name":"terminal-publication","same_digest":true,"run_status":"completed","artifact":"publication","dispatches":0,"state":"decision-ready"},
+    {"name":"terminal-failure","same_digest":true,"run_status":"completed","artifact":"operational","dispatches":0,"state":"bloqueada"},
+    {"name":"unexplained-success","same_digest":true,"run_status":"completed","artifact":"none","dispatches":0,"state":"bloqueada"}
+  ]
+}

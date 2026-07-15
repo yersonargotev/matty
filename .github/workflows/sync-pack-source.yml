@@ -1,10 +1,15 @@
 name: Synchronize pack source
+run-name: sync-pack-source / ${{ inputs.source_id }} / ${{ inputs.request_digest }}
 
 on:
   workflow_dispatch:
     inputs:
       source_id:
         description: Configured source identifier
+        required: true
+        type: string
+      request_digest:
+        description: SHA-256 identity of the canonical request JSON
         required: true
         type: string
       selector:
@@ -88,6 +93,7 @@ jobs:
           MATTY_SELECTOR_REF: ${{ inputs.selector_ref }}
           MATTY_CLASSIFICATION_MODE: ${{ inputs.classification_mode }}
           MATTY_REQUEST_REASON: ${{ inputs.request_reason }}
+          MATTY_REQUEST_DIGEST: ${{ inputs.request_digest }}
           MATTY_RETRY_OF_RUN: ${{ inputs.retry_of_run }}
           MATTY_EXPECTED_PLAN_ID: ${{ inputs.expected_plan_id }}
           MATTY_EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
@@ -302,5 +308,16 @@ jobs:
         with:
           name: pack-source-failure-${{ github.run_id }}
           path: ${{ runner.temp }}/matty-sync/publication/operational-artifact.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload canonical publication result
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-publication-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/matty-sync/publication/publication.json
+            ${{ runner.temp }}/matty-sync/publication/proposal-brief.json
+            ${{ runner.temp }}/matty-sync/publication/proposal-brief.md
           if-no-files-found: error
           retention-days: 30

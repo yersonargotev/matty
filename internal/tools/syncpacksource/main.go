@@ -190,6 +190,12 @@ func inspectRequest(option options) (packsyncworkflow.DispatchRequest, packsync.
 			if err := request.Validate(); err != nil {
 				return request, packsync.CheckRequest{}, err
 			}
+			if expected := os.Getenv("MATTY_REQUEST_DIGEST"); expected != "" {
+				actual, err := request.Digest()
+				if err != nil || actual != expected {
+					return request, packsync.CheckRequest{}, errors.New("workflow request digest does not match the canonical dispatch")
+				}
+			}
 			check, err := checkRequestForDispatch(option.repositoryRoot, request)
 			return request, check, err
 		}

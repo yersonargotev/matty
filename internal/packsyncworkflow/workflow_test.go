@@ -11,6 +11,37 @@ import (
 	"github.com/yersonargotev/matty/internal/packsync"
 )
 
+func TestDispatchDigestIsCanonicalAcrossEvidenceObjectOrder(t *testing.T) {
+	stable := DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: SelectorLatestStable, ClassificationMode: ClassificationAI, RequestReason: "fixture"}
+	stableDigest, err := stable.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stableDigest != "7b1ae0ab21f15629d19c22e1de9974b09198fb3f2d5c5d6f9ee890e7782d9b2e" {
+		t.Fatalf("stable digest = %q", stableDigest)
+	}
+	first := DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: SelectorCommit, SelectorRef: candidateA, ClassificationMode: ClassificationHuman, RequestReason: "evidence", ExpectedPlanID: "plan", ExpectedBaseSHA: baseA, HumanEvidence: []byte(`{"z":1,"a":{"d":2,"c":1}}`)}
+	second := first
+	second.HumanEvidence = []byte(`{"a":{"c":1,"d":2},"z":1}`)
+	firstDigest, err := first.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDigest, err := second.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstDigest != secondDigest || len(firstDigest) != 64 {
+		t.Fatalf("canonical digests = %q and %q", firstDigest, secondDigest)
+	}
+	changed := first
+	changed.RequestReason = "different"
+	changedDigest, _ := changed.Digest()
+	if changedDigest == firstDigest {
+		t.Fatal("distinct requests shared a digest")
+	}
+}
+
 const (
 	baseA      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	baseB      = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

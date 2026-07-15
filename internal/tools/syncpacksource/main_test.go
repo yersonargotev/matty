@@ -90,9 +90,26 @@ func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing
 	t.Setenv("MATTY_SELECTOR_REF", strings.Repeat("a", 40))
 	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
 	t.Setenv("MATTY_REQUEST_REASON", "fixture")
-	request, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
-	if err != nil || request.SourceID != "source" || check.Selector == nil || check.Selector.Mode != packsync.SelectorCommit {
-		t.Fatalf("normalized request = %#v, %#v, %v", request, check, err)
+	request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: strings.Repeat("a", 40), ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "fixture"}
+	digest, err := request.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MATTY_REQUEST_DIGEST", digest)
+	got, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
+	if err != nil || got.SourceID != "source" || check.Selector == nil || check.Selector.Mode != packsync.SelectorCommit {
+		t.Fatalf("normalized request = %#v, %#v, %v", got, check, err)
+	}
+}
+
+func TestInspectRejectsMismatchedWorkflowRequestDigest(t *testing.T) {
+	t.Setenv("MATTY_SOURCE_ID", "source")
+	t.Setenv("MATTY_SELECTOR", "latest-stable")
+	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("MATTY_REQUEST_REASON", "fixture")
+	t.Setenv("MATTY_REQUEST_DIGEST", strings.Repeat("0", 64))
+	if _, _, err := inspectRequest(options{repositoryRoot: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "request digest") {
+		t.Fatalf("mismatched request digest error = %v", err)
 	}
 }
 
