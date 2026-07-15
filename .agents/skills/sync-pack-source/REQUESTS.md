@@ -66,7 +66,7 @@ observed active and pending URLs and never manipulate that queue.
 Submit stdin JSON exactly once, adding only the required transport digest:
 
 ```sh
-request_digest="$(jq -cS . canonical-request.json | sha256sum | cut -d ' ' -f 1)"
+request_digest="$(jq -cS . canonical-request.json | shasum -a 256 | cut -d ' ' -f 1)"
 jq --arg request_digest "$request_digest" '{ref:"main", inputs:(
   del(.schema_version)
   |

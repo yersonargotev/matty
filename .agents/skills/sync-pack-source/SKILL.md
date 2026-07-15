@@ -51,4 +51,3 @@ or interruption, reporting **pendiente** rather than success.
 **decision-ready** for its exact plan/candidate/base/head identity, an intentional
 human-inspection wait, a linked supersession, or **bloqueada** with owner-produced
 evidence and an exact next action.
-

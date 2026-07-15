@@ -58,4 +58,3 @@ Base advancement uses a fresh exact-candidate dispatch. Edited metadata, human
 commits, divergence, closed PRs, unexpected identity, provenance discontinuity,
 or regression are decisions for the workflow/maintainer; never repair them.
 Candidate regression cannot be authorized away.
-
