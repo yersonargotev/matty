@@ -170,7 +170,7 @@ type FailureArtifact struct {
 }
 
 func (artifact FailureArtifact) CanonicalJSON() ([]byte, error) {
-	if artifact.SchemaVersion != 1 || artifact.State == "" || artifact.SourceID == "" || len(artifact.Blockers) == 0 || len(artifact.Recovery) == 0 {
+	if artifact.SchemaVersion != 1 || artifact.State == "" || !ValidSourceID(artifact.SourceID) || len(artifact.Blockers) == 0 || len(artifact.Recovery) == 0 {
 		return nil, errors.New("operational artifact is incomplete")
 	}
 	if artifact.ContainsSecrets || artifact.ContainsUpstreamBytes {
@@ -186,6 +186,11 @@ func (artifact FailureArtifact) CanonicalJSON() ([]byte, error) {
 	}
 	compact.WriteByte('\n')
 	return compact.Bytes(), nil
+}
+
+// ValidSourceID reports whether value is safe for canonical workflow identity.
+func ValidSourceID(value string) bool {
+	return sourceIDPattern.MatchString(value)
 }
 
 func requireFullSHA(name, value string) error {

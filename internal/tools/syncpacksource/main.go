@@ -98,9 +98,9 @@ func writeFailureArtifact(option options, failure error) error {
 	}
 	if sourceID == "" {
 		sourceID = os.Getenv("MATTY_SOURCE_ID")
-		if sourceID == "" {
-			sourceID = "unknown"
-		}
+	}
+	if !packsyncworkflow.ValidSourceID(sourceID) {
+		sourceID = "unknown"
 	}
 	context := packsyncworkflow.FailureArtifactContext{SourceID: sourceID, RunURL: actionsRunURL()}
 	planPath := option.planPath

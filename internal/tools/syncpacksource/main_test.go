@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -92,6 +93,31 @@ func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing
 	request, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
 	if err != nil || request.SourceID != "source" || check.Selector == nil || check.Selector.Mode != packsync.SelectorCommit {
 		t.Fatalf("normalized request = %#v, %#v, %v", request, check, err)
+	}
+}
+
+func TestInvalidDispatchStillEmitsCanonicalFailureArtifact(t *testing.T) {
+	output := t.TempDir()
+	t.Setenv("MATTY_SOURCE_ID", "../source")
+	t.Setenv("MATTY_SELECTOR", "latest-stable")
+	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("MATTY_REQUEST_REASON", "invalid source fixture")
+	if err := run(context.Background(), []string{"--phase", "inspect", "--output", output}, io.Discard); err == nil {
+		t.Fatal("invalid dispatch was admitted")
+	}
+	data, err := os.ReadFile(filepath.Join(output, "operational-artifact.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact packsyncworkflow.FailureArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact.SourceID != "unknown" {
+		t.Fatalf("failure source = %q", artifact.SourceID)
+	}
+	if _, err := artifact.CanonicalJSON(); err != nil {
+		t.Fatalf("failure artifact is not canonical: %v", err)
 	}
 }
 
