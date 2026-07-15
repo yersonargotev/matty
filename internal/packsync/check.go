@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -224,8 +225,11 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 		resources = append(resources, resource)
 	}
 	sort.Slice(resources, func(i, j int) bool { return bindingKey(resources[i].Binding) < bindingKey(resources[j].Binding) })
-	plan.ProposedLock = Lock{SchemaVersion: 1, SourceID: source.ID, Repository: plan.Candidate.Repository, RepositoryID: plan.Candidate.RepositoryID, Owner: plan.Candidate.Owner, OwnerID: plan.Candidate.OwnerID, Selector: plan.Selector, Candidate: plan.Candidate, Resources: resources}
+	plan.ProposedLock = Lock{SchemaVersion: 1, Generator: LockGeneratorName, GeneratorVersion: LockGeneratorVersion, Provider: source.Provider, ProviderAPIVersion: GitHubAPIVersion, SourceID: source.ID, Repository: plan.Candidate.Repository, RepositoryID: plan.Candidate.RepositoryID, Owner: plan.Candidate.Owner, OwnerID: plan.Candidate.OwnerID, Selector: plan.Selector, Candidate: plan.Candidate, Resources: resources}
 	plan.ProposedLock.Snapshot = snapshotHash(resources)
+	if lockPresent && lockDigest(oldLock) != lockDigest(plan.ProposedLock) {
+		plan.Changes = append(plan.Changes, Change{Kind: "provenance-updated", Path: "bundle/sources.lock.json", Before: lockDigest(oldLock), After: lockDigest(plan.ProposedLock)})
+	}
 	plan.Discoveries = discoverUnselected(snapshotRoot, bindings)
 	plan.Counts.Discoveries = len(plan.Discoveries)
 	return nil
@@ -292,6 +296,9 @@ func validateLock(lock Lock, source SourceConfig, candidate Candidate, selector 
 	if lock.SchemaVersion != 1 || lock.SourceID != source.ID {
 		blockers = append(blockers, "production lock schema or source identity is invalid")
 	}
+	if lock.Generator != LockGeneratorName || lock.GeneratorVersion != LockGeneratorVersion || lock.Provider != source.Provider || lock.ProviderAPIVersion != GitHubAPIVersion {
+		blockers = append(blockers, "production lock generator or provider evidence is invalid")
+	}
 	if lock.Repository != source.Repository || lock.RepositoryID != candidate.RepositoryID || lock.OwnerID != candidate.OwnerID || !strings.EqualFold(lock.Owner, candidate.Owner) {
 		blockers = append(blockers, "repository or owner numeric identity moved from the authoritative lock")
 	}
@@ -306,6 +313,9 @@ func validateLock(lock Lock, source SourceConfig, candidate Candidate, selector 
 	}
 	if lock.Candidate.Release != nil && candidate.Release != nil && lock.Candidate.Release.Tag == candidate.Release.Tag && lock.Candidate.TagRefSHA != "" && lock.Candidate.TagRefSHA != candidate.TagRefSHA {
 		blockers = append(blockers, "release tag ref moved for the locked candidate")
+	}
+	if lock.Candidate.Release != nil && candidate.Release != nil && lock.Candidate.Release.Tag == candidate.Release.Tag && !reflect.DeepEqual(lock.Candidate.Release, candidate.Release) {
+		blockers = append(blockers, "release identity or publication evidence changed for the locked tag")
 	}
 	if lock.Snapshot != snapshotHash(lock.Resources) {
 		blockers = append(blockers, "production lock snapshot hash is invalid")
@@ -331,7 +341,7 @@ func continuousTagChain(candidate Candidate) bool {
 		return false
 	}
 	for i, tag := range candidate.TagObjects {
-		if !fullSHA(tag.SHA) || tag.Name != candidate.Release.Tag || !fullSHA(tag.TargetSHA) {
+		if !fullSHA(tag.SHA) || tag.Name == "" || (i == 0 && tag.Name != candidate.Release.Tag) || !fullSHA(tag.TargetSHA) {
 			return false
 		}
 		want := candidate.Commit
@@ -424,6 +434,11 @@ func fullSHA(value string) bool {
 
 func fullDigest(value string) bool {
 	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
+}
+
+func lockDigest(lock Lock) string {
+	data, _ := json.Marshal(lock)
+	return hashBytes(data)
 }
 
 func diffFiles(binding Binding, local, candidate []FileEvidence) []Change {

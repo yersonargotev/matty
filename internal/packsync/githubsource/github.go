@@ -80,7 +80,7 @@ func (client *Client) Releases(ctx context.Context, source packsync.SourceConfig
 				}
 				published = parsed
 			}
-			releases = append(releases, packsync.Release{ID: item.ID, NodeID: item.NodeID, Tag: item.Tag, Name: item.Name, Target: item.Target, Immutable: item.Immutable, CreatedAt: created, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease, Author: item.Author.pack()})
+			releases = append(releases, packsync.Release{ID: item.ID, NodeID: item.NodeID, Tag: item.Tag, Name: item.Name, Target: item.Target, Immutable: item.Immutable, CreatedAt: created, PublishedAt: published, Draft: item.Draft, Prerelease: item.Prerelease, Author: item.Author.toActor()})
 		}
 		if len(response) < 100 {
 			break
@@ -124,7 +124,7 @@ func (client *Client) ResolveRelease(ctx context.Context, source packsync.Source
 		if err := client.getJSON(ctx, client.repoURL(source)+"/git/tags/"+object.SHA, &tag); err != nil {
 			return packsync.Candidate{}, fmt.Errorf("peel tag object: %w", err)
 		}
-		verification, err := tag.Verification.pack()
+		verification, err := tag.Verification.toEvidence()
 		if err != nil {
 			return packsync.Candidate{}, fmt.Errorf("decode tag verification: %w", err)
 		}
@@ -204,7 +204,7 @@ type verification struct {
 	Payload    *string `json:"payload"`
 }
 
-func (value verification) pack() (packsync.Verification, error) {
+func (value verification) toEvidence() (packsync.Verification, error) {
 	result := packsync.Verification{Verified: value.Verified, Reason: value.Reason, SignatureSHA256: hashOptional(value.Signature), PayloadSHA256: hashOptional(value.Payload)}
 	if value.VerifiedAt != nil {
 		parsed, err := time.Parse(time.RFC3339, *value.VerifiedAt)
@@ -222,7 +222,7 @@ type actor struct {
 	NodeID string `json:"node_id"`
 }
 
-func (value actor) pack() packsync.Actor {
+func (value actor) toActor() packsync.Actor {
 	return packsync.Actor{Login: value.Login, ID: value.ID, NodeID: value.NodeID}
 }
 
@@ -260,7 +260,7 @@ func (client *Client) addCommit(ctx context.Context, source packsync.SourceConfi
 	candidate.Commit = commit.SHA
 	candidate.CommitNodeID = commit.NodeID
 	candidate.Tree = commit.Tree.SHA
-	verification, err := commit.Verification.pack()
+	verification, err := commit.Verification.toEvidence()
 	if err != nil {
 		return fmt.Errorf("decode commit verification: %w", err)
 	}
@@ -310,7 +310,7 @@ func (client *Client) request(ctx context.Context, endpoint string) (*http.Reque
 		return nil, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("X-GitHub-Api-Version", packsync.GitHubAPIVersion)
 	request.Header.Set("User-Agent", "matty-pack-source-check")
 	return request, nil
 }

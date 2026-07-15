@@ -14,6 +14,9 @@ const (
 	SelectorStableRelease SelectorMode = "stable-release"
 	SelectorPrerelease    SelectorMode = "prerelease"
 	SelectorCommit        SelectorMode = "commit"
+	LockGeneratorName                  = "matty-packsync"
+	LockGeneratorVersion               = "1"
+	GitHubAPIVersion                   = "2022-11-28"
 )
 
 type Selector struct {
@@ -129,16 +132,20 @@ type ResourceEvidence struct {
 }
 
 type Lock struct {
-	SchemaVersion int                `json:"schema_version"`
-	SourceID      string             `json:"source_id"`
-	Repository    string             `json:"repository"`
-	RepositoryID  int64              `json:"repository_id"`
-	Owner         string             `json:"owner"`
-	OwnerID       int64              `json:"owner_id"`
-	Selector      Selector           `json:"selector"`
-	Candidate     Candidate          `json:"candidate"`
-	Snapshot      string             `json:"snapshot_sha256"`
-	Resources     []ResourceEvidence `json:"resources"`
+	SchemaVersion      int                `json:"schema_version"`
+	Generator          string             `json:"generator"`
+	GeneratorVersion   string             `json:"generator_version"`
+	Provider           string             `json:"provider"`
+	ProviderAPIVersion string             `json:"provider_api_version"`
+	SourceID           string             `json:"source_id"`
+	Repository         string             `json:"repository"`
+	RepositoryID       int64              `json:"repository_id"`
+	Owner              string             `json:"owner"`
+	OwnerID            int64              `json:"owner_id"`
+	Selector           Selector           `json:"selector"`
+	Candidate          Candidate          `json:"candidate"`
+	Snapshot           string             `json:"snapshot_sha256"`
+	Resources          []ResourceEvidence `json:"resources"`
 }
 
 type Change struct {

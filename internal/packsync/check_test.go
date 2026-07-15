@@ -150,6 +150,14 @@ func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 		plan := checkWith(t, repository, &moved)
 		assertBlocker(t, plan, "tag ref moved")
 	})
+	t.Run("recreated release identity", func(t *testing.T) {
+		recreated := *provider
+		release := *provider.candidate.Release
+		release.ID++
+		recreated.candidate.Release = &release
+		plan := checkWith(t, repository, &recreated)
+		assertBlocker(t, plan, "release identity or publication evidence changed")
+	})
 	t.Run("selected resource loss", func(t *testing.T) {
 		missing := t.TempDir()
 		plan := checkWith(t, repository, &fixtureSource{root: missing, candidate: acceptedCandidate()})
@@ -188,6 +196,32 @@ func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 		assertBlocker(t, plan, "retained provenance is invalid")
 		assertBlocker(t, plan, "duplicate selected resource")
 	})
+}
+
+func TestNewReleaseWithIdenticalBytesProducesProvenanceUpdate(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, provider)
+	writeJSON(t, filepath.Join(repository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+	newer := *provider
+	release := *provider.candidate.Release
+	release.ID++
+	release.NodeID = "new-release-node"
+	release.Tag = "v1.2.0"
+	release.Name = "v1.2.0"
+	release.CreatedAt = release.CreatedAt.Add(time.Hour)
+	release.PublishedAt = release.PublishedAt.Add(time.Hour)
+	newer.candidate.Release = &release
+	newer.candidate.TagRefName = "refs/tags/v1.2.0"
+	newer.candidate.TagRefSHA = strings.Repeat("c", 40)
+	newer.candidate.TagObjects = append([]TagObject(nil), provider.candidate.TagObjects...)
+	newer.candidate.TagObjects[0].SHA = strings.Repeat("c", 40)
+	newer.candidate.TagObjects[0].Name = "v1.2.0"
+	plan := checkWith(t, repository, &newer)
+	if plan.Status != "review-required" {
+		t.Fatalf("identical-byte new release status = %s, blockers=%#v", plan.Status, plan.Blockers)
+	}
+	assertChange(t, plan, "provenance-updated")
 }
 
 func TestAuthoritativeDiffReportsResourceAddRemoveAndMove(t *testing.T) {
@@ -255,6 +289,20 @@ func TestSelectorsRejectFloatingAndResolveDeterministically(t *testing.T) {
 		if err := validateSelector(selector); err == nil {
 			t.Fatalf("selector %#v unexpectedly accepted", selector)
 		}
+	}
+}
+
+func TestRecursiveAnnotatedTagChainAllowsDistinctInnerNames(t *testing.T) {
+	candidate := acceptedCandidate()
+	outer := strings.Repeat("c", 40)
+	inner := strings.Repeat("d", 40)
+	candidate.TagRefSHA = outer
+	candidate.TagObjects = []TagObject{
+		{SHA: outer, Name: candidate.Release.Tag, TargetSHA: inner, TargetType: "tag", Verification: Verification{Reason: "unsigned"}},
+		{SHA: inner, Name: "upstream-inner-tag", TargetSHA: candidate.Commit, TargetType: "commit", Verification: Verification{Reason: "unsigned"}},
+	}
+	if !continuousTagChain(candidate) {
+		t.Fatal("valid recursively annotated tag chain was rejected")
 	}
 }
 
