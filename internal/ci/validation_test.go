@@ -175,6 +175,7 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 	}
 	type monitoringFixture struct {
 		Name       string `json:"name"`
+		Operation  string `json:"operation"`
 		SameDigest bool   `json:"same_digest"`
 		RunStatus  string `json:"run_status"`
 		Artifact   string `json:"artifact"`
@@ -203,31 +204,113 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 			t.Fatalf("request fixture %s has no maintainer intent", fixture.Name)
 		}
 	}
-	wantMonitoring := map[string]struct {
-		dispatches int
-		state      string
-	}{
-		"identical-active":     {0, "ejecución iniciada"},
-		"identical-pending":    {0, "pendiente"},
-		"distinct-pending":     {1, "solicitud aceptada"},
-		"url-only":             {1, "solicitud aceptada"},
-		"interrupted":          {0, "pendiente"},
-		"terminal-noop":        {0, "sin cambios"},
-		"terminal-publication": {0, "decision-ready"},
-		"terminal-failure":     {0, "bloqueada"},
-		"unexplained-success":  {0, "bloqueada"},
+	testMaintainerDispatchRenderer(t, fixtures.Requests[0].Request)
+	var canonical packsyncworkflow.DispatchRequest
+	if err := json.Unmarshal(fixtures.Requests[0].Request, &canonical); err != nil {
+		t.Fatal(err)
 	}
-	if len(fixtures.Monitoring) != len(wantMonitoring) {
-		t.Fatalf("monitoring fixtures = %d, want %d", len(fixtures.Monitoring), len(wantMonitoring))
+	digest, err := canonical.Digest()
+	if err != nil {
+		t.Fatal(err)
 	}
+	root := repositoryRoot(t)
+	attachScript := filepath.Join(root, ".agents", "skills", "sync-pack-source", "scripts", "attach.sh")
+	resultScript := filepath.Join(root, ".agents", "skills", "sync-pack-source", "scripts", "result-state.sh")
 	for _, fixture := range fixtures.Monitoring {
-		want, ok := wantMonitoring[fixture.Name]
-		if !ok || fixture.Dispatches != want.dispatches || fixture.State != want.state {
-			t.Fatalf("monitoring fixture %s = dispatches %d state %q", fixture.Name, fixture.Dispatches, fixture.State)
+		workspace := t.TempDir()
+		requestPath := filepath.Join(workspace, "request.json")
+		writeFile(t, requestPath, string(fixtures.Requests[0].Request))
+		runsPath := filepath.Join(workspace, "runs.json")
+		runs := []map[string]any{}
+		if fixture.RunStatus != "none" {
+			titleDigest := "different"
+			if fixture.SameDigest {
+				titleDigest = digest
+			}
+			runs = append(runs, map[string]any{"displayTitle": "sync-pack-source / mattpocock-skills / " + titleDigest, "status": fixture.RunStatus, "url": "https://github.com/yersonargotev/matty/actions/runs/42"})
 		}
-		if fixture.SameDigest && fixture.RunStatus != "none" && fixture.Dispatches != 0 {
-			t.Fatalf("identical fixture %s duplicates a run", fixture.Name)
+		runsJSON, _ := json.Marshal(runs)
+		writeFile(t, runsPath, string(runsJSON))
+		attached := exec.Command(attachScript, requestPath, runsPath).Run() == nil
+		dispatches := 1
+		if attached || fixture.Operation == "monitor" {
+			dispatches = 0
 		}
+		state := "solicitud aceptada"
+		if fixture.Name == "interrupted" {
+			state = "pendiente"
+		} else if dispatches == 0 {
+			runPath := filepath.Join(workspace, "run.json")
+			writeFile(t, runPath, fmt.Sprintf(`{"status":%q}`, fixture.RunStatus))
+			artifacts := filepath.Join(workspace, "artifacts")
+			if err := os.MkdirAll(artifacts, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			switch fixture.Artifact {
+			case "noop":
+				writeFile(t, filepath.Join(artifacts, "no-op.json"), `{}`)
+			case "publication":
+				writeFile(t, filepath.Join(artifacts, "publication.json"), `{"decision_ready":true}`)
+			case "operational":
+				writeFile(t, filepath.Join(artifacts, "operational-artifact.json"), `{}`)
+			case "inspection":
+				writeFile(t, filepath.Join(artifacts, "inspection.json"), `{}`)
+			}
+			output, err := exec.Command(resultScript, runPath, artifacts).CombinedOutput()
+			if err != nil {
+				t.Fatalf("monitoring fixture %s: %v: %s", fixture.Name, err, output)
+			}
+			state = strings.TrimSpace(string(output))
+		}
+		if dispatches != fixture.Dispatches || state != fixture.State {
+			t.Fatalf("monitoring fixture %s = dispatches %d state %q, want %d %q", fixture.Name, dispatches, state, fixture.Dispatches, fixture.State)
+		}
+	}
+}
+
+func testMaintainerDispatchRenderer(t *testing.T, request json.RawMessage) {
+	t.Helper()
+	root := repositoryRoot(t)
+	workspace := t.TempDir()
+	requestPath := filepath.Join(workspace, "request.json")
+	writeFile(t, requestPath, string(request))
+	bin := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argsPath, stdinPath := filepath.Join(workspace, "args"), filepath.Join(workspace, "stdin")
+	fake := `#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_GH_ARGS"
+cat > "$FAKE_GH_STDIN"
+echo https://github.com/yersonargotev/matty/actions/runs/42
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, ".agents", "skills", "sync-pack-source", "scripts", "dispatch.sh")
+	cmd := exec.Command(script, requestPath)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GH_ARGS="+argsPath, "FAKE_GH_STDIN="+stdinPath)
+	if output, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(output), "/actions/runs/42") {
+		t.Fatalf("fixture dispatch = %v: %s", err, output)
+	}
+	wantArgs := "workflow run .github/workflows/sync-pack-source.yml --repo yersonargotev/matty --ref main --json"
+	if got := strings.TrimSpace(readFile(t, argsPath)); got != wantArgs {
+		t.Fatalf("gh args = %q, want %q", got, wantArgs)
+	}
+	var inputs map[string]string
+	if err := json.Unmarshal([]byte(readFile(t, stdinPath)), &inputs); err != nil {
+		t.Fatal(err)
+	}
+	var canonical packsyncworkflow.DispatchRequest
+	if err := json.Unmarshal(request, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := canonical.Digest()
+	if inputs["request_digest"] != digest || inputs["source_id"] != canonical.SourceID || inputs["selector"] != string(canonical.Selector) || inputs["classification_mode"] != string(canonical.ClassificationMode) || inputs["request_reason"] != canonical.RequestReason {
+		t.Fatalf("workflow inputs = %#v", inputs)
+	}
+	if _, present := inputs["schema_version"]; present {
+		t.Fatal("workflow transport contains schema_version")
 	}
 }
 

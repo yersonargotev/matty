@@ -13,6 +13,11 @@ and presents evidence.
 
 ## 1. Normalize
 
+If the maintainer supplied an existing run ID/URL only for monitoring, validate
+that it belongs to `yersonargotev/matty` and the canonical workflow, then go
+directly to **Monitor and conclude** using its owner-produced request and
+artifacts. Recovery or retry continues through normalization below.
+
 Follow [REQUESTS.md](REQUESTS.md). Resolve the source and selector exclusively
 from remote `main`, render the exact canonical JSON request, and reject every
 ambiguity or forbidden override before any write.

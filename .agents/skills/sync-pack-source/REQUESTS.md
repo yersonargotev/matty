@@ -63,25 +63,15 @@ A distinct admitted request may be dispatched; GitHub's non-cancelling
 per-source concurrency owns queueing and pending supersession. Report the
 observed active and pending URLs and never manipulate that queue.
 
-Submit stdin JSON exactly once, adding only the required transport digest:
+Submit stdin JSON exactly once with the repository-owned renderer, which adds
+only the required transport digest and executes the accepted primary command:
 
 ```sh
-request_digest="$(jq -cS . canonical-request.json | shasum -a 256 | cut -d ' ' -f 1)"
-jq --arg request_digest "$request_digest" '{ref:"main", inputs:(
-  del(.schema_version)
-  |
-  with_entries(.value |= if type == "object" or type == "array" then tojson else tostring end)
-  | if has("human_evidence") then .human_evidence_json=.human_evidence | del(.human_evidence) else . end
-  | .request_digest=$request_digest
-)}' canonical-request.json |
-  gh api --method POST \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2026-03-10' \
-    repos/yersonargotev/matty/actions/workflows/sync-pack-source.yml/dispatches \
-    --input -
+./.agents/skills/sync-pack-source/scripts/dispatch.sh canonical-request.json
 ```
 
-Require the response's `workflow_run_id` and `html_url`; do not rediscover the
-run by time or actor. If dispatch is unavailable, report **bloqueada** and show
-this exact API request plus the equivalent Actions UI fields. Instructions are
-not success.
+Require the returned run URL; do not rediscover the run by time or actor. If
+dispatch is unavailable, report **bloqueada** and show the exact `gh workflow
+run .github/workflows/sync-pack-source.yml --repo yersonargotev/matty --ref
+main --json` command plus equivalent Actions UI fields. Instructions are not
+success.
