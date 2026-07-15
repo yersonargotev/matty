@@ -14,42 +14,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Test, vet and build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Check formatting
-        run: |
-          set -euo pipefail
-          go_files="$(git ls-files '*.go' ':!:.scratch/**')"
-          unformatted="$(gofmt -l $go_files)"
-          if [[ -n "$unformatted" ]]; then
-            echo "These files are not gofmt-clean:" >&2
-            echo "$unformatted" >&2
-            echo "Run 'gofmt -w' on these files and commit the result." >&2
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build CLI
-        run: go build ./...
-
-      - name: Test
-        run: go test ./...
-
-  race:
-    name: Race detector (all Go packages)
+  validate:
+    name: Validate Matty-owned code
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -62,5 +28,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test all Go packages with race detector
-        run: go test -race -timeout 10m ./...
+      - name: Validate allowlisted Matty-owned code
+        run: ./scripts/validate-matty.sh

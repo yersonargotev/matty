@@ -96,8 +96,13 @@ If `XDG_CONFIG_HOME` is unset or relative, Matty uses `~/.config`.
 
 ## Verification
 
-The final v0 verification command is:
+The repository validation authority uses an explicit allowlist of Matty-owned
+Go packages and paths, so vendored or temporary upstream content is never
+discovered or executed:
 
 ```sh
-go test ./...
+./scripts/validate-matty.sh
 ```
+
+Until vendored upstream Go content exists, `go test ./...` also remains a
+supported compatibility check.
