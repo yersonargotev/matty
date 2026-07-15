@@ -56,7 +56,18 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 	if err := validateSelector(selector); err != nil {
 		return Plan{}, err
 	}
-	candidate, err := engine.resolve(ctx, source, selector)
+	lock, lockBytes, lockPresent, err := readLock(filepath.Join(request.RepositoryRoot, "bundle", "sources.lock.json"))
+	if err != nil {
+		return Plan{}, err
+	}
+	var releases []Release
+	if selector.Mode != SelectorCommit || (lockPresent && lock.Candidate.Release != nil) {
+		releases, err = engine.Source.Releases(ctx, source)
+		if err != nil {
+			return Plan{}, fmt.Errorf("list published releases: %w", err)
+		}
+	}
+	candidate, err := engine.resolveFromReleases(ctx, source, selector, releases)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -66,10 +77,6 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		return Plan{}, err
 	}
 	bindings, bindingBlockers := deriveDestinations(source.Resources, manifests)
-	lock, lockBytes, lockPresent, err := readLock(filepath.Join(request.RepositoryRoot, "bundle", "sources.lock.json"))
-	if err != nil {
-		return Plan{}, err
-	}
 	bundleHash, err := treeHash(filepath.Join(request.RepositoryRoot, "bundle"))
 	if err != nil {
 		return Plan{}, fmt.Errorf("hash bundle: %w", err)
@@ -90,6 +97,11 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
 	} else {
 		plan.Blockers = append(plan.Blockers, validateLock(lock, source, candidate, selector)...)
+		continuityBlockers, err := engine.lockedContinuity(ctx, source, lock, releases)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.Blockers = append(plan.Blockers, continuityBlockers...)
 	}
 	plan.Blockers = append(plan.Blockers, validateCandidate(source, candidate, selector)...)
 
@@ -121,10 +133,18 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 }
 
 func (engine Engine) resolve(ctx context.Context, source SourceConfig, selector Selector) (Candidate, error) {
-	releases, err := engine.Source.Releases(ctx, source)
-	if err != nil {
-		return Candidate{}, fmt.Errorf("list published releases: %w", err)
+	var releases []Release
+	var err error
+	if selector.Mode != SelectorCommit {
+		releases, err = engine.Source.Releases(ctx, source)
+		if err != nil {
+			return Candidate{}, fmt.Errorf("list published releases: %w", err)
+		}
 	}
+	return engine.resolveFromReleases(ctx, source, selector, releases)
+}
+
+func (engine Engine) resolveFromReleases(ctx context.Context, source SourceConfig, selector Selector, releases []Release) (Candidate, error) {
 	switch selector.Mode {
 	case SelectorStableRelease:
 		var stable []Release
@@ -162,6 +182,37 @@ func (engine Engine) resolve(ctx context.Context, source SourceConfig, selector 
 	default:
 		return Candidate{}, fmt.Errorf("floating or unknown selector %q is forbidden", selector.Mode)
 	}
+}
+
+func (engine Engine) lockedContinuity(ctx context.Context, source SourceConfig, lock Lock, releases []Release) ([]string, error) {
+	var observed Candidate
+	var err error
+	if lock.Candidate.Release != nil {
+		var current *Release
+		for i := range releases {
+			if releases[i].Tag == lock.Candidate.Release.Tag {
+				current = &releases[i]
+				break
+			}
+		}
+		if current == nil {
+			return []string{"currently locked release tag is no longer published by the configured repository"}, nil
+		}
+		observed, err = engine.Source.ResolveRelease(ctx, source, *current)
+	} else {
+		observed, err = engine.Source.ResolveCommit(ctx, source, lock.Candidate.Commit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("re-resolve currently locked provenance: %w", err)
+	}
+	var blockers []string
+	for _, blocker := range validateCandidate(source, observed, lock.Selector) {
+		blockers = append(blockers, "currently locked provenance is no longer valid: "+blocker)
+	}
+	if !reflect.DeepEqual(lock.Candidate, observed) {
+		blockers = append(blockers, "currently locked release/tag/commit provenance changed")
+	}
+	return blockers, nil
 }
 
 func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, bindings []Binding, manifests map[string]packManifest, oldLock Lock, lockPresent bool, plan *Plan) error {

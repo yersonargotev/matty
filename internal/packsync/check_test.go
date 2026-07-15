@@ -3,6 +3,7 @@ package packsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -217,11 +218,42 @@ func TestNewReleaseWithIdenticalBytesProducesProvenanceUpdate(t *testing.T) {
 	newer.candidate.TagObjects = append([]TagObject(nil), provider.candidate.TagObjects...)
 	newer.candidate.TagObjects[0].SHA = strings.Repeat("c", 40)
 	newer.candidate.TagObjects[0].Name = "v1.2.0"
-	plan := checkWith(t, repository, &newer)
+	history := &multiReleaseSource{root: snapshot, candidates: map[string]Candidate{provider.candidate.Release.Tag: provider.candidate, newer.candidate.Release.Tag: newer.candidate}}
+	plan := checkWith(t, repository, history)
 	if plan.Status != "review-required" {
 		t.Fatalf("identical-byte new release status = %s, blockers=%#v", plan.Status, plan.Blockers)
 	}
 	assertChange(t, plan, "provenance-updated")
+}
+
+func TestCheckReResolvesMovedLockedTagBeforeSelectingNewerRelease(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	locked := acceptedCandidate()
+	bootstrap := checkWith(t, repository, &fixtureSource{root: snapshot, candidate: locked})
+	writeJSON(t, filepath.Join(repository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+
+	newer := locked
+	newRelease := *locked.Release
+	newRelease.ID++
+	newRelease.NodeID = "new-release-node"
+	newRelease.Tag = "v1.2.0"
+	newRelease.Name = "v1.2.0"
+	newRelease.CreatedAt = newRelease.CreatedAt.Add(time.Hour)
+	newRelease.PublishedAt = newRelease.PublishedAt.Add(time.Hour)
+	newer.Release = &newRelease
+	newer.TagRefName = "refs/tags/v1.2.0"
+	newer.TagRefSHA = strings.Repeat("c", 40)
+	newer.TagObjects = append([]TagObject(nil), locked.TagObjects...)
+	newer.TagObjects[0].SHA = newer.TagRefSHA
+	newer.TagObjects[0].Name = newRelease.Tag
+
+	movedLocked := locked
+	movedLocked.TagObjects = append([]TagObject(nil), locked.TagObjects...)
+	movedLocked.TagRefSHA = strings.Repeat("d", 40)
+	movedLocked.TagObjects[0].SHA = movedLocked.TagRefSHA
+	provider := &multiReleaseSource{root: snapshot, candidates: map[string]Candidate{locked.Release.Tag: movedLocked, newer.Release.Tag: newer}}
+	plan := checkWith(t, repository, provider)
+	assertBlocker(t, plan, "currently locked release/tag/commit provenance changed")
 }
 
 func TestAuthoritativeDiffReportsResourceAddRemoveAndMove(t *testing.T) {
@@ -406,6 +438,46 @@ func (source *fixtureSource) WithSnapshot(_ context.Context, _ Candidate, tempor
 type selectorSource struct {
 	fixtureSource
 	releases []Release
+}
+
+type multiReleaseSource struct {
+	root       string
+	candidates map[string]Candidate
+}
+
+func (source *multiReleaseSource) Releases(context.Context, SourceConfig) ([]Release, error) {
+	var releases []Release
+	for _, candidate := range source.candidates {
+		releases = append(releases, *candidate.Release)
+	}
+	return releases, nil
+}
+
+func (source *multiReleaseSource) ResolveRelease(_ context.Context, _ SourceConfig, release Release) (Candidate, error) {
+	candidate, ok := source.candidates[release.Tag]
+	if !ok {
+		return Candidate{}, errors.New("release candidate not found")
+	}
+	candidate.Release = &release
+	return candidate, nil
+}
+
+func (source *multiReleaseSource) ResolveCommit(_ context.Context, _ SourceConfig, sha string) (Candidate, error) {
+	for _, candidate := range source.candidates {
+		if candidate.Commit == sha {
+			candidate.Release = nil
+			candidate.TagObjects = nil
+			candidate.TagRefName = ""
+			candidate.TagRefType = ""
+			candidate.TagRefSHA = ""
+			return candidate, nil
+		}
+	}
+	return Candidate{}, errors.New("commit candidate not found")
+}
+
+func (source *multiReleaseSource) WithSnapshot(_ context.Context, _ Candidate, temporaryRoot string, visit func(string) error) error {
+	return (&fixtureSource{root: source.root}).WithSnapshot(context.Background(), Candidate{}, temporaryRoot, visit)
 }
 
 func (source *selectorSource) Releases(context.Context, SourceConfig) ([]Release, error) {
