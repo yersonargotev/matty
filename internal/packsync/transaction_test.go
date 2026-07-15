@@ -173,6 +173,26 @@ func TestApplyRejectsEverySealedFreshnessBoundary(t *testing.T) {
 	}
 }
 
+func TestPublicationProvenanceRevalidationRejectsMovedCandidate(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+	plan := checkWith(t, repository, provider)
+	if err := (Engine{Source: provider}).RevalidateCandidate(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	provider.candidate.RepositoryID++
+	if err := (Engine{Source: provider}).RevalidateCandidate(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "provenance changed") {
+		t.Fatalf("moved provenance error = %v", err)
+	}
+}
+
+func TestRecoverPendingTreatsAbsentMarkerAsCleanState(t *testing.T) {
+	result, pending, err := (Engine{}).RecoverPending(context.Background(), t.TempDir())
+	if err != nil || pending || result.Status != "" {
+		t.Fatalf("clean recovery state = %#v pending=%v err=%v", result, pending, err)
+	}
+}
+
 func TestRecoverRetainsEvidenceForIncompleteBackupAndAmbiguousSiblings(t *testing.T) {
 	for _, test := range []struct {
 		name   string

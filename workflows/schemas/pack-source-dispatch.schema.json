@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yersonargotev/matty/workflows/schemas/pack-source-dispatch.schema.json",
+  "title": "Pack source synchronization dispatch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "selector",
+    "classification_mode",
+    "request_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "selector": {
+      "enum": ["latest-stable", "prerelease", "commit"]
+    },
+    "selector_ref": { "type": "string", "minLength": 1 },
+    "classification_mode": { "enum": ["ai", "human"] },
+    "request_reason": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+    "retry_of_run": { "type": "string", "pattern": "^[0-9]+$" },
+    "expected_plan_id": { "type": "string", "minLength": 1 },
+    "expected_base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "human_evidence": {}
+  },
+  "dependentRequired": {
+    "expected_plan_id": ["expected_base_sha", "human_evidence"],
+    "expected_base_sha": ["expected_plan_id", "human_evidence"],
+    "human_evidence": ["expected_plan_id", "expected_base_sha"]
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "selector": { "const": "latest-stable" } } },
+      "then": { "not": { "required": ["selector_ref"] } }
+    },
+    {
+      "if": { "properties": { "selector": { "const": "prerelease" } } },
+      "then": {
+        "required": ["selector_ref"],
+        "properties": {
+          "selector_ref": {
+            "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$"
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "selector": { "const": "commit" } } },
+      "then": {
+        "required": ["selector_ref"],
+        "properties": { "selector_ref": { "pattern": "^[0-9a-f]{40}$" } }
+      }
+    },
+    {
+      "if": { "properties": { "classification_mode": { "const": "ai" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["expected_plan_id"] },
+            { "required": ["expected_base_sha"] },
+            { "required": ["human_evidence"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "required": ["human_evidence"] },
+      "then": {
+        "required": ["expected_plan_id", "expected_base_sha"],
+        "properties": {
+          "selector": { "const": "commit" },
+          "classification_mode": { "const": "human" }
+        }
+      }
+    }
+  ]
+}

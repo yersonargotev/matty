@@ -194,21 +194,22 @@ type Preconditions struct {
 }
 
 type Plan struct {
-	SchemaVersion  int           `json:"schema_version"`
-	PlanID         string        `json:"plan_id"`
-	Status         string        `json:"status"`
-	Authoritative  bool          `json:"authoritative"`
-	SourceID       string        `json:"source_id"`
-	Selector       Selector      `json:"selector"`
-	Candidate      Candidate     `json:"candidate"`
-	Counts         Counts        `json:"counts"`
-	Changes        []Change      `json:"changes"`
-	AffectedPacks  []PackImpact  `json:"affected_packs"`
-	Discoveries    []string      `json:"unselected_discoveries"`
-	Blockers       []string      `json:"blockers"`
-	Preconditions  Preconditions `json:"preconditions"`
-	ProposedLock   Lock          `json:"proposed_lock"`
-	LegacyEvidence bool          `json:"legacy_root_lock_present"`
+	SchemaVersion          int           `json:"schema_version"`
+	PlanID                 string        `json:"plan_id"`
+	Status                 string        `json:"status"`
+	Authoritative          bool          `json:"authoritative"`
+	SourceID               string        `json:"source_id"`
+	Selector               Selector      `json:"selector"`
+	Candidate              Candidate     `json:"candidate"`
+	Counts                 Counts        `json:"counts"`
+	Changes                []Change      `json:"changes"`
+	AffectedPacks          []PackImpact  `json:"affected_packs"`
+	Discoveries            []string      `json:"unselected_discoveries"`
+	Blockers               []string      `json:"blockers"`
+	Preconditions          Preconditions `json:"preconditions"`
+	PreviousSnapshotSHA256 string        `json:"previous_snapshot_sha256,omitempty"`
+	ProposedLock           Lock          `json:"proposed_lock"`
+	LegacyEvidence         bool          `json:"legacy_root_lock_present"`
 }
 
 type CheckRequest struct {

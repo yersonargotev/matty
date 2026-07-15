@@ -23,6 +23,7 @@ readonly packages=(
   ./internal/packclassification
   ./internal/packsync
   ./internal/packsync/githubsource
+  ./internal/packsyncworkflow
   ./internal/prompt
   ./internal/release
   ./internal/setuphealth

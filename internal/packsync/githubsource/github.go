@@ -32,6 +32,20 @@ type Client struct {
 	apiBase    string
 }
 
+// HTTPError preserves rate-limit and service response metadata for the
+// workflow-owned retry policy without making acquisition decide whether a
+// failure is retryable.
+type HTTPError struct {
+	Operation  string
+	StatusCode int
+	Status     string
+	RetryAfter string
+}
+
+func (failure HTTPError) Error() string {
+	return fmt.Sprintf("%s: GitHub returned %s", failure.Operation, failure.Status)
+}
+
 func New(httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -179,7 +193,7 @@ func (client *Client) WithSnapshot(ctx context.Context, candidate packsync.Candi
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("download immutable archive: GitHub returned %s", response.Status)
+		return HTTPError{Operation: "download immutable archive", StatusCode: response.StatusCode, Status: response.Status, RetryAfter: response.Header.Get("Retry-After")}
 	}
 	snapshot := filepath.Join(temporaryRoot, "snapshot")
 	if err := os.Mkdir(snapshot, 0o755); err != nil {
@@ -295,7 +309,7 @@ func (client *Client) getJSON(ctx context.Context, endpoint string, target any) 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub returned %s", response.Status)
+		return HTTPError{Operation: "read GitHub API", StatusCode: response.StatusCode, Status: response.Status, RetryAfter: response.Header.Get("Retry-After")}
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 8<<20))
 	if err := decoder.Decode(target); err != nil {

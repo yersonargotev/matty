@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yersonargotev/matty/workflows/schemas/pack-source-operational-artifact.schema.json",
+  "title": "Pack source synchronization operational artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "state",
+    "source_id",
+    "blockers",
+    "recovery",
+    "contains_secrets",
+    "contains_upstream_bytes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "state": { "const": "blocked" },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "blockers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "recovery": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "run_url": { "type": "string", "format": "uri" },
+    "contains_secrets": { "const": false },
+    "contains_upstream_bytes": { "const": false }
+  }
+}

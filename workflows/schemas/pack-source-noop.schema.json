@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yersonargotev/matty/workflows/schemas/pack-source-noop.schema.json",
+  "title": "Pack source synchronization no-op",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state", "source_id", "plan_id", "base_sha", "candidate_sha", "contains_secrets", "contains_upstream_bytes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "state": { "const": "no-op" },
+    "source_id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "contains_secrets": { "const": false },
+    "contains_upstream_bytes": { "const": false }
+  }
+}
