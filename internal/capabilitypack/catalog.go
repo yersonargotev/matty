@@ -76,9 +76,10 @@ func (p Pack) ResourceCounts() ResourceCounts {
 }
 
 type Catalog struct {
-	packs      []Pack
-	bundleRoot string
-	entries    []catalogEntry
+	packs                 []Pack
+	bundleRoot            string
+	entries               []catalogEntry
+	allowSyntheticHistory bool
 }
 
 type catalogEntry struct {

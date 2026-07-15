@@ -14,6 +14,7 @@ type StatusRequest struct {
 type IntentStatus struct {
 	Active   bool
 	Revision int
+	Version  string
 }
 
 type AttemptStatus struct {
@@ -63,6 +64,7 @@ type StatusEntry struct {
 	Surface             Surface
 	Intent              IntentStatus
 	IntentPresent       bool
+	UpdateAvailable     bool
 	LatestAttempt       *AttemptStatus
 	Readiness           ReadinessStatus
 	ReadinessObserved   ReadinessObservationStatus
@@ -88,6 +90,11 @@ type Facade struct {
 }
 
 func NewFacade(catalog Catalog, options ...FacadeOption) Facade {
+	// Package tests use in-memory catalogs to isolate lifecycle policy from
+	// filesystem provenance. Discover always supplies a bundle root in runtime.
+	if catalog.bundleRoot == "" && len(catalog.packs) > 0 {
+		catalog.allowSyntheticHistory = true
+	}
 	facade := Facade{catalog: catalog}
 	for _, option := range options {
 		option(&facade)
@@ -143,10 +150,11 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	entry := StatusEntry{Pack: pack, Surface: surface}
 	evidencePack := pack
 	if intent, ok := intentForPack(state, pack.ID, surface); ok {
-		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision}
+		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision, Version: intent.Version}
 		entry.IntentPresent = true
+		entry.UpdateAvailable = intent.Active && intent.Version != pack.Version
 		if intent.Active {
-			evidencePack, err = f.catalog.showVersion(intent.PackID, intent.Version)
+			evidencePack, err = f.catalog.resolveIntentPack(intent.PackID, intent.Version)
 			if err != nil {
 				return StatusEntry{}, err
 			}

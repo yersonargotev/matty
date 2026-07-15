@@ -121,7 +121,7 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 		if intent.PackID == requested.ID && !useRequestedIntent {
 			continue
 		}
-		pack, err := f.catalog.showVersion(intent.PackID, intent.Version)
+		pack, err := f.catalog.resolveIntentPack(intent.PackID, intent.Version)
 		if err != nil {
 			return composition{}, err
 		}
@@ -233,7 +233,7 @@ func (f Facade) composeWithout(requested Pack, state ActivationState, surface Su
 			continue
 		}
 		remaining = append(remaining, intent)
-		pack, err := f.catalog.showVersion(intent.PackID, intent.Version)
+		pack, err := f.catalog.resolveIntentPack(intent.PackID, intent.Version)
 		if err != nil {
 			return composition{}, nil, err
 		}
@@ -254,7 +254,7 @@ func (f Facade) composeWithout(requested Pack, state ActivationState, surface Su
 	if len(remaining) == 0 {
 		return composition{requested: Pack{ID: requested.ID, Surfaces: []Surface{surface}}, contributors: map[string][]string{}}, dependents, nil
 	}
-	root, err := f.catalog.showVersion(remaining[0].PackID, remaining[0].Version)
+	root, err := f.catalog.resolveIntentPack(remaining[0].PackID, remaining[0].Version)
 	if err != nil {
 		return composition{}, nil, err
 	}

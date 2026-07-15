@@ -13,6 +13,7 @@ type JSONIntent struct {
 	State    string `json:"state"`
 	Active   *bool  `json:"active"`
 	Revision *int   `json:"revision"`
+	Version  string `json:"version,omitempty"`
 }
 
 type JSONAttempt struct {
@@ -39,6 +40,7 @@ type JSONStatusEntry struct {
 	PackVersion         string                `json:"pack_version"`
 	Surface             Surface               `json:"surface"`
 	Intent              JSONIntent            `json:"intent"`
+	UpdateAvailable     bool                  `json:"update_available"`
 	LatestAttempt       *JSONAttempt          `json:"latest_attempt"`
 	Projections         JSONProjectionSummary `json:"projection_summary"`
 	Readiness           JSONReadiness         `json:"readiness"`
@@ -63,7 +65,7 @@ func (report StatusReport) JSONReport(targeted bool) JSONStatusReport {
 		intent := JSONIntent{State: "absent"}
 		if entry.IntentPresent {
 			active, revision := entry.Intent.Active, entry.Intent.Revision
-			intent = JSONIntent{State: "known", Active: &active, Revision: &revision}
+			intent = JSONIntent{State: "known", Active: &active, Revision: &revision, Version: entry.Intent.Version}
 		}
 		var attempt *JSONAttempt
 		if entry.LatestAttempt != nil {
@@ -77,7 +79,7 @@ func (report StatusReport) JSONReport(targeted bool) JSONStatusReport {
 		}
 		entries = append(entries, JSONStatusEntry{
 			Pack: entry.Pack.ID, PackVersion: entry.Pack.Version, Surface: entry.Surface,
-			Intent: intent, LatestAttempt: attempt, Projections: JSONProjectionSummary{Verified: entry.Projections.Verified, Missing: entry.Projections.Missing, Drifted: entry.Projections.Drifted, Ambiguous: entry.Projections.Ambiguous, Unmanaged: entry.Projections.Unmanaged},
+			Intent: intent, UpdateAvailable: entry.UpdateAvailable, LatestAttempt: attempt, Projections: JSONProjectionSummary{Verified: entry.Projections.Verified, Missing: entry.Projections.Missing, Drifted: entry.Projections.Drifted, Ambiguous: entry.Projections.Ambiguous, Unmanaged: entry.Projections.Unmanaged},
 			Readiness: JSONReadiness{optionalBool(entry.ReadinessObserved.Configured, entry.Readiness.Configured), optionalBool(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), optionalBool(entry.ReadinessObserved.Usability, entry.Readiness.Usable)},
 			Blockers:  sortedCopy(entry.Blockers), Evidence: sortedCopy(entry.Evidence), PendingHumanActions: sortedCopy(entry.PendingHumanActions),
 		})

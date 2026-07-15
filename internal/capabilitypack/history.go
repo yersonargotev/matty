@@ -15,6 +15,10 @@ import (
 
 const historicalArtifactSchemaVersion = 1
 
+var trustedHistoricalAggregates = map[string]string{
+	"matty@1.0.0": "9f19a157532a3ee607938a4ec83a8f0bfc745d60d5fd0101b72c456988f800c0",
+}
+
 type historicalFileEvidence struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
@@ -39,7 +43,7 @@ type historicalArtifact struct {
 	AggregateSHA256 string                       `json:"aggregate_sha256"`
 }
 
-func (c Catalog) showVersion(id, version string) (Pack, error) {
+func (c Catalog) resolveIntentPack(id, version string) (Pack, error) {
 	current, err := c.Show(id)
 	if err != nil {
 		return Pack{}, err
@@ -50,17 +54,12 @@ func (c Catalog) showVersion(id, version string) (Pack, error) {
 	if version == current.Version {
 		return current, nil
 	}
-	if c.bundleRoot == "" {
-		// In-memory catalogs are a package-test seam. Production catalogs always
-		// carry a bundle root and therefore cannot bypass historical validation.
+	if c.allowSyntheticHistory {
 		current.Version = version
 		return current, nil
 	}
-	if id != "matty" || version != "1.0.0" {
-		// This delivery preserves exactly matty@1.0.0. Other versions retain the
-		// pre-history behavior until their own immutable artifacts are delivered.
-		current.Version = version
-		return current, nil
+	if c.bundleRoot == "" {
+		return Pack{}, fmt.Errorf("capability pack %q targets unavailable historical version %s", id, version)
 	}
 	if !idPattern.MatchString(id) || !validSemver(version) {
 		return Pack{}, fmt.Errorf("capability pack %q targets invalid historical version %q", id, version)
@@ -97,6 +96,13 @@ func loadHistoricalArtifact(root, bundleRoot, packID, version string) (Pack, err
 	}
 	if artifact.SchemaVersion != historicalArtifactSchemaVersion || artifact.PackID != packID || artifact.PackVersion != version {
 		return Pack{}, fmt.Errorf("artifact identity does not match %s@%s", packID, version)
+	}
+	trustedAggregate, trusted := trustedHistoricalAggregates[packID+"@"+version]
+	if !trusted {
+		return Pack{}, fmt.Errorf("historical artifact %s@%s has no trusted immutable aggregate", packID, version)
+	}
+	if artifact.AggregateSHA256 != trustedAggregate {
+		return Pack{}, fmt.Errorf("artifact aggregate hash does not match the trusted immutable aggregate")
 	}
 	if artifact.Manifest.Path != "pack.json" {
 		return Pack{}, fmt.Errorf("artifact manifest path must be pack.json")
@@ -377,4 +383,9 @@ func canonicalHistoricalArtifact(artifact historicalArtifact) ([]byte, error) {
 		return nil, fmt.Errorf("encode canonical artifact evidence: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+func hasTrustedHistoricalArtifact(packID, version string) bool {
+	_, ok := trustedHistoricalAggregates[packID+"@"+version]
+	return ok
 }

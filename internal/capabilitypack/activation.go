@@ -511,7 +511,7 @@ func (f Facade) PreviewDeactivate(ctx context.Context, request DeactivationReque
 	oldVersion := requested.Version
 	if active && intent.Version != "" {
 		oldVersion = intent.Version
-		requested, err = f.catalog.showVersion(request.PackID, intent.Version)
+		requested, err = f.catalog.resolveIntentPack(request.PackID, intent.Version)
 		if err != nil {
 			return ReconciliationPlan{}, err
 		}
@@ -611,7 +611,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 		return ReconciliationPlan{}, err
 	}
 	var beforeCompositionFacts []Pack
-	if operation == OperationUpdate {
+	if operation == OperationUpdate && hasTrustedHistoricalArtifact(requested.ID, oldVersion) {
 		before, err := f.compose(requested, state, request.Surface, true)
 		if err != nil {
 			return ReconciliationPlan{}, err
@@ -646,7 +646,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 				continue
 			}
 			if managedDrift {
-				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to catalog-current content: " + projection.Action.Description
+				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to intent-selected content: " + projection.Action.Description
 			}
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				destructiveActions = append(destructiveActions, projection.Action)
@@ -1035,11 +1035,13 @@ type planPreflight struct {
 }
 
 func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (planPreflight, error) {
-	freshCatalog, err := f.catalog.refreshed()
-	if err != nil {
-		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or manifest changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
+	if !planUsesHistoricalIntent(plan) {
+		freshCatalog, err := f.catalog.refreshed()
+		if err != nil {
+			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or manifest changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
+		}
+		f.catalog = freshCatalog
 	}
-	f.catalog = freshCatalog
 	pack, adapter, state, err := f.activationInputs(ctx, ActivationRequest{PackID: plan.pack.ID, Surface: plan.surface})
 	if err != nil {
 		return planPreflight{}, err
@@ -1050,7 +1052,7 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 	if plan.operation == OperationDeactivate {
 		intent, ok := intentForPack(state, plan.pack.ID, plan.surface)
 		if ok && intent.Version != "" {
-			pack, err = f.catalog.showVersion(intent.PackID, intent.Version)
+			pack, err = f.catalog.resolveIntentPack(intent.PackID, intent.Version)
 			if err != nil {
 				return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("historical artifact changed after Preview: %v; rerun deactivate to preview a fresh plan", err)}
 			}
@@ -1070,7 +1072,7 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 	if err != nil {
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("catalog or historical artifact changed after Preview: %v; rerun %s to preview a fresh plan", err, plan.operation)}
 	}
-	if plan.operation == OperationUpdate {
+	if plan.operation == OperationUpdate && len(plan.beforeCompositionFacts) > 0 {
 		before, beforeErr := f.compose(pack, state, plan.surface, true)
 		if beforeErr != nil || digestJSON(before.packs) != digestJSON(plan.beforeCompositionFacts) {
 			return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("historical update comparison changed after Preview; rerun %s to preview a fresh plan", plan.operation)}
@@ -1121,6 +1123,18 @@ func (f Facade) preflightPlan(ctx context.Context, plan ReconciliationPlan) (pla
 		return planPreflight{}, StalePlanError{Precondition: fmt.Sprintf("%s projections changed after Preview; rerun %s to preview a fresh plan", plan.surface, plan.operation)}
 	}
 	return planPreflight{pack: pack, adapter: adapter, state: state, composition: current, combined: combined, resolutions: resolutions}, nil
+}
+
+func planUsesHistoricalIntent(plan ReconciliationPlan) bool {
+	if plan.operation != OperationReconcile && plan.operation != OperationDeactivate {
+		return false
+	}
+	for _, pack := range append(append([]Pack(nil), plan.compositionFacts...), plan.beforeCompositionFacts...) {
+		if hasTrustedHistoricalArtifact(pack.ID, pack.Version) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendCompleted(completed []string, id string) []string {

@@ -90,6 +90,15 @@ func TestHistoricalArtifactFailsClosed(t *testing.T) {
 			artifact.AggregateSHA256 = historicalAggregateHash(artifact)
 			writeHistoricalArtifact(t, root, artifact)
 		}},
+		{name: "coordinated bytes and evidence mutation", mutate: func(t *testing.T, root, _ string) {
+			path := firstHistoricalResourceFile(t, root)
+			mustWrite(t, path, append(mustRead(t, path), '\n'), 0o644)
+			artifact, err := inspectHistoricalArtifact(root, mustDecodeHistoricalManifest(t, root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeHistoricalArtifact(t, root, artifact)
+		}},
 		{name: "wrong artifact identity", mutate: func(t *testing.T, root, _ string) {
 			artifact := readHistoricalArtifact(t, root)
 			artifact.PackID = "other"
@@ -101,7 +110,7 @@ func TestHistoricalArtifactFailsClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			catalog, root, bundle := clonedHistoricalCatalog(t)
 			test.mutate(t, root, bundle)
-			if _, err := catalog.showVersion("matty", "1.0.0"); err == nil {
+			if _, err := catalog.resolveIntentPack("matty", "1.0.0"); err == nil {
 				t.Fatal("mutated historical artifact was accepted")
 			}
 		})
@@ -121,31 +130,20 @@ func TestHistoricalOperationsUseOnlyHistoryWhileSelectionStaysCatalogCurrent(t *
 	}
 	intent := ActivationIntent{PackID: "matty", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 4}
 	state := ActivationState{Intent: intent, Intents: []ActivationIntent{intent}}
-	adapter := &fakeSurfaceAdapter{inspect: func(transition SurfaceTransition) SurfaceInspection {
-		for _, pack := range []Pack{transition.Prior, transition.Desired} {
-			for _, resource := range pack.Resources {
-				if resource.Source == "" {
-					continue
-				}
-				if !strings.HasPrefix(resource.Source, "history/matty/1.0.0/") && pack.Version == "1.0.0" {
-					t.Fatalf("pinned pack used non-historical source %q", resource.Source)
-				}
-			}
-		}
-		return SurfaceInspection{}
-	}}
+	adapter := &fakeSurfaceAdapter{}
 	store := &fakeActivationStore{state: state}
 	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 
-	if _, err := facade.Status(context.Background(), StatusRequest{PackID: "matty", Surface: SurfaceCodex}); err != nil {
+	report, err := facade.Status(context.Background(), StatusRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil {
 		t.Fatalf("historical status failed: %v", err)
 	}
-	if _, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "matty", Surface: SurfaceCodex}); err != nil {
-		t.Fatalf("historical reconcile/repair failed: %v", err)
+	if len(report.Entries) != 1 || report.Entries[0].Intent.Version != "1.0.0" || !report.Entries[0].UpdateAvailable {
+		t.Fatalf("status omitted pinned version or update availability: %+v", report)
 	}
-	deactivate, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "matty", Surface: SurfaceCodex})
-	if err != nil || deactivate.OldVersion() != "1.0.0" {
-		t.Fatalf("historical deactivate comparison failed: plan=%+v err=%v", deactivate, err)
+	jsonReport := report.JSONReport(true)
+	if jsonReport.Entries[0].Intent.Version != "1.0.0" || !jsonReport.Entries[0].UpdateAvailable {
+		t.Fatalf("structured status omitted pinned version or update availability: %+v", jsonReport)
 	}
 	update, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "matty", Surface: SurfaceCodex})
 	if err != nil {
@@ -154,6 +152,39 @@ func TestHistoricalOperationsUseOnlyHistoryWhileSelectionStaysCatalogCurrent(t *
 	if update.Pack().Version != "2.0.0" || len(update.beforeCompositionFacts) != 1 || update.beforeCompositionFacts[0].Version != "1.0.0" {
 		t.Fatalf("update did not compare historical 1.0.0 to catalog-current 2.0.0: %+v", update)
 	}
+
+	historicalInstruction := filepath.Join(root, "instructions", "matty-guidance.md")
+	desired := historicalHash(mustRead(t, historicalInstruction))
+	drift := SurfaceInspection{Revision: "drift", Projections: []ObservedProjection{{ID: "instruction:matty-guidance", Exists: true, ObservedFingerprint: "drifted", DesiredFingerprint: desired, Action: ProjectionAction{ID: "instruction:matty-guidance", Kind: ActionInstructionFile, Source: historicalInstruction}}}}
+	verified := drift
+	verified.Revision = "verified"
+	verified.Projections = append([]ObservedProjection(nil), drift.Projections...)
+	verified.Projections[0].ObservedFingerprint = desired
+	adapter = &fakeSurfaceAdapter{observations: []SurfaceInspection{drift, drift, verified}}
+	store.state.Ownership = []ProjectionOwnership{{ID: "instruction:matty-guidance", Contributors: []string{"matty"}, Fingerprint: desired}}
+	facade = NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+	repair, err := facade.PreviewReconcile(context.Background(), ReconcileRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil || len(repair.Phases()) != 1 || !strings.Contains(repair.Phases()[0].Actions[0].Description, "intent-selected content") {
+		t.Fatalf("historical repair plan failed: plan=%+v err=%v", repair, err)
+	}
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: repair, Approvals: []ApprovalReceipt{facade.Approve(repair, ConsentReversibleLocal)}, Interactive: true})
+	if err != nil || !result.Verified {
+		t.Fatalf("historical repair apply failed: result=%+v err=%v", result, err)
+	}
+	assertHistoricalTransitionSources(t, adapter.calls)
+
+	deletion := SurfaceInspection{Revision: "present", Projections: []ObservedProjection{{ID: "instruction:matty-guidance", Exists: true, ObservedFingerprint: desired, Action: ProjectionAction{ID: "instruction:matty-guidance", Kind: ActionInstructionFile, Mode: ProjectionRemoveContent}}}}
+	adapter = &fakeSurfaceAdapter{observations: []SurfaceInspection{deletion, deletion, {Revision: "removed"}}}
+	facade = NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+	deactivate, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil || deactivate.OldVersion() != "1.0.0" {
+		t.Fatalf("historical deactivate comparison failed: plan=%+v err=%v", deactivate, err)
+	}
+	result, err = facade.Apply(context.Background(), ApplyRequest{Plan: deactivate, Approvals: []ApprovalReceipt{facade.Approve(deactivate, ConsentDestructiveCleanup)}, Interactive: true})
+	if err != nil || !result.Verified || store.state.Intent.Active {
+		t.Fatalf("historical deactivate apply failed: result=%+v state=%+v err=%v", result, store.state, err)
+	}
+	assertHistoricalTransitionSources(t, adapter.calls)
 
 	store.state = ActivationState{}
 	fresh, err := facade.Preview(context.Background(), ActivationRequest{PackID: "matty", Surface: SurfaceCodex})
@@ -168,6 +199,19 @@ func TestHistoricalOperationsUseOnlyHistoryWhileSelectionStaysCatalogCurrent(t *
 	}
 }
 
+func assertHistoricalTransitionSources(t *testing.T, calls []surfaceInspectionCall) {
+	t.Helper()
+	for _, call := range calls {
+		for _, pack := range []Pack{call.prior, call.desired} {
+			for _, resource := range pack.Resources {
+				if pack.Version == "1.0.0" && resource.Source != "" && !strings.HasPrefix(resource.Source, "history/matty/1.0.0/") {
+					t.Fatalf("pinned pack used non-historical source %q", resource.Source)
+				}
+			}
+		}
+	}
+}
+
 func TestHistoryNeverFallsBackToCatalogCurrent(t *testing.T) {
 	catalog, root, bundle := clonedHistoricalCatalog(t)
 	artifact := readHistoricalArtifact(t, root)
@@ -175,7 +219,7 @@ func TestHistoryNeverFallsBackToCatalogCurrent(t *testing.T) {
 	mustRemove(t, filepath.Join(root, filepath.FromSlash(source)))
 	fallback := filepath.Join(bundle, filepath.FromSlash(source))
 	mustWrite(t, fallback, []byte("catalog-current bytes\n"), 0o644)
-	if _, err := catalog.showVersion("matty", "1.0.0"); err == nil {
+	if _, err := catalog.resolveIntentPack("matty", "1.0.0"); err == nil {
 		t.Fatal("missing historical bytes fell back to catalog-current")
 	}
 }
