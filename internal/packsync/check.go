@@ -290,6 +290,9 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 				if locked.UpstreamPath != binding.UpstreamPath && locked.SHA256 == resource.SHA256 {
 					plan.Changes = append(plan.Changes, Change{Kind: "resource-moved", PackID: binding.PackID, ResourceID: binding.ResourceID, Path: binding.UpstreamPath, Before: locked.UpstreamPath, After: binding.UpstreamPath})
 					plan.Counts.Moved++
+				} else if locked.VendoredPath != binding.VendoredPath && locked.SHA256 == resource.SHA256 {
+					plan.Changes = append(plan.Changes, Change{Kind: "resource-moved", PackID: binding.PackID, ResourceID: binding.ResourceID, Path: binding.VendoredPath, Before: locked.VendoredPath, After: binding.VendoredPath})
+					plan.Counts.Moved++
 				}
 				if locked.SHA256 != resourceHash(locked.Files) {
 					plan.Blockers = append(plan.Blockers, "locked selected-resource hash is invalid: "+bindingKey(binding))

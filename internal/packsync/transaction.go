@@ -390,7 +390,8 @@ func materializeSelectedResources(staged, snapshotRoot string, current Lock, cur
 	nextByKey := mapResources(next.Resources)
 	if currentPresent {
 		for _, resource := range current.Resources {
-			if _, retained := nextByKey[bindingKey(resource.Binding)]; retained {
+			next, retained := nextByKey[bindingKey(resource.Binding)]
+			if retained && next.VendoredPath == resource.VendoredPath {
 				continue
 			}
 			target, err := stagedResourcePath(staged, resource.VendoredPath)

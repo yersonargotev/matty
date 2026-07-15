@@ -348,6 +348,39 @@ func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 	}
 }
 
+func TestApplyRemovesObsoleteDestinationWhenManifestMovesBinding(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, provider)
+	engine := Engine{Source: provider, Validate: acceptingBundleValidator()}
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	oldDestination := filepath.Join(repository, "bundle", "skills", "engineering", "one")
+	newDestination := filepath.Join(repository, "bundle", "skills", "engineering", "moved")
+	copyTree(t, oldDestination, newDestination)
+	manifest := filepath.Join(repository, "bundle", "packs", "matty", "pack.json")
+	writeFile(t, manifest, strings.Replace(string(mustReadFile(t, manifest)), "skills/engineering/one", "skills/engineering/moved", 1))
+
+	plan := checkWith(t, repository, provider)
+	if plan.Status != "review-required" || !plan.Authoritative || plan.Counts.Moved != 1 {
+		t.Fatalf("destination move plan = %#v", plan)
+	}
+	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldDestination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete selected destination remains: %v", err)
+	}
+	if got := string(mustReadFile(t, filepath.Join(newDestination, "SKILL.md"))); got != "same\n" {
+		t.Fatalf("new selected destination = %q", got)
+	}
+	repeated := checkWith(t, repository, provider)
+	if repeated.Status != "no-op" || len(repeated.Changes) != 0 || len(repeated.Blockers) != 0 {
+		t.Fatalf("repeated Check = %#v", repeated)
+	}
+}
+
 func TestRecoverResumesAfterItsOwnRollbackAndCleanupEffects(t *testing.T) {
 	t.Run("rollback rename already completed", func(t *testing.T) {
 		repository, snapshot := tinyRepository(t)
