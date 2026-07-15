@@ -88,6 +88,9 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 			return fmt.Errorf("resolve repository base: %w", err)
 		}
 		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, LockSHA256: hashBytes(fresh.lockBytes)}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json"))}
+		if fresh.lockPresent {
+			plan.PreviousSnapshotSHA256 = fresh.lock.Snapshot
+		}
 		if !fresh.lockPresent {
 			plan.Preconditions.LockSHA256 = ""
 			plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")

@@ -135,6 +135,20 @@ func TestResolveCommitRequiresFullExactSHA(t *testing.T) {
 	}
 }
 
+func TestHTTPFailurePreservesRetryAfterWithoutChoosingRetryPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Retry-After", "9")
+		writer.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	client := newClient(server.Client(), server.URL)
+	_, err := client.Releases(context.Background(), packsync.SourceConfig{Repository: "o/r"})
+	var responseError HTTPError
+	if !errors.As(err, &responseError) || responseError.StatusCode != http.StatusTooManyRequests || responseError.RetryAfter != "9" {
+		t.Fatalf("HTTP error = %#v, %v", responseError, err)
+	}
+}
+
 func TestReleasesFollowsEveryPageNeededForStableDiscovery(t *testing.T) {
 	requestedSecondPage := false
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

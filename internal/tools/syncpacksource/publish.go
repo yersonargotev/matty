@@ -1,0 +1,674 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+)
+
+type phaseValidator interface {
+	packsync.BundleValidator
+	packsyncworkflow.Validator
+}
+
+var (
+	workflowValidatorFactory = func() phaseValidator { return commandValidator{} }
+	workflowGatewayFactory   = newGitHubGateway
+)
+
+func publish(ctx context.Context, option options, output io.Writer) error {
+	if option.requestPath == "" || option.planPath == "" || option.evidencePath == "" || option.validationPath == "" || option.outputDir == "" {
+		return errors.New("publish requires request, plan, evidence, validation proof, and output paths")
+	}
+	var dispatch packsyncworkflow.DispatchRequest
+	var plan packsync.Plan
+	var evidence packsync.ClassificationEvidenceSet
+	if err := readJSON(option.requestPath, &dispatch); err != nil {
+		return err
+	}
+	if err := dispatch.Validate(); err != nil {
+		return err
+	}
+	if err := readJSON(option.planPath, &plan); err != nil {
+		return err
+	}
+	if err := readJSON(option.evidencePath, &evidence); err != nil {
+		return err
+	}
+	if plan.SourceID != dispatch.SourceID || plan.Candidate.Commit == "" || plan.Preconditions.BaseCommit == "" {
+		return errors.New("dispatch and sealed plan identity contradict")
+	}
+	if err := validateWorkflowEvidence(plan, evidence); err != nil {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureClassification, Err: err}
+	}
+	var validation packsyncworkflow.ValidationArtifact
+	if err := readJSON(option.validationPath, &validation); err != nil {
+		return err
+	}
+	if err := validation.Validate(); err != nil || validation.SourceID != dispatch.SourceID || validation.PlanID != plan.PlanID || validation.BaseSHA != plan.Preconditions.BaseCommit || validation.CandidateSHA != plan.Candidate.Commit {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: errors.New("sandbox validation proof is missing, invalid, or stale")}
+	}
+	acquisition, err := os.MkdirTemp("", "matty-pack-publish-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(acquisition)
+	validator := workflowValidatorFactory()
+	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
+	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
+	if plan.Status == "no-op" {
+		return writeCanonical(filepath.Join(option.outputDir, "publication.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "candidate_sha": plan.Candidate.Commit})
+	}
+	if err := os.MkdirAll(option.outputDir, 0o755); err != nil {
+		return err
+	}
+	if err := stageAll(ctx, option.repositoryRoot); err != nil {
+		return err
+	}
+	baseStatus, err := command(ctx, option.repositoryRoot, "git", "status", "--porcelain")
+	if err != nil || strings.TrimSpace(baseStatus) != "" {
+		return errors.New("publish sandbox must begin from the exact clean base")
+	}
+	github := workflowGatewayFactory(option.repositoryRoot, plan)
+	builder := &publicationBuilder{dispatch: dispatch, plan: plan, evidence: evidence, evidencePath: option.evidencePath, github: github}
+	publisher := packsyncworkflow.Publisher{Applier: engine, Validator: validator, Builder: builder, Diff: gitDiffVerifier{}, Provenance: engine, GitHub: github}
+	result, err := publisher.Run(ctx, packsyncworkflow.PublishRequest{RepositoryRoot: option.repositoryRoot, Apply: apply})
+	if err != nil {
+		return err
+	}
+	builder.brief.PullRequest = result.PullRequest.Number
+	builder.brief.HeadSHA = result.PullRequest.HeadSHA
+	builder.brief.Validation = result.Readiness.Gates
+	builder.brief.DecisionReady = result.Readiness.DecisionReady
+	builder.brief.Blockers = nil
+	builder.brief.InvalidationConditions = result.Proposal.InvalidationConditions
+	if err := writeCanonical(filepath.Join(option.outputDir, "proposal-brief.json"), builder.brief); err != nil {
+		return err
+	}
+	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.PullRequest.HeadSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
+	if err := writeCanonical(filepath.Join(option.outputDir, "publication.json"), artifact); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, filepath.Join(option.outputDir, "publication.json"))
+	return err
+}
+
+func validateSandbox(ctx context.Context, option options, output io.Writer) error {
+	if option.requestPath == "" || option.planPath == "" || option.evidencePath == "" || option.outputDir == "" {
+		return errors.New("validate requires request, plan, evidence, and output paths")
+	}
+	var dispatch packsyncworkflow.DispatchRequest
+	var plan packsync.Plan
+	var evidence packsync.ClassificationEvidenceSet
+	if err := readJSON(option.requestPath, &dispatch); err != nil {
+		return err
+	}
+	if err := readJSON(option.planPath, &plan); err != nil {
+		return err
+	}
+	if err := readJSON(option.evidencePath, &evidence); err != nil {
+		return err
+	}
+	if err := dispatch.Validate(); err != nil || plan.SourceID != dispatch.SourceID || plan.Preconditions.BaseCommit == "" || plan.Candidate.Commit == "" {
+		return errors.New("validation inputs contradict the sealed dispatch")
+	}
+	if err := validateWorkflowEvidence(plan, evidence); err != nil {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureClassification, Err: err}
+	}
+	acquisition, err := os.MkdirTemp("", "matty-pack-validate-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(acquisition)
+	validator := workflowValidatorFactory()
+	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
+	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
+	if _, err := engine.Apply(ctx, apply); err != nil {
+		return err
+	}
+	if err := validator.Validate(ctx, option.repositoryRoot); err != nil {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: err}
+	}
+	artifact := packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, MattySuite: true, Apply: true, UpstreamBytes: false}
+	if err := artifact.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(option.outputDir, 0o755); err != nil {
+		return err
+	}
+	if err := writeCanonical(filepath.Join(option.outputDir, "validation.json"), artifact); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, filepath.Join(option.outputDir, "validation.json"))
+	return err
+}
+
+func validateWorkflowEvidence(plan packsync.Plan, evidence packsync.ClassificationEvidenceSet) error {
+	if len(plan.AffectedPacks) > 0 {
+		return packsync.ValidateClassificationEvidence(plan, evidence)
+	}
+	if len(evidence.Evidence) != 0 || evidence.PlanID != "" || evidence.BaseSHA != "" || evidence.SchemaVersion != 0 {
+		return errors.New("classification evidence contradicts a plan without affected packs")
+	}
+	return nil
+}
+
+type publicationBuilder struct {
+	dispatch     packsyncworkflow.DispatchRequest
+	plan         packsync.Plan
+	evidence     packsync.ClassificationEvidenceSet
+	evidencePath string
+	github       *githubGateway
+	proposal     packsyncworkflow.Proposal
+	brief        packsyncworkflow.ReviewBrief
+	provenance   string
+}
+
+type gitDiffVerifier struct{}
+
+func (gitDiffVerifier) Seal(ctx context.Context, root string) (string, error) {
+	if err := stageAll(ctx, root); err != nil {
+		return "", err
+	}
+	tree, err := command(ctx, root, "git", "write-tree")
+	return strings.TrimSpace(tree), err
+}
+
+func (gitDiffVerifier) VerifyWorkspace(ctx context.Context, root, seal string) error {
+	observed, err := (gitDiffVerifier{}).Seal(ctx, root)
+	if err != nil {
+		return err
+	}
+	if observed != seal {
+		return errors.New("workspace tree changed after Apply was sealed")
+	}
+	return nil
+}
+
+func (gitDiffVerifier) VerifyCommit(ctx context.Context, root, seal, head string) error {
+	observed, err := command(ctx, root, "git", "rev-parse", head+"^{tree}")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(observed) != seal {
+		return errors.New("commit tree differs from sealed Apply tree")
+	}
+	return nil
+}
+
+func (builder *publicationBuilder) Build(ctx context.Context, repositoryRoot string, applyResult packsync.ApplyResult) (packsyncworkflow.Proposal, error) {
+	if err := stageAll(ctx, repositoryRoot); err != nil {
+		return packsyncworkflow.Proposal{}, err
+	}
+	provenance, err := fileHash(filepath.Join(repositoryRoot, "bundle", "sources.lock.json"))
+	if err != nil {
+		return packsyncworkflow.Proposal{}, err
+	}
+	head, err := prepareCommit(ctx, repositoryRoot, builder.dispatch.SourceID, builder.plan)
+	if err != nil {
+		return packsyncworkflow.Proposal{}, err
+	}
+	traces := []packsyncworkflow.ClassifierTrace{}
+	_ = readJSON(filepath.Join(filepath.Dir(builder.evidencePath), "classifier-trace.json"), &traces)
+	brief := packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: os.Getenv("GITHUB_ACTOR"), RunID: os.Getenv("GITHUB_RUN_ID"), RunAttempt: os.Getenv("GITHUB_RUN_ATTEMPT"), RunURL: actionsRunURL(), Request: builder.dispatch, Candidate: builder.plan.Candidate, PlanID: builder.plan.PlanID, BaseSHA: builder.plan.Preconditions.BaseCommit, HeadSHA: head, Branch: "sync/" + builder.dispatch.SourceID, Changes: builder.plan.Changes, Discoveries: builder.plan.Discoveries, SelectedResources: builder.plan.ProposedLock.Resources, PreviousSnapshotSHA256: builder.plan.PreviousSnapshotSHA256, ProposedSnapshotSHA256: builder.plan.ProposedLock.Snapshot, Classification: builder.evidence.Evidence, ClassifierTrace: traces, ApplyStatus: applyResult.Status, UpstreamContentExecuted: false, DecisionReady: false, AutoMerge: false, ManualMergeRequired: true, Recovery: []string{"Review the canonical evidence and diff, then merge manually only while readiness remains valid."}}
+	title := fmt.Sprintf("sync(%s): %s", builder.dispatch.SourceID, builder.plan.Candidate.Commit[:12])
+	proposal := packsyncworkflow.Proposal{SourceID: builder.dispatch.SourceID, PlanID: builder.plan.PlanID, BaseSHA: builder.plan.Preconditions.BaseCommit, CandidateSHA: builder.plan.Candidate.Commit, ResultTreeSHA: head, ProvenanceSHA256: provenance, ManagedTitle: title}
+	builder.proposal, builder.brief, builder.provenance = proposal, brief, provenance
+	builder.github.title, builder.github.brief = title, brief
+	return proposal, nil
+}
+
+type commandValidator struct{}
+
+func (commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
+	if filepath.Clean(bundleRoot) == filepath.Join(filepath.Clean(repositoryRoot), "bundle") {
+		return commandValidator{}.Validate(ctx, repositoryRoot)
+	}
+	sandbox, err := os.MkdirTemp("", "matty-staged-validation-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(sandbox)
+	checkout := filepath.Join(sandbox, "repo")
+	if err := copyForValidation(repositoryRoot, checkout, bundleRoot); err != nil {
+		return err
+	}
+	return commandValidator{}.Validate(ctx, checkout)
+}
+
+func (commandValidator) Validate(ctx context.Context, repositoryRoot string) error {
+	home, err := os.MkdirTemp("", "matty-validation-home-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(home)
+	cmd := exec.CommandContext(ctx, "bash", "./scripts/validate-matty.sh")
+	cmd.Dir = repositoryRoot
+	cmd.Env = append(withoutCredentials(os.Environ()), "HOME="+filepath.Join(home, "home"), "XDG_CONFIG_HOME="+filepath.Join(home, "xdg"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Matty-owned validation failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func copyForValidation(repositoryRoot, checkout, bundleRoot string) error {
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(repositoryRoot)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".git" || entry.Name() == ".codegraph" || entry.Name() == ".scratch" || entry.Name() == "bundle" {
+			continue
+		}
+		if err := copyPath(filepath.Join(repositoryRoot, entry.Name()), filepath.Join(checkout, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return copyPath(bundleRoot, filepath.Join(checkout, "bundle"))
+}
+
+func copyPath(source, destination string) error {
+	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("validation copy encountered a non-regular path")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+}
+
+type githubGateway struct {
+	repositoryRoot string
+	repository     string
+	plan           packsync.Plan
+	title          string
+	bodyPrefix     string
+	brief          packsyncworkflow.ReviewBrief
+	last           packsyncworkflow.PublicationState
+	retry          packsyncworkflow.RetryPolicy
+	run            func(context.Context, string, string, ...string) (string, error)
+}
+
+func newGitHubGateway(repositoryRoot string, plan packsync.Plan) *githubGateway {
+	return &githubGateway{repositoryRoot: repositoryRoot, repository: os.Getenv("GITHUB_REPOSITORY"), plan: plan, retry: packsyncworkflow.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second}, run: command}
+}
+
+func (gateway *githubGateway) Prepare(proposal packsyncworkflow.Proposal) (packsyncworkflow.Proposal, error) {
+	gateway.brief.Validation = proposal.Validation
+	gateway.brief.DecisionReady = false
+	gateway.brief.Blockers = []string{"Publication remains blocked until the exact post-write pull request identity is reobserved."}
+	gateway.brief.InvalidationConditions = proposal.InvalidationConditions
+	prefix, err := gateway.brief.Markdown()
+	if err != nil {
+		return packsyncworkflow.Proposal{}, err
+	}
+	proposal.ManagedMetadataHash = packsyncworkflow.ManagedMetadataHash(proposal.ManagedTitle, prefix)
+	gateway.title, gateway.bodyPrefix = proposal.ManagedTitle, prefix
+	gateway.brief.Validation = proposal.Validation
+	gateway.brief.InvalidationConditions = proposal.InvalidationConditions
+	return proposal, nil
+}
+
+func (gateway *githubGateway) Observe(ctx context.Context, sourceID string) (packsyncworkflow.PublicationState, error) {
+	if gateway.repository == "" {
+		return packsyncworkflow.PublicationState{}, errors.New("GITHUB_REPOSITORY is required for publication")
+	}
+	branch := "sync/" + sourceID
+	base, err := gateway.retryCommand(ctx, "gh", "api", "repos/"+gateway.repository+"/git/ref/heads/main", "--jq", ".object.sha")
+	if err != nil {
+		return packsyncworkflow.PublicationState{}, err
+	}
+	state := packsyncworkflow.PublicationState{BaseSHA: strings.TrimSpace(base)}
+	remote, err := gateway.retryCommand(ctx, "git", "ls-remote", "origin", "refs/heads/"+branch)
+	if err != nil {
+		return state, err
+	}
+	fields := strings.Fields(remote)
+	if len(fields) > 0 {
+		state.Branch.Exists, state.Branch.Name, state.Branch.HeadSHA = true, branch, fields[0]
+	}
+	prs, err := gateway.pullRequests(ctx, branch)
+	if err != nil {
+		return state, err
+	}
+	if len(prs) > 1 {
+		state.Branch.Owner = ""
+		state.PR.Exists = true
+		return state, nil
+	}
+	if len(prs) == 1 {
+		pr := prs[0]
+		state.PR = packsyncworkflow.PRState{Exists: true, Number: pr.Number, Open: pr.State == "OPEN", BaseBranch: pr.BaseRefName, HeadBranch: pr.HeadRefName, HeadSHA: pr.HeadRefOID, MetadataHash: packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body), Owner: pr.Author.Login, Draft: pr.IsDraft, AutoMerge: pr.AutoMergeRequest != nil}
+		record, ok := packsyncworkflow.ParsePublicationRecord(pr.Body)
+		if ok {
+			state.Record = record
+			state.Branch.ManagedMetadataHash = record.MetadataHash
+		}
+	}
+	if state.PR.Exists && state.PR.Owner == "app/github-actions" {
+		state.PR.Owner = packsyncworkflow.AutomationOwner
+	}
+	commitOwned := false
+	if state.Branch.Exists && state.Record.HeadSHA == state.Branch.HeadSHA {
+		identityJSON, identityErr := gateway.retryCommand(ctx, "gh", "api", "repos/"+gateway.repository+"/commits/"+state.Branch.HeadSHA, "--jq", "{author:.author.login,committer:.committer.login,message:.commit.message,parents:[.parents[].sha]}")
+		if identityErr != nil {
+			return state, identityErr
+		}
+		var identity struct {
+			Author    string   `json:"author"`
+			Committer string   `json:"committer"`
+			Message   string   `json:"message"`
+			Parents   []string `json:"parents"`
+		}
+		if json.Unmarshal([]byte(identityJSON), &identity) != nil {
+			return state, packsyncworkflow.Failure{Kind: packsyncworkflow.FailureIntegrity, Err: errors.New("commit ownership identity is malformed")}
+		}
+		expectedMessage := ""
+		if len(state.Record.CandidateSHA) == 40 {
+			expectedMessage = fmt.Sprintf("sync(%s): %s [%s]", sourceID, state.Record.CandidateSHA[:12], state.Record.PlanID)
+		}
+		commitOwned = identity.Author == packsyncworkflow.AutomationOwner && identity.Committer == packsyncworkflow.AutomationOwner && identity.Message == expectedMessage && len(identity.Parents) == 1 && identity.Parents[0] == state.Record.BaseSHA
+	}
+	if state.Branch.Exists && commitOwned && state.PR.Owner == packsyncworkflow.AutomationOwner && state.Record.HeadSHA != "" && state.Record.HeadSHA == state.Branch.HeadSHA && state.PR.HeadSHA == state.Branch.HeadSHA && state.Record.MetadataHash == state.PR.MetadataHash {
+		state.Branch.Owner = packsyncworkflow.AutomationOwner
+	}
+	if state.Record.HeadSHA != "" && state.Branch.HeadSHA != state.Record.HeadSHA {
+		state.Branch.Diverged = true
+		state.Branch.HumanCommits = true
+	}
+	switch {
+	case state.Record.CandidateSHA == "" || state.Record.CandidateSHA == gateway.plan.Candidate.Commit:
+		state.CandidateRelation = packsyncworkflow.CandidateSame
+	default:
+		status, compareErr := gateway.retryCommand(ctx, "gh", "api", "repos/"+gateway.plan.Candidate.Repository+"/compare/"+state.Record.CandidateSHA+"..."+gateway.plan.Candidate.Commit, "--jq", ".status")
+		if compareErr != nil {
+			return state, compareErr
+		}
+		if strings.TrimSpace(status) == "ahead" {
+			state.CandidateRelation = packsyncworkflow.CandidateAdvancing
+		} else {
+			state.CandidateRelation = packsyncworkflow.CandidateRegressive
+		}
+	}
+	gateway.last = state
+	return state, nil
+}
+
+func (gateway *githubGateway) Publish(ctx context.Context, proposal packsyncworkflow.Proposal, decision packsyncworkflow.PublicationDecision) (packsyncworkflow.PRState, error) {
+	expectedState := gateway.last
+	branch := decision.Branch
+	head := proposal.ResultTreeSHA
+	expected := gateway.last.Branch.HeadSHA
+	lease := "--force-with-lease=refs/heads/" + branch + ":" + expected
+	if err := gateway.pushWithRetry(ctx, lease, branch, head); err != nil {
+		return packsyncworkflow.PRState{}, err
+	}
+	record := packsyncworkflow.NewPublicationRecord(proposal, head, proposal.ManagedMetadataHash)
+	body, err := packsyncworkflow.ManagedBody(gateway.bodyPrefix, record)
+	if err != nil {
+		return packsyncworkflow.PRState{}, err
+	}
+	var number int
+	if decision.Action == packsyncworkflow.PublicationCreate {
+		url, err := gateway.createPRWithRetry(ctx, branch, body)
+		if err != nil {
+			kind := packsyncworkflow.FailureIntegrity
+			var failure packsyncworkflow.Failure
+			if errors.As(err, &failure) {
+				kind = failure.Kind
+			}
+			return packsyncworkflow.PRState{}, packsyncworkflow.Failure{Kind: kind, Blocker: "The automation-owned stable branch was pushed but first pull-request creation did not complete.", Recovery: fmt.Sprintf("Verify refs/heads/%s still equals %s and has no pull request, delete only that exact orphan branch, then start a fresh Check.", branch, head), Err: err}
+		}
+		if _, err := fmt.Sscanf(strings.TrimSpace(url), "https://github.com/%*s/pull/%d", &number); err != nil {
+			listed, listErr := gateway.pullRequests(ctx, branch)
+			if listErr != nil || len(listed) != 1 {
+				return packsyncworkflow.PRState{}, errors.New("created PR identity is ambiguous")
+			}
+			number = listed[0].Number
+		}
+	} else {
+		number = decision.PRNumber
+		observed, err := gateway.Observe(ctx, proposal.SourceID)
+		if err != nil {
+			return packsyncworkflow.PRState{}, err
+		}
+		if observed.PR.Number != expectedState.PR.Number || observed.PR.MetadataHash != expectedState.PR.MetadataHash || observed.PR.Owner != packsyncworkflow.AutomationOwner {
+			return packsyncworkflow.PRState{}, packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed after the publication lease was acquired", Recovery: "Preserve the reviewer change and restart with a fresh Check; automation must not overwrite it.", Err: errors.New("pull request changed before update")}
+		}
+		if err := gateway.editPRWithReobserve(ctx, proposal.SourceID, number, expectedState.PR.MetadataHash, body, proposal.ManagedMetadataHash); err != nil {
+			return packsyncworkflow.PRState{}, err
+		}
+	}
+	return packsyncworkflow.PRState{Number: number}, nil
+}
+
+func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncworkflow.Proposal, decision packsyncworkflow.PublicationDecision, observed packsyncworkflow.PRState) (string, error) {
+	if decision.Action == packsyncworkflow.PublicationCreate {
+		if err := gateway.retry.Do(ctx, func() error {
+			_, readyErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "ready", fmt.Sprint(observed.Number), "--repo", gateway.repository)
+			if readyErr == nil {
+				return nil
+			}
+			state, observeErr := gateway.Observe(ctx, proposal.SourceID)
+			if observeErr == nil && !state.PR.Draft {
+				return nil
+			}
+			return packsyncworkflow.ClassifyNetworkFailure(readyErr)
+		}); err != nil {
+			return "", err
+		}
+	}
+	gateway.brief.PullRequest = observed.Number
+	gateway.brief.HeadSHA = observed.HeadSHA
+	gateway.brief.Validation = proposal.Validation
+	gateway.brief.Blockers = nil
+	gateway.brief.DecisionReady = true
+	gateway.brief.InvalidationConditions = proposal.InvalidationConditions
+	finalPrefix, err := gateway.brief.Markdown()
+	if err != nil {
+		return "", err
+	}
+	finalHash := packsyncworkflow.ManagedMetadataHash(gateway.title, finalPrefix)
+	record := packsyncworkflow.NewPublicationRecord(proposal, proposal.ResultTreeSHA, finalHash)
+	body, err := packsyncworkflow.ManagedBody(finalPrefix, record)
+	if err != nil {
+		return "", err
+	}
+	if err := gateway.editPRWithReobserve(ctx, proposal.SourceID, observed.Number, observed.MetadataHash, body, finalHash); err != nil {
+		return "", err
+	}
+	return finalHash, nil
+}
+
+func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, sourceID string, number int, expectedHash, body, targetHash string) error {
+	return gateway.retry.Do(ctx, func() error {
+		state, err := gateway.Observe(ctx, sourceID)
+		if err != nil {
+			return err
+		}
+		if state.PR.Number != number || state.PR.MetadataHash != expectedHash {
+			if state.PR.Number == number && state.PR.MetadataHash == targetHash {
+				return nil
+			}
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed before an automation edit", Recovery: "Preserve the reviewer edit and start a fresh Check; automation must not overwrite it.", Err: errors.New("pull request metadata compare-and-swap failed")}
+		}
+		_, editErr := gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "edit", fmt.Sprint(number), "--repo", gateway.repository, "--title", gateway.title, "--body", body)
+		if editErr == nil {
+			return nil
+		}
+		after, observeErr := gateway.Observe(ctx, sourceID)
+		if observeErr == nil && after.PR.Number == number && after.PR.MetadataHash == targetHash {
+			return nil
+		}
+		if observeErr == nil && after.PR.MetadataHash != expectedHash {
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Blocker: "managed pull request metadata changed during an ambiguous edit", Recovery: "Preserve the observed metadata and inspect manually; automation must not retry over reviewer work.", Err: errors.New("ambiguous pull request edit changed metadata")}
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(editErr)
+	})
+}
+
+type ghPR struct {
+	Number           int    `json:"number"`
+	State            string `json:"state"`
+	BaseRefName      string `json:"baseRefName"`
+	HeadRefName      string `json:"headRefName"`
+	HeadRefOID       string `json:"headRefOid"`
+	IsDraft          bool   `json:"isDraft"`
+	AutoMergeRequest any    `json:"autoMergeRequest"`
+	Title            string `json:"title"`
+	Body             string `json:"body"`
+	Author           struct {
+		Login string `json:"login"`
+	} `json:"author"`
+}
+
+func (gateway *githubGateway) pullRequests(ctx context.Context, branch string) ([]ghPR, error) {
+	data, err := gateway.retryCommand(ctx, "gh", "pr", "list", "--repo", gateway.repository, "--state", "all", "--head", branch, "--json", "number,state,baseRefName,headRefName,headRefOid,isDraft,autoMergeRequest,title,body,author")
+	if err != nil {
+		return nil, err
+	}
+	var prs []ghPR
+	if err := json.Unmarshal([]byte(data), &prs); err != nil {
+		return nil, err
+	}
+	return prs, nil
+}
+
+func (gateway *githubGateway) retryCommand(ctx context.Context, name string, args ...string) (output string, err error) {
+	err = gateway.retry.Do(ctx, func() error {
+		output, err = gateway.run(ctx, gateway.repositoryRoot, name, args...)
+		if err == nil {
+			return nil
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(err)
+	})
+	return output, err
+}
+
+func (gateway *githubGateway) pushWithRetry(ctx context.Context, lease, branch, localHead string) error {
+	return gateway.retry.Do(ctx, func() error {
+		_, err := gateway.run(ctx, gateway.repositoryRoot, "git", "push", lease, "origin", "HEAD:refs/heads/"+branch)
+		if err == nil {
+			return nil
+		}
+		remote, observeErr := gateway.retryCommand(ctx, "git", "ls-remote", "origin", "refs/heads/"+branch)
+		if observeErr == nil {
+			fields := strings.Fields(remote)
+			if len(fields) > 0 && fields[0] == localHead {
+				return nil
+			}
+			if len(fields) > 0 && fields[0] != gateway.last.Branch.HeadSHA {
+				return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("source branch changed during ambiguous push")}
+			}
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "rejected") || strings.Contains(strings.ToLower(err.Error()), "stale info") {
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureDivergence, Err: errors.New("force-with-lease rejected changed source branch")}
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(err)
+	})
+}
+
+func (gateway *githubGateway) createPRWithRetry(ctx context.Context, branch, body string) (url string, err error) {
+	err = gateway.retry.Do(ctx, func() error {
+		url, err = gateway.run(ctx, gateway.repositoryRoot, "gh", "pr", "create", "--repo", gateway.repository, "--base", "main", "--head", branch, "--title", gateway.title, "--body", body, "--draft")
+		if err == nil {
+			return nil
+		}
+		prs, observeErr := gateway.pullRequests(ctx, branch)
+		if observeErr == nil && len(prs) == 1 && prs[0].State == "OPEN" {
+			url = fmt.Sprintf("https://github.com/%s/pull/%d", gateway.repository, prs[0].Number)
+			return nil
+		}
+		if observeErr == nil && len(prs) > 1 {
+			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureOwnership, Err: errors.New("ambiguous PR creation produced multiple source PRs")}
+		}
+		return packsyncworkflow.ClassifyNetworkFailure(err)
+	})
+	return url, err
+}
+
+func fileHash(name string) (string, error) {
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return "", err
+	}
+	return packsyncworkflow.HashText(string(data)), nil
+}
+
+func stageAll(ctx context.Context, root string) error {
+	_, err := command(ctx, root, "git", "add", "-A")
+	return err
+}
+
+func prepareCommit(ctx context.Context, root, sourceID string, plan packsync.Plan) (string, error) {
+	if _, err := command(ctx, root, "git", "config", "user.name", packsyncworkflow.AutomationOwner); err != nil {
+		return "", err
+	}
+	if _, err := command(ctx, root, "git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"); err != nil {
+		return "", err
+	}
+	if _, err := command(ctx, root, "git", "commit", "-m", fmt.Sprintf("sync(%s): %s [%s]", sourceID, plan.Candidate.Commit[:12], plan.PlanID)); err != nil {
+		return "", err
+	}
+	head, err := command(ctx, root, "git", "rev-parse", "HEAD")
+	return strings.TrimSpace(head), err
+}
+
+func command(ctx context.Context, directory, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = directory
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
+}
+
+func actionsRunURL() string {
+	server, repository, runID := os.Getenv("GITHUB_SERVER_URL"), os.Getenv("GITHUB_REPOSITORY"), os.Getenv("GITHUB_RUN_ID")
+	if server == "" || repository == "" || runID == "" {
+		return ""
+	}
+	return strings.TrimSuffix(server, "/") + "/" + repository + "/actions/runs/" + runID
+}
+
+func withoutCredentials(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, item := range environment {
+		name, _, _ := strings.Cut(item, "=")
+		switch name {
+		case "GH_TOKEN", "GITHUB_TOKEN", "HOMEBREW_TAP_TOKEN", "SSH_AUTH_SOCK":
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}

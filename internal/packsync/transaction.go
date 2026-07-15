@@ -105,6 +105,23 @@ func (engine Engine) reacquireCandidate(ctx context.Context, plan Plan) (Candida
 	return Candidate{}, errors.New("sealed release is no longer published")
 }
 
+// RevalidateCandidate freshly resolves the exact sealed provenance without
+// acquiring or materializing upstream bytes. Publication calls it immediately
+// before its write boundary; Apply remains the owner of full reacquisition.
+func (engine Engine) RevalidateCandidate(ctx context.Context, plan Plan) error {
+	if engine.Source == nil || !plan.VerifySeal() {
+		return errors.New("fresh provenance revalidation requires a source and exact sealed plan")
+	}
+	candidate, err := engine.reacquireCandidate(ctx, plan)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(candidate, plan.Candidate) {
+		return errors.New("exact candidate provenance changed after validation")
+	}
+	return nil
+}
+
 func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, candidate Candidate, snapshotRoot string) (ApplyResult, error) {
 	plan := request.Plan
 	if !plan.VerifySeal() || !reflect.DeepEqual(plan.Candidate, candidate) {
@@ -436,6 +453,21 @@ func (engine Engine) Recover(ctx context.Context, request RecoverRequest) (Apply
 	default:
 		return ApplyResult{}, fmt.Errorf("%w: phase %q is incompatible with observed old/new hashes", ErrRecoveryEvidence, marker.Phase)
 	}
+}
+
+// RecoverPending reuses canonical Recover only when its repository marker is
+// present. Absence is the normal clean state, never fabricated evidence.
+func (engine Engine) RecoverPending(ctx context.Context, repositoryRoot string) (ApplyResult, bool, error) {
+	if repositoryRoot == "" {
+		return ApplyResult{}, false, errors.New("RecoverPending requires repository root")
+	}
+	if _, err := os.Stat(recoveryMarkerPath(repositoryRoot)); errors.Is(err, os.ErrNotExist) {
+		return ApplyResult{}, false, nil
+	} else if err != nil {
+		return ApplyResult{}, false, err
+	}
+	result, err := engine.Recover(ctx, RecoverRequest{RepositoryRoot: repositoryRoot})
+	return result, true, err
 }
 
 func (engine Engine) finishRollback(ctx context.Context, repositoryRoot, markerPath string, marker recoveryMarker) (ApplyResult, error) {

@@ -27,6 +27,7 @@ var mattyOwnedPackages = []string{
 	"./internal/packclassification",
 	"./internal/packsync",
 	"./internal/packsync/githubsource",
+	"./internal/packsyncworkflow",
 	"./internal/prompt",
 	"./internal/release",
 	"./internal/setuphealth",
@@ -79,6 +80,71 @@ func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 			t.Fatalf("CI bypasses validation entrypoint with %q", unsafe)
 		}
 	}
+}
+
+func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T) {
+	workflow := readFile(t, filepath.Join(repositoryRoot(t), ".github", "workflows", "sync-pack-source.yml"))
+	for _, forbidden := range []string{"schedule:", "push:", "pull_request:", "repository_dispatch:", "cancel-in-progress: true", "issues: write", "actions: write", "auto-merge"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("synchronization workflow contains forbidden capability %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"workflow_dispatch:", "permissions: {}", "group: sync-pack-source-${{ inputs.source_id }}", "cancel-in-progress: false",
+		"inspect:", "classify:", "validate:", "publish:", "needs: [inspect, classify, validate]", "contents: write", "pull-requests: write",
+		"--phase validate", "retention-days: 30",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("synchronization workflow missing %q", required)
+		}
+	}
+	for _, line := range strings.Split(workflow, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "uses:") && !strings.HasPrefix(line, "- uses:") {
+			continue
+		}
+		at := strings.LastIndex(line, "@")
+		if at < 0 || len(strings.TrimSpace(line[at+1:])) != 40 {
+			t.Fatalf("action is not pinned by a full SHA: %q", line)
+		}
+	}
+	inspect := workflowSection(t, workflow, "  inspect:", "  classify:")
+	classify := workflowSection(t, workflow, "  classify:", "  validate:")
+	validate := workflowSection(t, workflow, "  validate:", "  publish:")
+	publish := workflow[strings.Index(workflow, "  publish:"):]
+	if strings.Contains(inspect, "contents: write") || strings.Contains(inspect, "pull-requests: write") || strings.Contains(classify, "contents: write") || strings.Contains(classify, "pull-requests: write") || strings.Contains(validate, "contents: write") || strings.Contains(validate, "pull-requests: write") {
+		t.Fatal("Inspect, Classify, or Validate has publication permission")
+	}
+	if !strings.Contains(classify, "models: read") || !strings.Contains(publish, "contents: write") || !strings.Contains(publish, "pull-requests: write") {
+		t.Fatal("phase permissions do not match the accepted minimum")
+	}
+}
+
+func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing.T) {
+	root := filepath.Join(repositoryRoot(t), "workflows", "schemas")
+	for _, name := range []string{"pack-source-dispatch.schema.json", "pack-source-operational-artifact.schema.json", "pack-source-publication.schema.json", "pack-source-validation.schema.json"} {
+		contents := readFile(t, filepath.Join(root, name))
+		for _, required := range []string{`"$schema"`, `"additionalProperties": false`, `"schema_version"`} {
+			if !strings.Contains(contents, required) {
+				t.Fatalf("%s missing %s", name, required)
+			}
+		}
+		for _, forbidden := range []string{`"secret"`, `"token"`, `"upstream_bytes"`, `"upstream_payload"`} {
+			if strings.Contains(contents, forbidden) {
+				t.Fatalf("%s permits forbidden payload %s", name, forbidden)
+			}
+		}
+	}
+}
+
+func workflowSection(t *testing.T, workflow, start, end string) string {
+	t.Helper()
+	startIndex := strings.Index(workflow, start)
+	endIndex := strings.Index(workflow, end)
+	if startIndex < 0 || endIndex <= startIndex {
+		t.Fatalf("workflow sections %q..%q not found", start, end)
+	}
+	return workflow[startIndex:endIndex]
 }
 
 func TestValidationEntrypointIgnoresHostileUnownedGoContent(t *testing.T) {

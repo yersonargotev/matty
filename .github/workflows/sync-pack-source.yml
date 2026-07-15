@@ -1,0 +1,292 @@
+name: Synchronize pack source
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_id:
+        description: Configured source identifier
+        required: true
+        type: string
+      selector:
+        description: Candidate selector
+        required: true
+        type: choice
+        options:
+          - latest-stable
+          - prerelease
+          - commit
+      selector_ref:
+        description: Exact prerelease tag or full commit SHA when required
+        required: false
+        type: string
+      classification_mode:
+        description: Explicit classification mode (never falls back)
+        required: true
+        type: choice
+        options:
+          - ai
+          - human
+      request_reason:
+        description: Operator reason recorded with the request
+        required: true
+        type: string
+      retry_of_run:
+        description: Explicit retry only; prior workflow run ID
+        required: false
+        type: string
+      expected_plan_id:
+        description: Human evidence dispatch only; exact inspection plan ID
+        required: false
+        type: string
+      expected_base_sha:
+        description: Human evidence dispatch only; exact inspected base SHA
+        required: false
+        type: string
+      human_evidence_json:
+        description: Human evidence dispatch only; canonical bound evidence JSON
+        required: false
+        type: string
+
+permissions: {}
+
+# GitHub's concurrency contract keeps the active run, admits one pending run,
+# and replaces only an older pending run. A promoted run starts at Inspect and
+# therefore performs a fresh Check rather than consuming the superseded plan.
+concurrency:
+  group: sync-pack-source-${{ inputs.source_id }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Inspect
+    runs-on: ubuntu-latest
+    outputs:
+      continue: ${{ steps.route.outputs.continue }}
+    permissions:
+      contents: read
+    steps:
+      - name: Initialize fail-closed operational artifact
+        env:
+          MATTY_SOURCE_ID: ${{ inputs.source_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/matty-sync/inspect"
+          source_id="$MATTY_SOURCE_ID"
+          [[ "$source_id" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || source_id=unknown
+          jq -n --arg source_id "$source_id" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Inspect job ended before a canonical result was produced."],recovery:["Start a fresh manual dispatch after checking the failed job."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/matty-sync/inspect/operational-artifact.json"
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Inspect with a fresh canonical Check
+        env:
+          MATTY_SOURCE_ID: ${{ inputs.source_id }}
+          MATTY_SELECTOR: ${{ inputs.selector }}
+          MATTY_SELECTOR_REF: ${{ inputs.selector_ref }}
+          MATTY_CLASSIFICATION_MODE: ${{ inputs.classification_mode }}
+          MATTY_REQUEST_REASON: ${{ inputs.request_reason }}
+          MATTY_RETRY_OF_RUN: ${{ inputs.retry_of_run }}
+          MATTY_EXPECTED_PLAN_ID: ${{ inputs.expected_plan_id }}
+          MATTY_EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          MATTY_HUMAN_EVIDENCE_JSON: ${{ inputs.human_evidence_json }}
+        run: |
+          export HOME="$RUNNER_TEMP/matty-home"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$RUNNER_TEMP/matty-sync/inspect"
+          go run ./internal/tools/syncpacksource --phase inspect \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/matty-sync/inspect"
+      - name: Route the sealed inspection result
+        id: route
+        run: |
+          status="$(jq -r .status "$RUNNER_TEMP/matty-sync/inspect/plan.json")"
+          mode="$(jq -r .classification_mode "$RUNNER_TEMP/matty-sync/inspect/request.json")"
+          human_evidence="$(jq -r 'has("human_evidence")' "$RUNNER_TEMP/matty-sync/inspect/request.json")"
+          if [[ "$status" == "review-required" && ( "$mode" != "human" || "$human_evidence" == "true" ) ]]; then
+            echo "continue=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "continue=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload sealed inspection
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload pre-publication operational artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect/operational-artifact.json
+          if-no-files-found: error
+          retention-days: 30
+
+  classify:
+    name: Classify
+    needs: inspect
+    if: ${{ needs.inspect.outputs.continue == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      models: read
+    steps:
+      - name: Initialize fail-closed operational artifact
+        env:
+          MATTY_SOURCE_ID: ${{ inputs.source_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/matty-sync/classification"
+          jq -n --arg source_id "$MATTY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Classify job ended before canonical evidence was produced."],recovery:["Start a fresh dispatch for the exact sealed candidate; do not fall back between AI and human classification."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/matty-sync/classification/operational-artifact.json"
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect
+      - name: Classify the sealed Check plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MATTY_CLASSIFICATION_MODE: ${{ inputs.classification_mode }}
+        run: |
+          export HOME="$RUNNER_TEMP/matty-home"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+          go run ./internal/tools/syncpacksource --phase classify \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --request "$RUNNER_TEMP/matty-sync/inspect/request.json" \
+            --plan "$RUNNER_TEMP/matty-sync/inspect/plan.json" \
+            --output "$RUNNER_TEMP/matty-sync/classification"
+      - name: Upload classified plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-classification-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/classification/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload pre-publication operational artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/classification/operational-artifact.json
+          if-no-files-found: error
+          retention-days: 30
+
+  validate:
+    name: Validate sandbox
+    needs: [inspect, classify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Initialize fail-closed operational artifact
+        env:
+          MATTY_SOURCE_ID: ${{ inputs.source_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/matty-sync/validation"
+          jq -n --arg source_id "$MATTY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The sandbox Apply or complete Matty-owned validation suite did not finish."],recovery:["Inspect the validation logs, correct the implementation separately if needed, and start a fresh dispatch."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/matty-sync/validation/operational-artifact.json"
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-classification-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/classification
+      - name: Apply in sandbox and run the complete Matty-owned suite
+        run: |
+          export HOME="$RUNNER_TEMP/matty-home"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+          go run ./internal/tools/syncpacksource --phase validate \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --request "$RUNNER_TEMP/matty-sync/inspect/request.json" \
+            --plan "$RUNNER_TEMP/matty-sync/inspect/plan.json" \
+            --evidence "$RUNNER_TEMP/matty-sync/classification/classification.json" \
+            --output "$RUNNER_TEMP/matty-sync/validation"
+      - name: Upload sandbox validation proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/validation/validation.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload validation failure artifact
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/validation/operational-artifact.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish
+    needs: [inspect, classify, validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Initialize fail-closed operational artifact
+        env:
+          MATTY_SOURCE_ID: ${{ inputs.source_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/matty-sync/publication"
+          jq -n --arg source_id "$MATTY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Publish job ended before exact publication state was established."],recovery:["Inspect the stable branch and pull request; preserve reviewer work and start a fresh Check."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/matty-sync/publication/operational-artifact.json"
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-classification-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/classification
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/inspect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pack-source-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/validation
+      - name: Reacquire, Apply, validate, reobserve, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export HOME="$RUNNER_TEMP/matty-home"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/matty-xdg"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+          go run ./internal/tools/syncpacksource --phase publish \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --request "$RUNNER_TEMP/matty-sync/inspect/request.json" \
+            --plan "$RUNNER_TEMP/matty-sync/inspect/plan.json" \
+            --evidence "$RUNNER_TEMP/matty-sync/classification/classification.json" \
+            --validation "$RUNNER_TEMP/matty-sync/validation/validation.json" \
+            --output "$RUNNER_TEMP/matty-sync/publication"
+      - name: Upload operational artifact on publication block
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pack-source-failure-${{ github.run_id }}
+          path: ${{ runner.temp }}/matty-sync/publication/operational-artifact.json
+          if-no-files-found: error
+          retention-days: 30
