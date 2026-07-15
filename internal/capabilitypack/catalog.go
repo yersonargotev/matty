@@ -184,9 +184,13 @@ func (c Catalog) List() []Pack {
 func (c Catalog) ListCurrent() ([]Pack, error) {
 	var packs []Pack
 	err := c.withBundleLock(context.Background(), func(locked Catalog) error {
-		packs = make([]Pack, 0, len(c.packs))
-		for _, metadata := range c.packs {
-			pack, err := locked.showUnlocked(metadata.ID)
+		fresh, err := locked.refreshed()
+		if err != nil {
+			return err
+		}
+		packs = make([]Pack, 0, len(fresh.packs))
+		for _, metadata := range fresh.packs {
+			pack, err := fresh.showUnlocked(metadata.ID)
 			if err != nil {
 				return err
 			}
@@ -203,8 +207,11 @@ func (c Catalog) Show(id string) (Pack, error) {
 	}
 	var pack Pack
 	err := c.withBundleLock(context.Background(), func(locked Catalog) error {
-		var err error
-		pack, err = locked.showUnlocked(id)
+		fresh, err := locked.refreshed()
+		if err != nil {
+			return err
+		}
+		pack, err = fresh.showUnlocked(id)
 		return err
 	})
 	return pack, err

@@ -119,6 +119,66 @@ func TestPreviewHoldsBundleTransactionThroughAdapterReads(t *testing.T) {
 	}
 }
 
+func TestDeferredCatalogRefreshesAfterBundleSwap(t *testing.T) {
+	bundle := writeCatalogFixture(t)
+	catalog, err := DiscoverForDurableIntents(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := filepath.Dir(bundle)
+	stage := filepath.Join(repository, "bundle-stage")
+	for _, path := range []string{
+		"instructions/engram.md",
+		"instructions/matty.md",
+		"packs/engram/pack.json",
+		"packs/matty/pack.json",
+	} {
+		data, err := os.ReadFile(filepath.Join(bundle, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path == "packs/matty/pack.json" {
+			data = []byte(strings.Replace(string(data), `"version":"1.0.0"`, `"version":"2.0.0"`, 1))
+		}
+		target := filepath.Join(stage, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guard, err := bundletransaction.Acquire(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(repository, "bundle-backup")
+	if err := os.Rename(bundle, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(stage, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	pack, err := catalog.Show("matty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Version != "2.0.0" {
+		t.Fatalf("Show version=%s, want complete new generation 2.0.0", pack.Version)
+	}
+	packs, err := catalog.ListCurrent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packs[1].ID != "matty" || packs[1].Version != "2.0.0" {
+		t.Fatalf("ListCurrent packs=%+v, want complete new generation", packs)
+	}
+}
+
 func TestDiscoverLoadsInitialStrictCatalog(t *testing.T) {
 	bundleRoot := writeCatalogFixture(t)
 	catalog, err := Discover(bundleRoot)
