@@ -240,24 +240,13 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 }
 
 func classifiedVersionsConverged(bundle string, plan Plan, set ClassificationEvidenceSet) (bool, error) {
-	versions := make(map[string]string, len(set.Evidence))
-	for _, evidence := range set.Evidence {
-		versions[evidence.PackID] = evidence.ProposedVersion
-	}
+	versions := classificationVersions(set)
 	for _, impact := range plan.AffectedPacks {
-		data, err := os.ReadFile(filepath.Join(bundle, "packs", impact.PackID, "pack.json"))
+		_, manifest, err := readAffectedPackManifest(bundle, impact)
 		if err != nil {
 			return false, err
 		}
-		var manifest map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		if err := decoder.Decode(&manifest); err != nil {
-			return false, err
-		}
-		if err := ensureEOF(decoder); err != nil {
-			return false, err
-		}
-		if manifest["id"] != impact.PackID || manifest["version"] != versions[impact.PackID] {
+		if manifest["version"] != versions[impact.PackID] {
 			return false, nil
 		}
 	}
@@ -268,25 +257,13 @@ func materializeClassifiedVersions(staged string, plan Plan, set ClassificationE
 	if len(plan.AffectedPacks) == 0 {
 		return nil
 	}
-	versions := make(map[string]string, len(set.Evidence))
-	for _, evidence := range set.Evidence {
-		versions[evidence.PackID] = evidence.ProposedVersion
-	}
+	versions := classificationVersions(set)
 	for _, impact := range plan.AffectedPacks {
-		if !safeSlashPath(impact.PackID) || strings.Contains(impact.PackID, "/") {
-			return fmt.Errorf("unsafe affected pack identity %q", impact.PackID)
-		}
-		name := filepath.Join(staged, "packs", impact.PackID, "pack.json")
-		data, err := os.ReadFile(name)
+		name, manifest, err := readAffectedPackManifest(staged, impact)
 		if err != nil {
-			return fmt.Errorf("read affected pack manifest: %w", err)
+			return err
 		}
-		var manifest map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		if err := decoder.Decode(&manifest); err != nil {
-			return fmt.Errorf("decode affected pack manifest: %w", err)
-		}
-		if err := ensureEOF(decoder); err != nil || manifest["id"] != impact.PackID || manifest["version"] != impact.CurrentVersion {
+		if manifest["version"] != impact.CurrentVersion {
 			return fmt.Errorf("affected pack manifest contradicts sealed classification impact %s", impact.PackID)
 		}
 		manifest["version"] = versions[impact.PackID]
@@ -299,6 +276,34 @@ func materializeClassifiedVersions(staged string, plan Plan, set ClassificationE
 		}
 	}
 	return nil
+}
+
+func classificationVersions(set ClassificationEvidenceSet) map[string]string {
+	versions := make(map[string]string, len(set.Evidence))
+	for _, evidence := range set.Evidence {
+		versions[evidence.PackID] = evidence.ProposedVersion
+	}
+	return versions
+}
+
+func readAffectedPackManifest(bundle string, impact PackImpact) (string, map[string]any, error) {
+	if !safeSlashPath(impact.PackID) || strings.Contains(impact.PackID, "/") {
+		return "", nil, fmt.Errorf("unsafe affected pack identity %q", impact.PackID)
+	}
+	name := filepath.Join(bundle, "packs", impact.PackID, "pack.json")
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("read affected pack manifest: %w", err)
+	}
+	var manifest map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&manifest); err != nil {
+		return "", nil, fmt.Errorf("decode affected pack manifest: %w", err)
+	}
+	if err := ensureEOF(decoder); err != nil || manifest["id"] != impact.PackID {
+		return "", nil, fmt.Errorf("affected pack manifest contradicts sealed classification impact %s", impact.PackID)
+	}
+	return name, manifest, nil
 }
 
 func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged, snapshotRoot string, plan Plan) error {

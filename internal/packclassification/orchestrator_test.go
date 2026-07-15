@@ -17,10 +17,11 @@ import (
 
 func TestRequestsEmitExactlyOneRequestForEveryAffectedPackFromSealedCheck(t *testing.T) {
 	fixture := newClassificationFixture(t)
-	requests, err := Requests(fixture.plan)
+	inspection, err := InspectHuman(fixture.plan)
 	if err != nil {
 		t.Fatal(err)
 	}
+	requests := inspection.Requests
 	if len(requests) != 2 || requests[0].PackID != "alpha" || requests[1].PackID != "beta" || requests[0].RequestID == requests[1].RequestID {
 		t.Fatalf("requests = %#v", requests)
 	}
@@ -31,7 +32,7 @@ func TestRequestsEmitExactlyOneRequestForEveryAffectedPackFromSealedCheck(t *tes
 	}
 	tampered := fixture.plan
 	tampered.AffectedPacks[0].MechanicalFloor = packsync.LevelMajor
-	if _, err := Requests(tampered); err == nil || !strings.Contains(err.Error(), "canonical sealed Check plan") {
+	if _, err := InspectHuman(tampered); err == nil || !strings.Contains(err.Error(), "canonical sealed Check plan") {
 		t.Fatalf("tampered plan error = %v", err)
 	}
 }
@@ -233,7 +234,11 @@ func (model *fixtureModel) Attempt(_ context.Context, request Request) (packsync
 }
 
 func fixtureEvidence(plan packsync.Plan, classifierType packsync.ClassifierType, classifierID string) packsync.ClassificationEvidenceSet {
-	requests, _ := Requests(plan)
+	mode := ModeAI
+	if classifierType == packsync.ClassifierHuman {
+		mode = ModeHuman
+	}
+	requests, _ := requestsForMode(plan, mode)
 	set := packsync.ClassificationEvidenceSet{SchemaVersion: 1, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, Candidate: plan.Candidate}
 	for _, request := range requests {
 		set.Evidence = append(set.Evidence, evidenceForRequest(request, classifierType, classifierID))

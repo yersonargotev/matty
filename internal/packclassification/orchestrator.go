@@ -35,16 +35,9 @@ type Request struct {
 	Changes                  []packsync.Change            `json:"changes"`
 }
 
-func Requests(plan packsync.Plan) ([]Request, error) {
-	return requestsForMode(plan, "")
-}
-
 func requestsForMode(plan packsync.Plan, mode Mode) ([]Request, error) {
-	if !plan.VerifySeal() || plan.SchemaVersion != 1 || plan.Status != "review-required" || !plan.Authoritative || len(plan.Blockers) != 0 || len(plan.AffectedPacks) == 0 {
-		return nil, errors.New("classification requests require a canonical sealed Check plan with affected packs")
-	}
-	if !fullSHA(plan.Preconditions.BaseCommit) {
-		return nil, errors.New("classification requests require an exact repository base SHA")
+	if err := packsync.ValidateClassificationPlan(plan); err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	requests := make([]Request, 0, len(plan.AffectedPacks))
@@ -165,8 +158,4 @@ func SupplyHumanEvidence(plan packsync.Plan, inspection HumanInspection, set pac
 		return packsync.ClassificationEvidenceSet{}, fmt.Errorf("validate untrusted human classification evidence: %w", err)
 	}
 	return set, nil
-}
-
-func fullSHA(value string) bool {
-	return len(value) == 40 && strings.Trim(value, "0123456789abcdef") == ""
 }

@@ -45,8 +45,8 @@ type ClassificationEvidenceSet struct {
 }
 
 func ValidateClassificationEvidence(plan Plan, set ClassificationEvidenceSet) error {
-	if !plan.VerifySeal() || plan.SchemaVersion != 1 || plan.Status != "review-required" || !plan.Authoritative || len(plan.Blockers) != 0 {
-		return errors.New("classification requires a canonical sealed Check plan")
+	if err := ValidateClassificationPlan(plan); err != nil {
+		return err
 	}
 	if len(set.Evidence) != len(plan.AffectedPacks) {
 		return errors.New("classification requires complete evidence coverage for every affected pack")
@@ -98,9 +98,19 @@ func ValidateClassificationEvidence(plan Plan, set ClassificationEvidenceSet) er
 	return nil
 }
 
-func HumanInspectionID(plan Plan) (string, error) {
+func ValidateClassificationPlan(plan Plan) error {
 	if !plan.VerifySeal() || plan.SchemaVersion != 1 || plan.Status != "review-required" || !plan.Authoritative || len(plan.Blockers) != 0 || len(plan.AffectedPacks) == 0 {
-		return "", errors.New("human inspection requires a canonical sealed Check plan")
+		return errors.New("classification requires a canonical sealed Check plan with affected packs")
+	}
+	if !fullSHA(plan.Preconditions.BaseCommit) {
+		return errors.New("classification requires an exact repository base SHA")
+	}
+	return nil
+}
+
+func HumanInspectionID(plan Plan) (string, error) {
+	if err := ValidateClassificationPlan(plan); err != nil {
+		return "", err
 	}
 	digest := sha256.Sum256([]byte(plan.PlanID + "\x00human-inspection"))
 	return "pack-classification-inspection-" + hex.EncodeToString(digest[:]), nil
