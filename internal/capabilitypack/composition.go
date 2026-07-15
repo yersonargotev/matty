@@ -109,7 +109,7 @@ func (c composition) contributorSet(projectionID string) []string {
 	return ids
 }
 
-func (f Facade) compose(requested Pack, state ActivationState, surface Surface) composition {
+func (f Facade) compose(requested Pack, state ActivationState, surface Surface, useRequestedIntent bool) (composition, error) {
 	result := composition{requested: requested, contributors: map[string][]string{}}
 	selected := map[string]Pack{}
 	active := activeIntents(state)
@@ -118,10 +118,15 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface) 
 		if !intent.Active || intent.Surface != surface {
 			continue
 		}
-		if pack, err := f.catalog.Show(intent.PackID); err == nil {
-			selected[pack.ID] = pack
-			activeIDs[pack.ID] = intent.Active && intent.Version == pack.Version
+		if intent.PackID == requested.ID && !useRequestedIntent {
+			continue
 		}
+		pack, err := f.catalog.showVersion(intent.PackID, intent.Version)
+		if err != nil {
+			return composition{}, err
+		}
+		selected[pack.ID] = pack
+		activeIDs[pack.ID] = true
 	}
 	var visit func(Pack, ActivationRole)
 	visiting := map[string]bool{}
@@ -205,13 +210,13 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface) 
 		sort.Strings(result.contributors[key])
 	}
 	sortBlockers(result.blockers)
-	return result
+	return result, nil
 }
 
 // composeWithout builds the complete desired state for a surface after one
 // active pack is removed. The requested pack is never reintroduced through a
 // dependency: callers must reject the sealed dependent facts instead.
-func (f Facade) composeWithout(requested Pack, state ActivationState, surface Surface) (composition, []ActiveDependent) {
+func (f Facade) composeWithout(requested Pack, state ActivationState, surface Surface) (composition, []ActiveDependent, error) {
 	targetState := cloneActivationState(state)
 	active := activeIntents(state)
 	remaining := make([]ActivationIntent, 0, len(active))
@@ -228,11 +233,13 @@ func (f Facade) composeWithout(requested Pack, state ActivationState, surface Su
 			continue
 		}
 		remaining = append(remaining, intent)
-		if pack, err := f.catalog.Show(intent.PackID); err == nil {
-			for _, dependency := range pack.Requires.Capabilities {
-				if provided[dependency] {
-					dependents = append(dependents, ActiveDependent{PackID: pack.ID, Dependency: dependency})
-				}
+		pack, err := f.catalog.showVersion(intent.PackID, intent.Version)
+		if err != nil {
+			return composition{}, nil, err
+		}
+		for _, dependency := range pack.Requires.Capabilities {
+			if provided[dependency] {
+				dependents = append(dependents, ActiveDependent{PackID: pack.ID, Dependency: dependency})
 			}
 		}
 	}
@@ -245,15 +252,18 @@ func (f Facade) composeWithout(requested Pack, state ActivationState, surface Su
 	targetState.Intents = remaining
 	targetState.Intent = ActivationIntent{Surface: surface, Revision: state.Intent.Revision}
 	if len(remaining) == 0 {
-		return composition{requested: Pack{ID: requested.ID, Surfaces: []Surface{surface}}, contributors: map[string][]string{}}, dependents
+		return composition{requested: Pack{ID: requested.ID, Surfaces: []Surface{surface}}, contributors: map[string][]string{}}, dependents, nil
 	}
-	root, err := f.catalog.Show(remaining[0].PackID)
+	root, err := f.catalog.showVersion(remaining[0].PackID, remaining[0].Version)
 	if err != nil {
-		return composition{requested: requested, contributors: map[string][]string{}, blockers: []PlanBlocker{{Kind: BlockerDependency, Subject: remaining[0].PackID, Detail: err.Error()}}}, dependents
+		return composition{}, nil, err
 	}
-	result := f.compose(root, targetState, surface)
+	result, err := f.compose(root, targetState, surface, true)
+	if err != nil {
+		return composition{}, nil, err
+	}
 	result.activations = nil
-	return result, dependents
+	return result, dependents, nil
 }
 
 func (c composition) identityDigest() string {

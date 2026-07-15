@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1341,7 +1344,99 @@ func writeUpdateBundle(t *testing.T, version string) string {
 		t.Fatal(err)
 	}
 	writeUpdateManifest(t, root, version)
+	if version == "1.0.0" {
+		writeSyntheticMattyHistory(t, root)
+	}
 	return root
+}
+
+type syntheticHistoryFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	Mode   uint32 `json:"mode"`
+	SHA256 string `json:"sha256"`
+}
+
+type syntheticHistoryResource struct {
+	Kind   string                 `json:"kind"`
+	ID     string                 `json:"id"`
+	Source string                 `json:"source"`
+	Files  []syntheticHistoryFile `json:"files"`
+	SHA256 string                 `json:"sha256"`
+}
+
+type syntheticHistoryArtifact struct {
+	SchemaVersion   int                        `json:"schema_version"`
+	PackID          string                     `json:"pack_id"`
+	PackVersion     string                     `json:"pack_version"`
+	Manifest        syntheticHistoryFile       `json:"manifest"`
+	Resources       []syntheticHistoryResource `json:"resources"`
+	AggregateSHA256 string                     `json:"aggregate_sha256"`
+}
+
+func writeSyntheticMattyHistory(t *testing.T, bundleRoot string) {
+	t.Helper()
+	root := filepath.Join(bundleRoot, "history", "matty", "1.0.0")
+	if err := os.MkdirAll(filepath.Join(root, "instructions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := mustReadCLIFile(t, filepath.Join(bundleRoot, "packs", "matty", "pack.json"))
+	var pack struct {
+		Resources []struct {
+			Kind   string `json:"kind"`
+			ID     string `json:"id"`
+			Source string `json:"source"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(manifest, &pack); err != nil || len(pack.Resources) != 1 || pack.Resources[0].Source == "" {
+		t.Fatalf("synthetic history fixture requires one source resource: %v", err)
+	}
+	selected := pack.Resources[0]
+	resource := mustReadCLIFile(t, filepath.Join(bundleRoot, filepath.FromSlash(selected.Source)))
+	if err := os.WriteFile(filepath.Join(root, "pack.json"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resourcePath := filepath.Join(root, filepath.FromSlash(selected.Source))
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resourcePath, resource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestEvidence := syntheticHistoryEvidence("pack.json", manifest)
+	resourceEvidence := syntheticHistoryEvidence(selected.Source, resource)
+	resourceHash := sha256.New()
+	fmt.Fprintf(resourceHash, "%s\x00%d\x00%04o\x00%s\n", resourceEvidence.Path, resourceEvidence.Size, resourceEvidence.Mode, resourceEvidence.SHA256)
+	artifact := syntheticHistoryArtifact{
+		SchemaVersion: 1, PackID: "matty", PackVersion: "1.0.0", Manifest: manifestEvidence,
+		Resources: []syntheticHistoryResource{{Kind: selected.Kind, ID: selected.ID, Source: selected.Source, Files: []syntheticHistoryFile{resourceEvidence}, SHA256: hex.EncodeToString(resourceHash.Sum(nil))}},
+	}
+	aggregate := sha256.New()
+	fmt.Fprintf(aggregate, "%d\x00%s\x00%s\n", artifact.SchemaVersion, artifact.PackID, artifact.PackVersion)
+	fmt.Fprintf(aggregate, "manifest\x00%s\x00%d\x00%04o\x00%s\n", manifestEvidence.Path, manifestEvidence.Size, manifestEvidence.Mode, manifestEvidence.SHA256)
+	fmt.Fprintf(aggregate, "%s\x00%s\x00%s\x00%s\n", selected.Kind, selected.ID, selected.Source, artifact.Resources[0].SHA256)
+	artifact.AggregateSHA256 = hex.EncodeToString(aggregate.Sum(nil))
+	data, err := json.MarshalIndent(artifact, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "artifact.json"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func syntheticHistoryEvidence(path string, data []byte) syntheticHistoryFile {
+	sum := sha256.Sum256(data)
+	return syntheticHistoryFile{Path: path, Size: int64(len(data)), Mode: 0o600, SHA256: hex.EncodeToString(sum[:])}
+}
+
+func mustReadCLIFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func writeUpdateManifest(t *testing.T, root, version string) {
@@ -1380,6 +1475,7 @@ func writeCompositionBundle(t *testing.T, blocked bool) string {
 			t.Fatal(err)
 		}
 	}
+	writeSyntheticMattyHistory(t, root)
 	return root
 }
 

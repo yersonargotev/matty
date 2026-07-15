@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "id": "matty",
+  "version": "1.0.0",
+  "provides": [
+    "workflow:matty"
+  ],
+  "requires": {
+    "capabilities": [],
+    "tools": []
+  },
+  "conflicts": [],
+  "resources": [
+    {
+      "kind": "skill",
+      "id": "ask-matt",
+      "source": "skills/engineering/ask-matt"
+    },
+    {
+      "kind": "skill",
+      "id": "code-review",
+      "source": "skills/engineering/code-review"
+    },
+    {
+      "kind": "skill",
+      "id": "codebase-design",
+      "source": "skills/engineering/codebase-design"
+    },
+    {
+      "kind": "skill",
+      "id": "diagnosing-bugs",
+      "source": "skills/engineering/diagnosing-bugs"
+    },
+    {
+      "kind": "skill",
+      "id": "domain-modeling",
+      "source": "skills/engineering/domain-modeling"
+    },
+    {
+      "kind": "skill",
+      "id": "grill-with-docs",
+      "source": "skills/engineering/grill-with-docs"
+    },
+    {
+      "kind": "skill",
+      "id": "implement",
+      "source": "skills/engineering/implement"
+    },
+    {
+      "kind": "skill",
+      "id": "improve-codebase-architecture",
+      "source": "skills/engineering/improve-codebase-architecture"
+    },
+    {
+      "kind": "skill",
+      "id": "prototype",
+      "source": "skills/engineering/prototype"
+    },
+    {
+      "kind": "skill",
+      "id": "research",
+      "source": "skills/engineering/research"
+    },
+    {
+      "kind": "skill",
+      "id": "resolving-merge-conflicts",
+      "source": "skills/engineering/resolving-merge-conflicts"
+    },
+    {
+      "kind": "skill",
+      "id": "setup-matt-pocock-skills",
+      "source": "skills/engineering/setup-matt-pocock-skills"
+    },
+    {
+      "kind": "skill",
+      "id": "tdd",
+      "source": "skills/engineering/tdd"
+    },
+    {
+      "kind": "skill",
+      "id": "to-spec",
+      "source": "skills/engineering/to-spec"
+    },
+    {
+      "kind": "skill",
+      "id": "to-tickets",
+      "source": "skills/engineering/to-tickets"
+    },
+    {
+      "kind": "skill",
+      "id": "triage",
+      "source": "skills/engineering/triage"
+    },
+    {
+      "kind": "skill",
+      "id": "wayfinder",
+      "source": "skills/engineering/wayfinder"
+    },
+    {
+      "kind": "skill",
+      "id": "loop-me",
+      "source": "skills/in-progress/loop-me"
+    },
+    {
+      "kind": "skill",
+      "id": "grill-me",
+      "source": "skills/productivity/grill-me"
+    },
+    {
+      "kind": "skill",
+      "id": "grilling",
+      "source": "skills/productivity/grilling"
+    },
+    {
+      "kind": "skill",
+      "id": "handoff",
+      "source": "skills/productivity/handoff"
+    },
+    {
+      "kind": "skill",
+      "id": "teach",
+      "source": "skills/productivity/teach"
+    },
+    {
+      "kind": "skill",
+      "id": "writing-great-skills",
+      "source": "skills/productivity/writing-great-skills"
+    },
+    {
+      "kind": "instruction",
+      "id": "matty-guidance",
+      "source": "instructions/matty-guidance.md"
+    }
+  ]
+}

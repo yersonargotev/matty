@@ -20,12 +20,8 @@ func (f Facade) PreviewReconcile(ctx context.Context, request ReconcileRequest) 
 		if !ok || !intent.Active {
 			return ReconciliationPlan{}, fmt.Errorf("capability pack %q is not active on %s; reconcile does not activate packs", request.PackID, request.Surface)
 		}
-		pack, err := f.catalog.Show(request.PackID)
-		if err != nil {
+		if _, err := f.catalog.showVersion(request.PackID, intent.Version); err != nil {
 			return ReconciliationPlan{}, err
-		}
-		if intent.Version != pack.Version {
-			return ReconciliationPlan{}, fmt.Errorf("capability pack %q targets version %s but catalog-current is %s; reconcile does not change target versions; run `matty pack update %s --surface %s`", request.PackID, intent.Version, pack.Version, request.PackID, request.Surface)
 		}
 		plan, err := f.preview(ctx, activation, OperationReconcile, "")
 		if err != nil {
@@ -50,12 +46,8 @@ func (f Facade) PreviewReconcile(ctx context.Context, request ReconcileRequest) 
 	ids := make([]string, 0)
 	for _, intent := range activeIntents(state) {
 		if intent.Active && intent.Surface == request.Surface {
-			pack, showErr := f.catalog.Show(intent.PackID)
-			if showErr != nil {
+			if _, showErr := f.catalog.showVersion(intent.PackID, intent.Version); showErr != nil {
 				return ReconciliationPlan{}, showErr
-			}
-			if intent.Version != pack.Version {
-				return ReconciliationPlan{}, fmt.Errorf("capability pack %q targets version %s but catalog-current is %s; surface-wide reconcile does not change target versions; update it first", intent.PackID, intent.Version, pack.Version)
 			}
 			ids = append(ids, intent.PackID)
 		}
