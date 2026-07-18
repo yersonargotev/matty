@@ -27,7 +27,7 @@ packy pack list
 packy pack show matty
 packy pack show engram
 packy pack status
-packy pack status packy --surface codex
+packy pack status matty --surface codex
 packy pack status engram --surface opencode
 ```
 
