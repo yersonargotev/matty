@@ -1,0 +1,61 @@
+Issue #65 delegated Engram setup adjudication
+
+The cutover harness reached a fully installed, healthy Packy state, then stopped
+at 2026-07-18T14:36:33Z because its first final gate byte-compared the complete
+Codex config across Packy's explicit `engram setup codex` delegation.
+
+The following two diagnostic reruns were executed after that stop to determine
+whether the digest change represented contributor loss. They touched only the
+Engram-owned Codex setup surface. Their complete output was identical and is
+recorded below. Inspection showed Codex reserialized tilde paths to absolute
+paths and Engram refreshed `marketplaces.engram.last_updated`; contributor
+sections, normalized Packy-external surfaces, the Engram binary, and runtime
+remained present.
+
+2026-07-18T14:40:33Z
+command=/opt/homebrew/bin/engram setup codex
+config_sha256_before=4779f5e3d150a2206a76afc0feb46e4beb850ee0c388102fcca7fa8b31790f36
+config_sha256_after=d226c5d4485fbff8ad5eb6675806df7a0bf427b9343bd4eb042b4a1889f51b8d
+exit_status=0
+output:
+✓ Installed codex plugin (3 files)
+  → /Users/argote/.codex
+
+Next steps:
+  1. Restart Codex so MCP config and plugin are reloaded
+  2. Verify ~/.codex/config.toml has [mcp_servers.engram]
+  3. Verify model_instructions_file + experimental_compact_prompt_file are set
+  4. Verify plugin is installed with: codex plugin list
+  5. If codex CLI was absent during setup, install manually: codex plugin marketplace add Gentleman-Programming/engram --ref main && codex plugin add engram@engram
+
+2026-07-18T14:40:58Z
+command=/opt/homebrew/bin/engram setup codex
+config_sha256_before=d226c5d4485fbff8ad5eb6675806df7a0bf427b9343bd4eb042b4a1889f51b8d
+config_sha256_after=963b3162e8e92f314825f73c9a59ed8d8436806635db4f2f8dd1cec52872bbe0
+exit_status=0
+output:
+✓ Installed codex plugin (3 files)
+  → /Users/argote/.codex
+
+Next steps:
+  1. Restart Codex so MCP config and plugin are reloaded
+  2. Verify ~/.codex/config.toml has [mcp_servers.engram]
+  3. Verify model_instructions_file + experimental_compact_prompt_file are set
+  4. Verify plugin is installed with: codex plugin list
+  5. If codex CLI was absent during setup, install manually: codex plugin marketplace add Gentleman-Programming/engram --ref main && codex plugin add engram@engram
+
+Read-only metadata reconstruction
+
+The final config SHA-256 is
+963b3162e8e92f314825f73c9a59ed8d8436806635db4f2f8dd1cec52872bbe0.
+Replacing only `marketplaces.engram.last_updated` in that final byte stream with
+the timestamp emitted by each prior setup reconstructs every recorded post-run
+hash:
+
+2026-07-18T14:36:31Z -> 4779f5e3d150a2206a76afc0feb46e4beb850ee0c388102fcca7fa8b31790f36
+2026-07-18T14:40:33Z -> d226c5d4485fbff8ad5eb6675806df7a0bf427b9343bd4eb042b4a1889f51b8d
+2026-07-18T14:40:58Z -> 963b3162e8e92f314825f73c9a59ed8d8436806635db4f2f8dd1cec52872bbe0
+
+This establishes that the two diagnostic reruns changed only Engram-owned
+marketplace freshness metadata. The separate sandboxed preservation proof
+exercises the delegated setup seam with unrelated contributor sentinels.

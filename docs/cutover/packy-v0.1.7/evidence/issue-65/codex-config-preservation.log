@@ -1,0 +1,20 @@
+config_byte_sha256_before=22517cb6d88a9d9efa37e3a8f768727cf73e71911add9c5e26127c7057c10a1c
+contributor_semantic_sha256_before=1cbaf8be02b0fee03fc4ec166c747386ca8fa3bcf25584cc66153e5071e07041
+engram_version=engram 1.19.0
+codex_version=codex-cli 0.144.4
+config_byte_sha256_after=39f9660eaccee4d0c3cd94b519727f611d02981ad1b385846b7bf0927398de7d
+contributor_semantic_sha256_after=1cbaf8be02b0fee03fc4ec166c747386ca8fa3bcf25584cc66153e5071e07041
+setup_output_begin
+✓ Installed codex plugin (3 files)
+  → $SANDBOX/.codex
+
+Next steps:
+  1. Restart Codex so MCP config and plugin are reloaded
+  2. Verify ~/.codex/config.toml has [mcp_servers.engram]
+  3. Verify model_instructions_file + experimental_compact_prompt_file are set
+  4. Verify plugin is installed with: codex plugin list
+  5. If codex CLI was absent during setup, install manually: codex plugin marketplace add Gentleman-Programming/engram --ref main && codex plugin add engram@engram
+setup_output_end
+engram_projection=present
+contributor_semantics=preserved
+result=passed
