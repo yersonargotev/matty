@@ -1,9 +1,9 @@
 # Agent guidance
 
 - Read the relevant accepted ADR under `docs/adr/` before changing architecture; keep architectural decisions there rather than duplicating them here.
-- Keep Matty domain behavior in its owning package under `internal/`; `internal/cli` should adapt that behavior to commands and state.
+- Keep Packy domain behavior in its owning package under `internal/`; `internal/cli` should adapt that behavior to commands and state.
 - Sandbox `HOME` and `XDG_CONFIG_HOME` for tests or manual checks that resolve or write user paths.
-- Run `./scripts/validate-matty.sh` as the repository validation authority
+- Run `./scripts/validate-packy.sh` as the repository validation authority
   before committing or reporting success. Keep `go test ./...` green while the
   repository has no vendored upstream Go content.
 
@@ -19,4 +19,4 @@ Canonical triage roles map to the repository's existing status vocabulary. See `
 
 ### Domain docs
 
-Matty uses a single-context domain layout. See `docs/agents/domain.md`.
+Packy uses a single-context domain layout. See `docs/agents/domain.md`.

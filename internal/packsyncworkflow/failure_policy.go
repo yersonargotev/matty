@@ -78,7 +78,7 @@ func publicBlocker(kind FailureKind) string {
 	case FailureClassification:
 		return "Classification evidence is unavailable, invalid, or stale."
 	case FailureValidation:
-		return "The complete Matty-owned validation suite did not pass."
+		return "The complete Packy-owned validation suite did not pass."
 	case FailureOwnership:
 		return "Automation ownership of the stable branch or pull request is absent or ambiguous."
 	case FailureDivergence:
@@ -99,7 +99,7 @@ func publicRecovery(kind FailureKind) string {
 	case FailureClassification:
 		return "Provide valid evidence for the exact plan, candidate and base; human evidence requires a fresh inspection-first dispatch."
 	case FailureValidation:
-		return "Correct the Matty-owned validation failure in a separate implementation change, then start a fresh dispatch."
+		return "Correct the Packy-owned validation failure in a separate implementation change, then start a fresh dispatch."
 	case FailureOwnership, FailureDivergence:
 		return "Restore the expected automation-owned metadata and head or close the owned PR; never overwrite reviewer work or open a competitor."
 	default:

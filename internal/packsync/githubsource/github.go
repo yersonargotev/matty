@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 const maxArchiveBytes = 256 << 20
@@ -339,7 +339,7 @@ func (client *Client) request(ctx context.Context, endpoint string) (*http.Reque
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", packsync.GitHubAPIVersion)
-	request.Header.Set("User-Agent", "matty-pack-source-check")
+	request.Header.Set("User-Agent", "packy-pack-source-check")
 	return request, nil
 }
 

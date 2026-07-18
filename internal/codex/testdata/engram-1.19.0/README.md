@@ -3,7 +3,7 @@
 The two companion files in this directory were captured byte-for-byte from
 `/opt/homebrew/bin/engram setup codex` version 1.19.0 on 2026-07-12 with
 `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `CODEX_HOME` isolated under
-`/tmp/matty-engram-converge.7GOgu6`.
+`/tmp/packy-engram-converge.7GOgu6`.
 
 SHA-256:
 
@@ -12,4 +12,4 @@ SHA-256:
 
 The integration fixture executes a sandboxed external process that writes
 these captured files plus the native MCP, marketplace, and plugin settings.
-Update this directory deliberately when Matty adopts a new Engram contract.
+Update this directory deliberately when Packy adopts a new Engram contract.

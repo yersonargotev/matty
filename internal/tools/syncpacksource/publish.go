@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 type phaseValidator interface {
@@ -58,7 +58,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	if err := validation.Validate(); err != nil || validation.SourceID != dispatch.SourceID || validation.PlanID != plan.PlanID || validation.BaseSHA != plan.Preconditions.BaseCommit || validation.CandidateSHA != plan.Candidate.Commit {
 		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: errors.New("sandbox validation proof is missing, invalid, or stale")}
 	}
-	acquisition, err := os.MkdirTemp("", "matty-pack-publish-")
+	acquisition, err := os.MkdirTemp("", "packy-pack-publish-")
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func validateSandbox(ctx context.Context, option options, output io.Writer) erro
 	if err := validateWorkflowEvidence(plan, evidence); err != nil {
 		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureClassification, Err: err}
 	}
-	acquisition, err := os.MkdirTemp("", "matty-pack-validate-")
+	acquisition, err := os.MkdirTemp("", "packy-pack-validate-")
 	if err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func validateSandbox(ctx context.Context, option options, output io.Writer) erro
 	if err := validator.Validate(ctx, option.repositoryRoot); err != nil {
 		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: err}
 	}
-	artifact := packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, MattySuite: true, Apply: true, UpstreamBytes: false}
+	artifact := packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, PackySuite: true, Apply: true, UpstreamBytes: false}
 	if err := artifact.Validate(); err != nil {
 		return err
 	}
@@ -238,11 +238,13 @@ func (builder *publicationBuilder) Build(ctx context.Context, repositoryRoot str
 
 type commandValidator struct{}
 
+const stagedValidationEnvironment = "PACKY_VALIDATION_STAGED=1"
+
 func (commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
 	if filepath.Clean(bundleRoot) == filepath.Join(filepath.Clean(repositoryRoot), "bundle") {
 		return commandValidator{}.Validate(ctx, repositoryRoot)
 	}
-	sandbox, err := os.MkdirTemp("", "matty-staged-validation-")
+	sandbox, err := os.MkdirTemp("", "packy-staged-validation-")
 	if err != nil {
 		return err
 	}
@@ -251,23 +253,42 @@ func (commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bund
 	if err := copyForValidation(repositoryRoot, checkout, bundleRoot); err != nil {
 		return err
 	}
-	return commandValidator{}.Validate(ctx, checkout)
+	return commandValidator{}.validate(ctx, checkout, true)
 }
 
 func (commandValidator) Validate(ctx context.Context, repositoryRoot string) error {
-	home, err := os.MkdirTemp("", "matty-validation-home-")
+	return commandValidator{}.validate(ctx, repositoryRoot, false)
+}
+
+func (commandValidator) validate(ctx context.Context, repositoryRoot string, staged bool) error {
+	home, err := os.MkdirTemp("", "packy-validation-home-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(home)
-	cmd := exec.CommandContext(ctx, "bash", "./scripts/validate-matty.sh")
+	cmd := exec.CommandContext(ctx, "bash", "./scripts/validate-packy.sh")
 	cmd.Dir = repositoryRoot
-	cmd.Env = append(withoutCredentials(os.Environ()), "HOME="+filepath.Join(home, "home"), "XDG_CONFIG_HOME="+filepath.Join(home, "xdg"))
+	environment := withoutStagedValidationMarker(withoutCredentials(os.Environ()))
+	environment = append(environment, "HOME="+filepath.Join(home, "home"), "XDG_CONFIG_HOME="+filepath.Join(home, "xdg"))
+	if staged {
+		environment = append(environment, stagedValidationEnvironment)
+	}
+	cmd.Env = environment
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("Matty-owned validation failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("Packy-owned validation failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func withoutStagedValidationMarker(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, variable := range environment {
+		if !strings.HasPrefix(variable, "PACKY_VALIDATION_STAGED=") {
+			filtered = append(filtered, variable)
+		}
+	}
+	return filtered
 }
 
 func copyForValidation(repositoryRoot, checkout, bundleRoot string) error {

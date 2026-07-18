@@ -1,6 +1,6 @@
 ---
 name: sync-pack-source
-description: Synchronize one configured Matty pack source through the canonical manual workflow. Use when a Matty maintainer asks to update, retry, or monitor pack-source synchronization.
+description: Synchronize one configured Packy pack source through the canonical manual workflow. Use when a Packy maintainer asks to update, retry, or monitor pack-source synchronization.
 ---
 
 # Synchronize Pack Source
@@ -14,7 +14,7 @@ and presents evidence.
 ## 1. Normalize
 
 If the maintainer supplied an existing run ID/URL only for monitoring, validate
-that it belongs to `yersonargotev/matty` and the canonical workflow, then go
+that it belongs to `yersonargotev/packy` and the canonical workflow, then go
 directly to **Monitor and conclude** using its owner-produced request and
 artifacts. Recovery or retry continues through normalization below.
 

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 var defaultGroups = []string{"engineering", "productivity"}
@@ -29,7 +29,7 @@ type InstalledSource interface {
 
 // SourceOptions supplies the process-specific candidates used to select a
 // skill source. Callers own environment and cwd lookup; this package owns
-// precedence and the Matty bundle layout.
+// precedence and the Packy bundle layout.
 type SourceOptions struct {
 	ExplicitRoot    string
 	RepositoryStart string
@@ -73,7 +73,7 @@ func ResolveSource(opts SourceOptions) (Source, error) {
 
 	return Source{
 		Root:        InstalledSourceRoot(opts.InstalledSource),
-		MissingHint: "run matty init to initialize it",
+		MissingHint: "run packy init to initialize it",
 		IsDefault:   true,
 		Origin:      SourceOriginInstalled,
 	}, nil
@@ -85,11 +85,11 @@ func InstalledSourceRoot(source InstalledSource) string {
 	return filepath.Join(source.BundleRoot(), "skills")
 }
 
-func SourceRoot(mattyRoot string) string {
-	return filepath.Join(mattyRoot, "bundle", "skills")
+func SourceRoot(packyRoot string) string {
+	return filepath.Join(packyRoot, "bundle", "skills")
 }
 
-// BundleRoot returns the Matty-owned bundle containing a selected skill source.
+// BundleRoot returns the Packy-owned bundle containing a selected skill source.
 // Keeping this physical relationship here prevents capability modules from
 // learning the source tree layout.
 func BundleRoot(skillSourceRoot string) string {
@@ -128,7 +128,7 @@ func (err MissingSourceError) Error() string {
 }
 
 // MalformedSourceError reports a selected source that exists but does not
-// satisfy the Matty-owned bundle structure.
+// satisfy the Packy-owned bundle structure.
 type MalformedSourceError struct {
 	Path string
 	Err  error
@@ -142,7 +142,7 @@ func (err MalformedSourceError) Unwrap() error {
 	return err.Err
 }
 
-// Discover returns Matty's v0 skill bundle from a Matty-owned source root.
+// Discover returns Packy's v0 skill bundle from a Packy-owned source root.
 // The root is expected to contain engineering/, productivity/, and the selected
 // in-progress/ skills. Callers provide linkDir so this package owns the bundle
 // shape without knowing HOME or CLI state details. missingSourceHint adds
@@ -213,7 +213,7 @@ func transactionRoot(sourceRoot string) string {
 	}
 }
 
-// ValidateSource verifies that a selected root contains the complete Matty v0
+// ValidateSource verifies that a selected root contains the complete Packy v0
 // skill structure without writing or publishing any resources.
 func ValidateSource(sourceRoot, missingSourceHint string) error {
 	_, err := Discover(sourceRoot, "", missingSourceHint)

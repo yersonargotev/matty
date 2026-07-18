@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 func TestInitialApplyBootstrapsTruthfulProvenanceWithoutSelectedContentChange(t *testing.T) {
@@ -150,7 +150,7 @@ func TestApplyRejectsEverySealedFreshnessBoundary(t *testing.T) {
 		{name: "production-lock", want: "production provenance lock changed", mutate: func(t *testing.T, repository string, _ *fixtureSource, _ *Plan, _ *Engine) {
 			writeFile(t, filepath.Join(repository, "bundle", "sources.lock.json"), "{}\n")
 		}},
-		{name: "Matty-owned-suite", want: "fresh Matty-owned validation", mutate: func(_ *testing.T, _ string, _ *fixtureSource, _ *Plan, engine *Engine) {
+		{name: "Packy-owned-suite", want: "fresh Packy-owned validation", mutate: func(_ *testing.T, _ string, _ *fixtureSource, _ *Plan, engine *Engine) {
 			engine.Validate = BundleValidatorFunc(func(context.Context, string, string) error { return errors.New("suite rejected hostile content") })
 		}},
 	}
@@ -207,7 +207,7 @@ func TestRecoverRetainsEvidenceForIncompleteBackupAndAmbiguousSiblings(t *testin
 			writeFile(t, name, "tampered\n")
 		}},
 		{name: "ambiguous-sibling", mutate: func(t *testing.T, repository string, _ recoveryMarker) {
-			if err := os.Mkdir(filepath.Join(repository, ".matty-bundle-unexpected.backup"), 0o700); err != nil {
+			if err := os.Mkdir(filepath.Join(repository, ".packy-bundle-unexpected.backup"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -567,7 +567,7 @@ func assertNoTransactionEvidence(t *testing.T, repository string) {
 	if _, err := os.Stat(recoveryMarkerPath(repository)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovery marker remains: %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(repository, ".matty-bundle-*"))
+	matches, err := filepath.Glob(filepath.Join(repository, ".packy-bundle-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("transaction siblings remain: %v, %v", matches, err)
 	}

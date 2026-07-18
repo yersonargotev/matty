@@ -1,11 +1,11 @@
 ---
-name: deliver-matty-issue
-description: Deliver a named Matty GitHub issue end to end through validation, implementation, review, pull request, merge, and cleanup. Use when the user explicitly asks for complete issue delivery.
+name: deliver-packy-issue
+description: Deliver a named Packy GitHub issue end to end through validation, implementation, review, pull request, merge, and cleanup. Use when the user explicitly asks for complete issue delivery.
 ---
 
-# Deliver Matty Issue
+# Deliver Packy Issue
 
-Read the complete [workflow contract](../../../workflows/matty-issue-delivery.md)
+Read the complete [workflow contract](../../../workflows/packy-issue-delivery.md)
 and [repository instructions](../../../AGENTS.md) before mutating project or
 tracker state. The contract owns delivery behavior; keep this skill as its thin
 orchestrator.

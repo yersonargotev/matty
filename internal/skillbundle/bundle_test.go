@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 type installedSourceStub struct{ bundleRoot string }
@@ -170,7 +170,7 @@ func TestResolveSourceKeepsInvalidExplicitOverrideSelected(t *testing.T) {
 		t.Fatalf("ResolveSource = %#v, want invalid override preserved without Installed Source guidance", got)
 	}
 	_, err = Discover(got.Root, t.TempDir(), got.MissingHint)
-	if err == nil || strings.Contains(err.Error(), "matty init") {
+	if err == nil || strings.Contains(err.Error(), "packy init") {
 		t.Fatalf("explicit override error = %v, want stable missing error without Installed Source guidance", err)
 	}
 }
@@ -197,7 +197,7 @@ func TestResolveSourceMissingInstalledFallbackCarriesInitializationGuidance(t *t
 	if err == nil {
 		t.Fatal("expected missing Installed Source error")
 	}
-	for _, want := range []string{SourceRoot(installedRoot), "run matty init"} {
+	for _, want := range []string{SourceRoot(installedRoot), "run packy init"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
@@ -213,7 +213,7 @@ func TestBundleRootOwnsPhysicalSourceLayout(t *testing.T) {
 
 func TestDiscoverReportsMissingSourceWithHint(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "bundle", "skills")
-	_, err := Discover(missing, t.TempDir(), "run matty init to initialize it")
+	_, err := Discover(missing, t.TempDir(), "run packy init to initialize it")
 	if err == nil {
 		t.Fatal("expected missing source error")
 	}
@@ -224,7 +224,7 @@ func TestDiscoverReportsMissingSourceWithHint(t *testing.T) {
 	if missingErr.Path != missing {
 		t.Fatalf("MissingSourceError.Path = %q, want %q", missingErr.Path, missing)
 	}
-	for _, want := range []string{missing, "run matty init"} {
+	for _, want := range []string{missing, "run packy init"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}

@@ -40,8 +40,8 @@ func TestResolveNormalizesWorkstationFacts(t *testing.T) {
 			if snapshot.ExecutableSearchPath() != "/sandbox/bin" || snapshot.HomebrewPrefix() != "/sandbox/homebrew" || currentDirectory != cwd || currentDirectoryErr != nil {
 				t.Fatalf("ambient facts were not preserved: %#v", snapshot)
 			}
-			if snapshot.MattyHome() != filepath.Join(home, ".matty") {
-				t.Fatalf("MattyHome = %q", snapshot.MattyHome())
+			if snapshot.PackyHome() != filepath.Join(home, ".packy") {
+				t.Fatalf("PackyHome = %q", snapshot.PackyHome())
 			}
 		})
 	}

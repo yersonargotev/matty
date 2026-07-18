@@ -14,7 +14,7 @@ func NewCanonicalLayout(configurationHome string) CanonicalLayout {
 	return CanonicalLayout{
 		configurationHome: configurationHome,
 		configFile:        filepath.Join(root, "opencode.json"),
-		promptFile:        filepath.Join(root, "matty.md"),
+		promptFile:        filepath.Join(root, "packy.md"),
 	}
 }
 

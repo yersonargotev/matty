@@ -5,7 +5,7 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 // Applier is the existing packsync transaction seam. Implementations must be
@@ -16,7 +16,7 @@ type Applier interface {
 	RecoverPending(context.Context, string) (packsync.ApplyResult, bool, error)
 }
 
-// Validator runs the complete Matty-owned validation authority against the
+// Validator runs the complete Packy-owned validation authority against the
 // sandbox checkout after Apply and before publication credentials are used.
 type Validator interface {
 	Validate(context.Context, string) error
@@ -111,7 +111,7 @@ func (publisher Publisher) Run(ctx context.Context, request PublishRequest) (Pub
 	// These gates are derived here from the completed owner-controlled sequence,
 	// never asserted by the workflow adapter. Ownership is admitted only if the
 	// fail-closed state evaluation below succeeds.
-	proposal.Validation = ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}
+	proposal.Validation = ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true}
 	proposal.InvalidationConditions = DecisionReadyInvalidationConditions()
 	proposal, err = publisher.GitHub.Prepare(proposal)
 	if err != nil {

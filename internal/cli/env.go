@@ -3,7 +3,7 @@ package cli
 import "os"
 
 // Env provides environment lookup behind a small interface so tests can run
-// Matty against sandboxed HOME/config paths without mutating the real machine.
+// Packy against sandboxed HOME/config paths without mutating the real machine.
 type Env interface {
 	Getenv(key string) string
 }

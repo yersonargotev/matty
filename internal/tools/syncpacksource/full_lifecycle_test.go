@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t *testing.T) {
@@ -82,14 +82,14 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 	t.Setenv("GITHUB_RUN_ID", "37")
 	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
 	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
-	t.Setenv("MATTY_SOURCE_ID", "mattpocock-skills")
-	t.Setenv("MATTY_SELECTOR", "latest-stable")
-	t.Setenv("MATTY_SELECTOR_REF", "")
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", "sandbox tracer")
-	t.Setenv("MATTY_EXPECTED_PLAN_ID", "")
-	t.Setenv("MATTY_EXPECTED_BASE_SHA", "")
-	t.Setenv("MATTY_HUMAN_EVIDENCE_JSON", "")
+	t.Setenv("PACKY_SOURCE_ID", "mattpocock-skills")
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_SELECTOR_REF", "")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "sandbox tracer")
+	t.Setenv("PACKY_EXPECTED_PLAN_ID", "")
+	t.Setenv("PACKY_EXPECTED_BASE_SHA", "")
+	t.Setenv("PACKY_HUMAN_EVIDENCE_JSON", "")
 
 	artifacts := t.TempDir()
 	inspect := filepath.Join(artifacts, "inspect")
@@ -119,7 +119,7 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 	var result map[string]any
 	readJSONForTest(t, filepath.Join(publication, "publication.json"), &result)
 	markdown, err := os.ReadFile(filepath.Join(publication, "proposal-brief.md"))
-	if err != nil || !strings.Contains(string(markdown), "## Matty pack synchronization") {
+	if err != nil || !strings.Contains(string(markdown), "## Packy pack synchronization") {
 		t.Fatalf("canonical proposal Markdown = %q, %v", markdown, err)
 	}
 	if result["decision_ready"] != true || result["auto_merge"] != false {

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/localprojection"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
 type SurfaceAdapter struct {
@@ -318,11 +318,11 @@ func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilit
 }
 
 func instructionMarkers(id string) (string, string) {
-	return "<!-- matty:pack:" + id + ":start -->", "<!-- matty:pack:" + id + ":end -->"
+	return "<!-- packy:pack:" + id + ":start -->", "<!-- packy:pack:" + id + ":end -->"
 }
 
 func mcpMarkers(id string) (string, string) {
-	return "# matty:pack:" + id + ":start", "# matty:pack:" + id + ":end"
+	return "# packy:pack:" + id + ":start", "# packy:pack:" + id + ":end"
 }
 
 func mcpBlock(resource capabilitypack.Resource, command string) string {
@@ -397,7 +397,7 @@ func pendingActions(pack capabilitypack.Pack) []string {
 		return nil
 	}
 	return []string{
-		"review and trust the Engram integration in Codex through /hooks; Matty will not bypass hook trust",
+		"review and trust the Engram integration in Codex through /hooks; Packy will not bypass hook trust",
 		"reload Codex so the configured Engram MCP server becomes available at runtime",
 	}
 }

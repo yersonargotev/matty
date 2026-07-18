@@ -7,6 +7,6 @@ request="${1:?usage: dispatch.sh canonical-request.json}"
 
 workflow_inputs "$request" |
   gh workflow run .github/workflows/sync-pack-source.yml \
-    --repo yersonargotev/matty \
+    --repo yersonargotev/packy \
     --ref main \
     --json

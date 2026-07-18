@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
 func TestResolveInstalledSource(t *testing.T) {
@@ -24,7 +24,7 @@ func TestResolveInstalledSource(t *testing.T) {
 		explicitRoot string
 		wantRoot     string
 	}{
-		{name: "default", wantRoot: filepath.Join(home, ".local", "share", "matty")},
+		{name: "default", wantRoot: filepath.Join(home, ".local", "share", "packy")},
 		{name: "absolute override", explicitRoot: absoluteRoot, wantRoot: absoluteRoot},
 		{name: "relative override", explicitRoot: filepath.Join("relative", "installed"), wantRoot: filepath.Join(cwd, "relative", "installed")},
 	}

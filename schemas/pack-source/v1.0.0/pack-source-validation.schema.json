@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yersonargotev/matty/workflows/schemas/pack-source-validation.schema.json",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/pack-source-validation.schema.json",
   "title": "Pack source sandbox validation proof",
   "type": "object",
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "plan_id",
     "base_sha",
     "candidate_sha",
-    "matty_suite",
+    "packy_suite",
     "apply",
     "contains_upstream_bytes"
   ],
@@ -20,7 +20,7 @@
     "plan_id": { "type": "string", "minLength": 1 },
     "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-    "matty_suite": { "const": true },
+    "packy_suite": { "const": true },
     "apply": { "const": true },
     "contains_upstream_bytes": { "const": false }
   }

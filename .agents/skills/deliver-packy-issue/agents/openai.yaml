@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deliver Packy Issue"
+  short_description: "Deliver a Packy issue through merge and cleanup."
+  default_prompt: "Use $deliver-packy-issue to deliver the specified Packy GitHub issue completely."

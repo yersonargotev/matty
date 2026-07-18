@@ -112,13 +112,13 @@ type ValidationArtifact struct {
 	PlanID        string `json:"plan_id"`
 	BaseSHA       string `json:"base_sha"`
 	CandidateSHA  string `json:"candidate_sha"`
-	MattySuite    bool   `json:"matty_suite"`
+	PackySuite    bool   `json:"packy_suite"`
 	Apply         bool   `json:"apply"`
 	UpstreamBytes bool   `json:"contains_upstream_bytes"`
 }
 
 func (artifact ValidationArtifact) Validate() error {
-	if artifact.SchemaVersion != 1 || !sourceIDPattern.MatchString(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.MattySuite || !artifact.Apply || artifact.UpstreamBytes {
+	if artifact.SchemaVersion != 1 || !sourceIDPattern.MatchString(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.PackySuite || !artifact.Apply || artifact.UpstreamBytes {
 		return errors.New("sandbox validation proof is incomplete or contradictory")
 	}
 	return nil
@@ -127,6 +127,7 @@ func (artifact ValidationArtifact) Validate() error {
 var (
 	sourceIDPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	fullSHAPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	sha256Pattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	prereleasePattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$`)
 	runIDPattern      = regexp.MustCompile(`^[0-9]+$`)
 )
@@ -252,6 +253,13 @@ func validOptionalURI(value string) bool {
 func requireFullSHA(name, value string) error {
 	if !fullSHAPattern.MatchString(value) {
 		return fmt.Errorf("%s must be one full lowercase SHA", name)
+	}
+	return nil
+}
+
+func requireSHA256(name, value string) error {
+	if !sha256Pattern.MatchString(value) {
+		return fmt.Errorf("%s must be one lowercase hexadecimal SHA-256", name)
 	}
 	return nil
 }

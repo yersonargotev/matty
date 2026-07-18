@@ -3,16 +3,16 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Generate a Homebrew formula for Matty from a release checksum manifest.
+Generate a Homebrew formula for Packy from a release checksum manifest.
 
 Usage:
-  scripts/generate-homebrew-formula.sh --version <v0.x.y> --checksums <checksums.txt> --out <Formula/matty.rb> [options]
+  scripts/generate-homebrew-formula.sh --version <v0.x.y> --checksums <checksums.txt> --out <Formula/packy.rb> [options]
 
 Options:
   --version   Release tag used in artifact filenames, for example v0.1.0.
   --checksums Path to the release checksums.txt manifest.
   --out       Output formula path.
-  --repo      GitHub repository in owner/name form. Defaults to yersonargotev/matty.
+  --repo      GitHub repository in owner/name form. Defaults to yersonargotev/packy.
   --homepage  Formula homepage. Defaults to https://github.com/<repo>.
   --desc      Formula description. Defaults to AI coding workflow installer.
   -h, --help  Show this help.
@@ -34,7 +34,7 @@ ruby_escape() {
 version="${RELEASE_VERSION:-}"
 checksums_path=""
 out_path=""
-repo="yersonargotev/matty"
+repo="yersonargotev/packy"
 homepage=""
 desc="AI coding workflow installer"
 
@@ -161,10 +161,10 @@ validate_checksum_manifest() {
   done
 }
 
-darwin_amd64_artifact="matty_${version}_darwin_amd64"
-darwin_arm64_artifact="matty_${version}_darwin_arm64"
-linux_amd64_artifact="matty_${version}_linux_amd64"
-linux_arm64_artifact="matty_${version}_linux_arm64"
+darwin_amd64_artifact="packy_${version}_darwin_amd64"
+darwin_arm64_artifact="packy_${version}_darwin_arm64"
+linux_amd64_artifact="packy_${version}_linux_amd64"
+linux_arm64_artifact="packy_${version}_linux_arm64"
 
 expected_artifacts=(
   "$darwin_amd64_artifact"
@@ -181,7 +181,7 @@ validate_checksum_manifest
 
 mkdir -p "$(dirname "$out_path")"
 cat > "$out_path" <<FORMULA
-class Matty < Formula
+class Packy < Formula
   desc "$(ruby_escape "$desc")"
   homepage "$(ruby_escape "$homepage")"
   version "$formula_version"
@@ -207,13 +207,13 @@ class Matty < Formula
   end
 
   def install
-    downloaded_binary = Dir["matty_*"].first
-    odie "downloaded matty binary not found" if downloaded_binary.nil?
-    bin.install downloaded_binary => "matty"
+    downloaded_binary = Dir["packy_*"].first
+    odie "downloaded packy binary not found" if downloaded_binary.nil?
+    bin.install downloaded_binary => "packy"
   end
 
   test do
-    system "#{bin}/matty", "--version"
+    system "#{bin}/packy", "--version"
   end
 end
 FORMULA

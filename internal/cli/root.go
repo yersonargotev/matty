@@ -8,16 +8,16 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/setuphealth"
-	"github.com/yersonargotev/matty/internal/skillbundle"
-	mattyversion "github.com/yersonargotev/matty/internal/version"
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/corelifecycle"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/setuphealth"
+	"github.com/yersonargotev/packy/internal/skillbundle"
+	packyversion "github.com/yersonargotev/packy/internal/version"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
 // Options carries injectable process boundaries for tests and future command
@@ -53,20 +53,21 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// NewRootCommand constructs the Matty CLI command tree.
+// NewRootCommand constructs the Packy CLI command tree.
 func NewRootCommand(opts Options) *cobra.Command {
 	opts = opts.withDefaults()
 	workstationResolver := newWorkstationResolver(opts)
 
 	root := &cobra.Command{
-		Use:           "matty",
-		Short:         "Install and configure the Matty AI coding workflow",
+		Use:           "packy",
+		Short:         "Install and configure the Packy AI coding workflow",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       mattyversion.Value,
+		Version:       packyversion.Value,
 	}
 
 	root.AddCommand(
+		newVersionCommand(),
 		newPackCommand(opts, workstationResolver),
 		newInitCommand(opts, workstationResolver),
 		newInstallCommand(opts, workstationResolver),
@@ -76,6 +77,18 @@ func NewRootCommand(opts Options) *cobra.Command {
 	)
 
 	return root
+}
+
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the Packy version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "packy version %s\n", packyversion.Value)
+			return err
+		},
+	}
 }
 
 func newInitCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
@@ -88,7 +101,7 @@ func newInitCommand(opts Options, workstationResolver *workstation.Resolver) *co
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize Matty's package-installed source checkout",
+		Short: "Initialize Packy's package-installed source checkout",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			snapshot, err := workstationResolver.Resolve(workstation.Options{Home: strings.TrimSpace(homeFlag)})
@@ -103,11 +116,11 @@ func newInitCommand(opts Options, workstationResolver *workstation.Resolver) *co
 			result, err := bootstrap.EnsureInstalledSource(bootstrap.BootstrapOptions{
 				InstalledSource: installedSource,
 				RepositoryURL:   repositoryURL,
-				RepositoryRef:   defaultInitRepositoryRef(repositoryRef, mattyversion.Value),
+				RepositoryRef:   defaultInitRepositoryRef(repositoryRef, packyversion.Value),
 				HomeDir:         snapshot.Home(),
 				ConfigHome:      snapshot.ConfigurationHome(),
 				ReportProgress: func(message string) error {
-					_, err := fmt.Fprintf(cmd.OutOrStdout(), "matty init: %s\n", message)
+					_, err := fmt.Fprintf(cmd.OutOrStdout(), "packy init: %s\n", message)
 					return err
 				},
 			})
@@ -116,20 +129,20 @@ func newInitCommand(opts Options, workstationResolver *workstation.Resolver) *co
 			}
 			switch {
 			case result.Cloned:
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: initialized Installed Source at %s\n", installedSource.Root())
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy init: initialized Installed Source at %s\n", installedSource.Root())
 			case result.Updated:
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: updated Installed Source at %s\n", installedSource.Root())
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy init: updated Installed Source at %s\n", installedSource.Root())
 			default:
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty init: Installed Source already initialized at %s\n", installedSource.Root())
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy init: Installed Source already initialized at %s\n", installedSource.Root())
 			}
 			return err
 		},
 	}
 
 	cmd.Flags().StringVar(&homeFlag, "home", "", "home directory used to resolve the default Installed Source")
-	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "Installed Source root (default ~/.local/share/matty)")
-	cmd.Flags().StringVar(&repositoryURL, "repository-url", bootstrap.DefaultRepositoryURL, "Matty Source of Truth Git URL")
-	cmd.Flags().StringVar(&repositoryRef, "repository-ref", "", "optional Matty Source of Truth Git ref to clone or check out")
+	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "Installed Source root (default ~/.local/share/packy)")
+	cmd.Flags().StringVar(&repositoryURL, "repository-url", bootstrap.DefaultRepositoryURL, "Packy Source of Truth Git URL")
+	cmd.Flags().StringVar(&repositoryRef, "repository-ref", "", "optional Packy Source of Truth Git ref to clone or check out")
 	return cmd
 }
 
@@ -161,7 +174,7 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install Matty-managed global workflow configuration",
+		Short: "Install Packy-managed global workflow configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
@@ -177,7 +190,7 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "matty install", plan)
+				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy install", plan)
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
@@ -186,11 +199,11 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty install: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy install: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed changes without writing files")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed changes without writing files")
 	return cmd
 }
 
@@ -198,7 +211,7 @@ func newDoctorCommand(opts Options, workstationResolver *workstation.Resolver) *
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check Matty setup without changing files",
+		Short: "Check Packy setup without changing files",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var (
@@ -237,7 +250,7 @@ func diagnoseSetupHealth(opts Options, resolver *workstation.Resolver) (setuphea
 		return setuphealth.Report{}, err
 	}
 
-	state := corelifecycle.NewLayout(snapshot.MattyHome())
+	state := corelifecycle.NewLayout(snapshot.PackyHome())
 	skills := skillbundle.NewGlobalLayout(snapshot.Home())
 	codexLayout := codex.NewCanonicalLayout(snapshot.Home())
 	openCodeLayout := opencode.NewCanonicalLayout(snapshot.ConfigurationHome())
@@ -257,7 +270,7 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Refresh Matty-managed tools and configuration",
+		Short: "Refresh Packy-managed tools and configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
@@ -273,7 +286,7 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "matty update", plan)
+				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy update", plan)
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
@@ -282,18 +295,18 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty update: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy update: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed update changes without writing files or running commands")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed update changes without writing files or running commands")
 	return cmd
 }
 
 func printSkillSourceReport(out io.Writer, source skillbundle.Source, installedSource bootstrap.InstalledSource) error {
 	switch source.Origin {
 	case skillbundle.SourceOriginOverride:
-		if _, err := fmt.Fprintf(out, "Skill source: explicit override (MATTY_SKILLS_SOURCE=%s)\n", source.Root); err != nil {
+		if _, err := fmt.Fprintf(out, "Skill source: explicit override (PACKY_SKILLS_SOURCE=%s)\n", source.Root); err != nil {
 			return err
 		}
 	case skillbundle.SourceOriginRepository:
@@ -302,7 +315,7 @@ func printSkillSourceReport(out io.Writer, source skillbundle.Source, installedS
 		}
 		installedSkillSource := skillbundle.InstalledSourceRoot(installedSource)
 		if skillbundle.SourceRootExists(installedSkillSource) {
-			if _, err := fmt.Fprintf(out, "warning: installed source also exists at %s; repo checkout source may create a development-mode install. For package-installed setup, run matty install outside the repo or set MATTY_SKILLS_SOURCE explicitly.\n", installedSkillSource); err != nil {
+			if _, err := fmt.Fprintf(out, "warning: installed source also exists at %s; repo checkout source may create a development-mode install. For package-installed setup, run packy install outside the repo or set PACKY_SKILLS_SOURCE explicitly.\n", installedSkillSource); err != nil {
 				return err
 			}
 		}
@@ -357,7 +370,7 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove only Matty-managed artifacts",
+		Short: "Remove only Packy-managed artifacts",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
@@ -370,21 +383,21 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "matty uninstall", plan)
+				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy uninstall", plan)
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
 				return err
 			}
 			if !result.HasWork() {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), "matty uninstall: no Matty-managed artifacts found")
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "packy uninstall: no Packy-managed artifacts found")
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "matty uninstall: removed Matty-managed artifacts and state %s\n", result.StateFile())
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy uninstall: removed Packy-managed artifacts and state %s\n", result.StateFile())
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Matty-managed removals without deleting files")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed removals without deleting files")
 	return cmd
 }
 
@@ -409,7 +422,7 @@ func resolveInvocationSources(opts Options, snapshot workstation.Snapshot) (invo
 		return invocationSources{}, fmt.Errorf("resolve skill source root: %w", err)
 	}
 	skills, err := skillbundle.ResolveSource(skillbundle.SourceOptions{
-		ExplicitRoot:    opts.Env.Getenv("MATTY_SKILLS_SOURCE"),
+		ExplicitRoot:    opts.Env.Getenv("PACKY_SKILLS_SOURCE"),
 		RepositoryStart: currentDirectory,
 		InstalledSource: installed,
 	})
@@ -430,14 +443,14 @@ func resolveClassicLifecycle(opts Options, resolver *workstation.Resolver) (clas
 	}
 	return classicLifecycleComposition{
 		config: corelifecycle.FacadeConfig{
-			MattyHome:       snapshot.MattyHome(),
+			PackyHome:       snapshot.PackyHome(),
 			Skills:          skillbundle.NewGlobalLayout(snapshot.Home()),
 			SkillSource:     sources.skills,
 			Codex:           codex.NewCanonicalLayout(snapshot.Home()),
 			OpenCode:        opencode.NewCanonicalLayout(snapshot.ConfigurationHome()),
 			Engram:          engrambin.NewTopology(snapshot.HomebrewPrefix()),
 			InstalledSource: sources.installed,
-			RunningVersion:  mattyversion.Value,
+			RunningVersion:  packyversion.Value,
 		},
 		skillSource:     sources.skills,
 		installedSource: sources.installed,

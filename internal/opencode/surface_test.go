@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testing.T) {
@@ -24,11 +24,11 @@ func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testin
 	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("# Ask Matt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(instruction, []byte("OpenCode Matty guidance\n"), 0o600); err != nil {
+	if err := os.WriteFile(instruction, []byte("OpenCode Packy guidance\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := filepath.Join(root, "xdg", "opencode", "opencode.json")
-	prompt := filepath.Join(root, "xdg", "opencode", "matty.md")
+	prompt := filepath.Join(root, "xdg", "opencode", "packy.md")
 	if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testin
 		}
 	}
 	promptData, err := os.ReadFile(prompt)
-	if err != nil || string(promptData) != "OpenCode Matty guidance\n" {
+	if err != nil || string(promptData) != "OpenCode Packy guidance\n" {
 		t.Fatalf("prompt=%q err=%v", promptData, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestSurfaceAdapterComposesMultipleInstructionReferences(t *testing.T) {
 		}
 	}
 	config := filepath.Join(root, "opencode.json")
-	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, "skills"), config, filepath.Join(root, "matty.md"))
+	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, "skills"), config, filepath.Join(root, "packy.md"))
 	pack := capabilitypack.Pack{ID: "app", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "one", Source: "one.md"}, {Kind: "instruction", ID: "two", Source: "two.md"}}}
 	observed, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestSurfaceAdapterInspectDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := filepath.Join(root, "xdg", "opencode", "opencode.json")
-	prompt := filepath.Join(root, "xdg", "opencode", "matty.md")
+	prompt := filepath.Join(root, "xdg", "opencode", "packy.md")
 	adapter := NewSurfaceAdapter(bundle, filepath.Join(root, ".agents", "skills"), config, prompt)
 	pack := capabilitypack.Pack{ID: "matty", Resources: []capabilitypack.Resource{{Kind: "instruction", ID: "matty-guidance", Source: "instructions/matty.md"}}}
 	if _, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack}); err != nil {
@@ -259,15 +259,15 @@ func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
 
 func TestSurfaceAdapterRejectsInvalidConfigBeforeAnyProjection(t *testing.T) {
 	root := t.TempDir()
-	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "matty.md"))
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "packy.md"))
 	actions := []capabilitypack.ProjectionAction{
-		{ID: "instruction:matty-guidance", Kind: capabilitypack.ActionOpenCodeInstructionFile, Target: filepath.Join(root, "matty.md"), Content: "guidance\n"},
+		{ID: "instruction:matty-guidance", Kind: capabilitypack.ActionOpenCodeInstructionFile, Target: filepath.Join(root, "packy.md"), Content: "guidance\n"},
 		{ID: "opencode-instruction-reference:matty-guidance", Kind: capabilitypack.ActionOpenCodeConfigReference, Target: filepath.Join(root, "opencode.json"), Content: `{invalid`},
 	}
 	if err := adapter.ApplyProjections(context.Background(), actions); err == nil {
 		t.Fatal("invalid OpenCode projection was accepted")
 	}
-	if _, err := os.Stat(filepath.Join(root, "matty.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "packy.md")); !os.IsNotExist(err) {
 		t.Fatalf("validation failure wrote prompt: %v", err)
 	}
 }

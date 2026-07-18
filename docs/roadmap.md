@@ -1,8 +1,8 @@
-# Matty roadmap
+# Packy roadmap
 
-Matty v0 is an installable installer/configurator for Codex and OpenCode. It
+Packy v0 is an installable installer/configurator for Codex and OpenCode. It
 ships through GitHub Releases and Homebrew, supports package-installed use
-through `matty init`, and manages opt-in `matty` and `engram` capability packs.
+through `packy init`, and manages opt-in `matty` and `engram` capability packs.
 
 ## Next checkpoint
 
@@ -25,8 +25,8 @@ The completed work includes:
 
 | Topic | Question to answer |
 | --- | --- |
-| Token budget | What measurement proves Matty is materially lighter than Gentle AI at session start? |
-| Review workflow | Is Matt Pocock `review`/`code-review` sufficient, or does Matty need a distinct review layer later? |
+| Token budget | What measurement proves Packy is materially lighter than Gentle AI at session start? |
+| Review workflow | Is Matt Pocock `review`/`code-review` sufficient, or does Packy need a distinct review layer later? |
 | Engram ambiguity | What user-facing guidance is needed when Engram project detection is ambiguous? |
 | Next adapter | What evidence should be required before adding another host beyond Codex and OpenCode? |
 
@@ -40,7 +40,7 @@ evidence for its host-specific paths, projections, trust model, and readiness:
 - GitHub Copilot CLI.
 - Gemini, Cursor, or other host CLIs.
 
-When adding adapters, keep the same boundary: Matty should configure host-specific prompts/state through narrow adapters and avoid growing the core prompt.
+When adding adapters, keep the same boundary: Packy should configure host-specific prompts/state through narrow adapters and avoid growing the core prompt.
 
 ## Historical planning source
 

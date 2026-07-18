@@ -1,17 +1,17 @@
-# Matty Release
+# Packy Release
 
 Status: Active
 
 ## Goal
 
-Publish or recover one Matty release from an immutable commit in fetched
+Publish or recover one Packy release from an immutable commit in fetched
 `origin/main` history, then prove that every published surface agrees before
 announcing success.
 
 ## Skill shape
 
 The implementation strengthens the existing project-local, model-invoked skill
-`release-matty` at `.agents/skills/release-matty/SKILL.md`; it does not create a
+`release-packy` at `.agents/skills/release-packy/SKILL.md`; it does not create a
 second release skill. Fresh publication and existing-tag recovery are branches
 of this one release gate. Consultations and release audits without a publication
 request do not trigger it.
@@ -35,7 +35,7 @@ delegated.
 
 ### Trigger
 
-The user explicitly asks to publish Matty from `main`, optionally naming a
+The user explicitly asks to publish Packy from `main`, optionally naming a
 version, or to recover publication for one named existing tag. Classify the run
 as fresh publication or existing-tag recovery before any external mutation.
 
@@ -211,4 +211,4 @@ links the relevant run or asset and omits raw logs.
 A release run succeeds only when **Verify and close** is complete. An exception
 brief pauses an incomplete run until the user's decision resumes it from the
 invalidated phase. This specification is ready when an implementer can
-strengthen `release-matty` without asking another question.
+strengthen `release-packy` without asking another question.

@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/setuphealth"
-	"github.com/yersonargotev/matty/internal/skillbundle"
-	mattyversion "github.com/yersonargotev/matty/internal/version"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/corelifecycle"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/setuphealth"
+	"github.com/yersonargotev/packy/internal/skillbundle"
+	packyversion "github.com/yersonargotev/packy/internal/version"
 )
 
 func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
@@ -110,7 +110,7 @@ type changingSkillSourceEnv struct {
 }
 
 func (e *changingSkillSourceEnv) Getenv(key string) string {
-	if key != "MATTY_SKILLS_SOURCE" {
+	if key != "PACKY_SKILLS_SOURCE" {
 		return e.MapEnv.Getenv(key)
 	}
 	e.calls++
@@ -176,7 +176,7 @@ func sandboxOptions(t *testing.T) (Options, *fakeRunner, string) {
 			"CODEX_HOME":          filepath.Join(home, ".codex"),
 			"PATH":                homebrewBin,
 			"HOMEBREW_PREFIX":     homebrewPrefix,
-			"MATTY_SKILLS_SOURCE": sourceRoot,
+			"PACKY_SKILLS_SOURCE": sourceRoot,
 		},
 		Runner: runner,
 		EngramFacts: engrambin.Facts{
@@ -276,10 +276,10 @@ func createRepoCheckoutSkillSource(t *testing.T) (string, string) {
 
 func withVersion(t *testing.T, value string) {
 	t.Helper()
-	previous := mattyversion.Value
-	mattyversion.Value = value
+	previous := packyversion.Value
+	packyversion.Value = value
 	t.Cleanup(func() {
-		mattyversion.Value = previous
+		packyversion.Value = previous
 	})
 }
 
@@ -289,11 +289,12 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "init", "install", "doctor", "update", "uninstall"}},
-		{name: "install", args: []string{"install", "--help"}, want: []string{"Install Matty-managed", "--dry-run"}},
-		{name: "doctor", args: []string{"doctor", "--help"}, want: []string{"Check Matty setup"}},
-		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Matty-managed", "--dry-run"}},
-		{name: "uninstall", args: []string{"uninstall", "--help"}, want: []string{"Remove only Matty-managed", "--dry-run"}},
+		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "version", "init", "install", "doctor", "update", "uninstall"}},
+		{name: "version", args: []string{"version", "--help"}, want: []string{"Print the Packy version"}},
+		{name: "install", args: []string{"install", "--help"}, want: []string{"Install Packy-managed", "--dry-run"}},
+		{name: "doctor", args: []string{"doctor", "--help"}, want: []string{"Check Packy setup"}},
+		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Packy-managed", "--dry-run"}},
+		{name: "uninstall", args: []string{"uninstall", "--help"}, want: []string{"Remove only Packy-managed", "--dry-run"}},
 	}
 
 	for _, tt := range tests {
@@ -326,19 +327,22 @@ func TestVersionOutput(t *testing.T) {
 			withVersion(t, tt.version)
 			opts, _, _ := sandboxOptions(t)
 
-			out, err := executeCommand(t, NewRootCommand(opts), "--version")
-			if err != nil {
-				t.Fatalf("version command failed: %v\n%s", err, out)
-			}
-			if !strings.Contains(out, tt.version) {
-				t.Fatalf("version output missing %q:\n%s", tt.version, out)
+			for _, args := range [][]string{{"--version"}, {"version"}} {
+				out, err := executeCommand(t, NewRootCommand(opts), args...)
+				if err != nil {
+					t.Fatalf("version command %v failed: %v\n%s", args, err, out)
+				}
+				want := "packy version " + tt.version + "\n"
+				if out != want {
+					t.Fatalf("version output for %v = %q, want %q", args, out, want)
+				}
 			}
 		})
 	}
 }
 
 func TestHelpAndVersionDoNotResolveWorkstation(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"--version"}} {
+	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"version", "--help"}, {"--version"}, {"version"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			env := &countingEnv{values: map[string]string{}, calls: map[string]int{}}
 			getwdCalls := 0
@@ -367,7 +371,7 @@ func TestLifecycleCommandCapturesOneWorkstationSnapshot(t *testing.T) {
 		Env: MapEnv{
 			"HOME":                home,
 			"XDG_CONFIG_HOME":     filepath.Join(home, "xdg"),
-			"MATTY_SKILLS_SOURCE": source,
+			"PACKY_SKILLS_SOURCE": source,
 		},
 		Getwd: func() (string, error) {
 			getwdCalls++
@@ -399,9 +403,9 @@ func TestLifecycleCommandResolvesSkillSourceOnce(t *testing.T) {
 		t.Fatalf("install --dry-run: %v\n%s", err, out)
 	}
 	if env.calls != 1 {
-		t.Fatalf("MATTY_SKILLS_SOURCE reads = %d, want one", env.calls)
+		t.Fatalf("PACKY_SKILLS_SOURCE reads = %d, want one", env.calls)
 	}
-	if !strings.Contains(out, "MATTY_SKILLS_SOURCE="+source) {
+	if !strings.Contains(out, "PACKY_SKILLS_SOURCE="+source) {
 		t.Fatalf("source report did not use resolved source:\n%s", out)
 	}
 }
@@ -426,7 +430,7 @@ func TestCommandsResolveOwnerLayoutsFromInjectedEnvironment(t *testing.T) {
 	wants := []string{
 		"HOME=" + home,
 		"CONFIG_HOME=" + xdg,
-		"MATTY_STATE=" + filepath.Join(home, ".matty", "config.json"),
+		"PACKY_STATE=" + filepath.Join(home, ".packy", "config.json"),
 		"AGENT_SKILLS=" + filepath.Join(home, ".agents", "skills"),
 	}
 	for _, want := range wants {
@@ -478,7 +482,7 @@ func TestReadOnlyOrScaffoldCommandsDoNotCreateFilesInSandboxHome(t *testing.T) {
 			if err != nil {
 				t.Fatalf("command failed: %v\n%s", err, out)
 			}
-			for _, path := range []string{filepath.Join(home, ".matty"), filepath.Join(home, ".agents")} {
+			for _, path := range []string{filepath.Join(home, ".packy"), filepath.Join(home, ".agents")} {
 				if t.Failed() {
 					return
 				}
@@ -518,7 +522,7 @@ func TestInstallDryRunReportsRepoSourceAndInstalledSourceWarning(t *testing.T) {
 		"Skill source: repo checkout (" + fixture.skillSource.Root + ")",
 		"warning: installed source also exists at " + installedSkillSourceRoot(home),
 		"repo checkout source may create a development-mode install",
-		"For package-installed setup, run matty install outside the repo or set MATTY_SKILLS_SOURCE explicitly.",
+		"For package-installed setup, run packy install outside the repo or set PACKY_SKILLS_SOURCE explicitly.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install --dry-run output missing %q:\n%s", want, out)
@@ -556,12 +560,12 @@ func TestInstallAndUpdateReportInstalledSourceOutsideRepo(t *testing.T) {
 
 func TestInstallDryRunReportsExplicitOverrideSource(t *testing.T) {
 	opts, _, _ := sandboxOptions(t)
-	sourceRoot := opts.Env.Getenv("MATTY_SKILLS_SOURCE")
+	sourceRoot := opts.Env.Getenv("PACKY_SKILLS_SOURCE")
 	out, err := executeCommand(t, NewRootCommand(opts), "install", "--dry-run")
 	if err != nil {
 		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
 	}
-	want := "Skill source: explicit override (MATTY_SKILLS_SOURCE=" + sourceRoot + ")"
+	want := "Skill source: explicit override (PACKY_SKILLS_SOURCE=" + sourceRoot + ")"
 	if !strings.Contains(out, want) {
 		t.Fatalf("install --dry-run output missing %q:\n%s", want, out)
 	}
@@ -569,7 +573,7 @@ func TestInstallDryRunReportsExplicitOverrideSource(t *testing.T) {
 
 func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	chdirTempOutsideRepo(t)
 
 	homebrewPrefix := filepath.Join(t.TempDir(), "homebrew")
@@ -591,7 +595,7 @@ func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 		t.Fatalf("SkillSourceRoot = %q, want installed source %q", got, want)
 	}
 	if !exists(fixture.classicState.StateFile()) || !exists(fixture.skills.Skill("wayfinder")) {
-		t.Fatalf("install did not create Matty-managed artifacts from installed source")
+		t.Fatalf("install did not create Packy-managed artifacts from installed source")
 	}
 
 	runner.calls = nil
@@ -608,7 +612,7 @@ func TestPackageInstalledCommandsUseInitializedSourceOutsideRepo(t *testing.T) {
 		t.Fatalf("uninstall failed outside repo after init: %v\n%s", err, out)
 	}
 	if exists(fixture.classicState.StateFile()) || exists(fixture.skills.Skill("wayfinder")) {
-		t.Fatalf("uninstall left Matty-managed artifacts in sandbox")
+		t.Fatalf("uninstall left Packy-managed artifacts in sandbox")
 	}
 	if !exists(fixture.skillSource.Root) {
 		t.Fatalf("uninstall should not remove Installed Source at %s", fixture.skillSource.Root)
@@ -620,19 +624,19 @@ func TestPackageInstalledInstallSuggestsInitWhenSourceMissing(t *testing.T) {
 	chdirTempOutsideRepo(t)
 
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}, Runner: &fakeRunner{path: map[string]string{"engram": "/fake/bin/engram"}}}
-	missing := filepath.Join(home, ".local", "share", "matty", "bundle", "skills")
+	missing := filepath.Join(home, ".local", "share", "packy", "bundle", "skills")
 	for _, args := range [][]string{{"install", "--dry-run"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			out, err := executeCommand(t, NewRootCommand(opts), args...)
 			if err == nil {
 				t.Fatalf("expected missing Installed Source error, got output:\n%s", out)
 			}
-			for _, want := range []string{"run matty init", missing} {
+			for _, want := range []string{"run packy init", missing} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error missing %q: %v", want, err)
 				}
 			}
-			if exists(filepath.Join(home, ".matty")) || exists(filepath.Join(home, ".agents")) {
+			if exists(filepath.Join(home, ".packy")) || exists(filepath.Join(home, ".agents")) {
 				t.Fatalf("missing source command mutated sandbox")
 			}
 		})
@@ -714,7 +718,7 @@ func TestUpdateDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update --dry-run failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "matty update dry-run: planned actions") || !strings.Contains(out, "run: update Engram via Homebrew") {
+	if !strings.Contains(out, "packy update dry-run: planned actions") || !strings.Contains(out, "run: update Engram via Homebrew") {
 		t.Fatalf("update --dry-run did not report expected plan:\n%s", out)
 	}
 	if len(runner.calls) != 0 {
@@ -739,10 +743,10 @@ func TestUninstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 		t.Fatalf("uninstall --dry-run failed: %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"matty uninstall dry-run: planned actions",
+		"packy uninstall dry-run: planned actions",
 		"remove: remove managed skill ask-matt",
-		"remove-codex-prompt: remove Codex Matty prompt markers",
-		"remove-opencode-prompt: remove OpenCode Matty prompt reference",
+		"remove-codex-prompt: remove Codex Packy prompt markers",
+		"remove-opencode-prompt: remove OpenCode Packy prompt reference",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("uninstall --dry-run output missing %q:\n%s", want, out)
@@ -778,9 +782,9 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	fixture := newCLITestFixture(t, opts)
 	engram := fixture.engram.ExpectedPath()
 	wants := []string{
-		"matty install dry-run: planned actions",
-		"write-file: persist Matty state metadata",
-		filepath.Join(home, ".matty", "config.json"),
+		"packy install dry-run: planned actions",
+		"write-file: persist Packy state metadata",
+		filepath.Join(home, ".packy", "config.json"),
 		"symlink: link managed skill ask-matt",
 		"run: install Engram via Homebrew (brew install gentleman-programming/tap/engram)",
 		"run: delegate Codex Engram setup through Homebrew binary (" + engram + " setup codex)",
@@ -794,7 +798,7 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 	if len(runner.calls) != 0 {
 		t.Fatalf("dry-run executed external commands: %#v", runner.calls)
 	}
-	for _, path := range []string{filepath.Join(home, ".matty"), filepath.Join(home, ".agents")} {
+	for _, path := range []string{filepath.Join(home, ".packy"), filepath.Join(home, ".agents")} {
 		if exists(path) {
 			t.Fatalf("dry-run unexpectedly created %s", path)
 		}
@@ -804,7 +808,7 @@ func TestInstallDryRunReportsPlanAndDoesNotMutateSandbox(t *testing.T) {
 func TestInstallRejectsCorruptState(t *testing.T) {
 	opts, _, _ := sandboxOptions(t)
 	fixture := newCLITestFixture(t, opts)
-	if err := os.MkdirAll(fixture.classicState.MattyHome(), 0o700); err != nil {
+	if err := os.MkdirAll(fixture.classicState.PackyHome(), 0o700); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
 	if err := os.WriteFile(fixture.classicState.StateFile(), []byte("{not json"), 0o600); err != nil {
@@ -829,12 +833,12 @@ func TestInstallWarnsWhenMostExpectedSkillsAreUnmanagedSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install failed: %v\n%s", err, out)
 	}
-	recoveryAdvice := "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
+	recoveryAdvice := "Safe recovery: verify these are stale Packy-created links, remove them, then run packy install; Packy will not overwrite arbitrary files or links."
 	for _, want := range []string{
 		"warning: skipped 6 unmanaged skill symlinks; setup may be incomplete",
 		"Example: " + fixture.skills.Skill("ask-matt") + " -> " + filepath.Join(home, "stale-repo-skills", "ask-matt"),
 		recoveryAdvice,
-		"matty install: synced 0 managed skills",
+		"packy install: synced 0 managed skills",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install output missing %q:\n%s", want, out)
@@ -886,7 +890,7 @@ func TestEndToEndSandboxLifecyclePreservesGentleAIAndRealHome(t *testing.T) {
 		}
 	}
 	if !exists(fixture.classicState.StateFile()) || !exists(fixture.skills.Skill("ask-matt")) {
-		t.Fatalf("install did not create expected Matty-managed artifacts in sandbox")
+		t.Fatalf("install did not create expected Packy-managed artifacts in sandbox")
 	}
 
 	runner.calls = nil
@@ -903,7 +907,7 @@ func TestEndToEndSandboxLifecyclePreservesGentleAIAndRealHome(t *testing.T) {
 		t.Fatalf("uninstall failed: %v\n%s", err, out)
 	}
 	if exists(fixture.classicState.StateFile()) || exists(fixture.skills.Skill("ask-matt")) || exists(fixture.opencode.PromptFile()) {
-		t.Fatalf("uninstall left Matty-managed artifacts in sandbox")
+		t.Fatalf("uninstall left Packy-managed artifacts in sandbox")
 	}
 	if got := readFileString(t, fixture.codex.PromptFile()); got != codexOriginal {
 		t.Fatalf("uninstall did not restore Codex user/Gentle AI content:\ngot:\n%s\nwant:\n%s", got, codexOriginal)
@@ -915,7 +919,99 @@ func TestEndToEndSandboxLifecyclePreservesGentleAIAndRealHome(t *testing.T) {
 		}
 	}
 	if strings.Contains(openCodeAfter, fixture.opencode.PromptFile()) {
-		t.Fatalf("uninstall left Matty OpenCode prompt reference:\n%s", openCodeAfter)
+		t.Fatalf("uninstall left Packy OpenCode prompt reference:\n%s", openCodeAfter)
+	}
+}
+
+func TestPackyLifecycleIgnoresAndPreservesLegacyMattyOwnership(t *testing.T) {
+	opts, _, home := sandboxOptions(t)
+	env := opts.Env.(MapEnv)
+	packySource := env["PACKY_SKILLS_SOURCE"]
+	legacySource := createSkillSource(t)
+	env["MATTY_SKILLS_SOURCE"] = legacySource
+
+	legacyState := filepath.Join(home, ".matty", "config.json")
+	legacyPackState := filepath.Join(home, ".matty", "packs.json")
+	legacyPackLock := filepath.Join(home, ".matty", "packs.lock")
+	legacyCheckout := filepath.Join(home, ".local", "share", "matty", "sentinel")
+	legacyPrompt := filepath.Join(home, "xdg-config", "opencode", "matty.md")
+	legacyCodexBlock := "<!-- matty:skills-router -->\nlegacy Matty instructions\n<!-- /matty:skills-router -->\n" +
+		"<!-- matty:pack:matty-guidance:start -->\nlegacy Matty pack projection\n<!-- matty:pack:matty-guidance:end -->\n"
+	legacyOpenCodeConfig := "{\n  \"instructions\": [\"" + legacyPrompt + "\"]\n}\n"
+	for path, content := range map[string]string{
+		legacyState:     "{not valid Packy state",
+		legacyPackState: "legacy pack state must survive\n",
+		legacyPackLock:  "legacy pack lock must survive\n",
+		legacyCheckout:  "legacy checkout must survive\n",
+		legacyPrompt:    "legacy prompt must survive\n",
+		filepath.Join(home, ".codex", "AGENTS.md"):                     legacyCodexBlock,
+		filepath.Join(home, "xdg-config", "opencode", "opencode.json"): legacyOpenCodeConfig,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyLinkTarget := filepath.Join(home, ".local", "share", "matty", "bundle", "skills", "legacy-matty")
+	legacyLink := filepath.Join(home, ".agents", "skills", "legacy-matty")
+	if err := os.MkdirAll(legacyLinkTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyLink), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(legacyLinkTarget, legacyLink); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err != nil {
+		t.Fatalf("Packy install adopted legacy Matty state: %v\n%s", err, out)
+	}
+	packyState := filepath.Join(home, ".packy", "config.json")
+	data, err := os.ReadFile(packyState)
+	if err != nil || !strings.Contains(string(data), `"packy_version"`) || strings.Contains(string(data), `"matty_version"`) {
+		t.Fatalf("Packy state = %q, %v", data, err)
+	}
+	state, found, err := corelifecycle.LoadState(packyState)
+	if err != nil || !found {
+		t.Fatalf("load Packy state: found=%v err=%v", found, err)
+	}
+	for _, skill := range state.ManagedSkills {
+		if !strings.HasPrefix(skill.SourcePath, packySource+string(filepath.Separator)) || strings.HasPrefix(skill.SourcePath, legacySource+string(filepath.Separator)) {
+			t.Fatalf("Packy adopted legacy MATTY_SKILLS_SOURCE: %+v", skill)
+		}
+	}
+	if out, err := executeCommand(t, NewRootCommand(opts), "uninstall"); err != nil {
+		t.Fatalf("Packy uninstall touched legacy Matty ownership: %v\n%s", err, out)
+	}
+
+	for path, want := range map[string]string{
+		legacyState:     "{not valid Packy state",
+		legacyPackState: "legacy pack state must survive\n",
+		legacyPackLock:  "legacy pack lock must survive\n",
+		legacyCheckout:  "legacy checkout must survive\n",
+		legacyPrompt:    "legacy prompt must survive\n",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("legacy artifact %s = %q, %v; want preserved", path, got, err)
+		}
+	}
+	codexContent := readFileString(t, filepath.Join(home, ".codex", "AGENTS.md"))
+	if !strings.Contains(codexContent, legacyCodexBlock) || strings.Contains(codexContent, "packy:skills-router") {
+		t.Fatalf("legacy Codex ownership was changed or Packy ownership survived uninstall:\n%s", codexContent)
+	}
+	openCodeContent := readFileString(t, filepath.Join(home, "xdg-config", "opencode", "opencode.json"))
+	if !strings.Contains(openCodeContent, legacyPrompt) || strings.Contains(openCodeContent, "packy.md") {
+		t.Fatalf("legacy OpenCode ownership was changed or Packy ownership survived uninstall:\n%s", openCodeContent)
+	}
+	if exists(packyState) {
+		t.Fatalf("Packy state survived uninstall at %s", packyState)
+	}
+	if target, err := os.Readlink(legacyLink); err != nil || target != legacyLinkTarget {
+		t.Fatalf("legacy Matty link changed: target=%q err=%v", target, err)
 	}
 }
 
@@ -1015,14 +1111,14 @@ func snapshotTree(t *testing.T, root string) string {
 
 func TestInitClonesDefaultInstalledSourceAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
 	if err != nil {
 		t.Fatalf("init failed: %v\n%s", err, out)
 	}
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	sourceRoot := filepath.Join(home, ".local", "share", "packy")
 	if !exists(filepath.Join(sourceRoot, "bundle", "skills")) {
 		t.Fatalf("init did not clone bundle/skills into %s", sourceRoot)
 	}
@@ -1046,7 +1142,7 @@ func TestInitClonesDefaultInstalledSourceAndIsIdempotent(t *testing.T) {
 
 func TestInitCapturesOneWorkstationSnapshot(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	env := &countingEnv{
 		values: map[string]string{
 			"HOME":            home,
@@ -1090,7 +1186,7 @@ func TestInitPreservesMissingHomeError(t *testing.T) {
 
 func TestInitWithAbsoluteSourceDoesNotRequireCurrentDirectory(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	sourceRoot := filepath.Join(t.TempDir(), "installed")
 	opts := Options{
 		Env:   MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")},
@@ -1123,7 +1219,7 @@ func TestInitRejectsMalformedExistingInstalledSourceWithoutMutation(t *testing.T
 	if err == nil {
 		t.Fatalf("expected malformed Installed Source error, got output:\n%s", out)
 	}
-	for _, want := range []string{"not a valid Matty checkout", "Move it aside", "--source-root"} {
+	for _, want := range []string{"not a valid Packy checkout", "Move it aside", "--source-root"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
@@ -1145,7 +1241,7 @@ func TestInitDoesNotPublishMalformedClonedSource(t *testing.T) {
 	}
 	runGitCommand(t, repo, "init")
 	runGitCommand(t, repo, "add", ".")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "malformed")
+	runGitCommand(t, repo, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-m", "malformed")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
@@ -1164,13 +1260,13 @@ func TestInitDoesNotPublishMalformedClonedSource(t *testing.T) {
 
 func TestInitDoesNotReplaceValidInstalledSourceWithMalformedRef(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	runGitCommand(t, repo, "tag", "v0.1.0")
 	if err := os.RemoveAll(filepath.Join(repo, "bundle", "skills", "productivity")); err != nil {
 		t.Fatal(err)
 	}
 	runGitCommand(t, repo, "add", "-A")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "malformed")
+	runGitCommand(t, repo, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-m", "malformed")
 	runGitCommand(t, repo, "tag", "v0.2.0")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 	if out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo, "--repository-ref", "v0.1.0"); err != nil {
@@ -1197,13 +1293,13 @@ func TestInitDoesNotReplaceValidInstalledSourceWithMalformedRef(t *testing.T) {
 
 func TestInitReportsUpdateProgress(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	runGitCommand(t, repo, "tag", "v0.1.0")
 	if err := os.WriteFile(filepath.Join(repo, "UPDATED"), []byte("updated"), 0o600); err != nil {
 		t.Fatalf("write update fixture: %v", err)
 	}
 	runGitCommand(t, repo, "add", "UPDATED")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "updated")
+	runGitCommand(t, repo, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-m", "updated")
 	runGitCommand(t, repo, "tag", "v0.2.0")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
@@ -1215,7 +1311,7 @@ func TestInitReportsUpdateProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update init failed: %v\n%s", err, out)
 	}
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	sourceRoot := filepath.Join(home, ".local", "share", "packy")
 	for _, want := range []string{"updating Installed Source at " + sourceRoot + " to v0.2.0", "updated Installed Source"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("update output missing %q:\n%s", want, out)
@@ -1225,7 +1321,7 @@ func TestInitReportsUpdateProgress(t *testing.T) {
 
 func TestInitReportsProgressAndGitContextWhenCloneFails(t *testing.T) {
 	home := t.TempDir()
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	sourceRoot := filepath.Join(home, ".local", "share", "packy")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", filepath.Join(t.TempDir(), "missing-repository"))
@@ -1235,7 +1331,7 @@ func TestInitReportsProgressAndGitContextWhenCloneFails(t *testing.T) {
 	if !strings.Contains(out, "cloning Installed Source into "+sourceRoot) {
 		t.Fatalf("clone failure output did not include progress:\n%s", out)
 	}
-	for _, want := range []string{"clone Matty Source of Truth", "git clone", "failed"} {
+	for _, want := range []string{"clone Packy Source of Truth", "git clone", "failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("clone failure missing %q: %v", want, err)
 		}
@@ -1245,24 +1341,24 @@ func TestInitReportsProgressAndGitContextWhenCloneFails(t *testing.T) {
 func TestInitSupportsHomeFlag(t *testing.T) {
 	envHome := t.TempDir()
 	flagHome := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	opts := Options{Env: MapEnv{"HOME": envHome, "XDG_CONFIG_HOME": filepath.Join(flagHome, "xdg-config")}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "init", "--home", flagHome, "--repository-url", repo)
 	if err != nil {
 		t.Fatalf("init failed: %v\n%s", err, out)
 	}
-	if !exists(filepath.Join(flagHome, ".local", "share", "matty", "bundle", "skills")) {
+	if !exists(filepath.Join(flagHome, ".local", "share", "packy", "bundle", "skills")) {
 		t.Fatalf("init did not use --home for default Installed Source")
 	}
-	if exists(filepath.Join(envHome, ".local", "share", "matty")) {
+	if exists(filepath.Join(envHome, ".local", "share", "packy")) {
 		t.Fatalf("init --home unexpectedly wrote Env HOME")
 	}
 }
 
 func TestInitSupportsExplicitSourceRoot(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	sourceRoot := filepath.Join(t.TempDir(), "custom-source")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
@@ -1273,7 +1369,7 @@ func TestInitSupportsExplicitSourceRoot(t *testing.T) {
 	if !exists(filepath.Join(sourceRoot, "bundle", "skills")) {
 		t.Fatalf("init did not clone into explicit source root")
 	}
-	if exists(filepath.Join(home, ".local", "share", "matty")) {
+	if exists(filepath.Join(home, ".local", "share", "packy")) {
 		t.Fatalf("init with --source-root unexpectedly wrote default Installed Source")
 	}
 }
@@ -1281,7 +1377,7 @@ func TestInitSupportsExplicitSourceRoot(t *testing.T) {
 func TestInitNormalizesRelativeSourceRootFromCapturedDirectory(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	opts := Options{
 		Env:   MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")},
 		Getwd: func() (string, error) { return cwd, nil },
@@ -1298,12 +1394,12 @@ func TestInitNormalizesRelativeSourceRootFromCapturedDirectory(t *testing.T) {
 
 func TestInitRejectsInvalidNonEmptyDestination(t *testing.T) {
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	repo := createPackySourceRepo(t)
+	sourceRoot := filepath.Join(home, ".local", "share", "packy")
 	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
 		t.Fatalf("mkdir source root: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("not matty"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("not packy"), 0o600); err != nil {
 		t.Fatalf("write invalid destination: %v", err)
 	}
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
@@ -1312,7 +1408,7 @@ func TestInitRejectsInvalidNonEmptyDestination(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected invalid destination error, got output:\n%s", out)
 	}
-	for _, want := range []string{"not a valid Matty checkout", "Move it aside", "--source-root"} {
+	for _, want := range []string{"not a valid Packy checkout", "Move it aside", "--source-root"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
@@ -1325,21 +1421,21 @@ func TestInitRejectsInvalidNonEmptyDestination(t *testing.T) {
 func TestInitDefaultsReleaseVersionAsRepositoryRef(t *testing.T) {
 	withVersion(t, "v0.2.3")
 	home := t.TempDir()
-	repo := createMattySourceRepo(t)
+	repo := createPackySourceRepo(t)
 	runGitCommand(t, repo, "tag", "v0.2.3")
 	runGitCommand(t, repo, "checkout", "-b", "next")
 	if err := os.WriteFile(filepath.Join(repo, "UNRELEASED"), []byte("main only"), 0o600); err != nil {
 		t.Fatalf("write unreleased file: %v", err)
 	}
 	runGitCommand(t, repo, "add", "UNRELEASED")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "unreleased")
+	runGitCommand(t, repo, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-m", "unreleased")
 	opts := Options{Env: MapEnv{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, "xdg-config")}}
 
 	out, err := executeCommand(t, NewRootCommand(opts), "init", "--repository-url", repo)
 	if err != nil {
 		t.Fatalf("init failed: %v\n%s", err, out)
 	}
-	sourceRoot := filepath.Join(home, ".local", "share", "matty")
+	sourceRoot := filepath.Join(home, ".local", "share", "packy")
 	if exists(filepath.Join(sourceRoot, "UNRELEASED")) {
 		t.Fatalf("release init cloned repository HEAD instead of release tag")
 	}
@@ -1350,7 +1446,7 @@ func TestInitDefaultsReleaseVersionAsRepositoryRef(t *testing.T) {
 	}
 }
 
-func createMattySourceRepo(t *testing.T) string {
+func createPackySourceRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	for _, rel := range []string{
@@ -1371,7 +1467,7 @@ func createMattySourceRepo(t *testing.T) string {
 	}
 	runGitCommand(t, repo, "init")
 	runGitCommand(t, repo, "add", ".")
-	runGitCommand(t, repo, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-m", "initial")
+	runGitCommand(t, repo, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-m", "initial")
 	return repo
 }
 

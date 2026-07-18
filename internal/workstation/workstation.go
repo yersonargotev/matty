@@ -1,5 +1,5 @@
 // Package workstation normalizes the ambient workstation facts shared by one
-// Matty command invocation.
+// Packy command invocation.
 package workstation
 
 import (
@@ -33,7 +33,7 @@ type Snapshot struct {
 	homebrewPrefix       string
 	currentDirectory     string
 	currentDirectoryErr  error
-	mattyHome            string
+	packyHome            string
 }
 
 func (s Snapshot) Home() string                 { return s.home }
@@ -43,7 +43,7 @@ func (s Snapshot) HomebrewPrefix() string       { return s.homebrewPrefix }
 func (s Snapshot) CurrentDirectory() (string, error) {
 	return s.currentDirectory, s.currentDirectoryErr
 }
-func (s Snapshot) MattyHome() string { return s.mattyHome }
+func (s Snapshot) PackyHome() string { return s.packyHome }
 
 // Resolve normalizes captured ambient inputs into a narrow workstation
 // snapshot. An explicit Home intentionally isolates configuration lookup from
@@ -69,7 +69,7 @@ func Resolve(inputs Inputs, opts Options) (Snapshot, error) {
 		homebrewPrefix:       inputs.HomebrewPrefix,
 		currentDirectory:     inputs.CurrentDirectory,
 		currentDirectoryErr:  inputs.CurrentDirectoryErr,
-		mattyHome:            filepath.Join(home, ".matty"),
+		packyHome:            filepath.Join(home, ".packy"),
 	}, nil
 }
 

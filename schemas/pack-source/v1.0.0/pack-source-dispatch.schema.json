@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yersonargotev/matty/workflows/schemas/pack-source-dispatch.schema.json",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json",
   "title": "Pack source synchronization dispatch",
   "type": "object",
   "additionalProperties": false,
@@ -22,7 +22,7 @@
     },
     "selector_ref": { "type": "string", "minLength": 1 },
     "classification_mode": { "enum": ["ai", "human"] },
-    "request_reason": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+    "request_reason": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "[^\\s\u000b\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]" },
     "retry_of_run": { "type": "string", "pattern": "^[0-9]+$" },
     "expected_plan_id": { "type": "string", "minLength": 1 },
     "expected_base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },

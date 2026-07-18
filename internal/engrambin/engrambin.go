@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 const Formula = "gentleman-programming/tap/engram"
@@ -513,7 +513,7 @@ func DiagnoseLocalBin(localBinEngram string, canonical *Canonical) []LocalBinDia
 		return []LocalBinDiagnosis{{Detail: fmt.Sprintf("cannot inspect %s: %v", localBinEngram, err)}}
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return []LocalBinDiagnosis{{Detail: localBinEngram + " exists but is not a symlink; Matty will not install a second Engram binary there"}}
+		return []LocalBinDiagnosis{{Detail: localBinEngram + " exists but is not a symlink; Packy will not install a second Engram binary there"}}
 	}
 	target, err := os.Readlink(localBinEngram)
 	if err != nil {
@@ -548,7 +548,7 @@ func DiagnoseRuntimeProcess(process Process, canonical *Canonical, pathEngram *E
 
 func RuntimeRemediation(canonical *Canonical) string {
 	if canonical == nil {
-		return "safe remediation: pkill -f 'engram serve' && matty update"
+		return "safe remediation: pkill -f 'engram serve' && packy update"
 	}
 	return fmt.Sprintf("safe remediation: pkill -f 'engram serve' && %s serve", canonical.Path)
 }

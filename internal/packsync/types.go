@@ -1,5 +1,5 @@
 // Package packsync owns deterministic repository-local source inspection and
-// transactional replacement of the complete Matty bundle.
+// transactional replacement of the complete Packy bundle.
 // Upstream content is data only: this package inventories, hashes, and compares
 // it, but never executes it.
 package packsync
@@ -15,7 +15,7 @@ const (
 	SelectorStableRelease SelectorMode = "stable-release"
 	SelectorPrerelease    SelectorMode = "prerelease"
 	SelectorCommit        SelectorMode = "commit"
-	LockGeneratorName                  = "matty-packsync"
+	LockGeneratorName                  = "packy-packsync"
 	LockGeneratorVersion               = "1"
 	GitHubAPIVersion                   = "2022-11-28"
 )

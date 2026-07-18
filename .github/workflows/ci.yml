@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   validate:
-    name: Validate Matty-owned code
+    name: Validate Packy-owned code
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -28,5 +28,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Validate allowlisted Matty-owned code
-        run: ./scripts/validate-matty.sh
+      - name: Validate allowlisted Packy-owned code
+        run: ./scripts/validate-packy.sh

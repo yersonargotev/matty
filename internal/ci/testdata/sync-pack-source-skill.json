@@ -2,14 +2,14 @@
   "requests": [
     {
       "name": "stable",
-      "intent": "Actualiza Matty desde los cambios estables recientes de mattpocock/skills.",
+      "intent": "Actualiza Packy desde los cambios estables recientes de mattpocock/skills.",
       "valid": true,
       "request": {
         "schema_version": 1,
         "source_id": "mattpocock-skills",
         "selector": "latest-stable",
         "classification_mode": "ai",
-        "request_reason": "Actualiza Matty desde los cambios estables recientes de mattpocock/skills."
+        "request_reason": "Actualiza Packy desde los cambios estables recientes de mattpocock/skills."
       }
     },
     {

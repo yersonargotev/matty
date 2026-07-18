@@ -188,7 +188,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 		if !resolution.Available {
 			entry.Blockers = append(entry.Blockers, fmt.Sprintf("required executable %s is missing", resolution.Tool))
 			if entry.Intent.Active {
-				entry.PendingHumanActions = append(entry.PendingHumanActions, fmt.Sprintf("install %s and rerun status; Matty will not install it during Status", resolution.Tool))
+				entry.PendingHumanActions = append(entry.PendingHumanActions, fmt.Sprintf("install %s and rerun status; Packy will not install it during Status", resolution.Tool))
 			}
 		}
 	}

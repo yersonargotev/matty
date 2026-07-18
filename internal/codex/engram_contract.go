@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/localprojection"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
 const (

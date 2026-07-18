@@ -149,7 +149,7 @@ func initializeFixtureGit(t *testing.T, root string) {
 	if _, err := worktree.Add("."); err != nil {
 		t.Fatal(err)
 	}
-	_, err = worktree.Commit("fixture base", &git.CommitOptions{Author: &object.Signature{Name: "Matty test", Email: "test@matty.invalid", When: time.Unix(1, 0).UTC()}})
+	_, err = worktree.Commit("fixture base", &git.CommitOptions{Author: &object.Signature{Name: "Packy test", Email: "test@packy.invalid", When: time.Unix(1, 0).UTC()}})
 	if err != nil {
 		t.Fatal(err)
 	}

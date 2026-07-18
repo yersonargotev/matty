@@ -1,11 +1,11 @@
 ---
-name: release-matty
-description: Release Matty end to end. Use when the user asks to publish a new Matty release from origin/main or recover an incomplete publication for an existing immutable tag.
+name: release-packy
+description: Release Packy end to end. Use when the user asks to publish a new Packy release from origin/main or recover an incomplete publication for an existing immutable tag.
 ---
 
-# Release Matty
+# Release Packy
 
-Read the complete [workflow contract](../../../workflows/matty-release.md),
+Read the complete [workflow contract](../../../workflows/packy-release.md),
 [repository instructions](../../../AGENTS.md), [release
 contract](../../../docs/release.md), and [Release
 workflow](../../../.github/workflows/release.yml) before mutating project or

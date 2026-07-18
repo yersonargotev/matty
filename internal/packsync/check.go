@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 type packManifest struct {

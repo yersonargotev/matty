@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Packy"
+  short_description: "Publish and verify Packy releases safely."
+  default_prompt: "Use $release-packy to publish and verify a Packy release from the latest origin/main commit."

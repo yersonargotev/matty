@@ -1,17 +1,17 @@
-# Matty Issue Delivery
+# Packy Issue Delivery
 
 Status: Active
 
 ## Goal
 
-Turn a requested Matty GitHub issue into a verified change merged to `main`
+Turn a requested Packy GitHub issue into a verified change merged to `main`
 through one predictable delivery loop.
 
 ## Skill shape
 
 The implementation is the project-local, model-invoked skill
-`deliver-matty-issue` at `.agents/skills/deliver-matty-issue/SKILL.md`. Its
-model-facing description triggers only complete delivery of a named Matty issue;
+`deliver-packy-issue` at `.agents/skills/deliver-packy-issue/SKILL.md`. Its
+model-facing description triggers only complete delivery of a named Packy issue;
 consultations, isolated reviews, and releases do not trigger it.
 
 The skill is a thin orchestrator with four phases: **qualify**, **implement**,
@@ -32,7 +32,7 @@ checks, currently `go test ./...`.
 
 ### Trigger
 
-The user identifies one Matty GitHub issue by number or URL and explicitly asks
+The user identifies one Packy GitHub issue by number or URL and explicitly asks
 for complete delivery. Record the immutable issue contents and the starting
 base commit fetched from `origin/main` before changing project or tracker state.
 
@@ -135,5 +135,5 @@ decision. Briefs link artifacts and omit raw logs.
 
 This workflow run is complete only when the **Deliver** criterion is satisfied
 or an exception brief is waiting on the user's decision. This specification is
-ready when an implementer can build `deliver-matty-issue` without asking another
+ready when an implementer can build `deliver-packy-issue` without asking another
 question.

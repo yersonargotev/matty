@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsync/githubsource"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync/githubsource"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 func TestRendererUsesTheEngineCanonicalHumanAndJSONPlans(t *testing.T) {
@@ -53,6 +53,58 @@ func TestValidationSubprocessEnvironmentDropsCredentials(t *testing.T) {
 	want := []string{"PATH=/bin", "SAFE=value"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filtered environment = %#v", got)
+	}
+}
+
+func TestCommandValidatorRunsStagedBundleFromCopiedRepositoryWithSandboxedConfiguration(t *testing.T) {
+	repository := t.TempDir()
+	staged := filepath.Join(t.TempDir(), "bundle")
+	if err := os.MkdirAll(filepath.Join(repository, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repository, "bundle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "bundle", "identity"), []byte("production\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "identity"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+test "$(cat bundle/identity)" = "staged"
+test "${PACKY_VALIDATION_STAGED:-}" = "1"
+test "${HOME}" != "${OPERATOR_HOME}"
+test "${XDG_CONFIG_HOME}" != "${OPERATOR_XDG}"
+test -z "${GITHUB_TOKEN:-}"
+mkdir -p "${HOME}" "${XDG_CONFIG_HOME}"
+printf validated > "${HOME}/proof"
+printf validated > "${XDG_CONFIG_HOME}/proof"
+`
+	if err := os.WriteFile(filepath.Join(repository, "scripts", "validate-packy.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	operatorHome := filepath.Join(t.TempDir(), "operator-home")
+	operatorXDG := filepath.Join(t.TempDir(), "operator-xdg")
+	t.Setenv("HOME", operatorHome)
+	t.Setenv("XDG_CONFIG_HOME", operatorXDG)
+	t.Setenv("OPERATOR_HOME", operatorHome)
+	t.Setenv("OPERATOR_XDG", operatorXDG)
+	t.Setenv("GITHUB_TOKEN", "must-not-reach-validator")
+	t.Setenv("PACKY_VALIDATION_STAGED", "hostile-inherited-value")
+
+	if err := (commandValidator{}).ValidateBundle(context.Background(), repository, staged); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{operatorHome, operatorXDG} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("staged validation wrote operator configuration path %s: %v", path, err)
+		}
 	}
 }
 
@@ -98,10 +150,10 @@ func TestInspectBoundaryReportsNonRateLimit403AsSecretFreeAccessFailure(t *testi
 	t.Cleanup(func() { workflowSourceFactory = oldFactory })
 
 	t.Setenv("GITHUB_TOKEN", "inspect-secret-token")
-	t.Setenv("MATTY_SOURCE_ID", "mattpocock-skills")
-	t.Setenv("MATTY_SELECTOR", "latest-stable")
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", "access failure fixture")
+	t.Setenv("PACKY_SOURCE_ID", "mattpocock-skills")
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "access failure fixture")
 	output := t.TempDir()
 	err := run(context.Background(), []string{"--phase", "inspect", "--repository-root", repository, "--output", output}, io.Discard)
 	var failure packsyncworkflow.Failure
@@ -225,10 +277,10 @@ func prepareInspectFixture(t *testing.T) (string, string, packsync.Lock) {
 
 func setInspectEnvironment(t *testing.T, reason string) {
 	t.Helper()
-	t.Setenv("MATTY_SOURCE_ID", "mattpocock-skills")
-	t.Setenv("MATTY_SELECTOR", "latest-stable")
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", reason)
+	t.Setenv("PACKY_SOURCE_ID", "mattpocock-skills")
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", reason)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -248,29 +300,44 @@ func TestWorkflowAcceptsOnlyEmptyEvidenceWhenNoPackIsAffected(t *testing.T) {
 }
 
 func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing.T) {
-	t.Setenv("MATTY_SOURCE_ID", "source")
-	t.Setenv("MATTY_SELECTOR", "commit")
-	t.Setenv("MATTY_SELECTOR_REF", strings.Repeat("a", 40))
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", "fixture")
+	t.Setenv("PACKY_SOURCE_ID", "source")
+	t.Setenv("PACKY_SELECTOR", "commit")
+	t.Setenv("PACKY_SELECTOR_REF", strings.Repeat("a", 40))
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "fixture")
 	request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: strings.Repeat("a", 40), ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "fixture"}
 	digest, err := request.Digest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MATTY_REQUEST_DIGEST", digest)
+	t.Setenv("PACKY_REQUEST_DIGEST", digest)
 	got, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
 	if err != nil || got.SourceID != "source" || check.Selector == nil || check.Selector.Mode != packsync.SelectorCommit {
 		t.Fatalf("normalized request = %#v, %#v, %v", got, check, err)
 	}
 }
 
+func TestInspectDoesNotAdoptLegacyMattyWorkflowEnvironment(t *testing.T) {
+	t.Setenv("PACKY_SOURCE_ID", "")
+	t.Setenv("MATTY_SOURCE_ID", "legacy-source")
+	t.Setenv("MATTY_SELECTOR", "commit")
+	t.Setenv("MATTY_SELECTOR_REF", strings.Repeat("a", 40))
+
+	got, check, err := inspectRequest(options{repositoryRoot: t.TempDir(), sourceID: "explicit-source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceID != "explicit-source" || check.SourceID != "explicit-source" {
+		t.Fatalf("legacy Matty environment was adopted: request=%#v check=%#v", got, check)
+	}
+}
+
 func TestInspectRejectsMismatchedWorkflowRequestDigest(t *testing.T) {
-	t.Setenv("MATTY_SOURCE_ID", "source")
-	t.Setenv("MATTY_SELECTOR", "latest-stable")
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", "fixture")
-	t.Setenv("MATTY_REQUEST_DIGEST", strings.Repeat("0", 64))
+	t.Setenv("PACKY_SOURCE_ID", "source")
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "fixture")
+	t.Setenv("PACKY_REQUEST_DIGEST", strings.Repeat("0", 64))
 	if _, _, err := inspectRequest(options{repositoryRoot: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "request digest") {
 		t.Fatalf("mismatched request digest error = %v", err)
 	}
@@ -278,10 +345,10 @@ func TestInspectRejectsMismatchedWorkflowRequestDigest(t *testing.T) {
 
 func TestInvalidDispatchStillEmitsCanonicalFailureArtifact(t *testing.T) {
 	output := t.TempDir()
-	t.Setenv("MATTY_SOURCE_ID", "../source")
-	t.Setenv("MATTY_SELECTOR", "latest-stable")
-	t.Setenv("MATTY_CLASSIFICATION_MODE", "ai")
-	t.Setenv("MATTY_REQUEST_REASON", "invalid source fixture")
+	t.Setenv("PACKY_SOURCE_ID", "../source")
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "invalid source fixture")
 	if err := run(context.Background(), []string{"--phase", "inspect", "--output", output}, io.Discard); err == nil {
 		t.Fatal("invalid dispatch was admitted")
 	}

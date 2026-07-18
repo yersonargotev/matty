@@ -5,10 +5,10 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# Keep this list explicit. A new Matty-owned package must be deliberately added
+# Keep this list explicit. A new Packy-owned package must be deliberately added
 # here before CI or the synchronization publisher can load or execute it.
 readonly packages=(
-  ./cmd/matty
+  ./cmd/packy
   ./internal/bootstrap
   ./internal/bundletransaction
   ./internal/capabilitypack
@@ -51,7 +51,7 @@ done
 go_cache="${GOCACHE:-$(go env GOCACHE)}"
 go_mod_cache="${GOMODCACHE:-$(go env GOMODCACHE)}"
 go_path="${GOPATH:-$(go env GOPATH)}"
-sandbox="$(mktemp -d "${TMPDIR:-/tmp}/matty-validation.XXXXXX")"
+sandbox="$(mktemp -d "${TMPDIR:-/tmp}/packy-validation.XXXXXX")"
 trap 'rm -rf "$sandbox"' EXIT
 export HOME="$sandbox/home"
 export XDG_CONFIG_HOME="$sandbox/xdg"
@@ -74,7 +74,7 @@ done
 echo "==> formatting"
 unformatted="$(gofmt -l "${go_files[@]}")"
 if [[ -n "$unformatted" ]]; then
-  echo "These Matty-owned files are not gofmt-clean:" >&2
+  echo "These Packy-owned files are not gofmt-clean:" >&2
   echo "$unformatted" >&2
   exit 1
 fi

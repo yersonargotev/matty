@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
-// InstalledSource is the immutable location of Matty's package-installed
+// InstalledSource is the immutable location of Packy's package-installed
 // checkout and its bundle.
 type InstalledSource struct {
 	root       string
@@ -19,7 +19,7 @@ func (s InstalledSource) Root() string       { return s.root }
 func (s InstalledSource) BundleRoot() string { return s.bundleRoot }
 
 func DefaultInstalledSourceRoot(home string) string {
-	return filepath.Join(home, ".local", "share", "matty")
+	return filepath.Join(home, ".local", "share", "packy")
 }
 
 func InstalledSourceAt(root string) InstalledSource {

@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	mattyprompt "github.com/yersonargotev/matty/internal/prompt"
+	packyprompt "github.com/yersonargotev/packy/internal/prompt"
 )
 
 func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 
 	result, err := Write(configPath, promptPath)
 	if err != nil {
@@ -23,7 +23,7 @@ func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
 		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 	prompt := readString(t, promptPath)
-	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", mattyprompt.RulesSectionContent()} {
+	for _, want := range []string{"~/.agents/skills", "ask-matt", "Engram memory tools", "delegation rules", packyprompt.RulesSectionContent()} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
@@ -38,7 +38,7 @@ func TestWriteCreatesPromptAndConfigInstruction(t *testing.T) {
 func TestWriteMergesOpenCodeConfigAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "$schema": "https://opencode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-5",
@@ -85,7 +85,7 @@ func TestWriteMergesOpenCodeConfigAndIsIdempotent(t *testing.T) {
 func TestWriteOnlyWarnsForKnownGentleAIOverlays(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "instructions": ["docs/gentle-ai-migration-notes.md"]
 }
@@ -106,7 +106,7 @@ func TestWriteOnlyWarnsForKnownGentleAIOverlays(t *testing.T) {
 func TestWriteDoesNotWarnForPluginNamesThatOnlyContainGentleAI(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "plugin": ["my-gentle-ai-helper"]
 }
@@ -127,7 +127,7 @@ func TestWriteDoesNotWarnForPluginNamesThatOnlyContainGentleAI(t *testing.T) {
 func TestWriteMergesOpenCodeJSONCConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   // OpenCode accepts JSONC global config.
   "$schema": "https://opencode.ai/config.json",
@@ -174,7 +174,7 @@ func TestWriteMergesOpenCodeJSONCConfig(t *testing.T) {
 func TestWritePreservesLeadingJSONCComments(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `// global OpenCode config
 {
   "model": "anthropic/claude-sonnet-4-5"
@@ -200,7 +200,7 @@ func TestWritePreservesLeadingJSONCComments(t *testing.T) {
 func TestWriteAndRemovePreserveInstructionComments(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "instructions": [
     // keep user rationale
@@ -231,14 +231,14 @@ func TestWriteAndRemovePreserveInstructionComments(t *testing.T) {
 		}
 	}
 	if strings.Contains(removed, promptPath) {
-		t.Fatalf("Remove left Matty instruction reference:\n%s", removed)
+		t.Fatalf("Remove left Packy instruction reference:\n%s", removed)
 	}
 }
 
 func TestWritePreservesTrailingPropertyCommentWhenAddingInstructions(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "model": "anthropic/claude-sonnet-4-5" // keep model note
 }
@@ -265,7 +265,7 @@ func TestWritePreservesTrailingPropertyCommentWhenAddingInstructions(t *testing.
 func TestWritePreservesTrailingInstructionCommentWhenAppending(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := `{
   "instructions": [
     "CONTRIBUTING.md" // keep instruction note
@@ -294,7 +294,7 @@ func TestWritePreservesTrailingInstructionCommentWhenAppending(t *testing.T) {
 func TestWriteInsertsIntoCommentOnlyJSONCConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	existing := "{\n  // keep this comment\n}\n"
 	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
 		t.Fatalf("write jsonc config: %v", err)
@@ -313,10 +313,10 @@ func TestWriteInsertsIntoCommentOnlyJSONCConfig(t *testing.T) {
 	}
 }
 
-func TestRemoveDeletesOnlyMattyOpenCodeEntries(t *testing.T) {
+func TestRemoveDeletesOnlyPackyOpenCodeEntries(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "opencode.json")
-	promptPath := filepath.Join(dir, "matty.md")
+	promptPath := filepath.Join(dir, "packy.md")
 	if _, err := Write(configPath, promptPath); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}

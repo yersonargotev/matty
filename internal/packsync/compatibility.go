@@ -154,7 +154,7 @@ func validateCompatibilityEvidence(repositoryRoot, snapshotRoot string, source S
 		} else {
 			for _, semantics := range rules {
 				if !strings.Contains(string(instructionBytes), semantics) {
-					failures = append(failures, "replacement semantics are absent from the Matty-owned instruction")
+					failures = append(failures, "replacement semantics are absent from the Packy-owned instruction")
 					break
 				}
 			}

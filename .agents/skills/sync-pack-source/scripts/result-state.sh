@@ -29,7 +29,7 @@ elif publication="$(find_artifact publication.json)"; [[ -n "$publication" ]] &&
   expected_metadata="$(jq -er .managed_metadata_hash "$publication")"
   expected_state="$(jq -er .pr_state_sha256 "$publication")"
   observed_metadata="$(jq -jr '
-    .title, "\u0000", (.body | (rindex("<!-- matty-pack-sync:") // length) as $i | .[0:$i] | rtrimstr("\n"))
+    .title, "\u0000", (.body | (rindex("<!-- packy-pack-sync:") // length) as $i | .[0:$i] | rtrimstr("\n"))
   ' "$live_pr" | shasum -a 256 | cut -d ' ' -f 1)"
   if [[ -n "$live_pr" && -n "$remote_main" && "$observed_metadata" == "$expected_metadata" && "$observed_metadata" == "$expected_state" ]] &&
     jq -e --argjson number "$number" --arg base "$base" --arg head "$head" --arg branch "$branch" '

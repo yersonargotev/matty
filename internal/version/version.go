@@ -4,5 +4,5 @@ package version
 //
 // Release builds override this with:
 //
-//	go build -ldflags "-X github.com/yersonargotev/matty/internal/version.Value=v0.x.y"
+//	go build -ldflags "-X github.com/yersonargotev/packy/internal/version.Value=v0.x.y"
 var Value = "dev"

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 const (
@@ -535,7 +535,7 @@ func lifecycleGateway(t *testing.T, fake *fakeGitHubCommands) *githubGateway {
 }
 
 func lifecycleProposal() packsyncworkflow.Proposal {
-	return packsyncworkflow.Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", Validation: packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, MattySuite: true}, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions()}
+	return packsyncworkflow.Proposal{SourceID: "mattpocock-skills", PlanID: "plan-1", BaseSHA: baseA, CandidateSHA: candidateA, ResultTreeSHA: headA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), ManagedTitle: "sync(mattpocock-skills): candidate", Validation: packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true}, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions()}
 }
 
 func lifecycleBrief() packsyncworkflow.ReviewBrief {

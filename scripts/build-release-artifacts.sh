@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Build Matty release artifacts and a SHA-256 checksum manifest.
+Build Packy release artifacts and a SHA-256 checksum manifest.
 
 Usage:
   scripts/build-release-artifacts.sh --version <v0.x.y> [--out-dir <dir>]
@@ -63,10 +63,10 @@ cd "$repo_root"
 for platform in "${platforms[@]}"; do
   goos="${platform%/*}"
   goarch="${platform#*/}"
-  artifact="matty_${version}_${goos}_${goarch}"
+  artifact="packy_${version}_${goos}_${goarch}"
   echo "building ${artifact}"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-    go build -trimpath -ldflags="-s -w -X github.com/yersonargotev/matty/internal/version.Value=${version}" -o "$out_dir/$artifact" ./cmd/matty
+    go build -trimpath -ldflags="-s -w -X github.com/yersonargotev/packy/internal/version.Value=${version}" -o "$out_dir/$artifact" ./cmd/packy
   artifacts+=("$artifact")
 done
 

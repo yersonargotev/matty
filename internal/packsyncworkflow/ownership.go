@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const publicationMarker = "<!-- matty-pack-sync:"
+const publicationMarker = "<!-- packy-pack-sync:"
 
 func ManagedBody(prefix string, record PublicationRecord) (string, error) {
 	data, err := json.Marshal(record)

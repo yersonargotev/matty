@@ -1,14 +1,14 @@
-// Package setuphealth owns read-only diagnosis of the base Matty setup.
+// Package setuphealth owns read-only diagnosis of the base Packy setup.
 package setuphealth
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/corelifecycle"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
 )
 
 type Severity string
@@ -100,21 +100,21 @@ func summarize(checks []Check) Summary {
 func stateCheck(lifecycle corelifecycle.SetupObservation) Check {
 	state := lifecycle.State()
 	if state.Condition() == corelifecycle.StateCorrupt {
-		return Check{Severity: Fail, Name: "matty-state", Detail: state.Err().Error() + "; inspect or remove the corrupt state, then run matty install"}
+		return Check{Severity: Fail, Name: "packy-state", Detail: state.Err().Error() + "; inspect or remove the corrupt state, then run packy install"}
 	}
 	if state.Condition() == corelifecycle.StateMissing {
-		return Check{Severity: Warn, Name: "matty-state", Detail: "missing at " + lifecycle.StateFile() + "; run matty install"}
+		return Check{Severity: Warn, Name: "packy-state", Detail: "missing at " + lifecycle.StateFile() + "; run packy install"}
 	}
 	if state.Condition() == corelifecycle.StateRecoveryRequired {
-		return Check{Severity: Fail, Name: "matty-state", Detail: "classic installation was interrupted and requires recovery; run matty install or matty update to retry safely, or matty uninstall to remove only verified Matty-owned artifacts"}
+		return Check{Severity: Fail, Name: "packy-state", Detail: "classic installation was interrupted and requires recovery; run packy install or packy update to retry safely, or packy uninstall to remove only verified Packy-owned artifacts"}
 	}
-	return Check{Severity: Pass, Name: "matty-state", Detail: "present at " + lifecycle.StateFile()}
+	return Check{Severity: Pass, Name: "packy-state", Detail: "present at " + lifecycle.StateFile()}
 }
 
 func skillChecks(lifecycle corelifecycle.SetupObservation) []Check {
 	state := lifecycle.State()
 	if !state.Found() {
-		return []Check{{Severity: Warn, Name: "skill-symlinks", Detail: "state is missing, so Matty-owned skill links are unknown; run matty install"}}
+		return []Check{{Severity: Warn, Name: "skill-symlinks", Detail: "state is missing, so Packy-owned skill links are unknown; run packy install"}}
 	}
 	managedLinks := lifecycle.ManagedSkillLinks()
 	if len(managedLinks) == 0 {
@@ -145,11 +145,11 @@ func skillChecks(lifecycle corelifecycle.SetupObservation) []Check {
 	if len(changed) > 0 {
 		detail += "; changed: " + strings.Join(changed, ", ")
 	}
-	return []Check{{Severity: Fail, Name: "skill-symlinks", Detail: detail + "; run matty update"}}
+	return []Check{{Severity: Fail, Name: "skill-symlinks", Detail: detail + "; run packy update"}}
 }
 
 func zeroManagedSkillsDetail(lifecycle corelifecycle.SetupObservation) string {
-	detail := "state has no managed skills; run matty install"
+	detail := "state has no managed skills; run packy install"
 	links, err := lifecycle.ExpectedSkillLinks(), lifecycle.ExpectedSkillLinksErr()
 	if err != nil {
 		return detail + "; could not inspect expected skill links: " + err.Error()
@@ -167,32 +167,32 @@ func zeroManagedSkillsDetail(lifecycle corelifecycle.SetupObservation) string {
 		return detail
 	}
 	example := unmanaged[0]
-	return fmt.Sprintf("state has no managed skills, but %d expected skill symlinks are unmanaged by current Matty state; setup may be incomplete. Example: %s -> %s. %s", len(unmanaged), example.LinkPath(), example.Target(), unmanagedSymlinkRecoveryAdvice())
+	return fmt.Sprintf("state has no managed skills, but %d expected skill symlinks are unmanaged by current Packy state; setup may be incomplete. Example: %s -> %s. %s", len(unmanaged), example.LinkPath(), example.Target(), unmanagedSymlinkRecoveryAdvice())
 }
 
 func unmanagedSymlinkRecoveryAdvice() string {
-	return "Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links."
+	return "Safe recovery: verify these are stale Packy-created links, remove them, then run packy install; Packy will not overwrite arbitrary files or links."
 }
 
 func engramChecks(observation engrambin.SetupObservation, state corelifecycle.StateObservation) []Check {
 	checks := engramBinaryChecks(observation)
 	checks = append(checks, engramRuntimeChecks(observation)...)
 	if !state.Found() {
-		return append(checks, Check{Severity: Warn, Name: "engram-setup", Detail: "state is missing, so delegated setup cannot be confirmed; run matty install"})
+		return append(checks, Check{Severity: Warn, Name: "engram-setup", Detail: "state is missing, so delegated setup cannot be confirmed; run packy install"})
 	}
 	configuredSurfaces := state.ConfiguredSurfaces()
 	if hasSurface(configuredSurfaces, "codex") && hasSurface(configuredSurfaces, "opencode") {
-		return append(checks, Check{Severity: Pass, Name: "engram-setup", Detail: "state records Codex and OpenCode setup expectations; run matty update if Engram setup drifted"})
+		return append(checks, Check{Severity: Pass, Name: "engram-setup", Detail: "state records Codex and OpenCode setup expectations; run packy update if Engram setup drifted"})
 	}
-	return append(checks, Check{Severity: Fail, Name: "engram-setup", Detail: "state does not record both Codex and OpenCode setup expectations; run matty update"})
+	return append(checks, Check{Severity: Fail, Name: "engram-setup", Detail: "state does not record both Codex and OpenCode setup expectations; run packy update"})
 }
 
 func engramBinaryChecks(observation engrambin.SetupObservation) []Check {
 	canonical := observation.Canonical()
 	if observation.LookupErr() != nil {
-		detail := "engram is not available on PATH; run matty install"
+		detail := "engram is not available on PATH; run packy install"
 		if canonical != nil {
-			detail = fmt.Sprintf("engram is not available on PATH; Homebrew Engram exists at %s; add it to PATH or run matty install", canonical.Path)
+			detail = fmt.Sprintf("engram is not available on PATH; Homebrew Engram exists at %s; add it to PATH or run packy install", canonical.Path)
 		}
 		checks := []Check{{Severity: Fail, Name: "engram-binary", Detail: detail}}
 		return append(checks, engramLocalBinChecks(observation.LocalBinDiagnoses())...)
@@ -275,13 +275,13 @@ func codexChecks(observation codex.SetupObservation) []Check {
 		return []Check{{Severity: Fail, Name: "codex-config", Detail: fmt.Sprintf("cannot read %s: %v; inspect permissions", observation.PromptFile(), observation.Err())}}
 	}
 	if !observation.Exists() {
-		return []Check{{Severity: Warn, Name: "codex-config", Detail: "missing Matty Codex prompt markers at " + observation.PromptFile() + "; run matty install"}}
+		return []Check{{Severity: Warn, Name: "codex-config", Detail: "missing Packy Codex prompt markers at " + observation.PromptFile() + "; run packy install"}}
 	}
 	checks := []Check{}
-	if observation.HasMattyMarkers() {
-		checks = append(checks, Check{Severity: Pass, Name: "codex-config", Detail: "Matty prompt markers are present"})
+	if observation.HasPackyMarkers() {
+		checks = append(checks, Check{Severity: Pass, Name: "codex-config", Detail: "Packy prompt markers are present"})
 	} else {
-		checks = append(checks, Check{Severity: Warn, Name: "codex-config", Detail: "Matty prompt markers are missing; run matty install"})
+		checks = append(checks, Check{Severity: Warn, Name: "codex-config", Detail: "Packy prompt markers are missing; run packy install"})
 	}
 	for _, warning := range observation.Warnings() {
 		if strings.Contains(warning, "gentle-ai") {
@@ -293,19 +293,19 @@ func codexChecks(observation codex.SetupObservation) []Check {
 
 func openCodeChecks(observation opencode.SetupObservation) []Check {
 	if observation.Err() != nil {
-		return []Check{{Severity: Fail, Name: "opencode-config", Detail: observation.Err().Error() + "; inspect the config or run matty install"}}
+		return []Check{{Severity: Fail, Name: "opencode-config", Detail: observation.Err().Error() + "; inspect the config or run packy install"}}
 	}
 	inspection := observation.Inspection()
 	checks := []Check{}
 	switch {
-	case inspection.HasMattyInstruction && inspection.PromptExists:
-		checks = append(checks, Check{Severity: Pass, Name: "opencode-config", Detail: "Matty instruction reference and prompt file are present"})
+	case inspection.HasPackyInstruction && inspection.PromptExists:
+		checks = append(checks, Check{Severity: Pass, Name: "opencode-config", Detail: "Packy instruction reference and prompt file are present"})
 	case !inspection.ConfigExists:
-		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "missing OpenCode config; run matty install"})
-	case !inspection.HasMattyInstruction:
-		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "Matty instruction reference is missing; run matty install"})
+		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "missing OpenCode config; run packy install"})
+	case !inspection.HasPackyInstruction:
+		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "Packy instruction reference is missing; run packy install"})
 	default:
-		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "Matty prompt file is missing; run matty update"})
+		checks = append(checks, Check{Severity: Warn, Name: "opencode-config", Detail: "Packy prompt file is missing; run packy update"})
 	}
 	for _, warning := range inspection.Warnings {
 		checks = append(checks, Check{Severity: Warn, Name: "opencode-conflict", Detail: warning + "; inspect duplicate OpenCode overlays"})

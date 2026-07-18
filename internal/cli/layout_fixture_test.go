@@ -3,14 +3,14 @@ package cli
 import (
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/skillbundle"
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/corelifecycle"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
 // cliTestFixture gathers owner-derived layout values for CLI integration tests.
@@ -48,7 +48,7 @@ func newCLITestFixture(t *testing.T, opts Options) cliTestFixture {
 		t.Fatalf("resolve Installed Source fixture: %v", err)
 	}
 	skillSource, err := skillbundle.ResolveSource(skillbundle.SourceOptions{
-		ExplicitRoot:    opts.Env.Getenv("MATTY_SKILLS_SOURCE"),
+		ExplicitRoot:    opts.Env.Getenv("PACKY_SKILLS_SOURCE"),
 		RepositoryStart: currentDirectory,
 		InstalledSource: installedSource,
 	})
@@ -60,8 +60,8 @@ func newCLITestFixture(t *testing.T, opts Options) cliTestFixture {
 		workstation:     snapshot,
 		installedSource: installedSource,
 		skillSource:     skillSource,
-		classicState:    corelifecycle.NewLayout(snapshot.MattyHome()),
-		packState:       capabilitypack.NewStateLayout(snapshot.MattyHome()),
+		classicState:    corelifecycle.NewLayout(snapshot.PackyHome()),
+		packState:       capabilitypack.NewStateLayout(snapshot.PackyHome()),
 		skills:          skillbundle.NewGlobalLayout(snapshot.Home()),
 		codex:           codex.NewCanonicalLayout(snapshot.Home()),
 		opencode:        opencode.NewCanonicalLayout(snapshot.ConfigurationHome()),

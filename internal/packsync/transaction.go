@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	git "github.com/go-git/go-git/v5"
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 var ErrRecoveryEvidence = errors.New("bundle recovery evidence is absent or invalid")
@@ -37,7 +37,7 @@ type recoveryMarker struct {
 
 func (engine Engine) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, error) {
 	if engine.Source == nil || engine.Validate == nil {
-		return ApplyResult{}, errors.New("Apply requires source acquisition and Matty-owned bundle validation")
+		return ApplyResult{}, errors.New("Apply requires source acquisition and Packy-owned bundle validation")
 	}
 	if request.RepositoryRoot == "" || request.AcquisitionDir == "" || request.Plan.PlanID == "" {
 		return ApplyResult{}, errors.New("Apply requires repository root, acquisition directory, and exact sealed plan")
@@ -155,7 +155,7 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 		return ApplyResult{}, err
 	}
 	if err := engine.Validate.ValidateBundle(ctx, request.RepositoryRoot, bundle); err != nil {
-		return ApplyResult{}, fmt.Errorf("fresh Matty-owned validation: %w", err)
+		return ApplyResult{}, fmt.Errorf("fresh Packy-owned validation: %w", err)
 	}
 	staged, backup := transactionPaths(request.RepositoryRoot, plan.PlanID)
 	markerPath := recoveryMarkerPath(request.RepositoryRoot)
@@ -324,7 +324,7 @@ func readAffectedPackManifest(bundle string, impact PackImpact) (string, map[str
 }
 
 func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged, snapshotRoot string, plan Plan) error {
-	view, err := os.MkdirTemp(repositoryRoot, ".matty-bundle-validation-")
+	view, err := os.MkdirTemp(repositoryRoot, ".packy-bundle-validation-")
 	if err != nil {
 		return err
 	}
@@ -362,15 +362,15 @@ func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged,
 	if len(blockers) != 0 || len(stagedPlan.Changes) != 0 || lockDigest(stagedPlan.ProposedLock) != lockDigest(plan.ProposedLock) {
 		return fmt.Errorf("staged bundle validation blocked: %s", strings.Join(blockers, "; "))
 	}
-	if err := engine.Validate.ValidateBundle(ctx, view, viewBundle); err != nil {
-		return fmt.Errorf("validate staged bundle with Matty-owned suite: %w", err)
+	if err := engine.Validate.ValidateBundle(ctx, repositoryRoot, viewBundle); err != nil {
+		return fmt.Errorf("validate staged bundle with Packy-owned suite: %w", err)
 	}
 	return nil
 }
 
 func (engine Engine) Recover(ctx context.Context, request RecoverRequest) (ApplyResult, error) {
 	if engine.Validate == nil || request.RepositoryRoot == "" {
-		return ApplyResult{}, errors.New("Recover requires repository root and Matty-owned bundle validation")
+		return ApplyResult{}, errors.New("Recover requires repository root and Packy-owned bundle validation")
 	}
 	guard, err := bundletransaction.Acquire(ctx, request.RepositoryRoot)
 	if err != nil {
@@ -624,11 +624,11 @@ func writeCanonicalLock(path string, lock Lock) error {
 
 func transactionPaths(repositoryRoot, planID string) (string, string) {
 	suffix := strings.TrimPrefix(planID, "pack-sync-")
-	return filepath.Join(repositoryRoot, ".matty-bundle-"+suffix+".staged"), filepath.Join(repositoryRoot, ".matty-bundle-"+suffix+".backup")
+	return filepath.Join(repositoryRoot, ".packy-bundle-"+suffix+".staged"), filepath.Join(repositoryRoot, ".packy-bundle-"+suffix+".backup")
 }
 
 func recoveryMarkerPath(repositoryRoot string) string {
-	return filepath.Join(repositoryRoot, ".matty-bundle-recovery.json")
+	return filepath.Join(repositoryRoot, ".packy-bundle-recovery.json")
 }
 
 func (engine Engine) inject(point FaultPoint) error {
@@ -653,7 +653,7 @@ func writeRecoveryMarker(path string, marker *recoveryMarker) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".matty-bundle-marker-*.tmp")
+	file, err := os.CreateTemp(filepath.Dir(path), ".packy-bundle-marker-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -707,13 +707,13 @@ func validateRecoveryPaths(repositoryRoot string, marker recoveryMarker) error {
 	if marker.Bundle != bundle || marker.Staged != staged || marker.Backup != backup || (marker.Legacy != "" && marker.Legacy != filepath.Join(repositoryRoot, "skills-lock.json")) {
 		return fmt.Errorf("%w: marker paths are not canonical siblings", ErrRecoveryEvidence)
 	}
-	matches, err := filepath.Glob(filepath.Join(repositoryRoot, ".matty-bundle-*"))
+	matches, err := filepath.Glob(filepath.Join(repositoryRoot, ".packy-bundle-*"))
 	if err != nil {
 		return err
 	}
 	allowed := map[string]bool{markerPathClean(staged): true, markerPathClean(backup): true}
 	for _, match := range matches {
-		if filepath.Base(match) == ".matty-bundle-recovery.json" {
+		if filepath.Base(match) == ".packy-bundle-recovery.json" {
 			continue
 		}
 		if !allowed[markerPathClean(match)] {

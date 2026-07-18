@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
-	mattyversion "github.com/yersonargotev/matty/internal/version"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
+	packyversion "github.com/yersonargotev/packy/internal/version"
 )
 
 const SchemaVersion = 1
@@ -30,7 +30,7 @@ var (
 	publishStateTemp = os.Rename
 )
 
-// ManagedSkill records the small amount of metadata Matty needs to know which
+// ManagedSkill records the small amount of metadata Packy needs to know which
 // global skill symlinks it owns. It intentionally stores paths, not skill
 // prompt bodies.
 type ManagedSkill struct {
@@ -39,11 +39,11 @@ type ManagedSkill struct {
 	LinkPath   string `json:"link_path"`
 }
 
-// State is Matty's small global state file. It tracks ownership metadata only;
+// State is Packy's small global state file. It tracks ownership metadata only;
 // prompt contents and skill bodies stay on disk outside this JSON file.
 type State struct {
 	SchemaVersion      int                     `json:"schema_version"`
-	MattyVersion       string                  `json:"matty_version"`
+	PackyVersion       string                  `json:"packy_version"`
 	ManagedSkills      []ManagedSkill          `json:"managed_skills"`
 	ConfiguredSurfaces []string                `json:"configured_surfaces"`
 	Paths              StatePaths              `json:"paths"`
@@ -64,7 +64,7 @@ type StateConfig struct {
 	AgentSkillsDir string
 }
 
-// LoadState reads Matty state. Missing state is a safe default; corrupt state is
+// LoadState reads Packy state. Missing state is a safe default; corrupt state is
 // returned as a clear error because applying changes from unknown ownership data
 // would be unsafe.
 func LoadState(path string) (State, bool, error) {
@@ -73,15 +73,15 @@ func LoadState(path string) (State, bool, error) {
 		if os.IsNotExist(err) {
 			return State{}, false, nil
 		}
-		return State{}, false, fmt.Errorf("read Matty state %s: %w", path, err)
+		return State{}, false, fmt.Errorf("read Packy state %s: %w", path, err)
 	}
 
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
-		return State{}, false, fmt.Errorf("read Matty state %s: invalid JSON: %w", path, err)
+		return State{}, false, fmt.Errorf("read Packy state %s: invalid JSON: %w", path, err)
 	}
 	if state.SchemaVersion != SchemaVersion {
-		return State{}, false, fmt.Errorf("read Matty state %s: unsupported schema_version %d", path, state.SchemaVersion)
+		return State{}, false, fmt.Errorf("read Packy state %s: unsupported schema_version %d", path, state.SchemaVersion)
 	}
 	return state, true, nil
 }
@@ -89,32 +89,32 @@ func LoadState(path string) (State, bool, error) {
 func SaveState(path string, state State) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode Matty state: %w", err)
+		return fmt.Errorf("encode Packy state: %w", err)
 	}
 	data = append(data, '\n')
-	temp, err := os.CreateTemp(filepath.Dir(path), ".matty-state-*.tmp")
+	temp, err := os.CreateTemp(filepath.Dir(path), ".packy-state-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create Matty state temporary file for %s: %w", path, err)
+		return fmt.Errorf("create Packy state temporary file for %s: %w", path, err)
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 	if err := temp.Chmod(0o600); err != nil {
 		temp.Close()
-		return fmt.Errorf("set permissions on Matty state temporary file for %s: %w", path, err)
+		return fmt.Errorf("set permissions on Packy state temporary file for %s: %w", path, err)
 	}
 	if err := writeStateTemp(temp, data); err != nil {
 		temp.Close()
-		return fmt.Errorf("write Matty state temporary file for %s: %w", path, err)
+		return fmt.Errorf("write Packy state temporary file for %s: %w", path, err)
 	}
 	if err := temp.Sync(); err != nil {
 		temp.Close()
-		return fmt.Errorf("sync Matty state temporary file for %s: %w", path, err)
+		return fmt.Errorf("sync Packy state temporary file for %s: %w", path, err)
 	}
 	if err := temp.Close(); err != nil {
-		return fmt.Errorf("close Matty state temporary file for %s: %w", path, err)
+		return fmt.Errorf("close Packy state temporary file for %s: %w", path, err)
 	}
 	if err := publishStateTemp(tempPath, path); err != nil {
-		return fmt.Errorf("publish Matty state %s: %w", path, err)
+		return fmt.Errorf("publish Packy state %s: %w", path, err)
 	}
 	return nil
 }
@@ -122,7 +122,7 @@ func SaveState(path string, state State) error {
 func DesiredState(config StateConfig, checkedAt time.Time, managedSkills []ManagedSkill) State {
 	return State{
 		SchemaVersion:      SchemaVersion,
-		MattyVersion:       mattyversion.Value,
+		PackyVersion:       packyversion.Value,
 		ManagedSkills:      append([]ManagedSkill(nil), managedSkills...),
 		ConfiguredSurfaces: append([]string(nil), defaultConfiguredSurfaces...),
 		Paths: StatePaths{

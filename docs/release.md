@@ -1,10 +1,10 @@
 # Publish a v0.x Release
 
-This workflow publishes Matty release artifacts to GitHub Releases and updates
+This workflow publishes Packy release artifacts to GitHub Releases and updates
 `yersonargotev/homebrew-tap` from the same `checksums.txt` manifest. Homebrew
 and direct GitHub Release installs distribute the binary only; first-run users
-must run `matty init` so the binary can clone the Matty Source of Truth into the
-default Installed Source at `~/.local/share/matty`.
+must run `packy init` so the binary can clone the Packy Source of Truth into the
+default Installed Source at `~/.local/share/packy`.
 
 ## User install path
 
@@ -12,28 +12,28 @@ The [README quickstart](../README.md#quickstart) is the canonical user-facing
 Homebrew path. Keep the exact install/init/dry-run/apply command sequence there
 so release docs do not drift from the first-run instructions users see first.
 
-Direct GitHub Release users may download the matching `matty_<version>_<goos>_<goarch>`
+Direct GitHub Release users may download the matching `packy_<version>_<goos>_<goarch>`
 asset, verify it against `checksums.txt`, put it on `PATH`, then follow the same
 first-run sequence from the README quickstart.
 
 ## User upgrade path
 
-`matty update` is not a binary upgrade command. It refreshes Matty-managed
+`packy update` is not a binary upgrade command. It refreshes Packy-managed
 workflow artifacts and Engram setup from the currently resolved skill bundle.
-Homebrew users upgrade Matty itself with:
+Homebrew users upgrade Packy itself with:
 
 ```bash
-brew upgrade matty
-matty init
-matty update --dry-run
-matty update
+brew upgrade packy
+packy init
+packy update --dry-run
+packy update
 ```
 
-Direct GitHub Release users replace the `matty` binary with the newer release
-artifact, then run the same `matty init` and update dry-run/apply sequence.
-`matty init` is the command that aligns the Installed Source checkout to the
-running release. `matty update --dry-run` must not mutate that checkout; if the
-Installed Source is missing or stale, run `matty init` first.
+Direct GitHub Release users replace the `packy` binary with the newer release
+artifact, then run the same `packy init` and update dry-run/apply sequence.
+`packy init` is the command that aligns the Installed Source checkout to the
+running release. `packy update --dry-run` must not mutate that checkout; if the
+Installed Source is missing or stale, run `packy init` first.
 
 ## Maintainer quick path
 
@@ -50,12 +50,12 @@ Installed Source is missing or stale, run `matty init` first.
    ```
 4. Watch the `Release` workflow for that tag.
 5. Open the GitHub Release and verify these assets exist:
-   - `matty_v0.1.0_darwin_amd64`
-   - `matty_v0.1.0_darwin_arm64`
-   - `matty_v0.1.0_linux_amd64`
-   - `matty_v0.1.0_linux_arm64`
+   - `packy_v0.1.0_darwin_amd64`
+   - `packy_v0.1.0_darwin_arm64`
+   - `packy_v0.1.0_linux_amd64`
+   - `packy_v0.1.0_linux_arm64`
    - `checksums.txt`
-6. Verify `yersonargotev/homebrew-tap` has a `Formula/matty.rb` commit for the
+6. Verify `yersonargotev/homebrew-tap` has a `Formula/packy.rb` commit for the
    same tag and checksums.
 7. Run a sandboxed package-install smoke test before announcing the release.
 
@@ -70,7 +70,7 @@ update need to be rebuilt.
 
 The workflow checks out that tag, builds artifacts and `checksums.txt`, requires
 `HOMEBREW_TAP_TOKEN`, checks out the tap, regenerates and locally commits
-`Formula/matty.rb` when changed, proves the tap push with `git push --dry-run`,
+`Formula/packy.rb` when changed, proves the tap push with `git push --dry-run`,
 creates the GitHub Release if needed, uploads `dist/* --clobber`, and only then
 pushes the prepared tap commit.
 
@@ -93,15 +93,15 @@ GitHub Releases and the Homebrew tap do not drift.
 binaries named:
 
 ```text
-matty_<version>_<goos>_<goarch>
+packy_<version>_<goos>_<goarch>
 ```
 
 It currently emits Darwin and Linux assets for `amd64` and `arm64`, plus a
 standard SHA-256 `checksums.txt` manifest. `scripts/generate-homebrew-formula.sh`
-requires the same four checksum entries and generates `Formula/matty.rb` with
-platform selectors and a `matty --version` brew test.
+requires the same four checksum entries and generates `Formula/packy.rb` with
+platform selectors and a `packy --version` brew test.
 
-Matty v0 remains macOS-first. Darwin Homebrew installs are the supported user
+Packy v0 remains macOS-first. Darwin Homebrew installs are the supported user
 path for the first installable release. Linux artifacts are built, checksummed,
 and represented in the formula to keep the release contract ready for future
 Linux support, but Linux is not part of the v0 golden-path support promise until
@@ -109,9 +109,9 @@ a Linux package-install smoke test is defined and accepted.
 
 ## Sandboxed package-install smoke expectations
 
-Never validate package-installed Matty against the operator's real `HOME` or
+Never validate package-installed Packy against the operator's real `HOME` or
 `XDG_CONFIG_HOME`. A release smoke test must point both variables at disposable
-temporary directories before running Matty lifecycle commands, for example:
+temporary directories before running Packy lifecycle commands, for example:
 
 ```bash
 sandbox="$(mktemp -d)"
@@ -119,24 +119,24 @@ export HOME="$sandbox/home"
 export XDG_CONFIG_HOME="$sandbox/xdg"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 
-matty --version
-matty init
-matty install --dry-run
-matty install
-matty doctor
-matty update --dry-run
-matty update
-matty uninstall --dry-run
-matty uninstall
-matty doctor
+packy --version
+packy init
+packy install --dry-run
+packy install
+packy doctor
+packy update --dry-run
+packy update
+packy uninstall --dry-run
+packy uninstall
+packy doctor
 ```
 
 For Homebrew-specific verification, install the released formula in a disposable
-or explicitly controlled test environment, then run the Matty commands above
+or explicitly controlled test environment, then run the Packy commands above
 with sandboxed `HOME` and `XDG_CONFIG_HOME`. The smoke test should prove that a
 package-installed binary can initialize its Installed Source, read
 `bundle/skills` from that source, preview installation, apply the golden-path
-setup, refresh it, remove Matty-managed artifacts, and finish with a read-only
+setup, refresh it, remove Packy-managed artifacts, and finish with a read-only
 `doctor` without touching the maintainer's real home config. If external tools
 such as Homebrew or Engram are not intentionally exercised against real accounts,
 stub or otherwise control those calls.
@@ -147,22 +147,22 @@ The automated local-release smoke test is:
 go test ./internal/release -run TestPackageInstallSmokeLifecycleWithLocalReleaseBinary -count=1
 ```
 
-That test builds a temporary release-like `./cmd/matty` binary with an injected
+That test builds a temporary release-like `./cmd/packy` binary with an injected
 version, runs it from a temporary directory outside the repo checkout, clones a
-local Matty Source fixture, and places stubbed `brew` and `engram` executables
+local Packy Source fixture, and places stubbed `brew` and `engram` executables
 ahead of the real `PATH` to verify the expected external calls without reaching
-real accounts. Its exact Matty command sequence is:
+real accounts. Its exact Packy command sequence is:
 
 ```bash
-matty init --repository-url <local-fixture-repo>
-matty install --dry-run
-matty install
-matty doctor
-matty update --dry-run
-matty update
-matty uninstall --dry-run
-matty uninstall
-matty doctor
+packy init --repository-url <local-fixture-repo>
+packy install --dry-run
+packy install
+packy doctor
+packy update --dry-run
+packy update
+packy uninstall --dry-run
+packy uninstall
+packy doctor
 ```
 
 ## First v0.x checklist
@@ -175,13 +175,13 @@ matty doctor
 - [ ] All four platform artifacts and `checksums.txt` are attached to the GitHub
       Release.
 - [ ] `checksums.txt` contains one SHA-256 entry for each artifact.
-- [ ] `Formula/matty.rb` in `yersonargotev/homebrew-tap` points at the same tag
+- [ ] `Formula/packy.rb` in `yersonargotev/homebrew-tap` points at the same tag
       and checksums.
-- [ ] When explicitly requested, a real `brew install yersonargotev/tap/matty`
+- [ ] When explicitly requested, a real `brew install yersonargotev/tap/packy`
       in a controlled environment installs the released binary.
-- [ ] A sandboxed package install can run `matty init`, `matty install --dry-run`,
-      `matty install`, `matty doctor`, `matty update --dry-run`, `matty update`,
-      `matty uninstall --dry-run`, `matty uninstall`, and final `matty doctor`
+- [ ] A sandboxed package install can run `packy init`, `packy install --dry-run`,
+      `packy install`, `packy doctor`, `packy update --dry-run`, `packy update`,
+      `packy uninstall --dry-run`, `packy uninstall`, and final `packy doctor`
       without writing to real home config.
 - [ ] Release notes call out that v0 is macOS-first and that Linux artifacts are
       published for future support, not the current golden path.

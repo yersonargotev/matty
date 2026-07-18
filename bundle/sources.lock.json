@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generator": "matty-packsync",
+  "generator": "packy-packsync",
   "generator_version": "1",
   "provider": "github",
   "provider_api_version": "2022-11-28",

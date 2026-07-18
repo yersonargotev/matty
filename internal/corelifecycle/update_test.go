@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/bootstrap"
 )
 
 func TestUpdatePreviewIsReadOnlyAndItsActionViewCannotMutateThePlan(t *testing.T) {
@@ -93,8 +93,8 @@ func TestUpdatePreviewAcceptsAlignedAnnotatedTagWithPackedObject(t *testing.T) {
 	config.SkillSource.IsDefault = true
 	config.RunningVersion = "v1.2.3"
 	prepareUpdateSourceRepository(t, &config, "", false)
-	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.name", "Matty Test")
-	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.email", "matty@example.test")
+	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.name", "Packy Test")
+	runUpdateTestGit(t, config.InstalledSource.Root(), "config", "user.email", "packy@example.test")
 	runUpdateTestGit(t, config.InstalledSource.Root(), "tag", "-a", config.RunningVersion, "-m", "release")
 	runUpdateTestGit(t, config.InstalledSource.Root(), "gc")
 	tagObject := runUpdateTestGitOutput(t, config.InstalledSource.Root(), "rev-parse", "refs/tags/"+config.RunningVersion)
@@ -332,7 +332,7 @@ func TestUpdatePreviewEnforcesDefaultInstalledSourceAlignment(t *testing.T) {
 			prepare: func(t *testing.T, config *facadeConfig) {
 				prepareUpdateSourceRepository(t, config, "v1.2.3", true)
 			},
-			wantError: "stale for Matty v1.2.3",
+			wantError: "stale for Packy v1.2.3",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -379,7 +379,7 @@ func prepareUpdateSourceRepository(t *testing.T, config *facadeConfig, tag strin
 	config.InstalledSource = bootstrap.InstalledSourceAt(root)
 	runUpdateTestGit(t, root, "init", "-q")
 	runUpdateTestGit(t, root, "add", ".")
-	runUpdateTestGit(t, root, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-qm", "source")
+	runUpdateTestGit(t, root, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-qm", "source")
 	if tag != "" {
 		runUpdateTestGit(t, root, "tag", tag)
 	}
@@ -388,7 +388,7 @@ func prepareUpdateSourceRepository(t *testing.T, config *facadeConfig, tag strin
 			t.Fatal(err)
 		}
 		runUpdateTestGit(t, root, "add", ".")
-		runUpdateTestGit(t, root, "-c", "user.name=Matty Test", "-c", "user.email=matty@example.test", "commit", "-qm", "stale")
+		runUpdateTestGit(t, root, "-c", "user.name=Packy Test", "-c", "user.email=packy@example.test", "commit", "-qm", "stale")
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 const (

@@ -23,11 +23,11 @@ type ValidationGates struct {
 	Apply          bool `json:"apply"`
 	Diff           bool `json:"diff"`
 	Ownership      bool `json:"ownership"`
-	MattySuite     bool `json:"matty_suite"`
+	PackySuite     bool `json:"packy_suite"`
 }
 
 func (gates ValidationGates) Complete() bool {
-	return gates.Provenance && gates.Classification && gates.Reacquisition && gates.Apply && gates.Diff && gates.Ownership && gates.MattySuite
+	return gates.Provenance && gates.Classification && gates.Reacquisition && gates.Apply && gates.Diff && gates.Ownership && gates.PackySuite
 }
 
 type Proposal struct {
@@ -179,8 +179,11 @@ func validateProposal(proposal Proposal) error {
 			return err
 		}
 	}
-	if len(proposal.ProvenanceSHA256) != 64 || len(proposal.ManagedMetadataHash) != 64 {
-		return errors.New("proposal provenance and managed metadata hashes are required")
+	if err := requireSHA256("proposal provenance", proposal.ProvenanceSHA256); err != nil {
+		return err
+	}
+	if err := requireSHA256("managed metadata hash", proposal.ManagedMetadataHash); err != nil {
+		return err
 	}
 	return nil
 }
@@ -233,7 +236,7 @@ type Readiness struct {
 
 func MarkDecisionReady(identity ReadinessIdentity, gates ValidationGates, draft, autoMerge bool) (Readiness, error) {
 	ready := Readiness{Identity: identity, Gates: gates, AutoMerge: autoMerge, ManualMergeRequired: true}
-	if identity.PlanID == "" || identity.PRNumber < 1 || requireFullSHA("base", identity.BaseSHA) != nil || requireFullSHA("head", identity.HeadSHA) != nil || requireFullSHA("candidate", identity.CandidateSHA) != nil || len(identity.ProvenanceSHA256) != 64 || len(identity.PRStateSHA256) != 64 {
+	if identity.PlanID == "" || identity.PRNumber < 1 || requireFullSHA("base", identity.BaseSHA) != nil || requireFullSHA("head", identity.HeadSHA) != nil || requireFullSHA("candidate", identity.CandidateSHA) != nil || requireSHA256("readiness provenance", identity.ProvenanceSHA256) != nil || requireSHA256("pull request state hash", identity.PRStateSHA256) != nil {
 		return ready, errors.New("readiness identity is incomplete")
 	}
 	if !gates.Complete() || draft || autoMerge {

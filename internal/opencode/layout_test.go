@@ -17,7 +17,7 @@ func TestCanonicalLayoutOwnsOpenCodePaths(t *testing.T) {
 	if layout.ConfigFile() != filepath.Join(configHome, "opencode", "opencode.json") {
 		t.Fatalf("ConfigFile = %q", layout.ConfigFile())
 	}
-	if layout.PromptFile() != filepath.Join(configHome, "opencode", "matty.md") {
+	if layout.PromptFile() != filepath.Join(configHome, "opencode", "packy.md") {
 		t.Fatalf("PromptFile = %q", layout.PromptFile())
 	}
 }
@@ -37,7 +37,7 @@ func TestObserveSetupUsesCanonicalOpenCodeLayout(t *testing.T) {
 	observation := ObserveSetup(layout)
 
 	inspection := observation.Inspection()
-	if observation.ConfigFile() != layout.ConfigFile() || observation.PromptFile() != layout.PromptFile() || observation.Err() != nil || !inspection.ConfigExists || !inspection.PromptExists || !inspection.HasMattyInstruction {
+	if observation.ConfigFile() != layout.ConfigFile() || observation.PromptFile() != layout.PromptFile() || observation.Err() != nil || !inspection.ConfigExists || !inspection.PromptExists || !inspection.HasPackyInstruction {
 		t.Fatalf("observation = %#v inspection = %#v", observation, inspection)
 	}
 }

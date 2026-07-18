@@ -92,7 +92,7 @@ func TestTargetedReconcileRepairsDriftWhenCatalogCurrentOwnershipIsUnambiguous(t
 		t.Fatalf("managed drift remained blocked: %+v", plan.Blockers())
 	}
 	phases := plan.Phases()
-	if len(phases) != 1 || phases[0].Kind != ConsentReversibleLocal || len(phases[0].Actions) != 1 || !strings.Contains(phases[0].Actions[0].Description, "restore drifted Matty-managed projection") {
+	if len(phases) != 1 || phases[0].Kind != ConsentReversibleLocal || len(phases[0].Actions) != 1 || !strings.Contains(phases[0].Actions[0].Description, "restore drifted Packy-managed projection") {
 		t.Fatalf("repair preview was not explicit: %+v", phases)
 	}
 	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})

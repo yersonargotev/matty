@@ -16,10 +16,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/packclassification"
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsync/githubsource"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packclassification"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync/githubsource"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 func main() {
@@ -53,7 +53,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	flags.SetOutput(io.Discard)
 	var option options
 	flags.StringVar(&option.phase, "phase", "inspect", "inspect, classify, validate, or publish")
-	flags.StringVar(&option.repositoryRoot, "repository-root", ".", "sandbox Matty repository root")
+	flags.StringVar(&option.repositoryRoot, "repository-root", ".", "sandbox Packy repository root")
 	flags.StringVar(&option.requestPath, "request", "", "canonical dispatch request JSON")
 	flags.StringVar(&option.planPath, "plan", "", "canonical sealed plan JSON")
 	flags.StringVar(&option.evidencePath, "evidence", "", "canonical classification evidence JSON")
@@ -98,7 +98,7 @@ func writeFailureArtifact(option options, failure error) error {
 		sourceID = request.SourceID
 	}
 	if sourceID == "" {
-		sourceID = os.Getenv("MATTY_SOURCE_ID")
+		sourceID = os.Getenv("PACKY_SOURCE_ID")
 	}
 	if !packsyncworkflow.ValidSourceID(sourceID) {
 		sourceID = "unknown"
@@ -130,7 +130,7 @@ func inspect(ctx context.Context, option options, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	acquisition, err := os.MkdirTemp("", "matty-pack-check-")
+	acquisition, err := os.MkdirTemp("", "packy-pack-check-")
 	if err != nil {
 		return err
 	}
@@ -183,15 +183,15 @@ func writeNoopArtifact(outputDir, sourceID string, plan packsync.Plan) error {
 
 func inspectRequest(option options) (packsyncworkflow.DispatchRequest, packsync.CheckRequest, error) {
 	if option.requestPath == "" {
-		if os.Getenv("MATTY_SOURCE_ID") != "" {
-			request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: os.Getenv("MATTY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("MATTY_SELECTOR")), SelectorRef: os.Getenv("MATTY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("MATTY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("MATTY_REQUEST_REASON"), RetryOfRun: os.Getenv("MATTY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("MATTY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("MATTY_EXPECTED_BASE_SHA")}
-			if raw := os.Getenv("MATTY_HUMAN_EVIDENCE_JSON"); raw != "" {
+		if os.Getenv("PACKY_SOURCE_ID") != "" {
+			request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: os.Getenv("PACKY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("PACKY_SELECTOR")), SelectorRef: os.Getenv("PACKY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("PACKY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("PACKY_REQUEST_REASON"), RetryOfRun: os.Getenv("PACKY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("PACKY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("PACKY_EXPECTED_BASE_SHA")}
+			if raw := os.Getenv("PACKY_HUMAN_EVIDENCE_JSON"); raw != "" {
 				request.HumanEvidence = json.RawMessage(raw)
 			}
 			if err := request.Validate(); err != nil {
 				return request, packsync.CheckRequest{}, err
 			}
-			if expected := os.Getenv("MATTY_REQUEST_DIGEST"); expected != "" {
+			if expected := os.Getenv("PACKY_REQUEST_DIGEST"); expected != "" {
 				actual, err := request.Digest()
 				if err != nil || actual != expected {
 					return request, packsync.CheckRequest{}, errors.New("workflow request digest does not match the canonical dispatch")

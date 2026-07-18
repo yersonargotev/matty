@@ -12,7 +12,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 func TestRequestsEmitExactlyOneRequestForEveryAffectedPackFromSealedCheck(t *testing.T) {
@@ -94,7 +94,7 @@ func TestHumanClassificationRequiresInspectionThenBoundEvidenceDispatch(t *testi
 	}
 }
 
-func TestClassifiedFixtureAppliesInSandboxAndRunsMattyOwnedValidation(t *testing.T) {
+func TestClassifiedFixtureAppliesInSandboxAndRunsPackyOwnedValidation(t *testing.T) {
 	fixture := newClassificationFixture(t)
 	model := &fixtureModel{}
 	service, err := NewAIService(model, 1)
@@ -121,7 +121,7 @@ func TestClassifiedFixtureAppliesInSandboxAndRunsMattyOwnedValidation(t *testing
 		t.Fatalf("Apply = %#v, %v", result, err)
 	}
 	if len(validated) != 4 {
-		t.Fatalf("Matty-owned validation calls = %d, want current and staged bundle for two packs", len(validated))
+		t.Fatalf("Packy-owned validation calls = %d, want current and staged bundle for two packs", len(validated))
 	}
 	for _, pack := range []string{"alpha", "beta"} {
 		data, err := os.ReadFile(filepath.Join(fixture.repository, "bundle", "packs", pack, "pack.json"))
@@ -297,7 +297,7 @@ func initializeGit(t *testing.T, root string) {
 	if _, err := worktree.Add("."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := worktree.Commit("fixture", &git.CommitOptions{Author: &object.Signature{Name: "Matty test", Email: "test@matty.invalid", When: time.Unix(1, 0).UTC()}}); err != nil {
+	if _, err := worktree.Commit("fixture", &git.CommitOptions{Author: &object.Signature{Name: "Packy test", Email: "test@packy.invalid", When: time.Unix(1, 0).UTC()}}); err != nil {
 		t.Fatal(err)
 	}
 }

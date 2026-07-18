@@ -21,7 +21,7 @@ var supportedReleasePlatforms = []string{
 	"linux/arm64",
 }
 
-func TestReleaseWorkflowPublishesMattyArtifactsAndTapFormula(t *testing.T) {
+func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
 	root := repoRoot(t)
 	text := readReleaseWorkflow(t, root)
 
@@ -42,8 +42,8 @@ func TestReleaseWorkflowPublishesMattyArtifactsAndTapFormula(t *testing.T) {
 		"yersonargotev/homebrew-tap",
 		"scripts/generate-homebrew-formula.sh",
 		"--checksums dist/checksums.txt",
-		"--out homebrew-tap/Formula/matty.rb",
-		"--repo yersonargotev/matty",
+		"--out homebrew-tap/Formula/packy.rb",
+		"--repo yersonargotev/packy",
 		"gh release upload",
 		"dist/* --clobber",
 	} {
@@ -73,7 +73,8 @@ func TestReleaseWorkflowCreatesReleaseWithGeneratedNotes(t *testing.T) {
 
 func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.T) {
 	root := repoRoot(t)
-	workflow := parseReleaseWorkflow(t, readReleaseWorkflow(t, root))
+	text := readReleaseWorkflow(t, root)
+	workflow := parseReleaseWorkflow(t, text)
 
 	resolveTagIndex := releaseWorkflowStepIndex(t, workflow, "Resolve release tag", []string{
 		"git checkout --detach \"$tag\"",
@@ -99,18 +100,19 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 	formulaIndex := releaseWorkflowStepIndex(t, workflow, "Generate Homebrew formula from release checksums", []string{
 		"scripts/generate-homebrew-formula.sh",
 		"--checksums dist/checksums.txt",
-		"--out homebrew-tap/Formula/matty.rb",
+		"--out homebrew-tap/Formula/packy.rb",
 	})
 	prepareTapIndex := releaseWorkflowStepIndex(t, workflow, "Prepare Homebrew tap formula update", []string{
 		"id: prepare_tap",
 		"working-directory: homebrew-tap",
 		`git config user.name "github-actions[bot]"`,
 		`git config user.email "github-actions[bot]@users.noreply.github.com"`,
-		"git add Formula/matty.rb",
+		"git rm --ignore-unmatch Formula/matty.rb",
+		"git add Formula/packy.rb",
 		"git diff --cached --quiet",
 		`echo "changed=false" >> "$GITHUB_OUTPUT"`,
 		`echo "changed=true" >> "$GITHUB_OUTPUT"`,
-		`git commit -m "feat: update matty formula to ${RELEASE_TAG}"`,
+		`git commit -m "feat: update packy formula to ${RELEASE_TAG}"`,
 	})
 	tapPushAccessProofIndex := releaseWorkflowStepIndex(t, workflow, "Prove Homebrew tap push permission", []string{
 		"working-directory: homebrew-tap",
@@ -133,6 +135,16 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		"git push origin HEAD:main",
 	})
 
+	prepareTapStep := releaseWorkflowStep(t, workflow, "Prepare Homebrew tap formula update").Text
+	for _, forbidden := range []string{"formula_renames.json", "FormulaRenames", "yersonargotev/matty", "Formula/matty.rb =>"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("release workflow must not contain legacy formula rename metadata or Matty distribution identity %q", forbidden)
+		}
+	}
+	if !strings.Contains(prepareTapStep, "git rm --ignore-unmatch Formula/matty.rb") {
+		t.Fatal("tap update must remove the legacy Matty formula in the same commit as Formula/packy.rb")
+	}
+
 	if strings.Contains(releaseWorkflowStep(t, workflow, "Prove Homebrew tap push permission").Text, "git commit") {
 		t.Fatalf("tap push proof must dry-run the prepared local commit without creating another commit")
 	}
@@ -146,7 +158,7 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, tapCheckoutIndex, "the workflow must reject a missing HOMEBREW_TAP_TOKEN before falling back to anonymous tap checkout")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, createReleaseIndex, "a missing HOMEBREW_TAP_TOKEN must fail before creating a GitHub Release")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, uploadIndex, "a missing HOMEBREW_TAP_TOKEN must fail before re-uploading release assets")
-	assertReleaseWorkflowStepBefore(t, tapCheckoutIndex, formulaIndex, "the tap checkout must exist before writing Formula/matty.rb into it")
+	assertReleaseWorkflowStepBefore(t, tapCheckoutIndex, formulaIndex, "the tap checkout must exist before writing Formula/packy.rb into it")
 	assertReleaseWorkflowStepBefore(t, formulaIndex, prepareTapIndex, "the generated formula must be staged before preparing a local tap commit")
 	assertReleaseWorkflowStepBefore(t, prepareTapIndex, tapPushAccessProofIndex, "the workflow must dry-run push the already-prepared local tap state, not the untouched checkout")
 	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, createReleaseIndex, "token-backed tap push permission must be proven before creating a GitHub Release")
@@ -163,7 +175,7 @@ func TestBuildReleaseArtifactsCreatesChecksummedSupportedPlatforms(t *testing.T)
 
 	root := repoRoot(t)
 	outDir := t.TempDir()
-	cmd := exec.Command("bash", filepath.Join(root, "scripts", "build-release-artifacts.sh"), "--version", "v0.99.0", "--out-dir", outDir)
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "build-release-artifacts.sh"), "--version", "v0.1.7", "--out-dir", outDir)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir(), "GOCACHE="+t.TempDir(), "GOMODCACHE="+goEnv(t, "GOMODCACHE"))
 	output, err := cmd.CombinedOutput()
@@ -171,22 +183,24 @@ func TestBuildReleaseArtifactsCreatesChecksummedSupportedPlatforms(t *testing.T)
 		t.Fatalf("build release artifacts: %v\n%s", err, output)
 	}
 
-	wantAssets := releaseAssets("v0.99.0")
+	wantAssets := releaseAssets("v0.1.7")
+	wantEntries := append(append([]string{}, wantAssets...), "checksums.txt")
+	sort.Strings(wantEntries)
 
 	entries, err := os.ReadDir(outDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotAssets []string
+	var gotEntries []string
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "checksums.txt" {
-			continue
+		if entry.IsDir() {
+			t.Fatalf("release output contains unexpected directory %s", entry.Name())
 		}
-		gotAssets = append(gotAssets, entry.Name())
+		gotEntries = append(gotEntries, entry.Name())
 	}
-	sort.Strings(gotAssets)
-	if strings.Join(gotAssets, "\n") != strings.Join(wantAssets, "\n") {
-		t.Fatalf("release assets mismatch\nwant:\n%s\ngot:\n%s", strings.Join(wantAssets, "\n"), strings.Join(gotAssets, "\n"))
+	sort.Strings(gotEntries)
+	if strings.Join(gotEntries, "\n") != strings.Join(wantEntries, "\n") {
+		t.Fatalf("v0.1.7 release directory mismatch\nwant:\n%s\ngot:\n%s", strings.Join(wantEntries, "\n"), strings.Join(gotEntries, "\n"))
 	}
 
 	checksums := readChecksums(t, filepath.Join(outDir, "checksums.txt"))
@@ -228,7 +242,7 @@ func TestBuildReleaseArtifactsValidatesReleaseVersionBeforeBuilding(t *testing.T
 				if err != nil {
 					t.Fatalf("read go build log: %v", err)
 				}
-				wantLdflag := "-X github.com/yersonargotev/matty/internal/version.Value=" + version
+				wantLdflag := "-X github.com/yersonargotev/packy/internal/version.Value=" + version
 				if !strings.Contains(string(log), wantLdflag) {
 					t.Fatalf("release build should inject version with ldflags %q\nlog:\n%s", wantLdflag, log)
 				}
@@ -263,7 +277,7 @@ func TestBuildReleaseArtifactsValidatesReleaseVersionBeforeBuilding(t *testing.T
 func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 	root := repoRoot(t)
 	checksumsPath := writeChecksumManifest(t, validFormulaChecksumLines("v0.99.0"))
-	outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
+	outputPath := filepath.Join(t.TempDir(), "Formula", "packy.rb")
 
 	cmd := exec.Command(
 		"bash",
@@ -271,8 +285,8 @@ func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 		"--version", "v0.99.0",
 		"--checksums", checksumsPath,
 		"--out", outputPath,
-		"--repo", "yersonargotev/matty",
-		"--homepage", "https://github.com/yersonargotev/matty",
+		"--repo", "yersonargotev/packy",
+		"--homepage", "https://github.com/yersonargotev/packy",
 		"--desc", "AI coding workflow installer",
 	)
 	cmd.Dir = root
@@ -288,22 +302,22 @@ func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 	}
 	text := string(formula)
 	for _, want := range []string{
-		"class Matty < Formula",
+		"class Packy < Formula",
 		`desc "AI coding workflow installer"`,
-		`homepage "https://github.com/yersonargotev/matty"`,
+		`homepage "https://github.com/yersonargotev/packy"`,
 		`version "0.99.0"`,
-		`url "https://github.com/yersonargotev/matty/releases/download/v0.99.0/matty_v0.99.0_darwin_amd64", using: :nounzip`,
+		`url "https://github.com/yersonargotev/packy/releases/download/v0.99.0/packy_v0.99.0_darwin_amd64", using: :nounzip`,
 		`sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`,
-		`url "https://github.com/yersonargotev/matty/releases/download/v0.99.0/matty_v0.99.0_darwin_arm64", using: :nounzip`,
+		`url "https://github.com/yersonargotev/packy/releases/download/v0.99.0/packy_v0.99.0_darwin_arm64", using: :nounzip`,
 		`sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"`,
-		`url "https://github.com/yersonargotev/matty/releases/download/v0.99.0/matty_v0.99.0_linux_amd64", using: :nounzip`,
+		`url "https://github.com/yersonargotev/packy/releases/download/v0.99.0/packy_v0.99.0_linux_amd64", using: :nounzip`,
 		`sha256 "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"`,
-		`url "https://github.com/yersonargotev/matty/releases/download/v0.99.0/matty_v0.99.0_linux_arm64", using: :nounzip`,
+		`url "https://github.com/yersonargotev/packy/releases/download/v0.99.0/packy_v0.99.0_linux_arm64", using: :nounzip`,
 		`sha256 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"`,
-		`downloaded_binary = Dir["matty_*"].first`,
-		`odie "downloaded matty binary not found" if downloaded_binary.nil?`,
-		`bin.install downloaded_binary => "matty"`,
-		`system "#{bin}/matty", "--version"`,
+		`downloaded_binary = Dir["packy_*"].first`,
+		`odie "downloaded packy binary not found" if downloaded_binary.nil?`,
+		`bin.install downloaded_binary => "packy"`,
+		`system "#{bin}/packy", "--version"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("formula should contain %q\nformula:\n%s", want, text)
@@ -317,7 +331,7 @@ func TestGenerateHomebrewFormulaUsesChecksummedReleaseArtifacts(t *testing.T) {
 func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumEntryIsMissing(t *testing.T) {
 	root := repoRoot(t)
 	checksumsPath := writeChecksumManifest(t, validFormulaChecksumLines("v0.99.0")[:3])
-	outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
+	outputPath := filepath.Join(t.TempDir(), "Formula", "packy.rb")
 
 	cmd := exec.Command(
 		"bash",
@@ -332,7 +346,7 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumEntryIsMissing(t *testin
 	if err == nil {
 		t.Fatalf("generate formula should fail when a checksum entry is missing\n%s", output)
 	}
-	if !strings.Contains(string(output), "missing checksum entry for matty_v0.99.0_linux_arm64") {
+	if !strings.Contains(string(output), "missing checksum entry for packy_v0.99.0_linux_arm64") {
 		t.Fatalf("failure should name the missing artifact, got:\n%s", output)
 	}
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
@@ -351,13 +365,13 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumManifestIsNotExact(t *te
 	}{
 		{
 			name:      "rejects unexpected release artifact",
-			extraLine: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  matty_v0.99.0_linux_386",
-			wantError: "unexpected checksum entry for matty_v0.99.0_linux_386",
+			extraLine: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  packy_v0.99.0_linux_386",
+			wantError: "unexpected checksum entry for packy_v0.99.0_linux_386",
 		},
 		{
 			name:      "rejects duplicate expected artifact",
-			extraLine: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff  matty_v0.99.0_darwin_amd64",
-			wantError: "duplicate checksum entry for matty_v0.99.0_darwin_amd64",
+			extraLine: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff  packy_v0.99.0_darwin_amd64",
+			wantError: "duplicate checksum entry for packy_v0.99.0_darwin_amd64",
 		},
 	}
 
@@ -365,7 +379,7 @@ func TestGenerateHomebrewFormulaFailsClearlyWhenChecksumManifestIsNotExact(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			checksums := append(append([]string{}, baseChecksums...), tt.extraLine)
 			checksumsPath := writeChecksumManifest(t, checksums)
-			outputPath := filepath.Join(t.TempDir(), "Formula", "matty.rb")
+			outputPath := filepath.Join(t.TempDir(), "Formula", "packy.rb")
 
 			cmd := exec.Command(
 				"bash",
@@ -474,10 +488,10 @@ func assertReleaseWorkflowStepBefore(t *testing.T, earlier, later int, reason st
 
 func validFormulaChecksumLines(version string) []string {
 	return []string{
-		fmt.Sprintf("%s  matty_%s_darwin_amd64", strings.Repeat("a", sha256.Size*2), version),
-		fmt.Sprintf("%s  matty_%s_darwin_arm64", strings.Repeat("b", sha256.Size*2), version),
-		fmt.Sprintf("%s  matty_%s_linux_amd64", strings.Repeat("c", sha256.Size*2), version),
-		fmt.Sprintf("%s  matty_%s_linux_arm64", strings.Repeat("d", sha256.Size*2), version),
+		fmt.Sprintf("%s  packy_%s_darwin_amd64", strings.Repeat("a", sha256.Size*2), version),
+		fmt.Sprintf("%s  packy_%s_darwin_arm64", strings.Repeat("b", sha256.Size*2), version),
+		fmt.Sprintf("%s  packy_%s_linux_amd64", strings.Repeat("c", sha256.Size*2), version),
+		fmt.Sprintf("%s  packy_%s_linux_arm64", strings.Repeat("d", sha256.Size*2), version),
 	}
 }
 
@@ -522,7 +536,7 @@ func releaseAssets(version string) []string {
 	assets := make([]string, 0, len(supportedReleasePlatforms))
 	for _, platform := range supportedReleasePlatforms {
 		parts := strings.Split(platform, "/")
-		assets = append(assets, fmt.Sprintf("matty_%s_%s_%s", version, parts[0], parts[1]))
+		assets = append(assets, fmt.Sprintf("packy_%s_%s_%s", version, parts[0], parts[1]))
 	}
 	sort.Strings(assets)
 	return assets

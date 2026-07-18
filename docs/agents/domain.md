@@ -1,6 +1,6 @@
 # Domain Docs
 
-Matty uses a single-context domain layout. These rules tell engineering skills how to consume its domain documentation before exploring the codebase.
+Packy uses a single-context domain layout. These rules tell engineering skills how to consume its domain documentation before exploring the codebase.
 
 ## Before exploring, read these
 

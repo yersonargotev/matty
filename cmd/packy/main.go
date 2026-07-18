@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yersonargotev/matty/internal/cli"
+	"github.com/yersonargotev/packy/internal/cli"
 )
 
 func main() {

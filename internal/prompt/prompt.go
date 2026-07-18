@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	codexMattySectionID = "skills-router"
-	mattyRulesSectionID = "rules"
+	codexPackySectionID = "skills-router"
+	packyRulesSectionID = "rules"
 )
 
 type WriteResult struct {
@@ -17,11 +17,11 @@ type WriteResult struct {
 }
 
 type Inspection struct {
-	HasMattySection bool
+	HasPackySection bool
 }
 
 func CodexContent() string {
-	return strings.TrimSpace(`## Matty global workflow
+	return strings.TrimSpace(`## Packy global workflow
 
 - Global skills live in ~/.agents/skills. When a task matches a skill, read that skill's SKILL.md before acting.
 - Use ask-matt at ~/.agents/skills/ask-matt as the router when you are unsure which skill or workflow applies.
@@ -47,7 +47,7 @@ For non-trivial work, load the delegation skill when available. Use it for Deleg
 }
 
 func RulesSectionContent() string {
-	return sectionBlock(openMarker(mattyRulesSectionID), closeMarker(mattyRulesSectionID), RulesContent())
+	return sectionBlock(openMarker(packyRulesSectionID), closeMarker(packyRulesSectionID), RulesContent())
 }
 
 func WriteCodex(path string) (WriteResult, error) {
@@ -56,8 +56,8 @@ func WriteCodex(path string) (WriteResult, error) {
 		return WriteResult{}, err
 	}
 	result := WriteResult{Warnings: DetectExternalManagedBlocks(existing)}
-	updated := upsertSection(existing, codexMattySectionID, CodexContent())
-	updated = upsertSection(updated, mattyRulesSectionID, RulesContent())
+	updated := upsertSection(existing, codexPackySectionID, CodexContent())
+	updated = upsertSection(updated, packyRulesSectionID, RulesContent())
 	if updated == existing {
 		return result, nil
 	}
@@ -65,7 +65,7 @@ func WriteCodex(path string) (WriteResult, error) {
 		return WriteResult{}, fmt.Errorf("create Codex config directory %s: %w", filepath.Dir(path), err)
 	}
 	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
-		return WriteResult{}, fmt.Errorf("write Codex Matty prompt %s: %w", path, err)
+		return WriteResult{}, fmt.Errorf("write Codex Packy prompt %s: %w", path, err)
 	}
 	return result, nil
 }
@@ -75,7 +75,7 @@ func InspectCodex(path string) (Inspection, error) {
 	if err != nil {
 		return Inspection{}, err
 	}
-	return Inspection{HasMattySection: strings.Contains(existing, openMarker(codexMattySectionID)) || strings.Contains(existing, openMarker(mattyRulesSectionID))}, nil
+	return Inspection{HasPackySection: strings.Contains(existing, openMarker(codexPackySectionID)) || strings.Contains(existing, openMarker(packyRulesSectionID))}, nil
 }
 
 func RemoveCodex(path string) error {
@@ -83,13 +83,13 @@ func RemoveCodex(path string) error {
 	if err != nil {
 		return err
 	}
-	updated := removeSection(existing, codexMattySectionID)
-	updated = removeSection(updated, mattyRulesSectionID)
+	updated := removeSection(existing, codexPackySectionID)
+	updated = removeSection(updated, packyRulesSectionID)
 	if updated == existing {
 		return nil
 	}
 	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
-		return fmt.Errorf("remove Codex Matty prompt %s: %w", path, err)
+		return fmt.Errorf("remove Codex Packy prompt %s: %w", path, err)
 	}
 	return nil
 }
@@ -97,10 +97,10 @@ func RemoveCodex(path string) error {
 func DetectExternalManagedBlocks(content string) []string {
 	var warnings []string
 	if strings.Contains(content, "<!-- gentle-ai:") || strings.Contains(content, "<!-- /gentle-ai:") {
-		warnings = append(warnings, "Codex prompt contains gentle-ai managed blocks; Matty preserved them and only updated Matty markers")
+		warnings = append(warnings, "Codex prompt contains gentle-ai managed blocks; Packy preserved them and only updated Packy markers")
 	}
 	if containsEngramMarker(content) {
-		warnings = append(warnings, "Codex prompt contains Engram managed instructions; Matty preserved them and only updated Matty markers")
+		warnings = append(warnings, "Codex prompt contains Engram managed instructions; Packy preserved them and only updated Packy markers")
 	}
 	return warnings
 }
@@ -167,8 +167,8 @@ func mergeSection(existing, sectionID, content string) string {
 	return out.String()
 }
 
-func openMarker(sectionID string) string  { return "<!-- matty:" + sectionID + " -->" }
-func closeMarker(sectionID string) string { return "<!-- /matty:" + sectionID + " -->" }
+func openMarker(sectionID string) string  { return "<!-- packy:" + sectionID + " -->" }
+func closeMarker(sectionID string) string { return "<!-- /packy:" + sectionID + " -->" }
 
 func sectionBlock(open, close, content string) string {
 	if content == "" {

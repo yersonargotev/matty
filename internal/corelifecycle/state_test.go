@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
-	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
+	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
 func TestObserveSetupSuppliesStateAndManagedSkillFactsReadOnly(t *testing.T) {
 	home := t.TempDir()
-	stateLayout := NewLayout(filepath.Join(home, ".matty"))
+	stateLayout := NewLayout(filepath.Join(home, ".packy"))
 	skills := skillbundle.NewGlobalLayout(home)
 	source := skillbundle.Source{Root: filepath.Join(home, "source", "skills")}
 	managedSource := filepath.Join(source.Root, "engineering", "managed")
@@ -97,7 +97,7 @@ func TestStateStorePreservesPreviousBytesWhenTempWriteFails(t *testing.T) {
 	t.Cleanup(func() { writeStateTemp = previous })
 
 	err := SaveState(path, DesiredState(StateConfig{StateFile: path}, time.Unix(2, 0), nil))
-	if err == nil || !strings.Contains(err.Error(), "write Matty state temporary file") || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), "write Packy state temporary file") || !strings.Contains(err.Error(), path) {
 		t.Fatalf("error = %v", err)
 	}
 	assertPreviousStateAndNoTemps(t, path, old)
@@ -110,7 +110,7 @@ func TestStateStorePreservesPreviousBytesWhenPublicationFails(t *testing.T) {
 	t.Cleanup(func() { publishStateTemp = previous })
 
 	err := SaveState(path, DesiredState(StateConfig{StateFile: path}, time.Unix(3, 0), nil))
-	if err == nil || !strings.Contains(err.Error(), "publish Matty state") || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), "publish Packy state") || !strings.Contains(err.Error(), path) {
 		t.Fatalf("error = %v", err)
 	}
 	assertPreviousStateAndNoTemps(t, path, old)
@@ -154,7 +154,7 @@ func TestObserveStateDistinguishesStateConditions(t *testing.T) {
 
 func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"schema_version":1,"matty_version":"legacy","managed_skills":[{"name":"ask-matt","source_path":"/source","link_path":"/link"}],"configured_surfaces":["codex"],"paths":{"state_file":"legacy","agent_skills_dir":"legacy"},"created_containers":[{"path":"/owned","kind":"directory"}]}`
+	legacy := `{"schema_version":1,"packy_version":"legacy","managed_skills":[{"name":"ask-matt","source_path":"/source","link_path":"/link"}],"configured_surfaces":["codex"],"paths":{"state_file":"legacy","agent_skills_dir":"legacy"},"created_containers":[{"path":"/owned","kind":"directory"}]}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestObserveExpectedManagedSkillLinksUsesLifecycleDiscovery(t *testing.T) {
 func existingStateFile(t *testing.T) (string, []byte) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	old := []byte("{\n  \"schema_version\": 1,\n  \"matty_version\": \"old\",\n  \"managed_skills\": [],\n  \"configured_surfaces\": [],\n  \"paths\": {\"state_file\": \"old\", \"agent_skills_dir\": \"old\"}\n}\n")
+	old := []byte("{\n  \"schema_version\": 1,\n  \"packy_version\": \"old\",\n  \"managed_skills\": [],\n  \"configured_surfaces\": [],\n  \"paths\": {\"state_file\": \"old\", \"agent_skills_dir\": \"old\"}\n}\n")
 	if err := os.WriteFile(path, old, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func assertStateFileModeAndNoTemps(t *testing.T, path string) {
 
 func assertNoStateTemps(t *testing.T, path string) {
 	t.Helper()
-	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".matty-state-*.tmp"))
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".packy-state-*.tmp"))
 	if err != nil {
 		t.Fatal(err)
 	}
