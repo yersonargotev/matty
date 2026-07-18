@@ -3,10 +3,12 @@ set -Eeuo pipefail
 
 EVIDENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(git -C "$EVIDENCE_DIR" rev-parse --show-toplevel)"
-TRANSCRIPT="$EVIDENCE_DIR/transcript.log"
 RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/packy-issue-66.XXXXXX")"
 REAL_HOME="${HOME:?HOME must be set}"
 XDG_ROOT="${XDG_CONFIG_HOME:-$REAL_HOME/.config}"
+REAL_GOCACHE="$(go env GOCACHE)"
+REAL_GOMODCACHE="$(go env GOMODCACHE)"
+REAL_GOPATH="$(go env GOPATH)"
 BREW=/opt/homebrew/bin/brew
 PACKY=/opt/homebrew/bin/packy
 PACKY_SOURCE="$REAL_HOME/.local/share/packy"
@@ -18,9 +20,7 @@ MERGED_PACKY=283e726e9e1886d8b51e3222434022ac56f733eb
 STARTING_MAIN=2ed52a16a88d3b150dcf0a2bbbc596eb72cb389f
 TAP_SHA=ae1a2f979f073a5b07214d8f303c7ce5ff67d84d
 
-rm -f "$TRANSCRIPT"
-exec > >(tee "$TRANSCRIPT") 2>&1
-trap 'status=$?; rm -rf "$RUN_ROOT"; exit "$status"' EXIT
+trap 'status=$?; chmod -R u+w "$RUN_ROOT" 2>/dev/null || true; rm -rf "$RUN_ROOT"; exit "$status"' EXIT
 
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 section() { printf '\n===== %s | %s =====\n' "$(stamp)" "$1"; }
@@ -48,6 +48,7 @@ assert_equal() {
 
 section "audit identity and tool versions"
 printf 'issue=66\nstarting_origin_main=%s\nrun_root=%s\n' "$STARTING_MAIN" "$RUN_ROOT"
+printf 'execution=./run.sh 2>&1 | tee <temporary-transcript>; gzip -n -9 <temporary-transcript> > transcript.log.gz\n'
 run_expect 0 "UTC clock" date -u +%Y-%m-%dT%H:%M:%SZ
 run_expect 0 "git version" git --version
 run_expect 0 "Go version" go version
@@ -88,6 +89,9 @@ run_expect 0 "issue 65 maintainer cutover state" gh issue view 65 --repo yersona
 section "repository validation and current documentation"
 export HOME="$RUN_ROOT/home"
 export XDG_CONFIG_HOME="$RUN_ROOT/xdg"
+export GOCACHE="$REAL_GOCACHE"
+export GOMODCACHE="$REAL_GOMODCACHE"
+export GOPATH="$REAL_GOPATH"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 run_expect 0 "Packy repository validation" ./scripts/validate-packy.sh
 run_expect 0 "Go compatibility suite" go test ./...
