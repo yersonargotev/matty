@@ -253,6 +253,8 @@ func TestDispatchSchemaMatchesRuntimeValidation(t *testing.T) {
 		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, SelectorRef: "unexpected", ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "invalid"},
 		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: sha, ClassificationMode: packsyncworkflow.ClassificationHuman, RequestReason: "partial", ExpectedPlanID: "plan"},
 		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: " \t\n"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "\v"},
+		{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "\u00a0"},
 	}
 	for _, request := range cases {
 		data, err := json.Marshal(request)
@@ -566,6 +568,43 @@ func TestValidationArtifactSchemaMatchesRuntimeValidation(t *testing.T) {
 		runtimeErr := artifact.Validate()
 		if (runtimeErr == nil) != (schemaErr == nil) {
 			t.Fatalf("runtime/schema validation artifact disagreement for %s: runtime=%v schema=%v", data, runtimeErr, schemaErr)
+		}
+	}
+}
+
+func TestPublicationSchemaMatchesRuntimeHashValidation(t *testing.T) {
+	sha, hash := strings.Repeat("a", 40), strings.Repeat("b", 64)
+	validDocument := map[string]any{"schema_version": 1, "source_id": "source", "plan_id": "plan", "base_sha": sha, "candidate_sha": sha, "result_tree_sha": sha, "head_sha": strings.Repeat("c", 40), "provenance_sha256": hash, "branch_name": "sync/source", "pr_number": 7, "pr_state_sha256": hash, "managed_title": "managed", "managed_metadata_hash": hash, "validation": map[string]bool{"provenance": true, "classification": true, "reacquisition": true, "apply": true, "diff": true, "ownership": true, "packy_suite": true}, "decision_ready": true, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": packsyncworkflow.DecisionReadyInvalidationConditions()}
+	gates := packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true}
+	for _, field := range []string{"provenance_sha256", "managed_metadata_hash", "pr_state_sha256"} {
+		for _, invalid := range []string{strings.Repeat("g", 64), strings.Repeat("A", 64)} {
+			document := make(map[string]any, len(validDocument))
+			for key, value := range validDocument {
+				document[key] = value
+			}
+			document[field] = invalid
+			data, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schemaErr := validateSchemaInstance(t, "pack-source-publication.schema.json", data)
+			var runtimeErr error
+			switch field {
+			case "provenance_sha256", "managed_metadata_hash":
+				proposal := packsyncworkflow.Proposal{SourceID: "source", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, ResultTreeSHA: sha, HeadSHA: strings.Repeat("c", 40), ProvenanceSHA256: hash, ManagedTitle: "managed", ManagedMetadataHash: hash, Validation: gates, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions()}
+				if field == "provenance_sha256" {
+					proposal.ProvenanceSHA256 = invalid
+				} else {
+					proposal.ManagedMetadataHash = invalid
+				}
+				_, runtimeErr = packsyncworkflow.EvaluatePublication(proposal, packsyncworkflow.PublicationState{})
+			case "pr_state_sha256":
+				identity := packsyncworkflow.ReadinessIdentity{PlanID: "plan", BaseSHA: sha, HeadSHA: strings.Repeat("c", 40), CandidateSHA: sha, ProvenanceSHA256: hash, PRNumber: 7, PRStateSHA256: invalid}
+				_, runtimeErr = packsyncworkflow.MarkDecisionReady(identity, gates, false, false)
+			}
+			if runtimeErr == nil || schemaErr == nil {
+				t.Fatalf("publication %s accepted invalid hash %q: runtime=%v schema=%v", field, invalid, runtimeErr, schemaErr)
+			}
 		}
 	}
 }

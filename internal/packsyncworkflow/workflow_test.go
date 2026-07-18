@@ -93,6 +93,12 @@ func TestDispatchReasonLengthMatchesJSONSchemaUnicodeCharacters(t *testing.T) {
 	if err := request.Validate(); err == nil {
 		t.Fatal("whitespace-only reason accepted")
 	}
+	for _, reason := range []string{"\v", "\u00a0"} {
+		request.RequestReason = reason
+		if err := request.Validate(); err == nil {
+			t.Fatalf("Unicode whitespace-only reason %q accepted", reason)
+		}
+	}
 }
 
 func TestRetryPolicyRetriesOnlyTransientFailuresWithBackoffAndRetryAfter(t *testing.T) {
@@ -293,6 +299,31 @@ func TestDecisionReadinessBindsExactIdentityAndInvalidatesOnAnyLaterChange(t *te
 		mutate(&observed)
 		if !ready.InvalidatedBy(observed) {
 			t.Fatalf("readiness survived identity change: %#v", observed)
+		}
+	}
+}
+
+func TestPublicationHashesRequireLowercaseHexSHA256(t *testing.T) {
+	for _, invalid := range []string{strings.Repeat("g", 64), strings.Repeat("A", 64)} {
+		proposal := validProposal()
+		proposal.ProvenanceSHA256 = invalid
+		if _, err := EvaluatePublication(proposal, pristineState()); err == nil {
+			t.Fatalf("proposal accepted provenance hash %q", invalid)
+		}
+		proposal = validProposal()
+		proposal.ManagedMetadataHash = invalid
+		if _, err := EvaluatePublication(proposal, pristineState()); err == nil {
+			t.Fatalf("proposal accepted managed metadata hash %q", invalid)
+		}
+
+		identity := ReadinessIdentity{PlanID: "plan-1", BaseSHA: baseA, HeadSHA: headA, CandidateSHA: candidateA, ProvenanceSHA256: invalid, PRNumber: 7, PRStateSHA256: strings.Repeat("6", 64)}
+		if _, err := MarkDecisionReady(identity, ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true}, false, false); err == nil {
+			t.Fatalf("readiness accepted provenance hash %q", invalid)
+		}
+		identity.ProvenanceSHA256 = strings.Repeat("5", 64)
+		identity.PRStateSHA256 = invalid
+		if _, err := MarkDecisionReady(identity, ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true}, false, false); err == nil {
+			t.Fatalf("readiness accepted PR-state hash %q", invalid)
 		}
 	}
 }

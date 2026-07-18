@@ -127,6 +127,7 @@ func (artifact ValidationArtifact) Validate() error {
 var (
 	sourceIDPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	fullSHAPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	sha256Pattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	prereleasePattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$`)
 	runIDPattern      = regexp.MustCompile(`^[0-9]+$`)
 )
@@ -252,6 +253,13 @@ func validOptionalURI(value string) bool {
 func requireFullSHA(name, value string) error {
 	if !fullSHAPattern.MatchString(value) {
 		return fmt.Errorf("%s must be one full lowercase SHA", name)
+	}
+	return nil
+}
+
+func requireSHA256(name, value string) error {
+	if !sha256Pattern.MatchString(value) {
+		return fmt.Errorf("%s must be one lowercase hexadecimal SHA-256", name)
 	}
 	return nil
 }
