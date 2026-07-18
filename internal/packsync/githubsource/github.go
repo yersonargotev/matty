@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 const maxArchiveBytes = 256 << 20

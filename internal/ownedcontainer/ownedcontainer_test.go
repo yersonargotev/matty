@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
 )
 
 func TestProvisionProvesOnlyAtomicCreations(t *testing.T) {

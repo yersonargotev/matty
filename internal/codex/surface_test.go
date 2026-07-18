@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 func TestEngramCodexSetupContractIsObservedWithoutCompetingLocalWrites(t *testing.T) {
@@ -101,7 +101,7 @@ enabled = true
 	}
 	unchangedPrompt, err := os.ReadFile(prompt)
 	if err != nil || string(unchangedPrompt) != "# keep Codex guidance\n" {
-		t.Fatalf("Matty competed for Engram instructions: %q err=%v", unchangedPrompt, err)
+		t.Fatalf("Packy competed for Engram instructions: %q err=%v", unchangedPrompt, err)
 	}
 }
 

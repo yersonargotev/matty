@@ -1,4 +1,4 @@
-module github.com/yersonargotev/matty
+module github.com/yersonargotev/packy
 
 go 1.23.0
 

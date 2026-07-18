@@ -10,12 +10,12 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
-const DefaultRepositoryURL = "https://github.com/yersonargotev/matty.git"
+const DefaultRepositoryURL = "https://github.com/yersonargotev/packy.git"
 
-// BootstrapOptions describes how matty init prepares the package-installed
+// BootstrapOptions describes how packy init prepares the package-installed
 // Source of Truth checkout. It lives outside command construction so the CLI
 // remains an adapter around source bootstrapping behavior.
 type BootstrapOptions struct {
@@ -60,7 +60,7 @@ func EnsureInstalledSource(opts BootstrapOptions) (BootstrapResult, error) {
 			return BootstrapResult{}, err
 		}
 		if !empty {
-			return BootstrapResult{}, fmt.Errorf("Installed Source path exists but is not a valid Matty checkout: %s. Move it aside or pass --source-root", opts.InstalledSource.Root())
+			return BootstrapResult{}, fmt.Errorf("Installed Source path exists but is not a valid Packy checkout: %s. Move it aside or pass --source-root", opts.InstalledSource.Root())
 		}
 		if err := os.Remove(opts.InstalledSource.Root()); err != nil {
 			return BootstrapResult{}, fmt.Errorf("remove empty Installed Source directory: %w", err)
@@ -70,7 +70,7 @@ func EnsureInstalledSource(opts BootstrapOptions) (BootstrapResult, error) {
 	}
 
 	if _, err := exec.LookPath("git"); err != nil {
-		return BootstrapResult{}, fmt.Errorf("git is required to clone the Matty Source of Truth into %s", opts.InstalledSource.Root())
+		return BootstrapResult{}, fmt.Errorf("git is required to clone the Packy Source of Truth into %s", opts.InstalledSource.Root())
 	}
 	if err := cloneInstalledSource(opts); err != nil {
 		return BootstrapResult{}, err
@@ -112,7 +112,7 @@ func ensureInstalledSourceRef(opts BootstrapOptions) (bool, error) {
 }
 
 func validateFetchedInstalledSource(opts BootstrapOptions) (err error) {
-	validationRoot, err := os.MkdirTemp(filepath.Dir(opts.InstalledSource.Root()), ".matty-validate.*")
+	validationRoot, err := os.MkdirTemp(filepath.Dir(opts.InstalledSource.Root()), ".packy-validate.*")
 	if err != nil {
 		return fmt.Errorf("create Installed Source validation directory: %w", err)
 	}
@@ -156,14 +156,14 @@ func ValidateInstalledSourceRef(opts BootstrapOptions) error {
 		return errors.New("installed source root is required")
 	}
 	if validateInstalledSource(opts.InstalledSource.Root()) != nil {
-		return fmt.Errorf("default Installed Source is missing or invalid at %s; run matty init to initialize it", skillbundle.InstalledSourceRoot(opts.InstalledSource))
+		return fmt.Errorf("default Installed Source is missing or invalid at %s; run packy init to initialize it", skillbundle.InstalledSourceRoot(opts.InstalledSource))
 	}
-	matches, err := repositoryRefMatchesReadOnly(opts, fmt.Sprintf("run matty init to align it with %s", ref))
+	matches, err := repositoryRefMatchesReadOnly(opts, fmt.Sprintf("run packy init to align it with %s", ref))
 	if err != nil {
 		return err
 	}
 	if !matches {
-		return fmt.Errorf("default Installed Source at %s is stale for Matty %s; run matty init to align it before matty update", opts.InstalledSource.Root(), ref)
+		return fmt.Errorf("default Installed Source at %s is stale for Packy %s; run packy init to align it before packy update", opts.InstalledSource.Root(), ref)
 	}
 	return nil
 }
@@ -225,7 +225,7 @@ func cloneInstalledSource(opts BootstrapOptions) error {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create Installed Source parent: %w", err)
 	}
-	tmp, err := os.MkdirTemp(parent, ".matty-clone.*")
+	tmp, err := os.MkdirTemp(parent, ".packy-clone.*")
 	if err != nil {
 		return fmt.Errorf("create temporary clone directory: %w", err)
 	}
@@ -240,13 +240,13 @@ func cloneInstalledSource(opts BootstrapOptions) error {
 		return err
 	}
 	if _, err := runGit(opts, args...); err != nil {
-		return fmt.Errorf("clone Matty Source of Truth: %w", err)
+		return fmt.Errorf("clone Packy Source of Truth: %w", err)
 	}
 	if err := validateInstalledSource(tmp); err != nil {
-		return fmt.Errorf("cloned Matty Source of Truth has an invalid skill bundle: %w", err)
+		return fmt.Errorf("cloned Packy Source of Truth has an invalid skill bundle: %w", err)
 	}
 	if err := os.Rename(tmp, opts.InstalledSource.Root()); err != nil {
-		return fmt.Errorf("install cloned Matty Source of Truth: %w", err)
+		return fmt.Errorf("install cloned Packy Source of Truth: %w", err)
 	}
 	return nil
 }

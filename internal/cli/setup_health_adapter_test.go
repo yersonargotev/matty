@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/setuphealth"
+	"github.com/yersonargotev/packy/internal/setuphealth"
 )
 
 func TestRenderSetupHealthHuman(t *testing.T) {
@@ -14,7 +14,7 @@ func TestRenderSetupHealthHuman(t *testing.T) {
 		Context: setuphealth.Context{
 			HomeDir:        "/home/test",
 			ConfigHome:     "/home/test/config",
-			StateFile:      "/home/test/.matty/config.json",
+			StateFile:      "/home/test/.packy/config.json",
 			StateStatus:    "present",
 			AgentSkillsDir: "/home/test/.agents/skills",
 		},
@@ -25,7 +25,7 @@ func TestRenderSetupHealthHuman(t *testing.T) {
 	if err := renderSetupHealthHuman(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	want := "HOME=/home/test\nCONFIG_HOME=/home/test/config\nMATTY_STATE=/home/test/.matty/config.json\nMATTY_STATE_STATUS=present\nAGENT_SKILLS=/home/test/.agents/skills\nWARN fixture: inspect fixture\n"
+	want := "HOME=/home/test\nCONFIG_HOME=/home/test/config\nPACKY_STATE=/home/test/.packy/config.json\nPACKY_STATE_STATUS=present\nAGENT_SKILLS=/home/test/.agents/skills\nWARN fixture: inspect fixture\n"
 	if output.String() != want {
 		t.Fatalf("human output = %q, want %q", output.String(), want)
 	}

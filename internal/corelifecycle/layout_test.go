@@ -5,32 +5,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
-func TestClassicLayoutDerivesStateFromMattyHome(t *testing.T) {
-	mattyHome := filepath.Join(t.TempDir(), ".matty")
-	layout := NewLayout(mattyHome)
+func TestClassicLayoutDerivesStateFromPackyHome(t *testing.T) {
+	packyHome := filepath.Join(t.TempDir(), ".packy")
+	layout := NewLayout(packyHome)
 
-	if layout.MattyHome() != mattyHome {
-		t.Fatalf("MattyHome = %q, want %q", layout.MattyHome(), mattyHome)
+	if layout.PackyHome() != packyHome {
+		t.Fatalf("PackyHome = %q, want %q", layout.PackyHome(), packyHome)
 	}
-	if layout.StateFile() != filepath.Join(mattyHome, "config.json") {
+	if layout.StateFile() != filepath.Join(packyHome, "config.json") {
 		t.Fatalf("StateFile = %q", layout.StateFile())
 	}
 }
 
 func TestFacadeConfigDerivesInternalPathsFromOwnerValues(t *testing.T) {
 	home := t.TempDir()
-	mattyHome := filepath.Join(home, ".matty")
+	packyHome := filepath.Join(home, ".packy")
 	source := skillbundle.Source{Root: filepath.Join(t.TempDir(), "bundle", "skills")}
-	installed := bootstrap.InstalledSourceAt(filepath.Join(home, ".local", "share", "matty"))
+	installed := bootstrap.InstalledSourceAt(filepath.Join(home, ".local", "share", "packy"))
 	facade := NewFacade(FacadeConfig{
-		MattyHome:       mattyHome,
+		PackyHome:       packyHome,
 		Skills:          skillbundle.NewGlobalLayout(home),
 		SkillSource:     source,
 		Codex:           codex.NewCanonicalLayout(home),
@@ -40,7 +40,7 @@ func TestFacadeConfigDerivesInternalPathsFromOwnerValues(t *testing.T) {
 		RunningVersion:  "v1.2.3",
 	}, &installTestCommands{}, time.Now)
 
-	if facade.config.State.StateFile() != filepath.Join(mattyHome, "config.json") {
+	if facade.config.State.StateFile() != filepath.Join(packyHome, "config.json") {
 		t.Fatalf("StateFile = %q", facade.config.State.StateFile())
 	}
 	if facade.config.Skills.Root() != filepath.Join(home, ".agents", "skills") {

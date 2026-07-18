@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsync/githubsource"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync/githubsource"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 func TestRendererUsesTheEngineCanonicalHumanAndJSONPlans(t *testing.T) {

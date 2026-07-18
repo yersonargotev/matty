@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
 func TestInstallPreviewIsReadOnlyAndItsActionViewCannotMutateThePlan(t *testing.T) {
@@ -88,7 +88,7 @@ func TestInstallApplyConsumesThePreviewedPlanAndPublishesConfirmedOwnership(t *t
 	if state.LastInstallCheck != "1970-01-01T00:02:03Z" {
 		t.Fatalf("LastInstallCheck = %q, want injected clock", state.LastInstallCheck)
 	}
-	for _, path := range []string{config.State.MattyHome(), config.State.StateFile(), config.Skills.Root(), config.Codex.PromptFile(), config.OpenCode.ConfigFile(), config.OpenCode.PromptFile()} {
+	for _, path := range []string{config.State.PackyHome(), config.State.StateFile(), config.Skills.Root(), config.Codex.PromptFile(), config.OpenCode.ConfigFile(), config.OpenCode.PromptFile()} {
 		if !installTestHasContainer(state, path) {
 			t.Fatalf("confirmed state missing container provenance for %s: %#v", path, state.CreatedContainers)
 		}
@@ -135,9 +135,9 @@ func TestClassicLifecycleDoesNotReadOrMutateCapabilityPackStateOrArtifacts(t *te
 				}
 			}
 
-			packState := filepath.Join(config.State.MattyHome(), "packs.json")
+			packState := filepath.Join(config.State.PackyHome(), "packs.json")
 			packArtifact := filepath.Join(installTestHome(config), ".codex", "pack-owned-artifact")
-			if err := os.MkdirAll(config.State.MattyHome(), 0o700); err != nil {
+			if err := os.MkdirAll(config.State.PackyHome(), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.MkdirAll(filepath.Dir(packArtifact), 0o700); err != nil {
@@ -218,7 +218,7 @@ func TestInstallPreviewDoesNotAdoptANonHomebrewEngramFromPATH(t *testing.T) {
 
 func TestInstallPreviewRejectsCorruptStateBeforeMutation(t *testing.T) {
 	config := installTestConfig(t)
-	if err := os.MkdirAll(config.State.MattyHome(), 0o700); err != nil {
+	if err := os.MkdirAll(config.State.PackyHome(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(config.State.StateFile(), []byte("{not json"), 0o600); err != nil {
@@ -591,13 +591,13 @@ func installTestConfig(t *testing.T) facadeConfig {
 	configHome := filepath.Join(home, "xdg")
 	homebrewPrefix := filepath.Join(home, "homebrew")
 	return NewFacade(FacadeConfig{
-		MattyHome:       filepath.Join(home, ".matty"),
+		PackyHome:       filepath.Join(home, ".packy"),
 		Skills:          skillbundle.NewGlobalLayout(home),
 		SkillSource:     skillbundle.Source{Root: source},
 		Codex:           codex.NewCanonicalLayout(home),
 		OpenCode:        opencode.NewCanonicalLayout(configHome),
 		Engram:          engrambin.NewTopology(homebrewPrefix),
-		InstalledSource: bootstrap.InstalledSourceAt(filepath.Join(home, ".local", "share", "matty")),
+		InstalledSource: bootstrap.InstalledSourceAt(filepath.Join(home, ".local", "share", "packy")),
 	}, &installTestCommands{}, time.Now).config
 }
 
@@ -608,7 +608,7 @@ func newTestFacade(config facadeConfig, commands Commands, now func() time.Time)
 	return &Facade{config: config, commands: commands, now: now}
 }
 
-func installTestHome(config facadeConfig) string { return filepath.Dir(config.State.MattyHome()) }
+func installTestHome(config facadeConfig) string { return filepath.Dir(config.State.PackyHome()) }
 
 func installTestSnapshot(t *testing.T, root string) string {
 	t.Helper()

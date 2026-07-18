@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 func TestInitialApplyBootstrapsTruthfulProvenanceWithoutSelectedContentChange(t *testing.T) {

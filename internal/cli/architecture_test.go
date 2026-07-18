@@ -22,17 +22,17 @@ func TestCLIWorkstationLayoutOwnershipIsContracted(t *testing.T) {
 	}
 
 	knownArtifactParts := map[string]bool{
-		".matty": true, "config.json": true, "packs.json": true,
+		".packy": true, "config.json": true, "packs.json": true,
 		".agents": true, "skills": true,
-		".local": true, "share": true, "matty": true,
+		".local": true, "share": true, "packy": true,
 		".codex": true, "config.toml": true, "AGENTS.md": true,
-		"opencode": true, "opencode.json": true, "matty.md": true,
+		"opencode": true, "opencode.json": true, "packy.md": true,
 		"bin": true, "engram": true,
 	}
 	knownArtifactText := map[string]bool{
-		".matty": true, "config.json": true, "packs.json": true,
+		".packy": true, "config.json": true, "packs.json": true,
 		".agents": true, ".codex": true, "config.toml": true,
-		"AGENTS.md": true, "opencode.json": true, "matty.md": true,
+		"AGENTS.md": true, "opencode.json": true, "packy.md": true,
 	}
 
 	for _, source := range cliGoSources(t) {
@@ -301,7 +301,7 @@ func TestSetupHealthDeletionDoesNotRedistributeDiagnosisPolicyInCLI(t *testing.T
 			"engrambin.Diagnose",
 			"opencode.Inspect(",
 			"prompt.DetectExternalManagedBlocks(",
-			"\"matty-state\"",
+			"\"packy-state\"",
 			"\"engram-binary\"",
 			"\"codex-config\"",
 			"\"opencode-config\"",

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/prompt"
+	"github.com/yersonargotev/packy/internal/prompt"
 )
 
-// WriteResult reports non-fatal conditions Matty noticed while preserving user
+// WriteResult reports non-fatal conditions Packy noticed while preserving user
 // OpenCode config.
 type WriteResult struct {
 	Warnings []string
@@ -19,12 +19,12 @@ type WriteResult struct {
 type Inspection struct {
 	ConfigExists        bool
 	PromptExists        bool
-	HasMattyInstruction bool
+	HasPackyInstruction bool
 	Warnings            []string
 }
 
 func promptContent() string {
-	workflow := strings.TrimSpace(`## Matty global workflow
+	workflow := strings.TrimSpace(`## Packy global workflow
 - Global skills live in ~/.agents/skills. When a task matches a skill, read that skill's SKILL.md before acting.
 - Use ask-matt at ~/.agents/skills/ask-matt as the router when you are unsure which skill or workflow applies.
 - Use Engram memory tools when available: search before past-work or project-sensitive tasks; save decisions, discoveries, bug fixes, and conventions; summarize sessions before finishing.
@@ -45,7 +45,7 @@ func Write(configPath, promptPath string) (WriteResult, error) {
 		return WriteResult{}, fmt.Errorf("create OpenCode config directory %s: %w", filepath.Dir(promptPath), err)
 	}
 	if err := os.WriteFile(promptPath, []byte(promptContent()), 0o600); err != nil {
-		return WriteResult{}, fmt.Errorf("write OpenCode Matty prompt %s: %w", promptPath, err)
+		return WriteResult{}, fmt.Errorf("write OpenCode Packy prompt %s: %w", promptPath, err)
 	}
 	if config != existing {
 		if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
@@ -65,11 +65,11 @@ func Remove(configPath, promptPath string) error {
 	}
 	if config != existing {
 		if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
-			return fmt.Errorf("remove OpenCode Matty config %s: %w", configPath, err)
+			return fmt.Errorf("remove OpenCode Packy config %s: %w", configPath, err)
 		}
 	}
 	if err := os.Remove(promptPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove OpenCode Matty prompt %s: %w", promptPath, err)
+		return fmt.Errorf("remove OpenCode Packy prompt %s: %w", promptPath, err)
 	}
 	return nil
 }
@@ -77,7 +77,7 @@ func detectExternalManagedConfig(content string) []string {
 	if !hasKnownGentleAIOverlay(content) {
 		return nil
 	}
-	return []string{"OpenCode config contains gentle-ai references; Matty preserved them and only updated Matty instruction entries"}
+	return []string{"OpenCode config contains gentle-ai references; Packy preserved them and only updated Packy instruction entries"}
 }
 
 func hasKnownGentleAIOverlay(content string) bool {
@@ -139,7 +139,7 @@ func Inspect(configPath, promptPath string) (Inspection, error) {
 	if _, err := os.Stat(promptPath); err == nil {
 		inspection.PromptExists = true
 	} else if err != nil && !os.IsNotExist(err) {
-		return Inspection{}, fmt.Errorf("inspect OpenCode Matty prompt %s: %w", promptPath, err)
+		return Inspection{}, fmt.Errorf("inspect OpenCode Packy prompt %s: %w", promptPath, err)
 	}
 	if strings.TrimSpace(existing) == "" {
 		return inspection, nil
@@ -158,7 +158,7 @@ func Inspect(configPath, promptPath string) (Inspection, error) {
 	}
 	for _, instruction := range instructions {
 		if instruction == promptPath {
-			inspection.HasMattyInstruction = true
+			inspection.HasPackyInstruction = true
 			break
 		}
 	}
@@ -868,7 +868,7 @@ func MergeInstructionProjection(existing, configPath, promptPath string) (string
 	return mergeInstruction(existing, configPath, promptPath)
 }
 
-// RemoveInstructionProjection removes only the requested Matty instruction
+// RemoveInstructionProjection removes only the requested Packy instruction
 // reference while preserving unrelated JSONC content and comments.
 func RemoveInstructionProjection(existing, configPath, promptPath string) (string, error) {
 	return removeInstruction(existing, configPath, promptPath)

@@ -228,7 +228,7 @@ func TestBuildReleaseArtifactsValidatesReleaseVersionBeforeBuilding(t *testing.T
 				if err != nil {
 					t.Fatalf("read go build log: %v", err)
 				}
-				wantLdflag := "-X github.com/yersonargotev/matty/internal/version.Value=" + version
+				wantLdflag := "-X github.com/yersonargotev/packy/internal/version.Value=" + version
 				if !strings.Contains(string(log), wantLdflag) {
 					t.Fatalf("release build should inject version with ldflags %q\nlog:\n%s", wantLdflag, log)
 				}

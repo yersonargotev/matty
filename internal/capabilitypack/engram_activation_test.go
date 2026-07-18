@@ -216,7 +216,7 @@ func TestExternallyManagedEngramProjectionWaitsForCodexSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := phaseActions(plan.phases, ConsentReversibleLocal); len(got) != 0 {
-		t.Fatalf("Matty planned competing local projections: %#v", got)
+		t.Fatalf("Packy planned competing local projections: %#v", got)
 	}
 	if got := phaseActions(plan.phases, ConsentExecutableExternal); len(got) != 1 {
 		t.Fatalf("external setup actions = %#v", got)

@@ -9,12 +9,12 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/skillbundle"
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
 func newPackCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
@@ -29,19 +29,19 @@ login, trust, permissions, reload, or runtime loading remain pending; use target
 status with --require usable as the separate automation gate.
 
 After a stale plan or recovery-required attempt, repeat the original lifecycle
-verb to inspect fresh state and receive a new Preview. Matty never retries it
+verb to inspect fresh state and receive a new Preview. Packy never retries it
 automatically.`,
-		Example: `  matty pack list
-  matty pack show matty
-  matty pack status
-  matty pack status engram --surface codex
-  matty pack status engram --surface codex --require usable
-  matty pack activate matty --surface codex --dry-run
-  matty pack activate matty --surface codex
-  matty pack update matty --surface codex
-  matty pack reconcile matty --surface codex
-  matty pack reconcile --surface codex
-  matty pack deactivate matty --surface codex`,
+		Example: `  packy pack list
+  packy pack show matty
+  packy pack status
+  packy pack status engram --surface codex
+  packy pack status engram --surface codex --require usable
+  packy pack activate matty --surface codex --dry-run
+  packy pack activate matty --surface codex
+  packy pack update matty --surface codex
+  packy pack reconcile matty --surface codex
+  packy pack reconcile --surface codex
+  packy pack deactivate matty --surface codex`,
 	}
 	cmd.AddCommand(newPackListCommand(opts, workstationResolver), newPackShowCommand(opts, workstationResolver), newPackStatusCommand(opts, workstationResolver), newPackActivateCommand(opts, workstationResolver), newPackUpdateCommand(opts, workstationResolver), newPackDeactivateCommand(opts, workstationResolver), newPackReconcileCommand(opts, workstationResolver))
 	return cmd
@@ -255,7 +255,7 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		return err
 	}
 	if history := plan.HistoricalAttempt(); history != nil {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Recovery: fresh %s Preview toward the already-approved intent; historical plan %s is not replayed.\nHistorical outcome: %s\nHistorical digest: %s\nCompleted: %s\nFailed: %s — %s\nNot started: %s\nTo recover, repeat `matty pack %s %s --surface %s`; a new Preview and approvals are required.\n", plan.Operation(), history.PlanID, history.Outcome, history.PlanDigest, joinFacts(history.Completed), history.FailedAction, history.FailureDetail, joinFacts(history.NotStarted()), plan.Operation(), plan.Pack().ID, plan.Surface()); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Recovery: fresh %s Preview toward the already-approved intent; historical plan %s is not replayed.\nHistorical outcome: %s\nHistorical digest: %s\nCompleted: %s\nFailed: %s — %s\nNot started: %s\nTo recover, repeat `packy pack %s %s --surface %s`; a new Preview and approvals are required.\n", plan.Operation(), history.PlanID, history.Outcome, history.PlanDigest, joinFacts(history.Completed), history.FailedAction, history.FailureDetail, joinFacts(history.NotStarted()), plan.Operation(), plan.Pack().ID, plan.Surface()); err != nil {
 			return err
 		}
 	}
@@ -566,7 +566,7 @@ func resolvePackComposition(opts Options, workstationResolver *workstation.Resol
 	}
 	return packComposition{
 		catalog:    catalog,
-		state:      capabilitypack.NewStateLayout(snapshot.MattyHome()),
+		state:      capabilitypack.NewStateLayout(snapshot.PackyHome()),
 		skills:     skillbundle.NewGlobalLayout(snapshot.Home()),
 		bundleRoot: bundleRoot,
 		codex:      codex.NewCanonicalLayout(snapshot.Home()),

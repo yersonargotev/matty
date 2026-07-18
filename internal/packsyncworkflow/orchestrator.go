@@ -5,7 +5,7 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 // Applier is the existing packsync transaction seam. Implementations must be

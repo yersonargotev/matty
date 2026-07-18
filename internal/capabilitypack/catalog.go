@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 const schemaVersion = 1
@@ -98,7 +98,7 @@ var initialCatalog = []catalogEntry{
 	{ID: "matty", Description: "Matty workflow", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
 }
 
-// Discover loads the strict initial catalog from a Matty-owned bundle root.
+// Discover loads the strict initial catalog from a Packy-owned bundle root.
 func Discover(bundleRoot string) (Catalog, error) {
 	return discoverCatalog(bundleRoot, initialCatalog)
 }
@@ -228,7 +228,7 @@ func (c Catalog) showUnlocked(id string) (Pack, error) {
 			return clonePack(pack), nil
 		}
 	}
-	return Pack{}, fmt.Errorf("unknown capability pack %q; run `matty pack list` to see available packs", id)
+	return Pack{}, fmt.Errorf("unknown capability pack %q; run `packy pack list` to see available packs", id)
 }
 
 func (c Catalog) catalogMetadata(id string) (Pack, error) {
@@ -237,7 +237,7 @@ func (c Catalog) catalogMetadata(id string) (Pack, error) {
 			return clonePack(pack), nil
 		}
 	}
-	return Pack{}, fmt.Errorf("unknown capability pack %q; run `matty pack list` to see available packs", id)
+	return Pack{}, fmt.Errorf("unknown capability pack %q; run `packy pack list` to see available packs", id)
 }
 
 func clonePack(pack Pack) Pack {

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/corelifecycle"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/skillbundle"
-	"github.com/yersonargotev/matty/internal/workstation"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/corelifecycle"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/workstation"
 )
 
 func TestDiagnoseReturnsCompleteOrderedReadOnlyReportAfterPartialFailures(t *testing.T) {
@@ -33,14 +33,14 @@ func TestDiagnoseReturnsCompleteOrderedReadOnlyReportAfterPartialFailures(t *tes
 	report := diagnose(config, lookup, facts)
 
 	want := []Check{
-		{Severity: Warn, Name: "matty-state", Detail: "missing at " + config.StateFile + "; run matty install"},
-		{Severity: Warn, Name: "skill-symlinks", Detail: "state is missing, so Matty-owned skill links are unknown; run matty install"},
-		{Severity: Fail, Name: "engram-binary", Detail: "engram is not available on PATH; Homebrew Engram exists at " + canonical + "; add it to PATH or run matty install"},
+		{Severity: Warn, Name: "packy-state", Detail: "missing at " + config.StateFile + "; run packy install"},
+		{Severity: Warn, Name: "skill-symlinks", Detail: "state is missing, so Packy-owned skill links are unknown; run packy install"},
+		{Severity: Fail, Name: "engram-binary", Detail: "engram is not available on PATH; Homebrew Engram exists at " + canonical + "; add it to PATH or run packy install"},
 		{Severity: Pass, Name: "engram-local-bin", Detail: "no ~/.local/bin/engram compatibility symlink is present; Homebrew remains the Engram owner"},
 		{Severity: Warn, Name: "engram-runtime", Detail: "could not inspect active engram serve processes: process inspection failed"},
-		{Severity: Warn, Name: "engram-setup", Detail: "state is missing, so delegated setup cannot be confirmed; run matty install"},
-		{Severity: Warn, Name: "codex-config", Detail: "missing Matty Codex prompt markers at " + config.CodexPromptFile + "; run matty install"},
-		{Severity: Warn, Name: "opencode-config", Detail: "missing OpenCode config; run matty install"},
+		{Severity: Warn, Name: "engram-setup", Detail: "state is missing, so delegated setup cannot be confirmed; run packy install"},
+		{Severity: Warn, Name: "codex-config", Detail: "missing Packy Codex prompt markers at " + config.CodexPromptFile + "; run packy install"},
+		{Severity: Warn, Name: "opencode-config", Detail: "missing OpenCode config; run packy install"},
 	}
 	if !reflect.DeepEqual(report.Checks, want) {
 		t.Fatalf("checks changed:\ngot:  %#v\nwant: %#v", report.Checks, want)
@@ -73,7 +73,7 @@ func TestDiagnoseHealthySetupReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveState(t, config, desiredState(config, []corelifecycle.ManagedSkill{{Name: "skill", SourcePath: source, LinkPath: link}}))
-	writeFile(t, config.CodexPromptFile, "<!-- matty:skills-router -->\n<!-- /matty:skills-router -->")
+	writeFile(t, config.CodexPromptFile, "<!-- packy:skills-router -->\n<!-- /packy:skills-router -->")
 	writeFile(t, config.OpenCodePromptFile, "prompt")
 	writeFile(t, config.OpenCodeConfigFile, fmt.Sprintf(`{"instructions":[%q]}`, config.OpenCodePromptFile))
 
@@ -82,7 +82,7 @@ func TestDiagnoseHealthySetupReport(t *testing.T) {
 	if report.Summary != (Summary{Status: "healthy", Passes: 8}) {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
-	wantNames := []string{"matty-state", "skill-symlinks", "engram-binary", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"}
+	wantNames := []string{"packy-state", "skill-symlinks", "engram-binary", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"}
 	gotNames := make([]string, 0, len(report.Checks))
 	for _, check := range report.Checks {
 		gotNames = append(gotNames, check.Name)
@@ -100,7 +100,7 @@ func TestDiagnoseStateAndSkillSemanticMatrix(t *testing.T) {
 		config := sandboxConfig(t)
 		writeFile(t, config.StateFile, "{not json")
 		report := diagnoseWithoutEngram(t, config)
-		assertCheck(t, report, Fail, "matty-state", "invalid JSON")
+		assertCheck(t, report, Fail, "packy-state", "invalid JSON")
 		assertCheck(t, report, Warn, "skill-symlinks", "state is missing")
 		assertSummaryMatchesChecks(t, report)
 	})
@@ -120,7 +120,7 @@ func TestDiagnoseStateAndSkillSemanticMatrix(t *testing.T) {
 		state.InstallStatus = corelifecycle.InstallRecoveryRequired
 		saveState(t, config, state)
 		report := diagnoseWithoutEngram(t, config)
-		assertCheck(t, report, Fail, "matty-state", "installation was interrupted")
+		assertCheck(t, report, Fail, "packy-state", "installation was interrupted")
 		assertCheck(t, report, Pass, "skill-symlinks", "1 managed links")
 		if report.Context.StateStatus != "present" {
 			t.Fatalf("state status = %q", report.Context.StateStatus)
@@ -178,7 +178,7 @@ func TestDiagnoseStateAndSkillSemanticMatrix(t *testing.T) {
 		config := sandboxConfig(t)
 		createSkillSource(t, config.SkillSourceRoot)
 		saveState(t, config, desiredState(config, nil))
-		assertExactCheck(t, diagnoseWithoutEngram(t, config), Check{Severity: Warn, Name: "skill-symlinks", Detail: "state has no managed skills; run matty install"})
+		assertExactCheck(t, diagnoseWithoutEngram(t, config), Check{Severity: Warn, Name: "skill-symlinks", Detail: "state has no managed skills; run packy install"})
 	})
 }
 
@@ -186,7 +186,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 	t.Run("absent from PATH without canonical installation", func(t *testing.T) {
 		config := sandboxConfig(t)
 		report := diagnoseWithoutEngram(t, config)
-		assertExactCheck(t, report, Check{Severity: Fail, Name: "engram-binary", Detail: "engram is not available on PATH; run matty install"})
+		assertExactCheck(t, report, Check{Severity: Fail, Name: "engram-binary", Detail: "engram is not available on PATH; run packy install"})
 	})
 
 	t.Run("canonical binary no runtime", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		assertCheck(t, report, Warn, "engram-version", "version failed")
 		assertCheck(t, report, Warn, "engram-path-shadowing", local+" appears before Homebrew Engram at "+canonical)
 		assertNoCheck(t, report, "engram-version-mismatch")
-		assertCheckNames(t, report, []string{"matty-state", "skill-symlinks", "engram-binary", "engram-version", "engram-path-shadowing", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"})
+		assertCheckNames(t, report, []string{"packy-state", "skill-symlinks", "engram-binary", "engram-version", "engram-path-shadowing", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"})
 
 		f.Version = func(path string) (string, error) {
 			if path == local {
@@ -245,7 +245,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		}
 		writeExecutable(t, config.LocalBinEngram)
 		report = diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
-		assertExactCheck(t, report, Check{Severity: Warn, Name: "engram-local-bin", Detail: config.LocalBinEngram + " exists but is not a symlink; Matty will not install a second Engram binary there"})
+		assertExactCheck(t, report, Check{Severity: Warn, Name: "engram-local-bin", Detail: config.LocalBinEngram + " exists but is not a symlink; Packy will not install a second Engram binary there"})
 	})
 
 	t.Run("stale local compatibility symlink", func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestDiagnoseDelegatedSetupCodexAndOpenCodeMatrix(t *testing.T) {
 
 	state.ConfiguredSurfaces = []string{"codex", "opencode"}
 	saveState(t, config, state)
-	writeFile(t, config.CodexPromptFile, "<!-- matty:skills-router -->\n<!-- /matty:skills-router -->\n<!-- gentle-ai:persona -->x<!-- /gentle-ai:persona -->")
+	writeFile(t, config.CodexPromptFile, "<!-- packy:skills-router -->\n<!-- /packy:skills-router -->\n<!-- gentle-ai:persona -->x<!-- /gentle-ai:persona -->")
 	writeFile(t, config.OpenCodePromptFile, "prompt")
 	writeFile(t, config.OpenCodeConfigFile, fmt.Sprintf(`{"instructions":[%q],"plugin":["gentle-ai"]}`, config.OpenCodePromptFile))
 	report = diagnoseWithoutEngram(t, config)
@@ -295,9 +295,9 @@ func TestDiagnoseDelegatedSetupCodexAndOpenCodeMatrix(t *testing.T) {
 	assertCheck(t, report, Pass, "opencode-config", "reference and prompt file are present")
 	assertCheck(t, report, Warn, "opencode-conflict", "gentle-ai")
 
-	writeFile(t, config.CodexPromptFile, "<!-- matty:skills-router -->")
+	writeFile(t, config.CodexPromptFile, "<!-- packy:skills-router -->")
 	report = diagnoseWithoutEngram(t, config)
-	assertExactCheck(t, report, Check{Severity: Warn, Name: "codex-config", Detail: "Matty prompt markers are missing; run matty install"})
+	assertExactCheck(t, report, Check{Severity: Warn, Name: "codex-config", Detail: "Packy prompt markers are missing; run packy install"})
 
 	for _, tt := range []struct {
 		name, configBody, prompt, detail string
@@ -333,7 +333,7 @@ func TestDiagnoseDelegatedSetupCodexAndOpenCodeMatrix(t *testing.T) {
 		if err := os.MkdirAll(c.OpenCodeConfigFile, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		assertCheck(t, diagnoseWithoutEngram(t, c), Fail, "opencode-config", "is a directory; inspect the config or run matty install")
+		assertCheck(t, diagnoseWithoutEngram(t, c), Fail, "opencode-config", "is a directory; inspect the config or run packy install")
 	})
 }
 
@@ -376,9 +376,9 @@ func sandboxConfig(t *testing.T) setupFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := corelifecycle.NewLayout(snapshot.MattyHome())
+	state := corelifecycle.NewLayout(snapshot.PackyHome())
 	skills := skillbundle.NewGlobalLayout(snapshot.Home())
-	source := skillbundle.Source{Root: filepath.Join(home, "bundle", "skills"), MissingHint: "run matty init to initialize it"}
+	source := skillbundle.Source{Root: filepath.Join(home, "bundle", "skills"), MissingHint: "run packy init to initialize it"}
 	codexLayout := codex.NewCanonicalLayout(snapshot.Home())
 	openCode := opencode.NewCanonicalLayout(snapshot.ConfigurationHome())
 	engram := engrambin.NewSetupLayout(snapshot.Home(), snapshot.HomebrewPrefix())

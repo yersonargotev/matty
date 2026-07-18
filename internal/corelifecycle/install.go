@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
-	"github.com/yersonargotev/matty/internal/codex"
-	"github.com/yersonargotev/matty/internal/engrambin"
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
-	"github.com/yersonargotev/matty/internal/prompt"
-	"github.com/yersonargotev/matty/internal/skillbundle"
+	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/codex"
+	"github.com/yersonargotev/packy/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
+	"github.com/yersonargotev/packy/internal/prompt"
+	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
 type Operation string
@@ -72,7 +72,7 @@ type facadeConfig struct {
 // FacadeConfig is the narrow composition contract for classic lifecycle.
 // Every derived artifact path comes from its owning module.
 type FacadeConfig struct {
-	MattyHome       string
+	PackyHome       string
 	Skills          skillbundle.GlobalLayout
 	SkillSource     skillbundle.Source
 	Codex           codex.CanonicalLayout
@@ -97,7 +97,7 @@ func NewFacade(owners FacadeConfig, commands Commands, now func() time.Time) *Fa
 	if now == nil {
 		now = time.Now
 	}
-	state := NewLayout(owners.MattyHome)
+	state := NewLayout(owners.PackyHome)
 	config := facadeConfig{
 		State:           state,
 		Skills:          owners.Skills,
@@ -172,7 +172,7 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	actions := []plannedAction{{ActionView: ActionView{Kind: ActionWriteFile, Path: facade.config.State.StateFile(), Description: "persist Matty state metadata"}}}
+	actions := []plannedAction{{ActionView: ActionView{Kind: ActionWriteFile, Path: facade.config.State.StateFile(), Description: "persist Packy state metadata"}}}
 	managed := make([]ManagedSkill, 0, len(discovered))
 	for _, skill := range discovered {
 		managedSkill := ManagedSkill{Name: skill.Name, SourcePath: skill.SourcePath, LinkPath: skill.LinkPath}
@@ -200,8 +200,8 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 	actions = append(actions,
 		plannedAction{ActionView: ActionView{Kind: ActionRun, Command: engram, Args: []string{"setup", "codex"}, Description: "delegate Codex Engram setup through Homebrew binary"}},
 		plannedAction{ActionView: ActionView{Kind: ActionRun, Command: engram, Args: []string{"setup", "opencode"}, Description: "delegate OpenCode Engram setup through Homebrew binary"}},
-		plannedAction{ActionView: ActionView{Kind: ActionWriteCodexPrompt, Path: facade.config.Codex.PromptFile(), Description: "write Codex Matty prompt markers"}},
-		plannedAction{ActionView: ActionView{Kind: ActionWriteOpenCodePrompt, Path: facade.config.OpenCode.ConfigFile(), Target: facade.config.OpenCode.PromptFile(), Description: "write OpenCode Matty prompt reference"}},
+		plannedAction{ActionView: ActionView{Kind: ActionWriteCodexPrompt, Path: facade.config.Codex.PromptFile(), Description: "write Codex Packy prompt markers"}},
+		plannedAction{ActionView: ActionView{Kind: ActionWriteOpenCodePrompt, Path: facade.config.OpenCode.ConfigFile(), Target: facade.config.OpenCode.PromptFile(), Description: "write OpenCode Packy prompt reference"}},
 	)
 	return Plan{
 		owner:     facade,
@@ -243,7 +243,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	recovery := facade.recoveryState(plan.desired, previous, previousFound, anchor)
 	if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
 		if cleanupErr := cleanupInstallContainers(anchor); cleanupErr != nil {
-			return Result{}, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
+			return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
 		}
 		return Result{}, err
 	}
@@ -251,15 +251,15 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
 	if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
 		if cleanupErr := cleanupInstallContainers(created); cleanupErr != nil {
-			return Result{}, fmt.Errorf("%w; clean up unrecorded Matty containers: %v", err, cleanupErr)
+			return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
 		}
 		return Result{}, err
 	}
 	if provisionErr != nil {
 		return Result{}, provisionErr
 	}
-	if err := os.MkdirAll(facade.config.State.MattyHome(), 0o700); err != nil {
-		return Result{}, fmt.Errorf("create Matty config directory %s: %w", facade.config.State.MattyHome(), err)
+	if err := os.MkdirAll(facade.config.State.PackyHome(), 0o700); err != nil {
+		return Result{}, fmt.Errorf("create Packy config directory %s: %w", facade.config.State.PackyHome(), err)
 	}
 	if err := os.MkdirAll(facade.config.Skills.Root(), 0o700); err != nil {
 		return Result{}, fmt.Errorf("create agent skills directory %s: %w", facade.config.Skills.Root(), err)
@@ -434,18 +434,18 @@ func sameLinkTarget(linkPath, gotTarget, wantTarget string) bool {
 
 func (facade *Facade) provisionStateAnchor() ([]ownedcontainer.Record, error) {
 	var created []ownedcontainer.Record
-	if _, err := os.Lstat(facade.config.State.MattyHome()); os.IsNotExist(err) {
-		if err := os.Mkdir(facade.config.State.MattyHome(), 0o700); err != nil {
-			return nil, fmt.Errorf("create Matty config directory %s: %w", facade.config.State.MattyHome(), err)
+	if _, err := os.Lstat(facade.config.State.PackyHome()); os.IsNotExist(err) {
+		if err := os.Mkdir(facade.config.State.PackyHome(), 0o700); err != nil {
+			return nil, fmt.Errorf("create Packy config directory %s: %w", facade.config.State.PackyHome(), err)
 		}
-		created = append(created, ownedcontainer.Record{Path: facade.config.State.MattyHome(), Kind: ownedcontainer.Directory})
+		created = append(created, ownedcontainer.Record{Path: facade.config.State.PackyHome(), Kind: ownedcontainer.Directory})
 	} else if err != nil {
-		return nil, fmt.Errorf("inspect Matty config directory %s: %w", facade.config.State.MattyHome(), err)
+		return nil, fmt.Errorf("inspect Packy config directory %s: %w", facade.config.State.PackyHome(), err)
 	}
 	if _, err := os.Lstat(facade.config.State.StateFile()); os.IsNotExist(err) {
 		created = append(created, ownedcontainer.Record{Path: facade.config.State.StateFile(), Kind: ownedcontainer.File})
 	} else if err != nil {
-		return nil, fmt.Errorf("inspect Matty state %s: %w", facade.config.State.StateFile(), err)
+		return nil, fmt.Errorf("inspect Packy state %s: %w", facade.config.State.StateFile(), err)
 	}
 	return created, nil
 }
@@ -454,7 +454,7 @@ func (facade *Facade) effectContainerRecords() []ownedcontainer.Record {
 	records := facade.containerRecords()
 	out := make([]ownedcontainer.Record, 0, len(records)-2)
 	for _, record := range records {
-		if record.Path != facade.config.State.MattyHome() && record.Path != facade.config.State.StateFile() {
+		if record.Path != facade.config.State.PackyHome() && record.Path != facade.config.State.StateFile() {
 			out = append(out, record)
 		}
 	}
@@ -463,7 +463,7 @@ func (facade *Facade) effectContainerRecords() []ownedcontainer.Record {
 
 func (facade *Facade) containerRecords() []ownedcontainer.Record {
 	return []ownedcontainer.Record{
-		{Path: facade.config.State.MattyHome(), Kind: ownedcontainer.Directory},
+		{Path: facade.config.State.PackyHome(), Kind: ownedcontainer.Directory},
 		{Path: filepath.Dir(facade.config.Skills.Root()), Kind: ownedcontainer.Directory},
 		{Path: facade.config.Skills.Root(), Kind: ownedcontainer.Directory},
 		{Path: filepath.Dir(facade.config.Codex.PromptFile()), Kind: ownedcontainer.Directory},
@@ -515,7 +515,7 @@ func isInstallEngramSetup(action plannedAction) bool {
 }
 
 func missingInstallEngramError(action plannedAction, candidates []string) error {
-	return fmt.Errorf("run %s: canonical Homebrew Engram was not found at any expected Homebrew path (%s); run brew install %s or set HOMEBREW_PREFIX to the active Homebrew prefix, then retry matty install or matty update", strings.Join(append([]string{action.Command}, action.Args...), " "), strings.Join(candidates, ", "), engrambin.Formula)
+	return fmt.Errorf("run %s: canonical Homebrew Engram was not found at any expected Homebrew path (%s); run brew install %s or set HOMEBREW_PREFIX to the active Homebrew prefix, then retry packy install or packy update", strings.Join(append([]string{action.Command}, action.Args...), " "), strings.Join(candidates, ", "), engrambin.Formula)
 }
 
 func lifecycleActionRunError(action plannedAction, err error) error {
@@ -526,7 +526,7 @@ func lifecycleActionRunError(action plannedAction, err error) error {
 	case action.Command == "brew" && len(action.Args) > 0 && (action.Args[0] == "update" || action.Args[0] == "upgrade"):
 		return fmt.Errorf("run %s: failed to update Engram via Homebrew; ensure Homebrew is installed and retry: %w", command, err)
 	case isInstallEngramSetup(action):
-		return fmt.Errorf("run %s: failed to configure Engram for %s through the Homebrew-managed binary; run brew install %s or brew upgrade engram, then retry matty install or matty update: %w", command, action.Args[1], engrambin.Formula, err)
+		return fmt.Errorf("run %s: failed to configure Engram for %s through the Homebrew-managed binary; run brew install %s or brew upgrade engram, then retry packy install or packy update: %w", command, action.Args[1], engrambin.Formula, err)
 	default:
 		return fmt.Errorf("run %s: %w", command, err)
 	}
@@ -552,5 +552,5 @@ func unmanagedInstallSymlinkWarning(plan Plan) (string, bool) {
 	if expected == 0 || count*2 <= expected {
 		return "", false
 	}
-	return fmt.Sprintf("skipped %d unmanaged skill symlinks; setup may be incomplete. Example: %s -> %s. Safe recovery: verify these are stale Matty-created links, remove them, then run matty install; Matty will not overwrite arbitrary files or links.", count, example.Path, example.Target), true
+	return fmt.Sprintf("skipped %d unmanaged skill symlinks; setup may be incomplete. Example: %s -> %s. Safe recovery: verify these are stale Packy-created links, remove them, then run packy install; Packy will not overwrite arbitrary files or links.", count, example.Path, example.Target), true
 }

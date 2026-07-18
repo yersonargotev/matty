@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
-	"github.com/yersonargotev/matty/internal/prompt"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
+	"github.com/yersonargotev/packy/internal/prompt"
 )
 
 func (facade *Facade) previewUninstall() (Plan, error) {
@@ -26,21 +26,21 @@ func (facade *Facade) previewUninstall() (Plan, error) {
 		}
 	}
 	if found {
-		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemove, Path: facade.config.State.StateFile(), Description: "remove Matty state metadata"}})
+		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemove, Path: facade.config.State.StateFile(), Description: "remove Packy state metadata"}})
 	}
 	codex, err := prompt.InspectCodex(facade.config.Codex.PromptFile())
 	if err != nil {
 		return Plan{}, err
 	}
-	if codex.HasMattySection {
-		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemoveCodexPrompt, Path: facade.config.Codex.PromptFile(), Description: "remove Codex Matty prompt markers"}})
+	if codex.HasPackySection {
+		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemoveCodexPrompt, Path: facade.config.Codex.PromptFile(), Description: "remove Codex Packy prompt markers"}})
 	}
 	openCode, err := opencode.Inspect(facade.config.OpenCode.ConfigFile(), facade.config.OpenCode.PromptFile())
 	if err != nil {
 		return Plan{}, err
 	}
-	if openCode.PromptExists || openCode.HasMattyInstruction {
-		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemoveOpenCodePrompt, Path: facade.config.OpenCode.ConfigFile(), Target: facade.config.OpenCode.PromptFile(), Description: "remove OpenCode Matty prompt reference"}})
+	if openCode.PromptExists || openCode.HasPackyInstruction {
+		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionRemoveOpenCodePrompt, Path: facade.config.OpenCode.ConfigFile(), Target: facade.config.OpenCode.PromptFile(), Description: "remove OpenCode Packy prompt reference"}})
 	}
 
 	cleanup, err := ownedcontainer.Preview(facade.authorizedContainers(state.CreatedContainers))
@@ -48,9 +48,9 @@ func (facade *Facade) previewUninstall() (Plan, error) {
 		return Plan{}, err
 	}
 	for _, record := range cleanup.Records() {
-		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionCleanup, Path: record.Path, Description: "remove Matty-created container if empty; preserve if non-empty, unmanaged, contributor-owned, or changed after preview"}})
+		actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionCleanup, Path: record.Path, Description: "remove Packy-created container if empty; preserve if non-empty, unmanaged, contributor-owned, or changed after preview"}})
 	}
-	preconditions, err := ownedcontainer.Preview(uninstallFilePreconditions(facade.config, found, codex.HasMattySection, openCode))
+	preconditions, err := ownedcontainer.Preview(uninstallFilePreconditions(facade.config, found, codex.HasPackySection, openCode))
 	if err != nil {
 		return Plan{}, err
 	}
@@ -86,7 +86,7 @@ func uninstallFilePreconditions(config facadeConfig, stateFound, codexOwned bool
 	if codexOwned {
 		records = append(records, ownedcontainer.Record{Path: config.Codex.PromptFile(), Kind: ownedcontainer.File})
 	}
-	if openCode.ConfigExists && openCode.HasMattyInstruction {
+	if openCode.ConfigExists && openCode.HasPackyInstruction {
 		records = append(records, ownedcontainer.Record{Path: config.OpenCode.ConfigFile(), Kind: ownedcontainer.File})
 	}
 	if openCode.PromptExists {
@@ -110,7 +110,7 @@ func (facade *Facade) applyUninstall(plan Plan) (Result, error) {
 		case ActionRemove:
 			if action.Path == facade.config.State.StateFile() {
 				if err := os.Remove(action.Path); err != nil && !os.IsNotExist(err) {
-					return Result{}, fmt.Errorf("remove Matty state %s: %w", action.Path, err)
+					return Result{}, fmt.Errorf("remove Packy state %s: %w", action.Path, err)
 				}
 				continue
 			}

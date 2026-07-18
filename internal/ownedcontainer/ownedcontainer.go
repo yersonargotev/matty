@@ -56,7 +56,7 @@ func Provision(candidates []Record) ([]Record, error) {
 		if os.IsExist(err) {
 			continue
 		}
-		return created, fmt.Errorf("provision Matty container %s: %w", candidate.Path, err)
+		return created, fmt.Errorf("provision Packy container %s: %w", candidate.Path, err)
 	}
 	sortRecords(created)
 	return created, nil
@@ -146,7 +146,7 @@ func (p Plan) Cleanup() ([]Record, error) {
 			continue
 		}
 		if err := os.Remove(record.Path); err != nil && !os.IsNotExist(err) {
-			return removed, fmt.Errorf("remove Matty-created container %s: %w", record.Path, err)
+			return removed, fmt.Errorf("remove Packy-created container %s: %w", record.Path, err)
 		}
 		removed = append(removed, record)
 	}

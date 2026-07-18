@@ -3,7 +3,7 @@ package corelifecycle
 import (
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/bootstrap"
 )
 
 func (facade *Facade) validateUpdateInstalledSource() error {

@@ -12,7 +12,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 func TestRequestsEmitExactlyOneRequestForEveryAffectedPackFromSealedCheck(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/yersonargotev/matty/internal/setuphealth"
+	"github.com/yersonargotev/packy/internal/setuphealth"
 )
 
 // ErrDoctorUnhealthy identifies a completed diagnostic report containing one
@@ -23,7 +23,7 @@ func (err doctorHealthError) Unwrap() error { return ErrDoctorUnhealthy }
 
 func renderSetupHealthHuman(w io.Writer, report setuphealth.Report) error {
 	context := report.Context
-	if _, err := fmt.Fprintf(w, "HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", context.HomeDir, context.ConfigHome, context.StateFile, context.StateStatus, context.AgentSkillsDir); err != nil {
+	if _, err := fmt.Fprintf(w, "HOME=%s\nCONFIG_HOME=%s\nPACKY_STATE=%s\nPACKY_STATE_STATUS=%s\nAGENT_SKILLS=%s\n", context.HomeDir, context.ConfigHome, context.StateFile, context.StateStatus, context.AgentSkillsDir); err != nil {
 		return err
 	}
 	for _, check := range report.Checks {

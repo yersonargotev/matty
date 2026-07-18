@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 type Mode string

@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	git "github.com/go-git/go-git/v5"
-	"github.com/yersonargotev/matty/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
 var ErrRecoveryEvidence = errors.New("bundle recovery evidence is absent or invalid")

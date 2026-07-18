@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packclassification"
-	"github.com/yersonargotev/matty/internal/packsync"
-	"github.com/yersonargotev/matty/internal/packsyncworkflow"
+	"github.com/yersonargotev/packy/internal/packclassification"
+	"github.com/yersonargotev/packy/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
 const (

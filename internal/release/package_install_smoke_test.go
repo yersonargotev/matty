@@ -104,7 +104,7 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 func buildLocalReleaseBinary(t *testing.T, root, sandbox, version string) string {
 	t.Helper()
 	binary := filepath.Join(sandbox, "matty")
-	cmd := exec.Command("go", "build", "-ldflags", "-X github.com/yersonargotev/matty/internal/version.Value="+version, "-o", binary, "./cmd/matty")
+	cmd := exec.Command("go", "build", "-ldflags", "-X github.com/yersonargotev/packy/internal/version.Value="+version, "-o", binary, "./cmd/matty")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"HOME="+filepath.Join(sandbox, "go-home"),

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/packsync"
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 func TestDispatchDigestIsCanonicalAcrossEvidenceObjectOrder(t *testing.T) {

@@ -15,7 +15,7 @@ func TestInstallDryRunDoesNotWriteCodexPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "write-codex-prompt: write Codex Matty prompt markers") {
+	if !strings.Contains(out, "write-codex-prompt: write Codex Packy prompt markers") {
 		t.Fatalf("dry-run did not report Codex prompt action:\n%s", out)
 	}
 	if exists(fixture.codex.PromptFile()) || exists(filepath.Dir(fixture.codex.PromptFile())) {
@@ -40,7 +40,7 @@ func TestInstallDryRunDoesNotWriteOpenCodePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install --dry-run failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "write-opencode-prompt: write OpenCode Matty prompt reference") {
+	if !strings.Contains(out, "write-opencode-prompt: write OpenCode Packy prompt reference") {
 		t.Fatalf("dry-run did not report OpenCode prompt action:\n%s", out)
 	}
 	if exists(fixture.opencode.ConfigFile()) || exists(fixture.opencode.PromptFile()) || exists(filepath.Dir(fixture.opencode.ConfigFile())) {

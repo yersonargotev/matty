@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yersonargotev/matty/internal/opencode"
-	"github.com/yersonargotev/matty/internal/ownedcontainer"
-	"github.com/yersonargotev/matty/internal/prompt"
+	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/ownedcontainer"
+	"github.com/yersonargotev/packy/internal/prompt"
 )
 
 func TestUninstallPreviewIsReadOnlyOpaqueAndUsesNoCommands(t *testing.T) {
@@ -69,11 +69,11 @@ func TestUninstallMissingAndCorruptStateAreSafe(t *testing.T) {
 	if err != nil || result.HasWork() {
 		t.Fatalf("missing state result = %#v, %v", result, err)
 	}
-	if _, err := os.Stat(config.State.MattyHome()); !os.IsNotExist(err) {
-		t.Fatalf("no-op uninstall created Matty directory: %v", err)
+	if _, err := os.Stat(config.State.PackyHome()); !os.IsNotExist(err) {
+		t.Fatalf("no-op uninstall created Packy directory: %v", err)
 	}
 
-	if err := os.MkdirAll(config.State.MattyHome(), 0o700); err != nil {
+	if err := os.MkdirAll(config.State.PackyHome(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(config.State.StateFile(), []byte("{bad"), 0o600); err != nil {
@@ -202,10 +202,10 @@ func TestUninstallRemovesOpenCodeProjectionAndPreservesContributorConfig(t *test
 		}
 	}
 	if containsInstallTestText(string(got), config.OpenCode.PromptFile()) {
-		t.Fatalf("Matty instruction remains:\n%s", got)
+		t.Fatalf("Packy instruction remains:\n%s", got)
 	}
 	if _, err := os.Stat(config.OpenCode.PromptFile()); !os.IsNotExist(err) {
-		t.Fatalf("Matty prompt remains: %v", err)
+		t.Fatalf("Packy prompt remains: %v", err)
 	}
 }
 
@@ -326,7 +326,7 @@ func TestUninstallCleansPristineContainersButPreservesPreexistingContainers(t *t
 		if _, err := facade.Apply(context.Background(), plan); err != nil {
 			t.Fatal(err)
 		}
-		for _, path := range []string{config.State.MattyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
+		for _, path := range []string{config.State.PackyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatalf("pristine container remains %s: %v", path, err)
 			}
@@ -335,7 +335,7 @@ func TestUninstallCleansPristineContainersButPreservesPreexistingContainers(t *t
 
 	t.Run("preexisting", func(t *testing.T) {
 		config := installTestConfig(t)
-		for _, path := range []string{config.State.MattyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
+		for _, path := range []string{config.State.PackyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -353,7 +353,7 @@ func TestUninstallCleansPristineContainersButPreservesPreexistingContainers(t *t
 		if _, err := facade.Apply(context.Background(), plan); err != nil {
 			t.Fatal(err)
 		}
-		for _, path := range []string{config.State.MattyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
+		for _, path := range []string{config.State.PackyHome(), filepath.Dir(config.Skills.Root()), filepath.Dir(config.Codex.PromptFile()), filepath.Dir(config.OpenCode.ConfigFile())} {
 			if _, err := os.Stat(path); err != nil {
 				t.Fatalf("preexisting container removed %s: %v", path, err)
 			}
@@ -409,7 +409,7 @@ func TestUninstallInterruptedInstallUsesOnlyRecordedAndVerifiedOwnership(t *test
 
 func TestUninstallRejectsForgedContainerProvenanceOutsideAllowlist(t *testing.T) {
 	config := installTestConfig(t)
-	if err := os.MkdirAll(config.State.MattyHome(), 0o700); err != nil {
+	if err := os.MkdirAll(config.State.PackyHome(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(installTestHome(config), "unmanaged-empty")

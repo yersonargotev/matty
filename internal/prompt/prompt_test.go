@@ -8,35 +8,35 @@ import (
 
 func TestSectionInsertUpdateRemove(t *testing.T) {
 	existing := "# User notes\n\nKeep this.\n"
-	inserted := upsertSection(existing, codexMattySectionID, CodexContent())
+	inserted := upsertSection(existing, codexPackySectionID, CodexContent())
 	for _, want := range []string{
 		"# User notes\n\nKeep this.",
-		"<!-- matty:skills-router -->",
+		"<!-- packy:skills-router -->",
 		"~/.agents/skills",
 		"ask-matt",
 		"Engram memory tools",
 		"host delegation rules",
-		"<!-- /matty:skills-router -->",
+		"<!-- /packy:skills-router -->",
 	} {
 		if !strings.Contains(inserted, want) {
 			t.Fatalf("inserted prompt missing %q:\n%s", want, inserted)
 		}
 	}
 
-	updated := upsertSection(inserted, codexMattySectionID, "replacement\n")
-	if strings.Count(updated, "<!-- matty:skills-router -->") != 1 {
-		t.Fatalf("updated prompt should have one Matty marker:\n%s", updated)
+	updated := upsertSection(inserted, codexPackySectionID, "replacement\n")
+	if strings.Count(updated, "<!-- packy:skills-router -->") != 1 {
+		t.Fatalf("updated prompt should have one Packy marker:\n%s", updated)
 	}
 	if !strings.Contains(updated, "replacement") || strings.Contains(updated, "ask-matt") {
-		t.Fatalf("Matty block was not replaced surgically:\n%s", updated)
+		t.Fatalf("Packy block was not replaced surgically:\n%s", updated)
 	}
 	if !strings.Contains(updated, "# User notes\n\nKeep this.") {
 		t.Fatalf("user content was not preserved:\n%s", updated)
 	}
 
-	removed := removeSection(updated, codexMattySectionID)
-	if strings.Contains(removed, "matty:skills-router") || strings.Contains(removed, "replacement") {
-		t.Fatalf("Matty block was not removed:\n%s", removed)
+	removed := removeSection(updated, codexPackySectionID)
+	if strings.Contains(removed, "packy:skills-router") || strings.Contains(removed, "replacement") {
+		t.Fatalf("Packy block was not removed:\n%s", removed)
 	}
 	if removed != existing {
 		t.Fatalf("remove should preserve original content exactly:\ngot:  %q\nwant: %q", removed, existing)
@@ -59,7 +59,7 @@ func TestWriteCodexAddsAndRemovesRulesSection(t *testing.T) {
 	}
 	updated := string(updatedBytes)
 	for _, want := range []string{
-		"<!-- matty:skills-router -->",
+		"<!-- packy:skills-router -->",
 		RulesSectionContent(),
 	} {
 		if !strings.Contains(updated, want) {
@@ -75,7 +75,7 @@ func TestWriteCodexAddsAndRemovesRulesSection(t *testing.T) {
 		t.Fatalf("read removed prompt: %v", err)
 	}
 	if removed := string(removedBytes); removed != original {
-		t.Fatalf("RemoveCodex should remove all Matty sections:\ngot:  %q\nwant: %q", removed, original)
+		t.Fatalf("RemoveCodex should remove all Packy sections:\ngot:  %q\nwant: %q", removed, original)
 	}
 }
 
@@ -95,10 +95,10 @@ func TestSectionPreservesGentleAIAndEngramBlocks(t *testing.T) {
 		"",
 	}, "\n")
 
-	updated := upsertSection(existing, codexMattySectionID, CodexContent())
-	withoutMatty := removeSection(updated, codexMattySectionID)
-	if withoutMatty != existing {
-		t.Fatalf("non-Matty content changed after insert/remove:\ngot:\n%s\nwant:\n%s", withoutMatty, existing)
+	updated := upsertSection(existing, codexPackySectionID, CodexContent())
+	withoutPacky := removeSection(updated, codexPackySectionID)
+	if withoutPacky != existing {
+		t.Fatalf("non-Packy content changed after insert/remove:\ngot:\n%s\nwant:\n%s", withoutPacky, existing)
 	}
 	for _, want := range []string{"<!-- gentle-ai:persona -->", "Gentle persona.", "<!-- gentle-ai:engram-protocol -->", "Engram protocol."} {
 		if !strings.Contains(updated, want) {
@@ -107,19 +107,19 @@ func TestSectionPreservesGentleAIAndEngramBlocks(t *testing.T) {
 	}
 }
 
-func TestSectionUpdateAndRemoveAllMattyBlocks(t *testing.T) {
+func TestSectionUpdateAndRemoveAllPackyBlocks(t *testing.T) {
 	existing := "before\n" +
-		"<!-- matty:skills-router -->\none\n<!-- /matty:skills-router -->" +
+		"<!-- packy:skills-router -->\none\n<!-- /packy:skills-router -->" +
 		"\nbetween\n" +
-		"<!-- matty:skills-router -->\ntwo\n<!-- /matty:skills-router -->" +
+		"<!-- packy:skills-router -->\ntwo\n<!-- /packy:skills-router -->" +
 		"\nafter"
 
-	updated := upsertSection(existing, codexMattySectionID, "replacement\n")
-	if got := strings.Count(updated, "<!-- matty:skills-router -->"); got != 1 {
-		t.Fatalf("updated prompt should collapse to one Matty block, got %d:\n%s", got, updated)
+	updated := upsertSection(existing, codexPackySectionID, "replacement\n")
+	if got := strings.Count(updated, "<!-- packy:skills-router -->"); got != 1 {
+		t.Fatalf("updated prompt should collapse to one Packy block, got %d:\n%s", got, updated)
 	}
 	if strings.Contains(updated, "one") || strings.Contains(updated, "two") {
-		t.Fatalf("old Matty block content remained:\n%s", updated)
+		t.Fatalf("old Packy block content remained:\n%s", updated)
 	}
 	for _, want := range []string{"before\n", "\nbetween\n", "\nafter"} {
 		if !strings.Contains(updated, want) {
@@ -127,10 +127,10 @@ func TestSectionUpdateAndRemoveAllMattyBlocks(t *testing.T) {
 		}
 	}
 
-	removed := removeSection(existing, codexMattySectionID)
+	removed := removeSection(existing, codexPackySectionID)
 	want := "before\n\nbetween\n\nafter"
 	if removed != want {
-		t.Fatalf("remove should delete all Matty blocks and preserve intervening bytes:\ngot:  %q\nwant: %q", removed, want)
+		t.Fatalf("remove should delete all Packy blocks and preserve intervening bytes:\ngot:  %q\nwant: %q", removed, want)
 	}
 }
 

@@ -23,14 +23,14 @@ func TestObserveSetupUsesCanonicalPromptAndReportsMarkersAndConflicts(t *testing
 	if err := os.MkdirAll(filepath.Dir(layout.PromptFile()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	content := "<!-- matty:skills-router -->\n<!-- /matty:skills-router -->\n<!-- gentle-ai:persona -->x<!-- /gentle-ai:persona -->"
+	content := "<!-- packy:skills-router -->\n<!-- /packy:skills-router -->\n<!-- gentle-ai:persona -->x<!-- /gentle-ai:persona -->"
 	if err := os.WriteFile(layout.PromptFile(), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	observation := ObserveSetup(layout)
 
-	if observation.PromptFile() != layout.PromptFile() || !observation.Exists() || !observation.HasMattyMarkers() || observation.Err() != nil {
+	if observation.PromptFile() != layout.PromptFile() || !observation.Exists() || !observation.HasPackyMarkers() || observation.Err() != nil {
 		t.Fatalf("observation = %#v", observation)
 	}
 	if len(observation.Warnings()) != 1 {

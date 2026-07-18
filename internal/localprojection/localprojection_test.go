@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 func TestStagingFailureRemovesOnlyTransactionCreatedDirectories(t *testing.T) {

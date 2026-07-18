@@ -2,15 +2,15 @@ package corelifecycle
 
 import "path/filepath"
 
-// Layout is the classic lifecycle-owned state beneath Matty Home.
+// Layout is the classic lifecycle-owned state beneath Packy Home.
 type Layout struct {
-	mattyHome string
+	packyHome string
 	stateFile string
 }
 
-func NewLayout(mattyHome string) Layout {
-	return Layout{mattyHome: mattyHome, stateFile: filepath.Join(mattyHome, "config.json")}
+func NewLayout(packyHome string) Layout {
+	return Layout{packyHome: packyHome, stateFile: filepath.Join(packyHome, "config.json")}
 }
 
-func (l Layout) MattyHome() string { return l.mattyHome }
+func (l Layout) PackyHome() string { return l.packyHome }
 func (l Layout) StateFile() string { return l.stateFile }

@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 type Executor struct {
@@ -57,7 +57,7 @@ func (e Executor) Apply(actions []capabilitypack.ProjectionAction) error {
 				createdDirs = append(createdDirs, dir)
 			}
 		}
-		temp := filepath.Join(filepath.Dir(action.Target), ".matty-stage-"+FingerprintBytes([]byte(string(action.Kind) + ":" + action.ID))[:12])
+		temp := filepath.Join(filepath.Dir(action.Target), ".packy-stage-"+FingerprintBytes([]byte(string(action.Kind) + ":" + action.ID))[:12])
 		_ = os.RemoveAll(temp)
 		items = append(items, stagedAction{action: action, temp: temp, backup: temp + ".backup"})
 		if action.Mode == capabilitypack.ProjectionDeleteTarget {

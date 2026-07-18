@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-func TestStateLayoutDerivesPackStateFromMattyHome(t *testing.T) {
-	mattyHome := filepath.Join(t.TempDir(), "home", ".matty")
+func TestStateLayoutDerivesPackStateFromPackyHome(t *testing.T) {
+	packyHome := filepath.Join(t.TempDir(), "home", ".packy")
 
-	layout := NewStateLayout(mattyHome)
+	layout := NewStateLayout(packyHome)
 
-	if got, want := layout.File(), filepath.Join(mattyHome, "packs.json"); got != want {
+	if got, want := layout.File(), filepath.Join(packyHome, "packs.json"); got != want {
 		t.Fatalf("pack state file = %q, want %q", got, want)
 	}
 }

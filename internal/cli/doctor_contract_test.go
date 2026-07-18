@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/yersonargotev/matty/internal/engrambin"
+	"github.com/yersonargotev/packy/internal/engrambin"
 )
 
 func TestDoctorCommandPreservesHumanAndJSONWarningContractsReadOnly(t *testing.T) {
@@ -34,15 +34,15 @@ func TestDoctorCommandPreservesHumanAndJSONWarningContractsReadOnly(t *testing.T
 	if err != nil {
 		t.Fatalf("doctor returned a fatal warning: %v\n%s", err, human)
 	}
-	wantHuman := fmt.Sprintf("HOME=%s\nCONFIG_HOME=%s\nMATTY_STATE=%s\nMATTY_STATE_STATUS=missing\nAGENT_SKILLS=%s\n", fixture.workstation.Home(), fixture.workstation.ConfigurationHome(), fixture.classicState.StateFile(), fixture.skills.Root()) +
-		fmt.Sprintf("WARN matty-state: missing at %s; run matty install\n", fixture.classicState.StateFile()) +
-		"WARN skill-symlinks: state is missing, so Matty-owned skill links are unknown; run matty install\n" +
+	wantHuman := fmt.Sprintf("HOME=%s\nCONFIG_HOME=%s\nPACKY_STATE=%s\nPACKY_STATE_STATUS=missing\nAGENT_SKILLS=%s\n", fixture.workstation.Home(), fixture.workstation.ConfigurationHome(), fixture.classicState.StateFile(), fixture.skills.Root()) +
+		fmt.Sprintf("WARN packy-state: missing at %s; run packy install\n", fixture.classicState.StateFile()) +
+		"WARN skill-symlinks: state is missing, so Packy-owned skill links are unknown; run packy install\n" +
 		fmt.Sprintf("PASS engram-binary: PATH resolves to canonical Homebrew Engram: %s version 1.19.0\n", runner.path) +
 		"PASS engram-local-bin: no ~/.local/bin/engram compatibility symlink is present; Homebrew remains the Engram owner\n" +
 		"PASS engram-runtime: no active engram serve process found\n" +
-		"WARN engram-setup: state is missing, so delegated setup cannot be confirmed; run matty install\n" +
-		fmt.Sprintf("WARN codex-config: missing Matty Codex prompt markers at %s; run matty install\n", fixture.codex.PromptFile()) +
-		"WARN opencode-config: missing OpenCode config; run matty install\n"
+		"WARN engram-setup: state is missing, so delegated setup cannot be confirmed; run packy install\n" +
+		fmt.Sprintf("WARN codex-config: missing Packy Codex prompt markers at %s; run packy install\n", fixture.codex.PromptFile()) +
+		"WARN opencode-config: missing OpenCode config; run packy install\n"
 	if human != wantHuman {
 		t.Fatalf("human doctor contract changed:\ngot:\n%s\nwant:\n%s", human, wantHuman)
 	}
@@ -52,18 +52,18 @@ func TestDoctorCommandPreservesHumanAndJSONWarningContractsReadOnly(t *testing.T
 		t.Fatalf("doctor --json returned a fatal warning: %v\n%s", err, jsonOutput)
 	}
 	wantJSON := fmt.Sprintf("{\"schema_version\":1,\"report\":\"doctor\",\"checks\":["+
-		"{\"name\":\"matty-state\",\"severity\":\"WARN\",\"detail\":%s},"+
-		"{\"name\":\"skill-symlinks\",\"severity\":\"WARN\",\"detail\":\"state is missing, so Matty-owned skill links are unknown; run matty install\"},"+
+		"{\"name\":\"packy-state\",\"severity\":\"WARN\",\"detail\":%s},"+
+		"{\"name\":\"skill-symlinks\",\"severity\":\"WARN\",\"detail\":\"state is missing, so Packy-owned skill links are unknown; run packy install\"},"+
 		"{\"name\":\"engram-binary\",\"severity\":\"PASS\",\"detail\":%s},"+
 		"{\"name\":\"engram-local-bin\",\"severity\":\"PASS\",\"detail\":\"no ~/.local/bin/engram compatibility symlink is present; Homebrew remains the Engram owner\"},"+
 		"{\"name\":\"engram-runtime\",\"severity\":\"PASS\",\"detail\":\"no active engram serve process found\"},"+
-		"{\"name\":\"engram-setup\",\"severity\":\"WARN\",\"detail\":\"state is missing, so delegated setup cannot be confirmed; run matty install\"},"+
+		"{\"name\":\"engram-setup\",\"severity\":\"WARN\",\"detail\":\"state is missing, so delegated setup cannot be confirmed; run packy install\"},"+
 		"{\"name\":\"codex-config\",\"severity\":\"WARN\",\"detail\":%s},"+
-		"{\"name\":\"opencode-config\",\"severity\":\"WARN\",\"detail\":\"missing OpenCode config; run matty install\"}],"+
+		"{\"name\":\"opencode-config\",\"severity\":\"WARN\",\"detail\":\"missing OpenCode config; run packy install\"}],"+
 		"\"summary\":{\"status\":\"warnings\",\"passes\":3,\"warnings\":5,\"failures\":0}}\n",
-		jsonQuote(t, "missing at "+fixture.classicState.StateFile()+"; run matty install"),
+		jsonQuote(t, "missing at "+fixture.classicState.StateFile()+"; run packy install"),
 		jsonQuote(t, "PATH resolves to canonical Homebrew Engram: "+runner.path+" version 1.19.0"),
-		jsonQuote(t, "missing Matty Codex prompt markers at "+fixture.codex.PromptFile()+"; run matty install"),
+		jsonQuote(t, "missing Packy Codex prompt markers at "+fixture.codex.PromptFile()+"; run packy install"),
 	)
 	if jsonOutput != wantJSON {
 		t.Fatalf("JSON doctor contract changed:\ngot:\n%s\nwant:\n%s", jsonOutput, wantJSON)
@@ -109,19 +109,19 @@ func TestDoctorCommandPreservesCompleteReportAndFatalExitAfterObservationFailure
 		t.Fatalf("doctor error = %v, want ErrDoctorUnhealthy\n%s", err, out)
 	}
 	want := fmt.Sprintf("{\"schema_version\":1,\"report\":\"doctor\",\"checks\":["+
-		"{\"name\":\"matty-state\",\"severity\":\"WARN\",\"detail\":%s},"+
-		"{\"name\":\"skill-symlinks\",\"severity\":\"WARN\",\"detail\":\"state is missing, so Matty-owned skill links are unknown; run matty install\"},"+
+		"{\"name\":\"packy-state\",\"severity\":\"WARN\",\"detail\":%s},"+
+		"{\"name\":\"skill-symlinks\",\"severity\":\"WARN\",\"detail\":\"state is missing, so Packy-owned skill links are unknown; run packy install\"},"+
 		"{\"name\":\"engram-binary\",\"severity\":\"FAIL\",\"detail\":%s},"+
 		"{\"name\":\"engram-local-bin\",\"severity\":\"PASS\",\"detail\":\"no ~/.local/bin/engram compatibility symlink is present; Homebrew remains the Engram owner\"},"+
 		"{\"name\":\"engram-runtime\",\"severity\":\"WARN\",\"detail\":%s},"+
-		"{\"name\":\"engram-setup\",\"severity\":\"WARN\",\"detail\":\"state is missing, so delegated setup cannot be confirmed; run matty install\"},"+
+		"{\"name\":\"engram-setup\",\"severity\":\"WARN\",\"detail\":\"state is missing, so delegated setup cannot be confirmed; run packy install\"},"+
 		"{\"name\":\"codex-config\",\"severity\":\"WARN\",\"detail\":%s},"+
-		"{\"name\":\"opencode-config\",\"severity\":\"WARN\",\"detail\":\"missing OpenCode config; run matty install\"}],"+
+		"{\"name\":\"opencode-config\",\"severity\":\"WARN\",\"detail\":\"missing OpenCode config; run packy install\"}],"+
 		"\"summary\":{\"status\":\"failures\",\"passes\":1,\"warnings\":6,\"failures\":1}}\n",
-		jsonQuote(t, "missing at "+fixture.classicState.StateFile()+"; run matty install"),
-		jsonQuote(t, "engram is not available on PATH; Homebrew Engram exists at "+fixture.engram.ExpectedPath()+"; add it to PATH or run matty install"),
+		jsonQuote(t, "missing at "+fixture.classicState.StateFile()+"; run packy install"),
+		jsonQuote(t, "engram is not available on PATH; Homebrew Engram exists at "+fixture.engram.ExpectedPath()+"; add it to PATH or run packy install"),
 		jsonQuote(t, "could not inspect active engram serve processes: "+processErr.Error()),
-		jsonQuote(t, "missing Matty Codex prompt markers at "+fixture.codex.PromptFile()+"; run matty install"),
+		jsonQuote(t, "missing Packy Codex prompt markers at "+fixture.codex.PromptFile()+"; run packy install"),
 	)
 	if out != want {
 		t.Fatalf("failed-observation contract changed:\ngot:\n%s\nwant:\n%s", out, want)

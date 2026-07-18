@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yersonargotev/matty/internal/capabilitypack"
-	"github.com/yersonargotev/matty/internal/localprojection"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
 // SurfaceAdapter translates portable pack resources into OpenCode-owned
@@ -115,10 +115,10 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 			refID := "opencode-instruction-reference:" + resource.ID
 			refDesired := localprojection.FingerprintBytes([]byte(promptFile))
 			refObserved := "missing"
-			if inspection.HasMattyInstruction {
+			if inspection.HasPackyInstruction {
 				refObserved = refDesired
 			}
-			projections = append(projections, capabilitypack.ObservedProjection{ID: refID, Exists: inspection.HasMattyInstruction, ObservedFingerprint: refObserved, DesiredFingerprint: refDesired, Action: capabilitypack.ProjectionAction{ID: refID, Kind: capabilitypack.ActionOpenCodeConfigReference, Target: a.configFile, Content: merged, Description: fmt.Sprintf("add OpenCode instruction reference in %s", a.configFile)}})
+			projections = append(projections, capabilitypack.ObservedProjection{ID: refID, Exists: inspection.HasPackyInstruction, ObservedFingerprint: refObserved, DesiredFingerprint: refDesired, Action: capabilitypack.ProjectionAction{ID: refID, Kind: capabilitypack.ActionOpenCodeConfigReference, Target: a.configFile, Content: merged, Description: fmt.Sprintf("add OpenCode instruction reference in %s", a.configFile)}})
 			revisionParts = append(revisionParts, "prompt="+localprojection.FingerprintBytes(currentPrompt), "config="+localprojection.FingerprintBytes([]byte(currentConfig)))
 		case "mcp_server":
 			command := capabilitypack.ResolvedExecutablePath(resource.Command, resolutions)
@@ -277,7 +277,7 @@ func (a *SurfaceAdapter) inspectOwnedProjection(id, configContent string) (capab
 		if err != nil {
 			return capabilitypack.ObservedProjection{}, false, err
 		}
-		projection.Exists = inspection.HasMattyInstruction
+		projection.Exists = inspection.HasPackyInstruction
 		if projection.Exists {
 			projection.ObservedFingerprint = localprojection.FingerprintBytes([]byte(target))
 		}

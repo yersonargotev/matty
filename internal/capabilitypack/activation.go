@@ -660,7 +660,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 				continue
 			}
 			if managedDrift {
-				projection.Action.Description = "restore drifted Matty-managed projection " + projection.ID + " to intent-selected content: " + projection.Action.Description
+				projection.Action.Description = "restore drifted Packy-managed projection " + projection.ID + " to intent-selected content: " + projection.Action.Description
 			}
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				destructiveActions = append(destructiveActions, projection.Action)

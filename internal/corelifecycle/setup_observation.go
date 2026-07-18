@@ -1,6 +1,6 @@
 package corelifecycle
 
-import "github.com/yersonargotev/matty/internal/skillbundle"
+import "github.com/yersonargotev/packy/internal/skillbundle"
 
 // SetupObservation is the detached, read-only classic lifecycle view used by
 // setup diagnosis. Classic lifecycle remains the owner of state parsing and
