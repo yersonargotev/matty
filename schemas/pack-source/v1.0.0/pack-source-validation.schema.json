@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yersonargotev/packy/workflows/schemas/pack-source-validation.schema.json",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/pack-source-validation.schema.json",
   "title": "Pack source sandbox validation proof",
   "type": "object",
   "additionalProperties": false,

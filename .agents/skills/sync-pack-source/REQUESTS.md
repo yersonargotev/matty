@@ -63,8 +63,10 @@ PR, base, version, provenance, validation, permission, credential, secret,
 auto-merge, upstream-byte, executable, repair, or bypass inputs.
 
 Build JSON with `jq`, omitting absent optional properties. Its allowed keys are
-exactly those in `workflows/schemas/pack-source-dispatch.schema.json`. Validate
-it against the remote schema and show the exact JSON before dispatch. Map
+exactly those in
+`schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json`. Validate it
+against that checked-in schema by its canonical `$id`; do not resolve it over
+the network. Show the exact JSON before dispatch. Map
 `human_evidence` to the workflow transport input `human_evidence_json` without
 changing its canonical JSON.
 

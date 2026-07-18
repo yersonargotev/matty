@@ -16,12 +16,20 @@ exact version selection, evidence validation, Apply, or Recover. Those remain
 owned by `internal/packsync` and `internal/packclassification` under ADR 0007
 and ADR 0008.
 
+The complete immutable schema suite is checked in under
+`schemas/pack-source/v1.0.0/`. It consists of the dispatch, validation, no-op,
+operational-artifact, and publication schema files. Repository validation
+registers all five locally by their canonical GitHub Pages IDs. Packy runtime
+validates domain values directly and never resolves schemas over the network.
+
 ## Canonical dispatch
 
 Every request conforms to
-`workflows/schemas/pack-source-dispatch.schema.json`. It names one configured
-`source_id`, an explicit candidate selector, an explicit `ai` or `human`
-classification mode, and an operator reason. There are no automatic triggers.
+`schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json` (canonical ID
+`https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json`).
+It names one configured `source_id`, an explicit candidate selector, an
+explicit `ai` or `human` classification mode, and an operator reason. There are
+no automatic triggers.
 
 The workflow transport additionally requires `request_digest`, the lowercase
 SHA-256 of the sorted compact canonical request JSON including its trailing
@@ -77,8 +85,9 @@ and calls canonical `packsync.Check`. Its output is a sealed, immutable
 inspection artifact. It contains identities, reasons, changes, blockers and
 digests, not copied upstream resources or credentials.
 
-An exact Check-level no-op emits `pack-source-noop.schema.json` from Inspect
-and stops before classification, validation, or publication permissions.
+An exact Check-level no-op emits
+`schemas/pack-source/v1.0.0/pack-source-noop.schema.json` from Inspect and stops
+before classification, validation, or publication permissions.
 
 ### Classify — `contents: read`, `models: read`
 
@@ -145,11 +154,12 @@ attempts remain blocked. Retrying never changes candidate or classification
 mode and never implies AI-to-human fallback.
 
 Before a PR exists, every terminal failure emits
-`pack-source-operational-artifact.schema.json` as canonical JSON. It contains
-the exact known source/plan/base/candidate identities, blockers, and concrete
-recovery steps. It contains no credential, environment dump, request header,
-model prompt, upstream file content, patch, archive, or other upstream bytes.
-The workflow retains this artifact for 30 days and does not publish an issue.
+`schemas/pack-source/v1.0.0/pack-source-operational-artifact.schema.json` as
+canonical JSON. It contains the exact known source/plan/base/candidate
+identities, blockers, and concrete recovery steps. It contains no credential,
+environment dump, request header, model prompt, upstream file content, patch,
+archive, or other upstream bytes. The workflow retains this artifact for 30
+days and does not publish an issue.
 
 ## Publication ownership and fail-closed checks
 
@@ -180,9 +190,9 @@ a replacement. Reviewer-authored content is never normalized away.
 ## Decision readiness
 
 The publication record conforms to
-`pack-source-publication.schema.json`. A PR may be non-draft and marked
-decision-ready only when these gates passed for one exact plan/base/head/
-candidate/provenance/PR-state identity:
+`schemas/pack-source/v1.0.0/pack-source-publication.schema.json`. A PR may be
+non-draft and marked decision-ready only when these gates passed for one exact
+plan/base/head/candidate/provenance/PR-state identity:
 
 The record binds `result_tree_sha` as the validated content identity and
 `head_sha` as the distinct branch and pull-request commit identity.

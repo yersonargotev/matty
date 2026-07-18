@@ -43,6 +43,16 @@ var packyOwnedPackages = []string{
 	"./internal/workstation",
 }
 
+const packSourceSchemaBaseID = "https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/"
+
+var packSourceSchemaNames = []string{
+	"pack-source-dispatch.schema.json",
+	"pack-source-noop.schema.json",
+	"pack-source-operational-artifact.schema.json",
+	"pack-source-publication.schema.json",
+	"pack-source-validation.schema.json",
+}
+
 func TestValidationEntrypointOwnsTheExactPackageAllowlist(t *testing.T) {
 	root := repositoryRoot(t)
 	script := readFile(t, filepath.Join(root, "scripts", "validate-packy.sh"))
@@ -133,8 +143,44 @@ func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T)
 }
 
 func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing.T) {
-	root := filepath.Join(repositoryRoot(t), "workflows", "schemas")
-	for _, name := range []string{"pack-source-dispatch.schema.json", "pack-source-operational-artifact.schema.json", "pack-source-publication.schema.json", "pack-source-validation.schema.json", "pack-source-noop.schema.json"} {
+	repository := repositoryRoot(t)
+	root := packSourceSchemaRoot(t)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Fatalf("schema suite contains directory %s", entry.Name())
+		}
+		names = append(names, entry.Name())
+	}
+	if !reflect.DeepEqual(names, packSourceSchemaNames) {
+		t.Fatalf("schema suite files = %v, want exact complete suite %v", names, packSourceSchemaNames)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "workflows", "schemas")); !os.IsNotExist(err) {
+		t.Fatalf("legacy workflows/schemas path still exists: %v", err)
+	}
+	if err := filepath.Walk(filepath.Join(repository, "schemas"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(path) != ".json" {
+			t.Fatalf("checked-in Pages tree contains non-JSON file %s", path)
+		}
+		if strings.Contains(filepath.ToSlash(path), "/latest/") {
+			t.Fatalf("checked-in Pages tree contains forbidden latest alias %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := jsonschema.NewCompiler()
+	compiler.AssertFormat()
+	ids := make(map[string]bool, len(packSourceSchemaNames))
+	for _, name := range packSourceSchemaNames {
 		contents := readFile(t, filepath.Join(root, name))
 		for _, required := range []string{`"$schema"`, `"additionalProperties": false`, `"schema_version"`} {
 			if !strings.Contains(contents, required) {
@@ -144,6 +190,55 @@ func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing
 		for _, forbidden := range []string{`"secret"`, `"token"`, `"upstream_bytes"`, `"upstream_payload"`} {
 			if strings.Contains(contents, forbidden) {
 				t.Fatalf("%s permits forbidden payload %s", name, forbidden)
+			}
+		}
+		for _, forbidden := range []string{"github.com/yersonargotev/packy/workflows/schemas", "github.com/yersonargotev/matty/workflows/schemas", "/latest/"} {
+			if strings.Contains(contents, forbidden) {
+				t.Fatalf("%s contains forbidden identity %q", name, forbidden)
+			}
+		}
+		var schema map[string]any
+		if err := json.Unmarshal([]byte(contents), &schema); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", name, err)
+		}
+		wantID := packSourceSchemaBaseID + name
+		if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != wantID {
+			t.Fatalf("%s identities = $schema %v $id %v, want Draft 2020-12 and %s", name, schema["$schema"], schema["$id"], wantID)
+		}
+		if ids[wantID] {
+			t.Fatalf("duplicate canonical schema ID %s", wantID)
+		}
+		ids[wantID] = true
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no properties object", name)
+		}
+		schemaVersion, ok := properties["schema_version"].(map[string]any)
+		if !ok || schemaVersion["const"] != float64(1) {
+			t.Fatalf("%s schema_version does not match suite major v1", name)
+		}
+		document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(contents)))
+		if err != nil {
+			t.Fatalf("parse schema %s: %v", name, err)
+		}
+		if err := compiler.AddResource(wantID, document); err != nil {
+			t.Fatalf("register schema %s by canonical ID: %v", name, err)
+		}
+	}
+	for _, name := range packSourceSchemaNames {
+		id := packSourceSchemaBaseID + name
+		if _, err := compiler.Compile(id); err != nil {
+			t.Fatalf("compile and resolve schema offline by canonical ID %s: %v", id, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(repository, "workflows", "pack-source-synchronization.md"),
+		filepath.Join(repository, ".agents", "skills", "sync-pack-source", "REQUESTS.md"),
+	} {
+		contents := readFile(t, path)
+		for _, forbidden := range []string{"workflows/schemas/", "github.com/yersonargotev/packy/workflows/schemas", "github.com/yersonargotev/matty/workflows/schemas", "/schemas/pack-source/latest/"} {
+			if strings.Contains(contents, forbidden) {
+				t.Fatalf("normative document %s contains forbidden schema reference %q", path, forbidden)
 			}
 		}
 	}
@@ -448,19 +543,48 @@ func TestOperationalArtifactSchemaMatchesRuntimeValidation(t *testing.T) {
 	}
 }
 
+func TestValidationArtifactSchemaMatchesRuntimeValidation(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	valid := packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: "source", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, PackySuite: true, Apply: true}
+	cases := []packsyncworkflow.ValidationArtifact{
+		valid,
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.SchemaVersion = 2; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.SourceID = "../source"; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.PlanID = ""; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.BaseSHA = "bad"; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.CandidateSHA = "bad"; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.PackySuite = false; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.Apply = false; return value }(),
+		func() packsyncworkflow.ValidationArtifact { value := valid; value.UpstreamBytes = true; return value }(),
+	}
+	for _, artifact := range cases {
+		data, err := json.Marshal(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemaErr := validateSchemaInstance(t, "pack-source-validation.schema.json", data)
+		runtimeErr := artifact.Validate()
+		if (runtimeErr == nil) != (schemaErr == nil) {
+			t.Fatalf("runtime/schema validation artifact disagreement for %s: runtime=%v schema=%v", data, runtimeErr, schemaErr)
+		}
+	}
+}
+
 func validateSchemaInstance(t *testing.T, name string, instance []byte) error {
 	t.Helper()
-	root := filepath.Join(repositoryRoot(t), "workflows", "schemas")
-	document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(readFile(t, filepath.Join(root, name)))))
-	if err != nil {
-		t.Fatalf("parse schema %s: %v", name, err)
-	}
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
-	if err := compiler.AddResource(name, document); err != nil {
-		t.Fatalf("add schema %s: %v", name, err)
+	root := packSourceSchemaRoot(t)
+	for _, suiteName := range packSourceSchemaNames {
+		document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(readFile(t, filepath.Join(root, suiteName)))))
+		if err != nil {
+			t.Fatalf("parse schema %s: %v", suiteName, err)
+		}
+		if err := compiler.AddResource(packSourceSchemaBaseID+suiteName, document); err != nil {
+			t.Fatalf("register schema %s by canonical ID: %v", suiteName, err)
+		}
 	}
-	schema, err := compiler.Compile(name)
+	schema, err := compiler.Compile(packSourceSchemaBaseID + name)
 	if err != nil {
 		t.Fatalf("compile schema %s: %v", name, err)
 	}
@@ -469,6 +593,11 @@ func validateSchemaInstance(t *testing.T, name string, instance []byte) error {
 		return err
 	}
 	return schema.Validate(value)
+}
+
+func packSourceSchemaRoot(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repositoryRoot(t), "schemas", "pack-source", "v1.0.0")
 }
 
 func workflowSection(t *testing.T, workflow, start, end string) string {
