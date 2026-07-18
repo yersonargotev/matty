@@ -131,6 +131,7 @@ run_expect 0 "release metadata" gh release view v0.1.7 --repo yersonargotev/pack
 run_expect 0 "download exact release" gh release download v0.1.7 --repo yersonargotev/packy --dir "$RUN_ROOT/release"
 run_expect 0 "exact release asset names" bash -o pipefail -c 'cd "$1" && printf "%s\n" * | diff -u - "$2"' _ "$RUN_ROOT/release" <(printf '%s\n' checksums.txt packy_v0.1.7_darwin_amd64 packy_v0.1.7_darwin_arm64 packy_v0.1.7_linux_amd64 packy_v0.1.7_linux_arm64)
 run_expect 0 "release checksum manifest" bash -c 'cd "$1" && shasum -a 256 -c checksums.txt' _ "$RUN_ROOT/release"
+run_expect 0 "make downloaded native asset executable" chmod u+x "$RUN_ROOT/release/packy_v0.1.7_darwin_arm64"
 run_expect 0 "released Packy executable" "$RUN_ROOT/release/packy_v0.1.7_darwin_arm64" --version
 run_expect 0 "tap commit" bash -o pipefail -c 'gh api repos/yersonargotev/homebrew-tap/commits/main | jq -e '\''.sha == "ae1a2f979f073a5b07214d8f303c7ce5ff67d84d"'\'''
 run_expect 0 "tap tree" bash -o pipefail -c 'gh api "repos/yersonargotev/homebrew-tap/git/trees/ae1a2f979f073a5b07214d8f303c7ce5ff67d84d?recursive=1" | jq -e '\''([.tree[].path | select(. == "Formula/packy.rb")] | length == 1) and ([.tree[].path | select(. == "Formula/matty.rb" or . == "formula_renames.json")] | length == 0)'\'''
