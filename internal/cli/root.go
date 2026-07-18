@@ -67,6 +67,7 @@ func NewRootCommand(opts Options) *cobra.Command {
 	}
 
 	root.AddCommand(
+		newVersionCommand(),
 		newPackCommand(opts, workstationResolver),
 		newInitCommand(opts, workstationResolver),
 		newInstallCommand(opts, workstationResolver),
@@ -76,6 +77,18 @@ func NewRootCommand(opts Options) *cobra.Command {
 	)
 
 	return root
+}
+
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the Packy version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "packy version %s\n", packyversion.Value)
+			return err
+		},
+	}
 }
 
 func newInitCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {

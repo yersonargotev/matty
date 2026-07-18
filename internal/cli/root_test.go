@@ -289,7 +289,8 @@ func TestHelpRendersForRootAndV0Subcommands(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "init", "install", "doctor", "update", "uninstall"}},
+		{name: "root", args: []string{"--help"}, want: []string{"Install and configure", "version", "init", "install", "doctor", "update", "uninstall"}},
+		{name: "version", args: []string{"version", "--help"}, want: []string{"Print the Packy version"}},
 		{name: "install", args: []string{"install", "--help"}, want: []string{"Install Packy-managed", "--dry-run"}},
 		{name: "doctor", args: []string{"doctor", "--help"}, want: []string{"Check Packy setup"}},
 		{name: "update", args: []string{"update", "--help"}, want: []string{"Refresh Packy-managed", "--dry-run"}},
@@ -326,19 +327,22 @@ func TestVersionOutput(t *testing.T) {
 			withVersion(t, tt.version)
 			opts, _, _ := sandboxOptions(t)
 
-			out, err := executeCommand(t, NewRootCommand(opts), "--version")
-			if err != nil {
-				t.Fatalf("version command failed: %v\n%s", err, out)
-			}
-			if !strings.Contains(out, tt.version) {
-				t.Fatalf("version output missing %q:\n%s", tt.version, out)
+			for _, args := range [][]string{{"--version"}, {"version"}} {
+				out, err := executeCommand(t, NewRootCommand(opts), args...)
+				if err != nil {
+					t.Fatalf("version command %v failed: %v\n%s", args, err, out)
+				}
+				want := "packy version " + tt.version + "\n"
+				if out != want {
+					t.Fatalf("version output for %v = %q, want %q", args, out, want)
+				}
 			}
 		})
 	}
 }
 
 func TestHelpAndVersionDoNotResolveWorkstation(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"--version"}} {
+	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"version", "--help"}, {"--version"}, {"version"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			env := &countingEnv{values: map[string]string{}, calls: map[string]int{}}
 			getwdCalls := 0
