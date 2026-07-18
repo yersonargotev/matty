@@ -1,7 +1,9 @@
 # Packy v0.1.7 cutover baseline
 
-Status: frozen  
-Window opened: 2026-07-18T02:52:21Z  
+Status: frozen
+
+Window opened: 2026-07-18T03:00:48Z
+
 Source ticket: [#56](https://github.com/yersonargotev/matty/issues/56)
 
 This document opens the controlled Packy cutover window and binds its initial
@@ -56,6 +58,8 @@ The opening probes found no blocking collision:
 - Homebrew/core contained neither an expected-path Matty formula nor an
   expected-path Packy formula.
 - `https://yersonargotev.github.io/` and `/packy/` both returned HTTP 404.
+- The authenticated GitHub probe found no
+  `yersonargotev/yersonargotev.github.io` source repository.
 - GitHub reported no queued or in-progress Matty Actions run.
 
 The expected absence probes return non-zero status for GitHub 404 responses;
@@ -86,10 +90,10 @@ Only read-only observations were made against the maintainer installation:
 
 - Homebrew Matty `0.1.6` is installed and `/opt/homebrew/bin/matty` reports
   `v0.1.6`.
-- `matty doctor --json` is healthy and `matty uninstall --dry-run` produced the
-  expected owned-removal plan without applying it.
-- `~/.matty/config.json` and `~/.matty/backups/` exist; pack intent and lock
-  files are absent. The three known recovery files are still present.
+- Direct filesystem inspection found `~/.matty/config.json` and
+  `~/.matty/backups/`; pack intent and lock files are absent. The state records
+  23 managed links, all resolving to their recorded sources, and the three known
+  recovery files are still present.
 - `~/.local/share/matty` is a clean detached checkout at tag `v0.1.4`, commit
   `f348b84e50222a4eeadf5abbcedef7a24974cd88`.
 - The approved destination
@@ -97,12 +101,15 @@ Only read-only observations were made against the maintainer installation:
   not exist yet. Issue #65, not this ticket, creates, hashes, and verifies that
   copy before any legacy deletion.
 
-Targeted `matty` pack status probes show absent intent on both supported
-surfaces. Aggregate status and the targeted Engram/OpenCode probe report an
-unmanaged existing Engram MCP configuration. This is accepted baseline external
-ownership under issue #52: Packy and Matty must preserve it, must not adopt or
-rewrite it, and must re-audit it before #65. It is not an active Matty pack or a
-Matty-owned residual.
+Direct inspection also confirms that OpenCode contains its existing enabled
+Engram MCP configuration. This is accepted baseline external ownership under
+issue #52: Packy and Matty must preserve it, must not adopt or rewrite it, and
+must re-audit it before #65. It is not Matty-owned state.
+
+No product CLI command was run against the operator's real `HOME` or
+`XDG_CONFIG_HOME`. Real recovery material was observed only with direct,
+read-only filesystem/configuration tools; executable behavior used isolated
+roots.
 
 ## Evidence integrity
 

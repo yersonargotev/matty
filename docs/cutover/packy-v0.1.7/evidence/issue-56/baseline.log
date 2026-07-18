@@ -1,24 +1,24 @@
 Packy cutover baseline evidence — GitHub issue #56
-recording_started_utc: 2026-07-18T02:52:18Z
-asset_sandbox: /var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K
+recording_started_utc: 2026-07-18T03:00:48Z
+asset_sandbox: /var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD
 
-=== timestamp_utc: 2026-07-18T02:52:18Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ git --version
 git version 2.50.1 (Apple Git-155)
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:18Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ gh --version
 gh version 2.96.0 (2026-07-02)
 https://github.com/cli/cli/releases/tag/v2.96.0
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:18Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ brew --version
 Homebrew 6.0.11-28-gf9e050f
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ curl --version
 curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.68.1
 Release-Date: 2024-03-27
@@ -26,97 +26,102 @@ Protocols: dict file ftp ftps gopher gophers http https imap imaps ipfs ipns lda
 Features: alt-svc AsynchDNS GSS-API HSTS HTTP2 HTTPS-proxy IPv6 Kerberos Largefile libz MultiSSL NTLM SPNEGO SSL threadsafe UnixSockets
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ jq --version
 jq-1.7.1-apple
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ go version
 go version go1.26.5 darwin/arm64
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ shasum --version 2>&1 || shasum -a 256 /dev/null
 6.02
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ git status --short --branch
 ## feat/packy-atomic-cutover
-?? docs/cutover/
+ M docs/cutover/packy-v0.1.7/evidence/issue-56/baseline.log
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ git rev-parse HEAD origin/main
-0e8971ad4ccacad5f99ec97d05ed963830b58070
+73e0a3ff2c456a889aa44e42b2f697bb71cb128a
 0e8971ad4ccacad5f99ec97d05ed963830b58070
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ git show -s --format='%H%n%cI%n%s' origin/main
 0e8971ad4ccacad5f99ec97d05ed963830b58070
 2026-07-17T20:25:51-05:00
 docs: verify Packy external cutover constraints
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ git worktree list
 /Users/argote/Documents/dev/yersonargotev/matty                                 0e8971a [main]
-/Users/argote/Documents/dev/yersonargotev/matty-worktrees/packy-atomic-cutover  0e8971a [feat/packy-atomic-cutover]
+/Users/argote/Documents/dev/yersonargotev/matty-worktrees/packy-atomic-cutover  73e0a3f [feat/packy-atomic-cutover]
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ gh issue view 56 --json number,title,body,state,labels,assignees,url
 {"assignees":[{"id":"U_kgDOB9cnnw","login":"yersonargotev","name":"Yerson Argote","databaseId":131540895}],"body":"## Parent\n\n#49\n\n## What to build\n\nOpen the controlled Packy cutover window and produce a durable baseline evidence bundle before any identity mutation. Freeze ordinary releases and pack-source synchronization, rule out conflicting external state, bind the exact Matty base and Packy candidate inputs, and prove the historical recovery path remains usable.\n\n## Acceptance criteria\n\n- [ ] Ordinary releases and pack-source synchronization are frozen, with the permitted v0.1.7 path documented.\n- [ ] The Packy repository, tap, Homebrew-core, Pages, and workflow-run state are rechecked immediately before execution; any collision or active conflicting run blocks progress.\n- [ ] The exact pre-rename base SHA and intended candidate inputs are recorded with timestamps, tool versions, commands, exit statuses, and complete outputs or durable log links.\n- [ ] Historical Matty v0.1.6 formula, release assets, checksums, executable, and tag SHA are proven obtainable and mutually consistent.\n- [ ] The issue #52 maintainer recovery material and approved paths are verified without modifying real user configuration.\n- [ ] The evidence states that automation remains frozen until the final audit ticket completes.\n\n## Blocked by\n\nNone — can start immediately.","labels":[{"id":"LA_kwDOTOgLZM8AAAACqy8g-w","name":"status:approved","description":"Issue is approved for implementation","color":"0E8A16"}],"number":56,"state":"OPEN","title":"Freeze and bind the Packy cutover window","url":"https://github.com/yersonargotev/matty/issues/56"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:19Z ===
+=== timestamp_utc: 2026-07-18T03:00:48Z ===
 $ gh issue view 50 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":50,"resolution":["https://github.com/yersonargotev/matty/issues/50#issuecomment-5009149222"],"state":"CLOSED","title":"Classify the complete Matty identity surface","url":"https://github.com/yersonargotev/matty/issues/50"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:20Z ===
+=== timestamp_utc: 2026-07-18T03:00:49Z ===
 $ gh issue view 51 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":51,"resolution":["https://github.com/yersonargotev/matty/issues/51#issuecomment-5009172346"],"state":"CLOSED","title":"Verify the external Packy cutover constraints","url":"https://github.com/yersonargotev/matty/issues/51"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:20Z ===
+=== timestamp_utc: 2026-07-18T03:00:49Z ===
 $ gh issue view 52 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":52,"resolution":["https://github.com/yersonargotev/matty/issues/52#issuecomment-5009276610"],"state":"CLOSED","title":"Define the clean-cut installation and state contract","url":"https://github.com/yersonargotev/matty/issues/52"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:21Z ===
+=== timestamp_utc: 2026-07-18T03:00:50Z ===
 $ gh issue view 53 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":53,"resolution":["https://github.com/yersonargotev/matty/issues/53#issuecomment-5009372672"],"state":"CLOSED","title":"Choose the atomic cutover and rollback sequence","url":"https://github.com/yersonargotev/matty/issues/53"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:21Z ===
+=== timestamp_utc: 2026-07-18T03:00:51Z ===
 $ gh issue view 54 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":54,"resolution":["https://github.com/yersonargotev/matty/issues/54#issuecomment-5009446411"],"state":"CLOSED","title":"Lock the Packy rename acceptance contract","url":"https://github.com/yersonargotev/matty/issues/54"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:22Z ===
+=== timestamp_utc: 2026-07-18T03:00:52Z ===
 $ gh issue view 55 --comments --json number,title,state,comments,url --jq '{number,title,state,url,resolution:[.comments[].url]}'
 {"number":55,"resolution":["https://github.com/yersonargotev/matty/issues/55#issuecomment-5009298693"],"state":"CLOSED","title":"Choose the Packy schema identity and hosting contract","url":"https://github.com/yersonargotev/matty/issues/55"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:22Z ===
+=== timestamp_utc: 2026-07-18T03:00:52Z ===
 $ gh repo view yersonargotev/packy --json nameWithOwner,url,visibility,defaultBranchRef
 GraphQL: Could not resolve to a Repository with the name 'yersonargotev/packy'. (repository)
 exit_status: 1
 
-=== timestamp_utc: 2026-07-18T02:52:24Z ===
+=== timestamp_utc: 2026-07-18T03:00:53Z ===
 $ gh repo view yersonargotev/matty --json nameWithOwner,url,visibility,defaultBranchRef
 {"defaultBranchRef":{"name":"main"},"nameWithOwner":"yersonargotev/matty","url":"https://github.com/yersonargotev/matty","visibility":"PUBLIC"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:25Z ===
+=== timestamp_utc: 2026-07-18T03:00:53Z ===
+$ gh repo view yersonargotev/yersonargotev.github.io --json nameWithOwner,url,visibility,defaultBranchRef
+GraphQL: Could not resolve to a Repository with the name 'yersonargotev/yersonargotev.github.io'. (repository)
+exit_status: 1
+
+=== timestamp_utc: 2026-07-18T03:00:54Z ===
 $ gh repo view yersonargotev/homebrew-tap --json nameWithOwner,url,defaultBranchRef
 {"defaultBranchRef":{"name":"main"},"nameWithOwner":"yersonargotev/homebrew-tap","url":"https://github.com/yersonargotev/homebrew-tap"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:25Z ===
+=== timestamp_utc: 2026-07-18T03:00:54Z ===
 $ gh api repos/yersonargotev/homebrew-tap/contents/Formula --jq '.[].name'
 dots.rb
 matty.rb
@@ -124,63 +129,63 @@ tabby.rb
 tracky.rb
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:26Z ===
+=== timestamp_utc: 2026-07-18T03:00:55Z ===
 $ gh api repos/yersonargotev/homebrew-tap/contents/formula_renames.json --jq .html_url
 {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"}gh: Not Found (HTTP 404)
 exit_status: 1
 
-=== timestamp_utc: 2026-07-18T02:52:26Z ===
+=== timestamp_utc: 2026-07-18T03:00:55Z ===
 $ gh api repos/Homebrew/homebrew-core/contents/Formula/m/matty.rb --jq .html_url
 {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"}gh: Not Found (HTTP 404)
 exit_status: 1
 
-=== timestamp_utc: 2026-07-18T02:52:27Z ===
+=== timestamp_utc: 2026-07-18T03:00:56Z ===
 $ gh api repos/Homebrew/homebrew-core/contents/Formula/p/packy.rb --jq .html_url
 {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/contents#get-repository-content","status":"404"}gh: Not Found (HTTP 404)
 exit_status: 1
 
-=== timestamp_utc: 2026-07-18T02:52:27Z ===
+=== timestamp_utc: 2026-07-18T03:00:56Z ===
 $ curl -sS -o /dev/null -w 'status=%{http_code} redirect=%{redirect_url} url=%{url_effective}\n' https://yersonargotev.github.io/
 status=404 redirect= url=https://yersonargotev.github.io/
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:27Z ===
+=== timestamp_utc: 2026-07-18T03:00:57Z ===
 $ curl -sS -o /dev/null -w 'status=%{http_code} redirect=%{redirect_url} url=%{url_effective}\n' https://yersonargotev.github.io/packy/
 status=404 redirect= url=https://yersonargotev.github.io/packy/
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:27Z ===
+=== timestamp_utc: 2026-07-18T03:00:57Z ===
 $ gh workflow list -R yersonargotev/matty --all
 CI	active	307623507
 Release	active	307623509
 Synchronize pack source	active	313949537
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:28Z ===
+=== timestamp_utc: 2026-07-18T03:00:57Z ===
 $ gh run list -R yersonargotev/matty --status in_progress --json databaseId,workflowName,event,headBranch,headSha,url,status,createdAt
 []
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:29Z ===
+=== timestamp_utc: 2026-07-18T03:00:57Z ===
 $ gh run list -R yersonargotev/matty --status queued --json databaseId,workflowName,event,headBranch,headSha,url,status,createdAt
 []
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:29Z ===
+=== timestamp_utc: 2026-07-18T03:00:58Z ===
 $ gh run list -R yersonargotev/matty --limit 30 --json databaseId,workflowName,event,headBranch,headSha,url,status,conclusion,createdAt
 [{"conclusion":"success","createdAt":"2026-07-18T01:25:55Z","databaseId":29625177365,"event":"push","headBranch":"main","headSha":"0e8971ad4ccacad5f99ec97d05ed963830b58070","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29625177365","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-18T01:22:18Z","databaseId":29625063899,"event":"push","headBranch":"main","headSha":"91a44a5f509301750c0512d61566df1abada9780","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29625063899","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T21:30:45Z","databaseId":29452187989,"event":"workflow_dispatch","headBranch":"main","headSha":"4ce9a3dbae4d754fdba26c90c0cfe85a4cdda86a","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29452187989","workflowName":"Synchronize pack source"},{"conclusion":"success","createdAt":"2026-07-15T21:18:34Z","databaseId":29451461093,"event":"push","headBranch":"main","headSha":"4ce9a3dbae4d754fdba26c90c0cfe85a4cdda86a","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29451461093","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T21:10:22Z","databaseId":29450973306,"event":"pull_request","headBranch":"fix/issue-47-inspect-403-classification","headSha":"4193699a58bb50835aacf8ed60d8414b13b4c132","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29450973306","workflowName":"CI"},{"conclusion":"failure","createdAt":"2026-07-15T20:28:17Z","databaseId":29448411736,"event":"workflow_dispatch","headBranch":"main","headSha":"dba1511a42197f5dee2f156a6c6e6e005aa51128","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29448411736","workflowName":"Synchronize pack source"},{"conclusion":"success","createdAt":"2026-07-15T20:13:17Z","databaseId":29447468587,"event":"push","headBranch":"main","headSha":"dba1511a42197f5dee2f156a6c6e6e005aa51128","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29447468587","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T20:04:27Z","databaseId":29446913578,"event":"pull_request","headBranch":"feat/issue-38-sync-pack-source-skill","headSha":"d23dbaa84499268f51e16bfc6a55e402f63ec873","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29446913578","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T19:14:19Z","databaseId":29443749854,"event":"push","headBranch":"main","headSha":"0afb9aade3be4bae74e31275512b538bd39b5203","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29443749854","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T19:04:50Z","databaseId":29443142095,"event":"pull_request","headBranch":"feat/issue-37-manual-sync-workflow","headSha":"234dc82dcd80e747d81d78b55144b24a3d82aad5","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29443142095","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T15:14:23Z","databaseId":29427199200,"event":"push","headBranch":"main","headSha":"7a3cd130eb5edac464aa0bfce4f35ba525f73130","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29427199200","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T15:05:37Z","databaseId":29426545031,"event":"pull_request","headBranch":"feat/issue-36-fail-closed-classification","headSha":"44d1737a93af1c5192d0046e2bf0a7c47cfe4970","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29426545031","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T14:20:02Z","databaseId":29423081116,"event":"push","headBranch":"main","headSha":"6a1f0ea8226d46801061c1b6f704013f0b26b9ec","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29423081116","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T14:11:04Z","databaseId":29422422844,"event":"pull_request","headBranch":"feat/issue-35-transactional-apply-recover","headSha":"7ef14d41c3df3d07cbd3cb7727fb7e62733533c5","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29422422844","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T12:54:22Z","databaseId":29417027511,"event":"push","headBranch":"main","headSha":"a522fb33f04ec1385b6886a35b3064bffd2e9549","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29417027511","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T12:46:08Z","databaseId":29416490362,"event":"pull_request","headBranch":"feat/issue-34-matty-owned-seam","headSha":"3a57e6d16813654e5e632517d7c4da07ebae0966","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29416490362","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T05:12:11Z","databaseId":29390843843,"event":"push","headBranch":"main","headSha":"d752c9211835141db29b016a70369eca940eaddf","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29390843843","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T05:03:28Z","databaseId":29390472964,"event":"pull_request","headBranch":"feat/issue-33-preserve-matty-history","headSha":"7199d92da638128b6a36ff3890b7decb43a0ea48","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29390472964","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T04:07:43Z","databaseId":29388208801,"event":"push","headBranch":"main","headSha":"a78f6ab7952f0c2d1c858a27cfdfa3b9769f46e6","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29388208801","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T03:58:57Z","databaseId":29387834012,"event":"pull_request","headBranch":"feat/issue-32-source-check","headSha":"afaa4233a2d81f6e533eb80122f64040737b7e9a","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29387834012","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T02:40:44Z","databaseId":29384670056,"event":"push","headBranch":"main","headSha":"e77e6680e2a3cc7e456bd45c8f8aa55a3ba4501b","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29384670056","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T02:33:27Z","databaseId":29384376268,"event":"pull_request","headBranch":"feat/issue-31-harden-matty-validation","headSha":"0f8435cb660a215e9dc5e2aa3f6c07af00f42e42","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29384376268","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T01:24:55Z","databaseId":29381567412,"event":"push","headBranch":"main","headSha":"42a2ef621394c5443cd8fbd36e5110750d2af81d","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29381567412","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-15T00:24:26Z","databaseId":29378950343,"event":"push","headBranch":"main","headSha":"bc6ed4215b30a0b391eddf97fc8f3da045308c62","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29378950343","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T23:57:06Z","databaseId":29377624565,"event":"push","headBranch":"main","headSha":"b190ccb70feb1e959ebc4bca452da8c4539527e4","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29377624565","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T14:55:10Z","databaseId":29342999712,"event":"push","headBranch":"main","headSha":"f11ab92f628de5c1e254b1ecae32612038392f44","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29342999712","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T14:26:05Z","databaseId":29340823429,"event":"push","headBranch":"main","headSha":"ff085478203f3711fab12f7af5031cdcaad8747d","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29340823429","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T04:39:55Z","databaseId":29306525677,"event":"push","headBranch":"main","headSha":"e0fb775e97c6765169bb8c5006c238684ee92e59","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29306525677","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T04:27:09Z","databaseId":29306003680,"event":"push","headBranch":"main","headSha":"df6a18dbbc4b73b39658412f6603f891535c5c29","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29306003680","workflowName":"CI"},{"conclusion":"success","createdAt":"2026-07-14T03:45:21Z","databaseId":29304271083,"event":"push","headBranch":"v0.1.6","headSha":"68aec8969374fa9e9a6ea86b33e6719646b999f8","status":"completed","url":"https://github.com/yersonargotev/matty/actions/runs/29304271083","workflowName":"Release"}]
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:31Z ===
+=== timestamp_utc: 2026-07-18T03:01:00Z ===
 $ gh api repos/yersonargotev/matty/git/ref/tags/v0.1.6
 {"ref":"refs/tags/v0.1.6","node_id":"REF_kwDOTOgLZLByZWZzL3RhZ3MvdjAuMS42","url":"https://api.github.com/repos/yersonargotev/matty/git/refs/tags/v0.1.6","object":{"sha":"68aec8969374fa9e9a6ea86b33e6719646b999f8","type":"commit","url":"https://api.github.com/repos/yersonargotev/matty/git/commits/68aec8969374fa9e9a6ea86b33e6719646b999f8"}}exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:32Z ===
+=== timestamp_utc: 2026-07-18T03:01:00Z ===
 $ gh release view v0.1.6 -R yersonargotev/matty --json tagName,targetCommitish,isDraft,isPrerelease,publishedAt,url,assets
-{"assets":[{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232375","contentType":"text/plain; charset=utf-8","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:b2f59cab2d44c8a583b2f5670a62fcbd57993fa998d3c881cde56ea919aa74df","downloadCount":1,"id":"RA_kwDOTOgLZM4cYrq3","label":"","name":"checksums.txt","size":366,"state":"uploaded","updatedAt":"2026-07-14T03:46:32Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/checksums.txt"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232374","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:23aad97dd8b4dab679107b2cc9d93537072d4a5d9fba30ad24d6266dcabfaf7e","downloadCount":1,"id":"RA_kwDOTOgLZM4cYrq2","label":"","name":"matty_v0.1.6_darwin_amd64","size":7430160,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_darwin_amd64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232373","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:be0cc89a5e950e486103959c0018acf54a7eb6c2e8bb8176d125faa419451d6e","downloadCount":2,"id":"RA_kwDOTOgLZM4cYrq1","label":"","name":"matty_v0.1.6_darwin_arm64","size":7013522,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_darwin_arm64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232378","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:d0659f393c8da65a5806fb5c4e3cdc3b44cfb7dd2f63d3f932e0a9dda630206b","downloadCount":1,"id":"RA_kwDOTOgLZM4cYrq6","label":"","name":"matty_v0.1.6_linux_amd64","size":7274648,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_linux_amd64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232379","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:95da9b82aaa1a4d6c28c7e975434c3b10f08094cadab46ad448142f33e007396","downloadCount":1,"id":"RA_kwDOTOgLZM4cYrq7","label":"","name":"matty_v0.1.6_linux_arm64","size":6881432,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_linux_arm64"}],"isDraft":false,"isPrerelease":false,"publishedAt":"2026-07-14T03:46:31Z","tagName":"v0.1.6","targetCommitish":"main","url":"https://github.com/yersonargotev/matty/releases/tag/v0.1.6"}
+{"assets":[{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232375","contentType":"text/plain; charset=utf-8","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:b2f59cab2d44c8a583b2f5670a62fcbd57993fa998d3c881cde56ea919aa74df","downloadCount":3,"id":"RA_kwDOTOgLZM4cYrq3","label":"","name":"checksums.txt","size":366,"state":"uploaded","updatedAt":"2026-07-14T03:46:32Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/checksums.txt"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232374","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:23aad97dd8b4dab679107b2cc9d93537072d4a5d9fba30ad24d6266dcabfaf7e","downloadCount":3,"id":"RA_kwDOTOgLZM4cYrq2","label":"","name":"matty_v0.1.6_darwin_amd64","size":7430160,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_darwin_amd64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232373","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:be0cc89a5e950e486103959c0018acf54a7eb6c2e8bb8176d125faa419451d6e","downloadCount":4,"id":"RA_kwDOTOgLZM4cYrq1","label":"","name":"matty_v0.1.6_darwin_arm64","size":7013522,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_darwin_arm64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232378","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:d0659f393c8da65a5806fb5c4e3cdc3b44cfb7dd2f63d3f932e0a9dda630206b","downloadCount":3,"id":"RA_kwDOTOgLZM4cYrq6","label":"","name":"matty_v0.1.6_linux_amd64","size":7274648,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_linux_amd64"},{"apiUrl":"https://api.github.com/repos/yersonargotev/matty/releases/assets/476232379","contentType":"application/octet-stream","createdAt":"2026-07-14T03:46:32Z","digest":"sha256:95da9b82aaa1a4d6c28c7e975434c3b10f08094cadab46ad448142f33e007396","downloadCount":3,"id":"RA_kwDOTOgLZM4cYrq7","label":"","name":"matty_v0.1.6_linux_arm64","size":6881432,"state":"uploaded","updatedAt":"2026-07-14T03:46:33Z","url":"https://github.com/yersonargotev/matty/releases/download/v0.1.6/matty_v0.1.6_linux_arm64"}],"isDraft":false,"isPrerelease":false,"publishedAt":"2026-07-14T03:46:31Z","tagName":"v0.1.6","targetCommitish":"main","url":"https://github.com/yersonargotev/matty/releases/tag/v0.1.6"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:32Z ===
+=== timestamp_utc: 2026-07-18T03:01:01Z ===
 $ gh api repos/yersonargotev/homebrew-tap/contents/Formula/matty.rb --jq .content | base64 --decode
 class Matty < Formula
   desc "AI coding workflow installer"
@@ -219,29 +224,29 @@ class Matty < Formula
 end
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:33Z ===
-$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K' && gh api repos/yersonargotev/homebrew-tap/contents/Formula/matty.rb --jq .content | base64 --decode > matty.rb && gh release download v0.1.6 -R yersonargotev/matty && ls -l
+=== timestamp_utc: 2026-07-18T03:01:01Z ===
+$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD' && gh api repos/yersonargotev/homebrew-tap/contents/Formula/matty.rb --jq .content | base64 --decode > matty.rb && gh release download v0.1.6 -R yersonargotev/matty && ls -l
 total 55904
--rw-r--r--@ 1 argote  staff      366 Jul 17 21:52 checksums.txt
-drwxr-xr-x@ 2 argote  staff       64 Jul 17 21:52 home
--rw-r--r--@ 1 argote  staff     1294 Jul 17 21:52 matty.rb
--rw-r--r--@ 1 argote  staff  7430160 Jul 17 21:52 matty_v0.1.6_darwin_amd64
--rw-r--r--@ 1 argote  staff  7013522 Jul 17 21:52 matty_v0.1.6_darwin_arm64
--rw-r--r--@ 1 argote  staff  7274648 Jul 17 21:52 matty_v0.1.6_linux_amd64
--rw-r--r--@ 1 argote  staff  6881432 Jul 17 21:52 matty_v0.1.6_linux_arm64
-drwxr-xr-x@ 2 argote  staff       64 Jul 17 21:52 xdg
+-rw-r--r--@ 1 argote  staff      366 Jul 17 22:01 checksums.txt
+drwxr-xr-x@ 2 argote  staff       64 Jul 17 22:00 home
+-rw-r--r--@ 1 argote  staff     1294 Jul 17 22:01 matty.rb
+-rw-r--r--@ 1 argote  staff  7430160 Jul 17 22:01 matty_v0.1.6_darwin_amd64
+-rw-r--r--@ 1 argote  staff  7013522 Jul 17 22:01 matty_v0.1.6_darwin_arm64
+-rw-r--r--@ 1 argote  staff  7274648 Jul 17 22:01 matty_v0.1.6_linux_amd64
+-rw-r--r--@ 1 argote  staff  6881432 Jul 17 22:01 matty_v0.1.6_linux_arm64
+drwxr-xr-x@ 2 argote  staff       64 Jul 17 22:00 xdg
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:35Z ===
-$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K' && shasum -a 256 -c checksums.txt
+=== timestamp_utc: 2026-07-18T03:01:03Z ===
+$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD' && shasum -a 256 -c checksums.txt
 matty_v0.1.6_darwin_amd64: OK
 matty_v0.1.6_darwin_arm64: OK
 matty_v0.1.6_linux_amd64: OK
 matty_v0.1.6_linux_arm64: OK
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:35Z ===
-$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K' && python3 - <<'PY'
+=== timestamp_utc: 2026-07-18T03:01:03Z ===
+$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD' && python3 - <<'PY'
 import hashlib,pathlib,re
 s=pathlib.Path('matty.rb').read_text()
 for url,expected in re.findall(r'url "([^"]+)"[^\n]*\n\s*sha256 "([0-9a-f]+)"',s):
@@ -255,90 +260,81 @@ matty_v0.1.6_linux_arm64 formula=95da9b82aaa1a4d6c28c7e975434c3b10f08094cadab46a
 matty_v0.1.6_linux_amd64 formula=d0659f393c8da65a5806fb5c4e3cdc3b44cfb7dd2f63d3f932e0a9dda630206b actual=d0659f393c8da65a5806fb5c4e3cdc3b44cfb7dd2f63d3f932e0a9dda630206b match=True
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:35Z ===
-$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K' && chmod +x matty_v0.1.6_darwin_arm64 && HOME='/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K/home' XDG_CONFIG_HOME='/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.vns9DTL39K/xdg' ./matty_v0.1.6_darwin_arm64 --version && file matty_v0.1.6_darwin_arm64
+=== timestamp_utc: 2026-07-18T03:01:03Z ===
+$ cd '/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD' && chmod +x matty_v0.1.6_darwin_arm64 && HOME='/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD/home' XDG_CONFIG_HOME='/var/folders/91/b4gh134x6zdfdw1x9kwd0rrc0000gn/T/tmp.v7t3g2sGRD/xdg' ./matty_v0.1.6_darwin_arm64 --version && file matty_v0.1.6_darwin_arm64
 matty version v0.1.6
 matty_v0.1.6_darwin_arm64: Mach-O 64-bit executable arm64
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:35Z ===
+=== timestamp_utc: 2026-07-18T03:01:03Z ===
 $ gh api repos/yersonargotev/matty/commits/68aec8969374fa9e9a6ea86b33e6719646b999f8 --jq '{sha:.sha,tree:.commit.tree.sha,committed:.commit.committer.date,message:.commit.message}'
 {"committed":"2026-07-14T03:36:19Z","message":"Merge pull request #20 from yersonargotev/fix/issue-19-annotated-tag-git-identity\n\nFix annotated-tag test Git identity isolation","sha":"68aec8969374fa9e9a6ea86b33e6719646b999f8","tree":"4bfc8d33d19bf93cce2601a1634acd1534ed2b3a"}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:36Z ===
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
 $ brew list --versions yersonargotev/tap/matty
 matty 0.1.6
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:37Z ===
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
 $ command -v matty && matty --version
 /opt/homebrew/bin/matty
 matty version v0.1.6
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:37Z ===
-$ matty doctor --json
-{"schema_version":1,"report":"doctor","checks":[{"name":"matty-state","severity":"PASS","detail":"present at /Users/argote/.matty/config.json"},{"name":"skill-symlinks","severity":"PASS","detail":"23 managed links under /Users/argote/.agents/skills"},{"name":"engram-binary","severity":"PASS","detail":"PATH resolves to canonical Homebrew Engram: /Users/argote/.local/bin/engram version 1.19.0"},{"name":"engram-local-bin","severity":"PASS","detail":"/Users/argote/.local/bin/engram -\u003e /opt/homebrew/bin/engram points to Homebrew Engram at /opt/homebrew/bin/engram"},{"name":"engram-runtime","severity":"PASS","detail":"pid 4199 running /opt/homebrew/Cellar/engram/1.19.0/bin/engram (matches PATH and canonical Homebrew Engram)"},{"name":"engram-setup","severity":"PASS","detail":"state records Codex and OpenCode setup expectations; run matty update if Engram setup drifted"},{"name":"codex-config","severity":"PASS","detail":"Matty prompt markers are present"},{"name":"opencode-config","severity":"PASS","detail":"Matty instruction reference and prompt file are present"}],"summary":{"status":"healthy","passes":8,"warnings":0,"failures":0}}
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
+$ jq '{schema_version,matty_version,configured_surfaces,paths,managed_skill_count:(.managed_skills|length)}' "/Users/argote/.matty/config.json"
+{
+  "schema_version": 1,
+  "matty_version": "v0.1.4",
+  "configured_surfaces": [
+    "codex",
+    "opencode"
+  ],
+  "paths": {
+    "state_file": "/Users/argote/.matty/config.json",
+    "agent_skills_dir": "/Users/argote/.agents/skills"
+  },
+  "managed_skill_count": 23
+}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:37Z ===
-$ matty pack status matty --surface codex --json
-{"schema_version":1,"report":"pack-status","entries":[{"pack":"matty","pack_version":"2.0.0","surface":"codex","intent":{"state":"absent","active":null,"revision":null},"latest_attempt":null,"projection_summary":{"verified":0,"missing":2,"drifted":0,"ambiguous":0,"unmanaged":23},"readiness":{"configured":{"state":"known","value":false},"authorized":{"state":"known","value":false},"usable":{"state":"unknown","value":null}},"blockers":["instruction:matty-guidance is missing","instruction:matty-workflow-conventions is missing","skill:ask-matt is unmanaged","skill:code-review is unmanaged","skill:codebase-design is unmanaged","skill:diagnosing-bugs is unmanaged","skill:domain-modeling is unmanaged","skill:grill-me is unmanaged","skill:grill-with-docs is unmanaged","skill:grilling is unmanaged","skill:handoff is unmanaged","skill:implement is unmanaged","skill:improve-codebase-architecture is unmanaged","skill:loop-me is unmanaged","skill:prototype is unmanaged","skill:research is unmanaged","skill:resolving-merge-conflicts is unmanaged","skill:setup-matt-pocock-skills is unmanaged","skill:tdd is unmanaged","skill:teach is unmanaged","skill:to-spec is unmanaged","skill:to-tickets is unmanaged","skill:triage is unmanaged","skill:wayfinder is unmanaged","skill:writing-great-skills is unmanaged"],"evidence":["Codex filesystem discovery paths inspected; runtime loading is not observable without a host signal","instruction:matty-guidance: missing observed=missing desired=5e85372868cf89234d31190cc31eea9e7f435696f025403d8e06afbf2287fed4 target=/Users/argote/.codex/AGENTS.md","instruction:matty-workflow-conventions: missing observed=missing desired=943df68f1f86827e8c53f29b3a91c4fa71f17b5cea9c15427668158a34924bd3 target=/Users/argote/.codex/AGENTS.md","skill:ask-matt: unmanaged observed=c36080de0eeec63d25fdcd9d7295010e75141fc53219e38c41e3d3d93f90d30d desired=c36080de0eeec63d25fdcd9d7295010e75141fc53219e38c41e3d3d93f90d30d target=/Users/argote/.agents/skills/ask-matt","skill:code-review: unmanaged observed=bb6530543b3dd3a468ada15a743b13e724e9d5246e7f2dd6016198f250645a42 desired=bb6530543b3dd3a468ada15a743b13e724e9d5246e7f2dd6016198f250645a42 target=/Users/argote/.agents/skills/code-review","skill:codebase-design: unmanaged observed=026e509355b60fbc8ca32291c896567a0c76f085c7ecf45fc23e965721152934 desired=026e509355b60fbc8ca32291c896567a0c76f085c7ecf45fc23e965721152934 target=/Users/argote/.agents/skills/codebase-design","skill:diagnosing-bugs: unmanaged observed=636a1cf463fdd9e0c6effe56c7fe767c6c6ae3113624a99199bc54a2becc97cc desired=636a1cf463fdd9e0c6effe56c7fe767c6c6ae3113624a99199bc54a2becc97cc target=/Users/argote/.agents/skills/diagnosing-bugs","skill:domain-modeling: unmanaged observed=f02654516ed133288a1c76367450ecfc97c727b5c44881b9e419c78529ad20cf desired=f02654516ed133288a1c76367450ecfc97c727b5c44881b9e419c78529ad20cf target=/Users/argote/.agents/skills/domain-modeling","skill:grill-me: unmanaged observed=516d3ecda76003ddfa643fb62d8d1ea7a2c0e26531d1f78bb2bc4af613c4212e desired=516d3ecda76003ddfa643fb62d8d1ea7a2c0e26531d1f78bb2bc4af613c4212e target=/Users/argote/.agents/skills/grill-me","skill:grill-with-docs: unmanaged observed=1d900746d80809d758fe6db53a36064e1adf79784c42789dd93392f01bf2bc5f desired=1d900746d80809d758fe6db53a36064e1adf79784c42789dd93392f01bf2bc5f target=/Users/argote/.agents/skills/grill-with-docs","skill:grilling: unmanaged observed=b720aa60d7c83444684b48ec7b6ae4463a7e57ef7ddfe1b1f6c6f4357f97f1e9 desired=b720aa60d7c83444684b48ec7b6ae4463a7e57ef7ddfe1b1f6c6f4357f97f1e9 target=/Users/argote/.agents/skills/grilling","skill:handoff: unmanaged observed=0110d0189a990b8943c5da0473f0883c48cca289aa20ecc2ae5a763411c6e044 desired=0110d0189a990b8943c5da0473f0883c48cca289aa20ecc2ae5a763411c6e044 target=/Users/argote/.agents/skills/handoff","skill:implement: unmanaged observed=5378d84588b86416117de88277a4e76069c40b8618a63bef392d59ac2ea8e2a5 desired=5378d84588b86416117de88277a4e76069c40b8618a63bef392d59ac2ea8e2a5 target=/Users/argote/.agents/skills/implement","skill:improve-codebase-architecture: unmanaged observed=df48b11fb1bfc2efecbc787ef94f73d9c37767be9a7fdc25ae40b67be2131297 desired=df48b11fb1bfc2efecbc787ef94f73d9c37767be9a7fdc25ae40b67be2131297 target=/Users/argote/.agents/skills/improve-codebase-architecture","skill:loop-me: unmanaged observed=860827327e64e46aadbb555cd0ec95c00d51e5a737d24fc5500efa6142722c12 desired=860827327e64e46aadbb555cd0ec95c00d51e5a737d24fc5500efa6142722c12 target=/Users/argote/.agents/skills/loop-me","skill:prototype: unmanaged observed=6906a506acfe8a3a57299289defd00fdfe08bc4ee31c40b4944b285027f95e76 desired=6906a506acfe8a3a57299289defd00fdfe08bc4ee31c40b4944b285027f95e76 target=/Users/argote/.agents/skills/prototype","skill:research: unmanaged observed=eb8b38dbfa0ade8ae04ee452eaeae7618bd7dcf05acfe2cd54d034664cff6996 desired=eb8b38dbfa0ade8ae04ee452eaeae7618bd7dcf05acfe2cd54d034664cff6996 target=/Users/argote/.agents/skills/research","skill:resolving-merge-conflicts: unmanaged observed=a1390a0a917ac1f1d8a0904b21af104bb2cb2c63cca9f9aafbe75e9dda874975 desired=a1390a0a917ac1f1d8a0904b21af104bb2cb2c63cca9f9aafbe75e9dda874975 target=/Users/argote/.agents/skills/resolving-merge-conflicts","skill:setup-matt-pocock-skills: unmanaged observed=517c6182f3707ce10108255a99b96da13a9387c78bbede42d80430f437958893 desired=d2c0c5e75d68faef890605e55eb4ed896a164acbdfdf733feb852e012c9587ce target=/Users/argote/.agents/skills/setup-matt-pocock-skills","skill:tdd: unmanaged observed=348d9670e7f5287b78c2a8165a09c9d5281f2acb43a81c0cf430cf50bed24074 desired=348d9670e7f5287b78c2a8165a09c9d5281f2acb43a81c0cf430cf50bed24074 target=/Users/argote/.agents/skills/tdd","skill:teach: unmanaged observed=b1d7692a80af6b83a2869c221552b3fc57cbe6bcbfef69bbb19f78ce544c7456 desired=b1d7692a80af6b83a2869c221552b3fc57cbe6bcbfef69bbb19f78ce544c7456 target=/Users/argote/.agents/skills/teach","skill:to-spec: unmanaged observed=36b3c4b24779836343854f0f8f884a12d05e7635d7f4eab06330a03fc78a735d desired=36b3c4b24779836343854f0f8f884a12d05e7635d7f4eab06330a03fc78a735d target=/Users/argote/.agents/skills/to-spec","skill:to-tickets: unmanaged observed=bccdc649ccfd5d2839743a0e1946b738a8402665bb36a9434743ac580e41be8c desired=37646186f032276e69822f3276a0e8801b91177871444b990feee7661e88a071 target=/Users/argote/.agents/skills/to-tickets","skill:triage: unmanaged observed=2b01d4d683a7a609f49f91be595c937cea4932ae86be1ac87cfc00bdcea1de63 desired=2b01d4d683a7a609f49f91be595c937cea4932ae86be1ac87cfc00bdcea1de63 target=/Users/argote/.agents/skills/triage","skill:wayfinder: unmanaged observed=2408936ba43e4d292a819adae4dba266d7145124052ad3cb17516655eaf2199a desired=60cd462da343326f15cf77749c8431ce6afe2d9e7e1ea336a229993ffc7a247b target=/Users/argote/.agents/skills/wayfinder","skill:writing-great-skills: unmanaged observed=80d6a1c2c13e8b56aec9bd45af489c5622804c84e82c3a81a7145de0868abd77 desired=80d6a1c2c13e8b56aec9bd45af489c5622804c84e82c3a81a7145de0868abd77 target=/Users/argote/.agents/skills/writing-great-skills"],"pending_human_actions":[]}]}
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
+$ python3 - <<'PY'
+import json,os,pathlib
+p=pathlib.Path.home()/'.matty/config.json'
+data=json.loads(p.read_text())
+mismatches=[]
+for item in data.get('managed_skills',[]):
+    link=pathlib.Path(item['link_path'])
+    expected=item['source_path']
+    if not link.is_symlink() or os.path.realpath(link) != os.path.realpath(expected):
+        mismatches.append({'name':item['name'],'link':str(link),'expected':expected,'observed':os.path.realpath(link) if link.exists() else 'missing'})
+print({'recorded_links':len(data.get('managed_skills',[])),'mismatches':mismatches})
+PY
+{'recorded_links': 23, 'mismatches': []}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
-$ matty pack status matty --surface opencode --json
-{"schema_version":1,"report":"pack-status","entries":[{"pack":"matty","pack_version":"2.0.0","surface":"opencode","intent":{"state":"absent","active":null,"revision":null},"latest_attempt":null,"projection_summary":{"verified":0,"missing":2,"drifted":0,"ambiguous":0,"unmanaged":25},"readiness":{"configured":{"state":"known","value":false},"authorized":{"state":"known","value":false},"usable":{"state":"unknown","value":null}},"blockers":["instruction:matty-guidance is unmanaged","instruction:matty-workflow-conventions is missing","opencode-instruction-reference:matty-guidance is unmanaged","opencode-instruction-reference:matty-workflow-conventions is missing","skill:ask-matt is unmanaged","skill:code-review is unmanaged","skill:codebase-design is unmanaged","skill:diagnosing-bugs is unmanaged","skill:domain-modeling is unmanaged","skill:grill-me is unmanaged","skill:grill-with-docs is unmanaged","skill:grilling is unmanaged","skill:handoff is unmanaged","skill:implement is unmanaged","skill:improve-codebase-architecture is unmanaged","skill:loop-me is unmanaged","skill:prototype is unmanaged","skill:research is unmanaged","skill:resolving-merge-conflicts is unmanaged","skill:setup-matt-pocock-skills is unmanaged","skill:tdd is unmanaged","skill:teach is unmanaged","skill:to-spec is unmanaged","skill:to-tickets is unmanaged","skill:triage is unmanaged","skill:wayfinder is unmanaged","skill:writing-great-skills is unmanaged"],"evidence":["OpenCode filesystem and config discovery paths inspected; runtime loading is not observable without a host signal","instruction:matty-guidance: unmanaged observed=8fa90d64bfe24271e1f333d4a71d4781a85225a6ddde0f5f23ecb1c0c026f139 desired=3d07c86288aa58dd4989db7dd3d146e705158c374062d7e47a47fb1b55ee6fb7 target=/Users/argote/.config/opencode/matty.md","instruction:matty-workflow-conventions: missing observed=missing desired=a07d87f95b7c1290b5e6dd0180e6cfc11f2f6e847470926f7c5e52237634faee target=/Users/argote/.config/opencode/matty-workflow-conventions.md","opencode-instruction-reference:matty-guidance: unmanaged observed=8116b046bb062a7d033a7a1ce6afbb4fe5ff991b613de9526b3e9d7718d49406 desired=8116b046bb062a7d033a7a1ce6afbb4fe5ff991b613de9526b3e9d7718d49406 target=/Users/argote/.config/opencode/opencode.json","opencode-instruction-reference:matty-workflow-conventions: missing observed=missing desired=1f078c460b8996bc6be84c0f7ff1f7edcd69fbad52ccd4f032d24bc69f4b1db5 target=/Users/argote/.config/opencode/opencode.json","skill:ask-matt: unmanaged observed=c36080de0eeec63d25fdcd9d7295010e75141fc53219e38c41e3d3d93f90d30d desired=c36080de0eeec63d25fdcd9d7295010e75141fc53219e38c41e3d3d93f90d30d target=/Users/argote/.agents/skills/ask-matt","skill:code-review: unmanaged observed=bb6530543b3dd3a468ada15a743b13e724e9d5246e7f2dd6016198f250645a42 desired=bb6530543b3dd3a468ada15a743b13e724e9d5246e7f2dd6016198f250645a42 target=/Users/argote/.agents/skills/code-review","skill:codebase-design: unmanaged observed=026e509355b60fbc8ca32291c896567a0c76f085c7ecf45fc23e965721152934 desired=026e509355b60fbc8ca32291c896567a0c76f085c7ecf45fc23e965721152934 target=/Users/argote/.agents/skills/codebase-design","skill:diagnosing-bugs: unmanaged observed=636a1cf463fdd9e0c6effe56c7fe767c6c6ae3113624a99199bc54a2becc97cc desired=636a1cf463fdd9e0c6effe56c7fe767c6c6ae3113624a99199bc54a2becc97cc target=/Users/argote/.agents/skills/diagnosing-bugs","skill:domain-modeling: unmanaged observed=f02654516ed133288a1c76367450ecfc97c727b5c44881b9e419c78529ad20cf desired=f02654516ed133288a1c76367450ecfc97c727b5c44881b9e419c78529ad20cf target=/Users/argote/.agents/skills/domain-modeling","skill:grill-me: unmanaged observed=516d3ecda76003ddfa643fb62d8d1ea7a2c0e26531d1f78bb2bc4af613c4212e desired=516d3ecda76003ddfa643fb62d8d1ea7a2c0e26531d1f78bb2bc4af613c4212e target=/Users/argote/.agents/skills/grill-me","skill:grill-with-docs: unmanaged observed=1d900746d80809d758fe6db53a36064e1adf79784c42789dd93392f01bf2bc5f desired=1d900746d80809d758fe6db53a36064e1adf79784c42789dd93392f01bf2bc5f target=/Users/argote/.agents/skills/grill-with-docs","skill:grilling: unmanaged observed=b720aa60d7c83444684b48ec7b6ae4463a7e57ef7ddfe1b1f6c6f4357f97f1e9 desired=b720aa60d7c83444684b48ec7b6ae4463a7e57ef7ddfe1b1f6c6f4357f97f1e9 target=/Users/argote/.agents/skills/grilling","skill:handoff: unmanaged observed=0110d0189a990b8943c5da0473f0883c48cca289aa20ecc2ae5a763411c6e044 desired=0110d0189a990b8943c5da0473f0883c48cca289aa20ecc2ae5a763411c6e044 target=/Users/argote/.agents/skills/handoff","skill:implement: unmanaged observed=5378d84588b86416117de88277a4e76069c40b8618a63bef392d59ac2ea8e2a5 desired=5378d84588b86416117de88277a4e76069c40b8618a63bef392d59ac2ea8e2a5 target=/Users/argote/.agents/skills/implement","skill:improve-codebase-architecture: unmanaged observed=df48b11fb1bfc2efecbc787ef94f73d9c37767be9a7fdc25ae40b67be2131297 desired=df48b11fb1bfc2efecbc787ef94f73d9c37767be9a7fdc25ae40b67be2131297 target=/Users/argote/.agents/skills/improve-codebase-architecture","skill:loop-me: unmanaged observed=860827327e64e46aadbb555cd0ec95c00d51e5a737d24fc5500efa6142722c12 desired=860827327e64e46aadbb555cd0ec95c00d51e5a737d24fc5500efa6142722c12 target=/Users/argote/.agents/skills/loop-me","skill:prototype: unmanaged observed=6906a506acfe8a3a57299289defd00fdfe08bc4ee31c40b4944b285027f95e76 desired=6906a506acfe8a3a57299289defd00fdfe08bc4ee31c40b4944b285027f95e76 target=/Users/argote/.agents/skills/prototype","skill:research: unmanaged observed=eb8b38dbfa0ade8ae04ee452eaeae7618bd7dcf05acfe2cd54d034664cff6996 desired=eb8b38dbfa0ade8ae04ee452eaeae7618bd7dcf05acfe2cd54d034664cff6996 target=/Users/argote/.agents/skills/research","skill:resolving-merge-conflicts: unmanaged observed=a1390a0a917ac1f1d8a0904b21af104bb2cb2c63cca9f9aafbe75e9dda874975 desired=a1390a0a917ac1f1d8a0904b21af104bb2cb2c63cca9f9aafbe75e9dda874975 target=/Users/argote/.agents/skills/resolving-merge-conflicts","skill:setup-matt-pocock-skills: unmanaged observed=517c6182f3707ce10108255a99b96da13a9387c78bbede42d80430f437958893 desired=d2c0c5e75d68faef890605e55eb4ed896a164acbdfdf733feb852e012c9587ce target=/Users/argote/.agents/skills/setup-matt-pocock-skills","skill:tdd: unmanaged observed=348d9670e7f5287b78c2a8165a09c9d5281f2acb43a81c0cf430cf50bed24074 desired=348d9670e7f5287b78c2a8165a09c9d5281f2acb43a81c0cf430cf50bed24074 target=/Users/argote/.agents/skills/tdd","skill:teach: unmanaged observed=b1d7692a80af6b83a2869c221552b3fc57cbe6bcbfef69bbb19f78ce544c7456 desired=b1d7692a80af6b83a2869c221552b3fc57cbe6bcbfef69bbb19f78ce544c7456 target=/Users/argote/.agents/skills/teach","skill:to-spec: unmanaged observed=36b3c4b24779836343854f0f8f884a12d05e7635d7f4eab06330a03fc78a735d desired=36b3c4b24779836343854f0f8f884a12d05e7635d7f4eab06330a03fc78a735d target=/Users/argote/.agents/skills/to-spec","skill:to-tickets: unmanaged observed=bccdc649ccfd5d2839743a0e1946b738a8402665bb36a9434743ac580e41be8c desired=37646186f032276e69822f3276a0e8801b91177871444b990feee7661e88a071 target=/Users/argote/.agents/skills/to-tickets","skill:triage: unmanaged observed=2b01d4d683a7a609f49f91be595c937cea4932ae86be1ac87cfc00bdcea1de63 desired=2b01d4d683a7a609f49f91be595c937cea4932ae86be1ac87cfc00bdcea1de63 target=/Users/argote/.agents/skills/triage","skill:wayfinder: unmanaged observed=2408936ba43e4d292a819adae4dba266d7145124052ad3cb17516655eaf2199a desired=60cd462da343326f15cf77749c8431ce6afe2d9e7e1ea336a229993ffc7a247b target=/Users/argote/.agents/skills/wayfinder","skill:writing-great-skills: unmanaged observed=80d6a1c2c13e8b56aec9bd45af489c5622804c84e82c3a81a7145de0868abd77 desired=80d6a1c2c13e8b56aec9bd45af489c5622804c84e82c3a81a7145de0868abd77 target=/Users/argote/.agents/skills/writing-great-skills"],"pending_human_actions":[]}]}
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
+$ jq -e '{engram_mcp_present:(.mcp.engram != null),engram_mcp_enabled:(.mcp.engram.enabled == true),engram_command:(.mcp.engram.command // [])}' "/Users/argote/.config/opencode/opencode.json"
+{
+  "engram_mcp_present": true,
+  "engram_mcp_enabled": true,
+  "engram_command": [
+    "/Users/argote/.local/bin/engram",
+    "mcp",
+    "--tools=agent"
+  ]
+}
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
-$ matty pack status engram --surface codex --json
-{"schema_version":1,"report":"pack-status","entries":[{"pack":"engram","pack_version":"1.0.0","surface":"codex","intent":{"state":"absent","active":null,"revision":null},"latest_attempt":null,"projection_summary":{"verified":5,"missing":0,"drifted":0,"ambiguous":0,"unmanaged":0},"readiness":{"configured":{"state":"known","value":true},"authorized":{"state":"known","value":false},"usable":{"state":"unknown","value":null}},"blockers":["authorization/trust is not freshly demonstrated"],"evidence":["Codex trust and runtime loading are not yet observed","external_setup:engram:codex:compact-prompt: verified observed=d9077ea51bdf7b1e73d6c8728f9e66401c19ab8e166b60fa723262ea396a385f desired=d9077ea51bdf7b1e73d6c8728f9e66401c19ab8e166b60fa723262ea396a385f target=/Users/argote/.codex/config.toml","external_setup:engram:codex:instructions: verified observed=90c30c7a0f0321e9b2e4acd7258e897de99c2e064c69b4fec7e3a9ded073fa7f desired=90c30c7a0f0321e9b2e4acd7258e897de99c2e064c69b4fec7e3a9ded073fa7f target=/Users/argote/.codex/config.toml","external_setup:engram:codex:marketplace: verified observed=5e4c00a09f6311746d60e88450d4f8992439d043c0acff1030903ebfd954303f desired=5e4c00a09f6311746d60e88450d4f8992439d043c0acff1030903ebfd954303f target=/Users/argote/.codex/config.toml","external_setup:engram:codex:mcp: verified observed=bca9e28bee447632e7cc2cad660941dda173db732b8572cc7f12687086dcbbf5 desired=bca9e28bee447632e7cc2cad660941dda173db732b8572cc7f12687086dcbbf5 target=/Users/argote/.codex/config.toml","external_setup:engram:codex:plugin: verified observed=df150cce82071f1f48484aad788855034b39d6f28b7cee1a0ae4d5128fd9ca00 desired=df150cce82071f1f48484aad788855034b39d6f28b7cee1a0ae4d5128fd9ca00 target=/Users/argote/.codex/config.toml"],"pending_human_actions":["reload Codex so the configured Engram MCP server becomes available at runtime","review and trust the Engram integration in Codex through /hooks; Matty will not bypass hook trust"]}]}
+=== timestamp_utc: 2026-07-18T03:01:04Z ===
+$ shasum -a 256 "/Users/argote/.matty/config.json" "/Users/argote/.config/opencode/opencode.json"
+257aa1cbdbbd0d890a3729cc35efd42da8a1e99b1dcb1610847e9dda97764b81  /Users/argote/.matty/config.json
+22b54c932d3970926715e4fcde6977b5fa5faa445fe3801d8740c44e7686dfb9  /Users/argote/.config/opencode/opencode.json
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
-$ matty pack status engram --surface opencode --json
-inspect pack "engram" on opencode: OpenCode MCP server "engram" already exists with unmanaged settings
-exit_status: 1
-
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
-$ matty pack status
-inspect pack "engram" on opencode: OpenCode MCP server "engram" already exists with unmanaged settings
-exit_status: 1
-
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
-$ matty uninstall --dry-run
-matty uninstall dry-run: planned actions
-- remove: remove managed skill ask-matt (/Users/argote/.agents/skills/ask-matt)
-- remove: remove managed skill code-review (/Users/argote/.agents/skills/code-review)
-- remove: remove managed skill codebase-design (/Users/argote/.agents/skills/codebase-design)
-- remove: remove managed skill diagnosing-bugs (/Users/argote/.agents/skills/diagnosing-bugs)
-- remove: remove managed skill domain-modeling (/Users/argote/.agents/skills/domain-modeling)
-- remove: remove managed skill grill-me (/Users/argote/.agents/skills/grill-me)
-- remove: remove managed skill grill-with-docs (/Users/argote/.agents/skills/grill-with-docs)
-- remove: remove managed skill grilling (/Users/argote/.agents/skills/grilling)
-- remove: remove managed skill handoff (/Users/argote/.agents/skills/handoff)
-- remove: remove managed skill implement (/Users/argote/.agents/skills/implement)
-- remove: remove managed skill improve-codebase-architecture (/Users/argote/.agents/skills/improve-codebase-architecture)
-- remove: remove managed skill loop-me (/Users/argote/.agents/skills/loop-me)
-- remove: remove managed skill prototype (/Users/argote/.agents/skills/prototype)
-- remove: remove managed skill research (/Users/argote/.agents/skills/research)
-- remove: remove managed skill resolving-merge-conflicts (/Users/argote/.agents/skills/resolving-merge-conflicts)
-- remove: remove managed skill setup-matt-pocock-skills (/Users/argote/.agents/skills/setup-matt-pocock-skills)
-- remove: remove managed skill tdd (/Users/argote/.agents/skills/tdd)
-- remove: remove managed skill teach (/Users/argote/.agents/skills/teach)
-- remove: remove managed skill to-spec (/Users/argote/.agents/skills/to-spec)
-- remove: remove managed skill to-tickets (/Users/argote/.agents/skills/to-tickets)
-- remove: remove managed skill triage (/Users/argote/.agents/skills/triage)
-- remove: remove managed skill wayfinder (/Users/argote/.agents/skills/wayfinder)
-- remove: remove managed skill writing-great-skills (/Users/argote/.agents/skills/writing-great-skills)
-- remove: remove Matty state metadata (/Users/argote/.matty/config.json)
-- remove-codex-prompt: remove Codex Matty prompt markers (/Users/argote/.codex/AGENTS.md)
-- remove-opencode-prompt: remove OpenCode Matty prompt reference (/Users/argote/.config/opencode/opencode.json -> /Users/argote/.config/opencode/matty.md)
-exit_status: 0
-
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
+=== timestamp_utc: 2026-07-18T03:01:05Z ===
 $ for p in "$HOME/.matty/config.json" "$HOME/.matty/packs.json" "$HOME/.matty/packs.lock" "$HOME/.matty/backups" "$HOME/.local/share/matty" "$HOME/Documents/dev/backups" "$HOME/Documents/dev/backups/matty-to-packy-cutover-20260717"; do if [ -e "$p" ]; then echo "exists $p"; else echo "absent $p"; fi; done
 exists /Users/argote/.matty/config.json
 absent /Users/argote/.matty/packs.json
@@ -349,23 +345,23 @@ absent /Users/argote/Documents/dev/backups
 absent /Users/argote/Documents/dev/backups/matty-to-packy-cutover-20260717
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
+=== timestamp_utc: 2026-07-18T03:01:05Z ===
 $ git -C "$HOME/.local/share/matty" status --short --branch && git -C "$HOME/.local/share/matty" rev-parse HEAD && git -C "$HOME/.local/share/matty" describe --tags --exact-match HEAD
 ## HEAD (no branch)
 f348b84e50222a4eeadf5abbcedef7a24974cd88
 v0.1.4
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
+=== timestamp_utc: 2026-07-18T03:01:05Z ===
 $ find "$HOME/.matty/backups" -type f -print | sort
 /Users/argote/.matty/backups/20260708-171406/.codex/AGENTS.md
 /Users/argote/.matty/backups/20260708-171406/.config/opencode/opencode.json
 /Users/argote/.matty/backups/20260708-171406/.local/bin/engram.pre-homebrew-symlink
 exit_status: 0
 
-=== timestamp_utc: 2026-07-18T02:52:38Z ===
+=== timestamp_utc: 2026-07-18T03:01:05Z ===
 $ find "$HOME/Documents/dev/backups/matty-to-packy-cutover-20260717" -type f -print | sort
 find: /Users/argote/Documents/dev/backups/matty-to-packy-cutover-20260717: No such file or directory
 exit_status: 1
 
-recording_finished_utc: 2026-07-18T02:52:38Z
+recording_finished_utc: 2026-07-18T03:01:05Z
