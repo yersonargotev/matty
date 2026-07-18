@@ -58,11 +58,13 @@ run_expect 0 "Homebrew version" "$BREW" --version
 run_expect 0 "Packy version" "$PACKY" --version
 run_expect 0 "audit harness digest" shasum -a 256 "$EVIDENCE_DIR/run.sh"
 run_expect 0 "immutable issue request" cat "$EVIDENCE_DIR/issue-66.json"
+run_expect 0 "audit candidate HEAD" git -C "$REPO_ROOT" rev-parse HEAD
 
 section "bound repository identities"
 cd "$REPO_ROOT"
 run_expect 0 "clean committed audit checkout" bash -c 'test -z "$(git status --porcelain --untracked-files=no)"'
 run_expect 0 "Packy origin" bash -c 'test "$(git remote get-url origin)" = git@github.com:yersonargotev/packy.git'
+run_expect 0 "all linked worktree remotes" bash -o pipefail -c 'git worktree list --porcelain | awk '\''/^worktree / {sub(/^worktree /, ""); print}'\'' | while IFS= read -r worktree; do printf "worktree=%s origin=%s\n" "$worktree" "$(git -C "$worktree" remote get-url origin)"; test "$(git -C "$worktree" remote get-url origin)" = git@github.com:yersonargotev/packy.git; done'
 run_expect 0 "Packy repository identity" gh repo view yersonargotev/packy --json nameWithOwner,defaultBranchRef,url,isArchived
 run_expect 0 "historical repository redirect" bash -o pipefail -c 'test "$(curl -fsIL -o /dev/null -w "%{url_effective}" https://github.com/yersonargotev/matty)" = https://github.com/yersonargotev/packy'
 run_expect 0 "frozen base commit exists" git cat-file -e "$FROZEN_BASE^{commit}"
