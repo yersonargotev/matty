@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/yersonargotev/packy/internal/packsync"
 )
 
 type Selector string
@@ -38,17 +40,27 @@ const (
 	HumanEvidence HumanDispatchPhase = "evidence"
 )
 
+type DispatchOperation string
+
+const (
+	OperationSynchronize DispatchOperation = "synchronize"
+	OperationRegister    DispatchOperation = "register"
+)
+
 type DispatchRequest struct {
-	SchemaVersion      int                `json:"schema_version"`
-	SourceID           string             `json:"source_id"`
-	Selector           Selector           `json:"selector"`
-	SelectorRef        string             `json:"selector_ref,omitempty"`
-	ClassificationMode ClassificationMode `json:"classification_mode"`
-	RequestReason      string             `json:"request_reason"`
-	RetryOfRun         string             `json:"retry_of_run,omitempty"`
-	ExpectedPlanID     string             `json:"expected_plan_id,omitempty"`
-	ExpectedBaseSHA    string             `json:"expected_base_sha,omitempty"`
-	HumanEvidence      json.RawMessage    `json:"human_evidence,omitempty"`
+	SchemaVersion      int                    `json:"schema_version"`
+	Operation          DispatchOperation      `json:"operation,omitempty"`
+	SourceID           string                 `json:"source_id"`
+	Selector           Selector               `json:"selector"`
+	SelectorRef        string                 `json:"selector_ref,omitempty"`
+	ClassificationMode ClassificationMode     `json:"classification_mode"`
+	RequestReason      string                 `json:"request_reason"`
+	RetryOfRun         string                 `json:"retry_of_run,omitempty"`
+	ExpectedPlanID     string                 `json:"expected_plan_id,omitempty"`
+	ExpectedBaseSHA    string                 `json:"expected_base_sha,omitempty"`
+	HumanEvidence      json.RawMessage        `json:"human_evidence,omitempty"`
+	Registration       *packsync.SourceConfig `json:"registration,omitempty"`
+	RegistrationSHA256 string                 `json:"registration_sha256,omitempty"`
 }
 
 // Digest returns the stable request identity used only to attach maintainers to
@@ -87,12 +99,17 @@ func (request *DispatchRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	allowed := map[string]bool{"schema_version": true, "source_id": true, "selector": true, "selector_ref": true, "classification_mode": true, "request_reason": true, "retry_of_run": true, "expected_plan_id": true, "expected_base_sha": true, "human_evidence": true}
+	if decoded.SchemaVersion == 2 {
+		allowed["operation"] = true
+		allowed["registration"] = true
+		allowed["registration_sha256"] = true
+	}
 	for name := range fields {
 		if !allowed[name] {
 			return fmt.Errorf("dispatch contains unknown field %q", name)
 		}
 	}
-	for _, name := range []string{"selector_ref", "retry_of_run", "expected_plan_id", "expected_base_sha"} {
+	for _, name := range []string{"operation", "selector_ref", "retry_of_run", "expected_plan_id", "expected_base_sha", "registration_sha256"} {
 		value, present := fields[name]
 		if !present {
 			continue
@@ -102,8 +119,52 @@ func (request *DispatchRequest) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("dispatch field %s must be a non-empty string when present", name)
 		}
 	}
+	if raw, present := fields["registration"]; present {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		var registration packsync.SourceConfig
+		if err := decoder.Decode(&registration); err != nil {
+			return fmt.Errorf("decode registration: %w", err)
+		}
+		decoded.Registration = &registration
+	}
 	*request = DispatchRequest(decoded)
 	return nil
+}
+
+// CanonicalRegistrationSHA256 returns the identity sealed by a registration
+// dispatch. The canonical bytes are the validated, binding-sorted SourceConfig
+// encoded as two-space-indented JSON with one trailing LF.
+func CanonicalRegistrationSHA256(registration packsync.SourceConfig) (string, error) {
+	normalized, err := normalizeRegistration(registration)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(normalized, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	data = append(data, '\n')
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func normalizeRegistration(registration packsync.SourceConfig) (packsync.SourceConfig, error) {
+	if registration.Resources == nil {
+		return packsync.SourceConfig{}, errors.New("registration resources is a required array")
+	}
+	data, err := json.Marshal(packsync.Config{SchemaVersion: 1, Sources: []packsync.SourceConfig{registration}})
+	if err != nil {
+		return packsync.SourceConfig{}, err
+	}
+	config, err := packsync.LoadConfig(bytes.NewReader(data))
+	if err != nil {
+		return packsync.SourceConfig{}, fmt.Errorf("invalid registration: %w", err)
+	}
+	if !sourceIDPattern.MatchString(config.Sources[0].ID) {
+		return packsync.SourceConfig{}, errors.New("registration source id is not canonical")
+	}
+	return config.Sources[0], nil
 }
 
 type ValidationArtifact struct {
@@ -112,14 +173,67 @@ type ValidationArtifact struct {
 	PlanID        string `json:"plan_id"`
 	BaseSHA       string `json:"base_sha"`
 	CandidateSHA  string `json:"candidate_sha"`
+	ArtifactProvenance
+	ResultTreeSHA string `json:"result_tree_sha,omitempty"`
 	PackySuite    bool   `json:"packy_suite"`
 	Apply         bool   `json:"apply"`
 	UpstreamBytes bool   `json:"contains_upstream_bytes"`
 }
 
 func (artifact ValidationArtifact) Validate() error {
-	if artifact.SchemaVersion != 1 || !sourceIDPattern.MatchString(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.PackySuite || !artifact.Apply || artifact.UpstreamBytes {
+	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != 2 {
+		return errors.New("sandbox validation schema is not supported")
+	}
+	if !sourceIDPattern.MatchString(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.PackySuite || !artifact.Apply || artifact.UpstreamBytes {
 		return errors.New("sandbox validation proof is incomplete or contradictory")
+	}
+	if artifact.SchemaVersion == 1 {
+		if !artifact.ArtifactProvenance.empty() || artifact.ResultTreeSHA != "" {
+			return errors.New("v1 sandbox validation proof forbids v2 provenance")
+		}
+		return nil
+	}
+	if !artifact.ArtifactProvenance.valid() || requireFullSHA("result tree", artifact.ResultTreeSHA) != nil {
+		return errors.New("v2 sandbox validation proof lacks complete provenance")
+	}
+	return nil
+}
+
+// ArtifactProvenance binds a workflow artifact to both the target source lock
+// and the complete configured bundle observed by the workflow.
+type ArtifactProvenance struct {
+	SourceLockSHA256 string `json:"source_lock_sha256,omitempty"`
+	LockSetSHA256    string `json:"lock_set_sha256,omitempty"`
+	ConfigSHA256     string `json:"config_sha256,omitempty"`
+	ManifestsSHA256  string `json:"manifests_sha256,omitempty"`
+}
+
+func (provenance ArtifactProvenance) valid() bool {
+	return requireSHA256("source lock", provenance.SourceLockSHA256) == nil &&
+		requireSHA256("lock set", provenance.LockSetSHA256) == nil &&
+		requireSHA256("configuration", provenance.ConfigSHA256) == nil &&
+		requireSHA256("manifests", provenance.ManifestsSHA256) == nil
+}
+
+func (provenance ArtifactProvenance) empty() bool {
+	return provenance == (ArtifactProvenance{})
+}
+
+type NoopArtifact struct {
+	SchemaVersion int    `json:"schema_version"`
+	State         string `json:"state"`
+	SourceID      string `json:"source_id"`
+	PlanID        string `json:"plan_id"`
+	BaseSHA       string `json:"base_sha"`
+	CandidateSHA  string `json:"candidate_sha"`
+	ArtifactProvenance
+	ContainsSecrets       bool `json:"contains_secrets"`
+	ContainsUpstreamBytes bool `json:"contains_upstream_bytes"`
+}
+
+func (artifact NoopArtifact) Validate() error {
+	if artifact.SchemaVersion != 2 || artifact.State != "no-op" || !ValidSourceID(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.ArtifactProvenance.valid() || artifact.ContainsSecrets || artifact.ContainsUpstreamBytes {
+		return errors.New("v2 no-op artifact is incomplete or contradictory")
 	}
 	return nil
 }
@@ -133,8 +247,36 @@ var (
 )
 
 func (request DispatchRequest) Validate() error {
-	if request.SchemaVersion != 1 || !sourceIDPattern.MatchString(request.SourceID) || strings.TrimSpace(request.RequestReason) == "" || utf8.RuneCountInString(request.RequestReason) > 500 {
+	if request.SchemaVersion != 1 && request.SchemaVersion != 2 {
+		return errors.New("dispatch schema is not supported")
+	}
+	if !sourceIDPattern.MatchString(request.SourceID) || strings.TrimSpace(request.RequestReason) == "" || utf8.RuneCountInString(request.RequestReason) > 500 {
 		return errors.New("dispatch schema, source id, and request reason are required")
+	}
+	if request.SchemaVersion == 1 {
+		if request.Operation != "" || request.Registration != nil || request.RegistrationSHA256 != "" {
+			return errors.New("v1 dispatch forbids v2 operation fields")
+		}
+	} else {
+		switch request.Operation {
+		case OperationSynchronize:
+			if request.Registration != nil || request.RegistrationSHA256 != "" {
+				return errors.New("synchronize dispatch forbids registration")
+			}
+		case OperationRegister:
+			if request.Registration == nil || request.RegistrationSHA256 == "" {
+				return errors.New("register dispatch requires registration and its SHA-256")
+			}
+			if request.Registration.ID != request.SourceID {
+				return errors.New("registration id must equal dispatch source id")
+			}
+			digest, err := CanonicalRegistrationSHA256(*request.Registration)
+			if err != nil || digest != request.RegistrationSHA256 {
+				return errors.New("registration SHA-256 does not match canonical registration")
+			}
+		default:
+			return errors.New("v2 dispatch operation must be synchronize or register")
+		}
 	}
 	switch request.Selector {
 	case SelectorLatestStable:
@@ -184,12 +326,13 @@ func (request DispatchRequest) HumanPhase() (HumanDispatchPhase, error) {
 }
 
 type FailureArtifact struct {
-	SchemaVersion         int      `json:"schema_version"`
-	State                 string   `json:"state"`
-	SourceID              string   `json:"source_id"`
-	PlanID                string   `json:"plan_id,omitempty"`
-	BaseSHA               string   `json:"base_sha,omitempty"`
-	CandidateSHA          string   `json:"candidate_sha,omitempty"`
+	SchemaVersion int    `json:"schema_version"`
+	State         string `json:"state"`
+	SourceID      string `json:"source_id"`
+	PlanID        string `json:"plan_id,omitempty"`
+	BaseSHA       string `json:"base_sha,omitempty"`
+	CandidateSHA  string `json:"candidate_sha,omitempty"`
+	ArtifactProvenance
 	Blockers              []string `json:"blockers"`
 	Recovery              []string `json:"recovery"`
 	RunURL                string   `json:"run_url,omitempty"`
@@ -198,8 +341,17 @@ type FailureArtifact struct {
 }
 
 func (artifact FailureArtifact) CanonicalJSON() ([]byte, error) {
-	if artifact.SchemaVersion != 1 || artifact.State != "blocked" || !ValidSourceID(artifact.SourceID) || !validOptionalSHA(artifact.BaseSHA) || !validOptionalSHA(artifact.CandidateSHA) || !validUniqueStrings(artifact.Blockers) || !validUniqueStrings(artifact.Recovery) || !validOptionalURI(artifact.RunURL) {
+	if artifact.SchemaVersion != 1 && artifact.SchemaVersion != 2 {
+		return nil, errors.New("operational artifact schema is not supported")
+	}
+	if artifact.State != "blocked" || !ValidSourceID(artifact.SourceID) || !validOptionalSHA(artifact.BaseSHA) || !validOptionalSHA(artifact.CandidateSHA) || !validUniqueStrings(artifact.Blockers) || !validUniqueStrings(artifact.Recovery) || !validOptionalURI(artifact.RunURL) {
 		return nil, errors.New("operational artifact is incomplete")
+	}
+	if artifact.SchemaVersion == 1 && !artifact.ArtifactProvenance.empty() {
+		return nil, errors.New("v1 operational artifact forbids v2 provenance")
+	}
+	if artifact.SchemaVersion == 2 && ((artifact.PlanID != "" && !artifact.ArtifactProvenance.valid()) || (artifact.PlanID == "" && !artifact.ArtifactProvenance.empty())) {
+		return nil, errors.New("v2 operational artifact provenance contradicts plan state")
 	}
 	if artifact.ContainsSecrets || artifact.ContainsUpstreamBytes {
 		return nil, errors.New("operational artifacts must not contain secrets or upstream bytes")
@@ -214,6 +366,54 @@ func (artifact FailureArtifact) CanonicalJSON() ([]byte, error) {
 	}
 	compact.WriteByte('\n')
 	return compact.Bytes(), nil
+}
+
+type PublicationArtifact struct {
+	SchemaVersion int    `json:"schema_version"`
+	SourceID      string `json:"source_id"`
+	PlanID        string `json:"plan_id"`
+	BaseSHA       string `json:"base_sha"`
+	CandidateSHA  string `json:"candidate_sha"`
+	ArtifactProvenance
+	ResultTreeSHA           string          `json:"result_tree_sha"`
+	HeadSHA                 string          `json:"head_sha"`
+	ProvenanceSHA256        string          `json:"provenance_sha256"`
+	BranchName              string          `json:"branch_name"`
+	PRNumber                int             `json:"pr_number"`
+	PRStateSHA256           string          `json:"pr_state_sha256"`
+	ManagedTitle            string          `json:"managed_title"`
+	ManagedMetadataHash     string          `json:"managed_metadata_hash"`
+	Validation              ValidationGates `json:"validation"`
+	DecisionReady           bool            `json:"decision_ready"`
+	AutoMerge               bool            `json:"auto_merge"`
+	ManualMergeRequired     bool            `json:"manual_merge_required"`
+	UpstreamContentExecuted bool            `json:"upstream_content_executed"`
+	InvalidationConditions  []string        `json:"invalidation_conditions"`
+}
+
+func (artifact PublicationArtifact) Validate() error {
+	if artifact.SchemaVersion != 2 || !ValidSourceID(artifact.SourceID) || artifact.PlanID == "" || requireFullSHA("base", artifact.BaseSHA) != nil || requireFullSHA("candidate", artifact.CandidateSHA) != nil || !artifact.ArtifactProvenance.valid() || requireFullSHA("result tree", artifact.ResultTreeSHA) != nil || requireFullSHA("head", artifact.HeadSHA) != nil || requireSHA256("provenance", artifact.ProvenanceSHA256) != nil || artifact.BranchName != "sync/"+artifact.SourceID || artifact.PRNumber < 1 || requireSHA256("pull request state", artifact.PRStateSHA256) != nil || artifact.ManagedTitle == "" || requireSHA256("managed metadata", artifact.ManagedMetadataHash) != nil {
+		return errors.New("v2 publication identity is incomplete")
+	}
+	if !artifact.Validation.Complete() || !artifact.DecisionReady || artifact.AutoMerge || !artifact.ManualMergeRequired || artifact.UpstreamContentExecuted || !validInvalidationConditions(artifact.InvalidationConditions) {
+		return errors.New("v2 publication is not decision ready")
+	}
+	return nil
+}
+
+func validInvalidationConditions(values []string) bool {
+	want := map[string]bool{"base_changed": true, "candidate_changed": true, "provenance_changed": true, "head_changed": true, "pr_state_changed": true}
+	if len(values) != len(want) {
+		return false
+	}
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if !want[value] || seen[value] {
+			return false
+		}
+		seen[value] = true
+	}
+	return true
 }
 
 // ValidSourceID reports whether value is safe for canonical workflow identity.

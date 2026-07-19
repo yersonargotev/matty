@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v2.0.0/pack-source-publication.schema.json",
+  "title": "Validated pack source publication proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "plan_id",
+    "base_sha",
+    "candidate_sha",
+    "source_lock_sha256",
+    "lock_set_sha256",
+    "config_sha256",
+    "manifests_sha256",
+    "result_tree_sha",
+    "head_sha",
+    "provenance_sha256",
+    "branch_name",
+    "pr_number",
+    "pr_state_sha256",
+    "managed_title",
+    "managed_metadata_hash",
+    "validation",
+    "decision_ready",
+    "auto_merge",
+    "manual_merge_required",
+    "upstream_content_executed",
+    "invalidation_conditions"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "base_sha": { "$ref": "#/$defs/full_sha" },
+    "candidate_sha": { "$ref": "#/$defs/full_sha" },
+    "source_lock_sha256": { "$ref": "#/$defs/sha256" },
+    "lock_set_sha256": { "$ref": "#/$defs/sha256" },
+    "config_sha256": { "$ref": "#/$defs/sha256" },
+    "manifests_sha256": { "$ref": "#/$defs/sha256" },
+    "result_tree_sha": { "$ref": "#/$defs/full_sha" },
+    "head_sha": { "$ref": "#/$defs/full_sha" },
+    "provenance_sha256": { "$ref": "#/$defs/sha256" },
+    "branch_name": {
+      "type": "string",
+      "pattern": "^sync/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "pr_number": { "type": "integer", "minimum": 1 },
+    "pr_state_sha256": { "$ref": "#/$defs/sha256" },
+    "managed_title": { "type": "string", "minLength": 1 },
+    "managed_metadata_hash": { "$ref": "#/$defs/sha256" },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance",
+        "classification",
+        "reacquisition",
+        "apply",
+        "diff",
+        "ownership",
+        "packy_suite"
+      ],
+      "properties": {
+        "provenance": { "const": true },
+        "classification": { "const": true },
+        "reacquisition": { "const": true },
+        "apply": { "const": true },
+        "diff": { "const": true },
+        "ownership": { "const": true },
+        "packy_suite": { "const": true }
+      }
+    },
+    "decision_ready": { "const": true },
+    "auto_merge": { "const": false },
+    "manual_merge_required": { "const": true },
+    "upstream_content_executed": { "const": false },
+    "invalidation_conditions": {
+      "type": "array",
+      "minItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "base_changed",
+          "candidate_changed",
+          "provenance_changed",
+          "head_changed",
+          "pr_state_changed"
+        ]
+      },
+      "allOf": [
+        { "contains": { "const": "base_changed" } },
+        { "contains": { "const": "candidate_changed" } },
+        { "contains": { "const": "provenance_changed" } },
+        { "contains": { "const": "head_changed" } },
+        { "contains": { "const": "pr_state_changed" } }
+      ]
+    }
+  },
+  "$defs": {
+    "full_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

@@ -2,6 +2,7 @@ package packsyncworkflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,6 +11,147 @@ import (
 
 	"github.com/yersonargotev/packy/internal/packsync"
 )
+
+func TestDispatchV2RequiresOneExactOperationAndCanonicalRegistration(t *testing.T) {
+	registration := packsync.SourceConfig{
+		ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills",
+		Selector: packsync.Selector{Mode: packsync.SelectorStableRelease},
+		Resources: []packsync.Binding{
+			{PackID: "addy", Kind: "skill", ResourceID: "z-last", UpstreamPath: "skills/z-last"},
+			{PackID: "addy", Kind: "agent", ResourceID: "a-first", UpstreamPath: "agents/a-first.md"},
+		},
+	}
+	digest, err := CanonicalRegistrationSHA256(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != "6f7d8f1515cb3761f150efa3bfa30952003c62ab7c346af7210a6d7ca0ee9730" {
+		t.Fatalf("registration digest = %q", digest)
+	}
+
+	synchronize := DispatchRequest{SchemaVersion: 2, Operation: OperationSynchronize, SourceID: "addy", Selector: SelectorLatestStable, ClassificationMode: ClassificationAI, RequestReason: "Synchronize Addy."}
+	if err := synchronize.Validate(); err != nil {
+		t.Fatalf("valid synchronization: %v", err)
+	}
+	register := synchronize
+	register.Operation = OperationRegister
+	register.Registration = &registration
+	register.RegistrationSHA256 = digest
+	if err := register.Validate(); err != nil {
+		t.Fatalf("valid registration: %v", err)
+	}
+
+	invalid := []DispatchRequest{
+		{SchemaVersion: 2, SourceID: "addy", Selector: SelectorLatestStable, ClassificationMode: ClassificationAI, RequestReason: "missing operation"},
+		func() DispatchRequest {
+			value := synchronize
+			value.Registration = &registration
+			value.RegistrationSHA256 = digest
+			return value
+		}(),
+		func() DispatchRequest { value := register; value.SourceID = "other"; return value }(),
+		func() DispatchRequest {
+			value := register
+			value.RegistrationSHA256 = strings.Repeat("0", 64)
+			return value
+		}(),
+		func() DispatchRequest {
+			value := register
+			missingResources := *value.Registration
+			missingResources.Resources = nil
+			value.Registration = &missingResources
+			return value
+		}(),
+		func() DispatchRequest {
+			value := register
+			invalidRegistration := *value.Registration
+			invalidRegistration.Repository = "not-owner-name"
+			value.Registration = &invalidRegistration
+			return value
+		}(),
+	}
+	for _, request := range invalid {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("invalid v2 dispatch accepted: %#v", request)
+		}
+	}
+
+	var decoded DispatchRequest
+	if err := json.Unmarshal([]byte(`{"schema_version":2,"operation":"register","source_id":"addy","selector":"latest-stable","classification_mode":"ai","request_reason":"register","registration":{"id":"addy","provider":"github","repository":"addyosmani/agent-skills","selector":{"mode":"stable-release","unknown":true},"resources":[]},"registration_sha256":"`+digest+`"}`), &decoded); err == nil {
+		t.Fatal("unknown nested registration field accepted")
+	}
+}
+
+func TestV1DispatchMeaningAndDigestRemainUnchanged(t *testing.T) {
+	request := DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: SelectorLatestStable, ClassificationMode: ClassificationAI, RequestReason: "fixture"}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := request.Digest()
+	if err != nil || digest != "7b1ae0ab21f15629d19c22e1de9974b09198fb3f2d5c5d6f9ee890e7782d9b2e" {
+		t.Fatalf("v1 digest = %q, %v", digest, err)
+	}
+	var decoded DispatchRequest
+	if err := json.Unmarshal([]byte(`{"schema_version":1,"operation":"synchronize","source_id":"source","selector":"latest-stable","classification_mode":"ai","request_reason":"fixture"}`), &decoded); err == nil {
+		t.Fatal("v1 dispatch accepted a v2 operation field")
+	}
+}
+
+func TestV2NoopValidationAndOperationalArtifactsBindCompleteProvenance(t *testing.T) {
+	provenance := ArtifactProvenance{SourceLockSHA256: strings.Repeat("1", 64), LockSetSHA256: strings.Repeat("2", 64), ConfigSHA256: strings.Repeat("3", 64), ManifestsSHA256: strings.Repeat("4", 64)}
+	noop := NoopArtifact{SchemaVersion: 2, State: "no-op", SourceID: "addy", PlanID: "plan-2", BaseSHA: baseA, CandidateSHA: candidateA, ArtifactProvenance: provenance}
+	if err := noop.Validate(); err != nil {
+		t.Fatalf("valid no-op: %v", err)
+	}
+	noop.LockSetSHA256 = ""
+	if err := noop.Validate(); err == nil {
+		t.Fatal("no-op without complete provenance accepted")
+	}
+
+	validation := ValidationArtifact{SchemaVersion: 2, SourceID: "addy", PlanID: "plan-2", BaseSHA: baseA, CandidateSHA: candidateA, ArtifactProvenance: provenance, ResultTreeSHA: treeA, PackySuite: true, Apply: true}
+	if err := validation.Validate(); err != nil {
+		t.Fatalf("valid v2 validation: %v", err)
+	}
+	validation.ResultTreeSHA = ""
+	if err := validation.Validate(); err == nil {
+		t.Fatal("validation without result tree accepted")
+	}
+
+	planned := FailureArtifact{SchemaVersion: 2, State: "blocked", SourceID: "addy", PlanID: "plan-2", BaseSHA: baseA, CandidateSHA: candidateA, ArtifactProvenance: provenance, Blockers: []string{"blocked"}, Recovery: []string{"retry"}}
+	if _, err := planned.CanonicalJSON(); err != nil {
+		t.Fatalf("valid planned failure: %v", err)
+	}
+	planned.ConfigSHA256 = ""
+	if _, err := planned.CanonicalJSON(); err == nil {
+		t.Fatal("planned failure without complete provenance accepted")
+	}
+	preplan := FailureArtifact{SchemaVersion: 2, State: "blocked", SourceID: "addy", Blockers: []string{"blocked"}, Recovery: []string{"retry"}}
+	if _, err := preplan.CanonicalJSON(); err != nil {
+		t.Fatalf("valid pre-plan failure: %v", err)
+	}
+	preplan.SourceLockSHA256 = strings.Repeat("1", 64)
+	if _, err := preplan.CanonicalJSON(); err == nil {
+		t.Fatal("pre-plan failure carrying partial provenance accepted")
+	}
+}
+
+func TestV2PublicationArtifactRequiresDecisionReadyManagedState(t *testing.T) {
+	artifact := PublicationArtifact{
+		SchemaVersion: 2, SourceID: "addy", PlanID: "plan-2", BaseSHA: baseA, CandidateSHA: candidateA,
+		ArtifactProvenance: ArtifactProvenance{SourceLockSHA256: strings.Repeat("1", 64), LockSetSHA256: strings.Repeat("2", 64), ConfigSHA256: strings.Repeat("3", 64), ManifestsSHA256: strings.Repeat("4", 64)},
+		ResultTreeSHA:      treeA, HeadSHA: headA, ProvenanceSHA256: strings.Repeat("5", 64), BranchName: "sync/addy", PRNumber: 7,
+		PRStateSHA256: strings.Repeat("6", 64), ManagedTitle: "Synchronize Addy", ManagedMetadataHash: strings.Repeat("7", 64),
+		Validation:    ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true},
+		DecisionReady: true, ManualMergeRequired: true, InvalidationConditions: DecisionReadyInvalidationConditions(),
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("valid publication: %v", err)
+	}
+	artifact.AutoMerge = true
+	if err := artifact.Validate(); err == nil {
+		t.Fatal("auto-merge publication accepted")
+	}
+}
 
 func TestDispatchDigestIsCanonicalAcrossEvidenceObjectOrder(t *testing.T) {
 	stable := DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: SelectorLatestStable, ClassificationMode: ClassificationAI, RequestReason: "fixture"}

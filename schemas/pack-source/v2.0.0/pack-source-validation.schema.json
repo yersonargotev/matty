@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v2.0.0/pack-source-validation.schema.json",
+  "title": "Pack source sandbox validation proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "plan_id",
+    "base_sha",
+    "candidate_sha",
+    "source_lock_sha256",
+    "lock_set_sha256",
+    "config_sha256",
+    "manifests_sha256",
+    "result_tree_sha",
+    "packy_suite",
+    "apply",
+    "contains_upstream_bytes"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "source_id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "base_sha": { "$ref": "#/$defs/full_sha" },
+    "candidate_sha": { "$ref": "#/$defs/full_sha" },
+    "source_lock_sha256": { "$ref": "#/$defs/sha256" },
+    "lock_set_sha256": { "$ref": "#/$defs/sha256" },
+    "config_sha256": { "$ref": "#/$defs/sha256" },
+    "manifests_sha256": { "$ref": "#/$defs/sha256" },
+    "result_tree_sha": { "$ref": "#/$defs/full_sha" },
+    "packy_suite": { "const": true },
+    "apply": { "const": true },
+    "contains_upstream_bytes": { "const": false }
+  },
+  "$defs": {
+    "full_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

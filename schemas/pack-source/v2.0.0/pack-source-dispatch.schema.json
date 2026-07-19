@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/pack-source/v2.0.0/pack-source-dispatch.schema.json",
+  "title": "Pack source synchronization dispatch",
+  "$comment": "Packy runtime additionally requires registration.id to equal source_id; Draft 2020-12 has no cross-property equality keyword.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation",
+    "source_id",
+    "selector",
+    "classification_mode",
+    "request_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "operation": { "enum": ["synchronize", "register"] },
+    "source_id": { "$ref": "#/$defs/source_id" },
+    "selector": {
+      "enum": ["latest-stable", "prerelease", "commit"]
+    },
+    "selector_ref": { "type": "string", "minLength": 1 },
+    "classification_mode": { "enum": ["ai", "human"] },
+    "request_reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "[^\\s\u000b\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+    },
+    "retry_of_run": { "type": "string", "pattern": "^[0-9]+$" },
+    "expected_plan_id": { "type": "string", "minLength": 1 },
+    "expected_base_sha": { "$ref": "#/$defs/full_sha" },
+    "human_evidence": {},
+    "registration": { "$ref": "#/$defs/source_config" },
+    "registration_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "dependentRequired": {
+    "expected_plan_id": ["expected_base_sha", "human_evidence"],
+    "expected_base_sha": ["expected_plan_id", "human_evidence"],
+    "human_evidence": ["expected_plan_id", "expected_base_sha"]
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "selector": { "const": "latest-stable" } } },
+      "then": { "not": { "required": ["selector_ref"] } }
+    },
+    {
+      "if": { "properties": { "selector": { "const": "prerelease" } } },
+      "then": {
+        "required": ["selector_ref"],
+        "properties": {
+          "selector_ref": {
+            "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$"
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "selector": { "const": "commit" } } },
+      "then": {
+        "required": ["selector_ref"],
+        "properties": { "selector_ref": { "$ref": "#/$defs/full_sha" } }
+      }
+    },
+    {
+      "if": { "properties": { "classification_mode": { "const": "ai" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["expected_plan_id"] },
+            { "required": ["expected_base_sha"] },
+            { "required": ["human_evidence"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "required": ["human_evidence"] },
+      "then": {
+        "required": ["expected_plan_id", "expected_base_sha"],
+        "properties": {
+          "selector": { "const": "commit" },
+          "classification_mode": { "const": "human" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "synchronize" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["registration"] },
+            { "required": ["registration_sha256"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "register" } } },
+      "then": { "required": ["registration", "registration_sha256"] }
+    }
+  ],
+  "$defs": {
+    "source_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "full_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "slash_path": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        { "not": { "pattern": "^/|/$|\\\\" } },
+        { "not": { "pattern": "(^|/)\\.{1,2}(/|$)" } },
+        { "not": { "pattern": "//" } }
+      ]
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["stable-release", "prerelease", "commit"] },
+        "ref": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "stable-release" } } },
+          "then": { "not": { "required": ["ref"] } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "prerelease" } } },
+          "then": {
+            "required": ["ref"],
+            "properties": { "ref": { "not": { "pattern": "^refs/" } } }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "commit" } } },
+          "then": {
+            "required": ["ref"],
+            "properties": { "ref": { "$ref": "#/$defs/full_sha" } }
+          }
+        }
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pack_id", "kind", "resource_id", "upstream_path"],
+      "properties": {
+        "pack_id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "resource_id": { "type": "string", "minLength": 1 },
+        "upstream_path": { "$ref": "#/$defs/slash_path" },
+        "vendored_path": { "type": "string" }
+      }
+    },
+    "source_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provider", "repository", "selector", "resources"],
+      "properties": {
+        "id": { "$ref": "#/$defs/source_id" },
+        "provider": { "const": "github" },
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/]+/[^/]+$"
+        },
+        "selector": { "$ref": "#/$defs/selector" },
+        "resources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/binding" }
+        }
+      }
+    }
+  }
+}

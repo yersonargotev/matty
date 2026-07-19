@@ -2,6 +2,7 @@ package ci_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/yersonargotev/packy/internal/packsync"
 	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
 
@@ -43,7 +45,12 @@ var packyOwnedPackages = []string{
 	"./internal/workstation",
 }
 
-const packSourceSchemaBaseID = "https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/"
+type packSourceSchemaSuite struct {
+	version string
+	major   int
+}
+
+var packSourceSchemaSuites = []packSourceSchemaSuite{{version: "v1.0.0", major: 1}, {version: "v2.0.0", major: 2}}
 
 var packSourceSchemaNames = []string{
 	"pack-source-dispatch.schema.json",
@@ -144,21 +151,6 @@ func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T)
 
 func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing.T) {
 	repository := repositoryRoot(t)
-	root := packSourceSchemaRoot(t)
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			t.Fatalf("schema suite contains directory %s", entry.Name())
-		}
-		names = append(names, entry.Name())
-	}
-	if !reflect.DeepEqual(names, packSourceSchemaNames) {
-		t.Fatalf("schema suite files = %v, want exact complete suite %v", names, packSourceSchemaNames)
-	}
 	if _, err := os.Stat(filepath.Join(repository, "workflows", "schemas")); !os.IsNotExist(err) {
 		t.Fatalf("legacy workflows/schemas path still exists: %v", err)
 	}
@@ -179,56 +171,81 @@ func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing
 
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
-	ids := make(map[string]bool, len(packSourceSchemaNames))
-	for _, name := range packSourceSchemaNames {
-		contents := readFile(t, filepath.Join(root, name))
-		for _, required := range []string{`"$schema"`, `"additionalProperties": false`, `"schema_version"`} {
-			if !strings.Contains(contents, required) {
-				t.Fatalf("%s missing %s", name, required)
-			}
-		}
-		for _, forbidden := range []string{`"secret"`, `"token"`, `"upstream_bytes"`, `"upstream_payload"`} {
-			if strings.Contains(contents, forbidden) {
-				t.Fatalf("%s permits forbidden payload %s", name, forbidden)
-			}
-		}
-		for _, forbidden := range []string{"github.com/yersonargotev/packy/workflows/schemas", "github.com/yersonargotev/matty/workflows/schemas", "/latest/"} {
-			if strings.Contains(contents, forbidden) {
-				t.Fatalf("%s contains forbidden identity %q", name, forbidden)
-			}
-		}
-		var schema map[string]any
-		if err := json.Unmarshal([]byte(contents), &schema); err != nil {
-			t.Fatalf("%s is not valid JSON: %v", name, err)
-		}
-		wantID := packSourceSchemaBaseID + name
-		if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != wantID {
-			t.Fatalf("%s identities = $schema %v $id %v, want Draft 2020-12 and %s", name, schema["$schema"], schema["$id"], wantID)
-		}
-		if ids[wantID] {
-			t.Fatalf("duplicate canonical schema ID %s", wantID)
-		}
-		ids[wantID] = true
-		properties, ok := schema["properties"].(map[string]any)
-		if !ok {
-			t.Fatalf("%s has no properties object", name)
-		}
-		schemaVersion, ok := properties["schema_version"].(map[string]any)
-		if !ok || schemaVersion["const"] != float64(1) {
-			t.Fatalf("%s schema_version does not match suite major v1", name)
-		}
-		document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(contents)))
+	ids := make(map[string]bool, len(packSourceSchemaNames)*len(packSourceSchemaSuites))
+	var schemaContents []string
+	for _, suite := range packSourceSchemaSuites {
+		root := filepath.Join(repository, "schemas", "pack-source", suite.version)
+		entries, err := os.ReadDir(root)
 		if err != nil {
-			t.Fatalf("parse schema %s: %v", name, err)
+			t.Fatal(err)
 		}
-		if err := compiler.AddResource(wantID, document); err != nil {
-			t.Fatalf("register schema %s by canonical ID: %v", name, err)
+		var names []string
+		for _, entry := range entries {
+			if entry.IsDir() {
+				t.Fatalf("schema suite %s contains directory %s", suite.version, entry.Name())
+			}
+			names = append(names, entry.Name())
+		}
+		if !reflect.DeepEqual(names, packSourceSchemaNames) {
+			t.Fatalf("schema suite %s files = %v, want exact complete suite %v", suite.version, names, packSourceSchemaNames)
+		}
+		baseID := "https://yersonargotev.github.io/packy/schemas/pack-source/" + suite.version + "/"
+		for _, name := range packSourceSchemaNames {
+			contents := readFile(t, filepath.Join(root, name))
+			schemaContents = append(schemaContents, contents)
+			for _, required := range []string{`"$schema"`, `"additionalProperties": false`, `"schema_version"`} {
+				if !strings.Contains(contents, required) {
+					t.Fatalf("%s missing %s", name, required)
+				}
+			}
+			for _, forbidden := range []string{`"secret"`, `"token"`, `"upstream_bytes"`, `"upstream_payload"`} {
+				if strings.Contains(contents, forbidden) {
+					t.Fatalf("%s permits forbidden payload %s", name, forbidden)
+				}
+			}
+			var schema map[string]any
+			if err := json.Unmarshal([]byte(contents), &schema); err != nil {
+				t.Fatalf("%s is not valid JSON: %v", name, err)
+			}
+			wantID := baseID + name
+			if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != wantID {
+				t.Fatalf("%s identities = $schema %v $id %v, want Draft 2020-12 and %s", name, schema["$schema"], schema["$id"], wantID)
+			}
+			if ids[wantID] {
+				t.Fatalf("duplicate canonical schema ID %s", wantID)
+			}
+			ids[wantID] = true
+			properties, ok := schema["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s has no properties object", name)
+			}
+			schemaVersion, ok := properties["schema_version"].(map[string]any)
+			if !ok || schemaVersion["const"] != float64(suite.major) {
+				t.Fatalf("%s/%s schema_version does not match suite major v%d", suite.version, name, suite.major)
+			}
+			document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(contents)))
+			if err != nil {
+				t.Fatalf("parse schema %s: %v", name, err)
+			}
+			if err := compiler.AddResource(wantID, document); err != nil {
+				t.Fatalf("register schema %s by canonical ID: %v", name, err)
+			}
 		}
 	}
-	for _, name := range packSourceSchemaNames {
-		id := packSourceSchemaBaseID + name
-		if _, err := compiler.Compile(id); err != nil {
-			t.Fatalf("compile and resolve schema offline by canonical ID %s: %v", id, err)
+	for _, contents := range schemaContents {
+		for _, forbidden := range []string{"github.com/yersonargotev/packy/workflows/schemas", "github.com/yersonargotev/matty/workflows/schemas", "/latest/"} {
+			if strings.Contains(contents, forbidden) {
+				t.Fatalf("schema contains forbidden identity %q", forbidden)
+			}
+		}
+	}
+	for _, suite := range packSourceSchemaSuites {
+		baseID := "https://yersonargotev.github.io/packy/schemas/pack-source/" + suite.version + "/"
+		for _, name := range packSourceSchemaNames {
+			id := baseID + name
+			if _, err := compiler.Compile(id); err != nil {
+				t.Fatalf("compile and resolve schema offline by canonical ID %s: %v", id, err)
+			}
 		}
 	}
 	for _, path := range []string{
@@ -241,6 +258,119 @@ func TestSynchronizationSchemasAreCanonicalAndForbidSensitivePayloads(t *testing
 				t.Fatalf("normative document %s contains forbidden schema reference %q", path, forbidden)
 			}
 		}
+	}
+}
+
+func TestPackSourceV1SchemaBytesRemainImmutable(t *testing.T) {
+	want := map[string]string{
+		"pack-source-dispatch.schema.json":             "c759176f7cc20bed520104ce7a5d732b2318b29c0442f80caa1b54318f13b571",
+		"pack-source-noop.schema.json":                 "596c81c047cea8160190b06e531bda474d748bfc534b01bf44594f701ab26b99",
+		"pack-source-operational-artifact.schema.json": "34f3b4e29e69b2f3f0c4e4dd65d2c216a94043ffaa358d25cda659e64ef0224e",
+		"pack-source-publication.schema.json":          "e6ec28082e88ad20eb32a5a9ee4142164fd77784278bea9f596e61bf2ae22931",
+		"pack-source-validation.schema.json":           "04d2ab6ba1394faab4bfe9d9347c0bcfb5a2ce57622a4ebba8982fbdd36a0da8",
+	}
+	root := packSourceSchemaRoot(t)
+	for name, digest := range want {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != digest {
+			t.Fatalf("immutable v1 schema %s digest = %s, want %s", name, got, digest)
+		}
+	}
+}
+
+func TestPackSourceV2SchemasAcceptCanonicalRuntimeContracts(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	head := strings.Repeat("c", 40)
+	hash := strings.Repeat("b", 64)
+	provenance := packsyncworkflow.ArtifactProvenance{SourceLockSHA256: hash, LockSetSHA256: hash, ConfigSHA256: hash, ManifestsSHA256: hash}
+	registration := packsync.SourceConfig{
+		ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills",
+		Selector:  packsync.Selector{Mode: packsync.SelectorStableRelease},
+		Resources: []packsync.Binding{{PackID: "addy", Kind: "skill", ResourceID: "idea-refine", UpstreamPath: "skills/idea-refine"}},
+	}
+	registrationDigest, err := packsyncworkflow.CanonicalRegistrationSHA256(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatches := []packsyncworkflow.DispatchRequest{
+		{SchemaVersion: 2, Operation: packsyncworkflow.OperationSynchronize, SourceID: "addy", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "inspect"},
+		{SchemaVersion: 2, Operation: packsyncworkflow.OperationRegister, SourceID: "addy", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "register", Registration: &registration, RegistrationSHA256: registrationDigest},
+	}
+	for _, dispatch := range dispatches {
+		assertV2RuntimeSchemaParity(t, "pack-source-dispatch.schema.json", dispatch, dispatch.Validate())
+	}
+
+	noop := packsyncworkflow.NoopArtifact{SchemaVersion: 2, State: "no-op", SourceID: "addy", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, ArtifactProvenance: provenance}
+	assertV2RuntimeSchemaParity(t, "pack-source-noop.schema.json", noop, noop.Validate())
+	failure := packsyncworkflow.FailureArtifact{SchemaVersion: 2, State: "blocked", SourceID: "addy", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, ArtifactProvenance: provenance, Blockers: []string{"blocked"}, Recovery: []string{"retry safely"}}
+	_, failureErr := failure.CanonicalJSON()
+	assertV2RuntimeSchemaParity(t, "pack-source-operational-artifact.schema.json", failure, failureErr)
+	validation := packsyncworkflow.ValidationArtifact{SchemaVersion: 2, SourceID: "addy", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, ArtifactProvenance: provenance, ResultTreeSHA: sha, PackySuite: true, Apply: true}
+	assertV2RuntimeSchemaParity(t, "pack-source-validation.schema.json", validation, validation.Validate())
+	publication := packsyncworkflow.PublicationArtifact{
+		SchemaVersion: 2, SourceID: "addy", PlanID: "plan", BaseSHA: sha, CandidateSHA: sha, ArtifactProvenance: provenance,
+		ResultTreeSHA: sha, HeadSHA: head, ProvenanceSHA256: hash, BranchName: "sync/addy", PRNumber: 7, PRStateSHA256: hash,
+		ManagedTitle: "managed", ManagedMetadataHash: hash,
+		Validation:    packsyncworkflow.ValidationGates{Provenance: true, Classification: true, Reacquisition: true, Apply: true, Diff: true, Ownership: true, PackySuite: true},
+		DecisionReady: true, ManualMergeRequired: true, InvalidationConditions: packsyncworkflow.DecisionReadyInvalidationConditions(),
+	}
+	assertV2RuntimeSchemaParity(t, "pack-source-publication.schema.json", publication, publication.Validate())
+
+	invalidNoop := noop
+	invalidNoop.LockSetSHA256 = ""
+	assertV2RuntimeSchemaParity(t, "pack-source-noop.schema.json", invalidNoop, invalidNoop.Validate())
+	invalidFailure := failure
+	invalidFailure.PlanID = ""
+	_, failureErr = invalidFailure.CanonicalJSON()
+	assertV2RuntimeSchemaParity(t, "pack-source-operational-artifact.schema.json", invalidFailure, failureErr)
+}
+
+func TestPackSourceV2RegistrationSemanticAndNullArrayValidation(t *testing.T) {
+	registration := packsync.SourceConfig{
+		ID: "other", Provider: "github", Repository: "addyosmani/agent-skills",
+		Selector: packsync.Selector{Mode: packsync.SelectorStableRelease}, Resources: []packsync.Binding{},
+	}
+	digest, err := packsyncworkflow.CanonicalRegistrationSHA256(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatch := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: packsyncworkflow.OperationRegister, SourceID: "addy", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "register", Registration: &registration, RegistrationSHA256: digest}
+	data, err := json.Marshal(mismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSchemaInstanceForSuite(t, "v2.0.0", "pack-source-dispatch.schema.json", data); err != nil {
+		t.Fatalf("structural schema rejected representable registration: %v", err)
+	}
+	if err := mismatch.Validate(); err == nil {
+		t.Fatal("runtime accepted registration.id different from source_id")
+	}
+
+	nullResources := []byte(`{"schema_version":2,"operation":"register","source_id":"addy","selector":"latest-stable","classification_mode":"ai","request_reason":"register","registration":{"id":"addy","provider":"github","repository":"addyosmani/agent-skills","selector":{"mode":"stable-release"},"resources":null},"registration_sha256":"` + strings.Repeat("a", 64) + `"}`)
+	if err := validateSchemaInstanceForSuite(t, "v2.0.0", "pack-source-dispatch.schema.json", nullResources); err == nil {
+		t.Fatal("v2 schema accepted null registration resources")
+	}
+	var request packsyncworkflow.DispatchRequest
+	if err := json.Unmarshal(nullResources, &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("runtime accepted null registration resources")
+	}
+}
+
+func assertV2RuntimeSchemaParity(t *testing.T, name string, value any, runtimeErr error) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaErr := validateSchemaInstanceForSuite(t, "v2.0.0", name, data)
+	if (runtimeErr == nil) != (schemaErr == nil) {
+		t.Fatalf("v2 runtime/schema disagreement for %s: runtime=%v schema=%v document=%s", name, runtimeErr, schemaErr, data)
 	}
 }
 
@@ -611,19 +741,25 @@ func TestPublicationSchemaMatchesRuntimeHashValidation(t *testing.T) {
 
 func validateSchemaInstance(t *testing.T, name string, instance []byte) error {
 	t.Helper()
+	return validateSchemaInstanceForSuite(t, "v1.0.0", name, instance)
+}
+
+func validateSchemaInstanceForSuite(t *testing.T, version, name string, instance []byte) error {
+	t.Helper()
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
-	root := packSourceSchemaRoot(t)
+	root := filepath.Join(repositoryRoot(t), "schemas", "pack-source", version)
+	baseID := "https://yersonargotev.github.io/packy/schemas/pack-source/" + version + "/"
 	for _, suiteName := range packSourceSchemaNames {
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader([]byte(readFile(t, filepath.Join(root, suiteName)))))
 		if err != nil {
 			t.Fatalf("parse schema %s: %v", suiteName, err)
 		}
-		if err := compiler.AddResource(packSourceSchemaBaseID+suiteName, document); err != nil {
+		if err := compiler.AddResource(baseID+suiteName, document); err != nil {
 			t.Fatalf("register schema %s by canonical ID: %v", suiteName, err)
 		}
 	}
-	schema, err := compiler.Compile(packSourceSchemaBaseID + name)
+	schema, err := compiler.Compile(baseID + name)
 	if err != nil {
 		t.Fatalf("compile schema %s: %v", name, err)
 	}
