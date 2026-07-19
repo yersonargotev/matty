@@ -24,7 +24,7 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 		Sources []packsync.SourceConfig `json:"sources"`
 	}
 	readJSONForTest(t, filepath.Join(base, "bundle", "sources.json"), &config)
-	for _, binding := range config.Sources[0].Resources {
+	for _, binding := range sourceResourcesForTest(t, config.Sources, "mattpocock-skills") {
 		copyTreeForTest(t, filepath.Join(base, "bundle", filepath.FromSlash(binding.UpstreamPath)), filepath.Join(snapshot, filepath.FromSlash(binding.UpstreamPath)))
 	}
 	copyTreeForTest(t, filepath.Join(root, "internal", "packsync", "testdata", "real-upstream"), snapshot)
@@ -128,6 +128,17 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 	if result["head_sha"] == "" || result["result_tree_sha"] == "" || result["head_sha"] == result["result_tree_sha"] {
 		t.Fatalf("publication did not preserve distinct commit/tree identity: %#v", result)
 	}
+}
+
+func sourceResourcesForTest(t *testing.T, sources []packsync.SourceConfig, sourceID string) []packsync.Binding {
+	t.Helper()
+	for _, source := range sources {
+		if source.ID == sourceID {
+			return source.Resources
+		}
+	}
+	t.Fatalf("source %q is missing", sourceID)
+	return nil
 }
 
 type sandboxSource struct {

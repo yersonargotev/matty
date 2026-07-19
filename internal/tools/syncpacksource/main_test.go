@@ -269,7 +269,7 @@ func prepareInspectFixture(t *testing.T) (string, string, packsync.Lock) {
 		Sources []packsync.SourceConfig `json:"sources"`
 	}
 	readJSONForTest(t, filepath.Join(repository, "bundle", "sources.json"), &config)
-	for _, binding := range config.Sources[0].Resources {
+	for _, binding := range sourceResourcesForTest(t, config.Sources, "mattpocock-skills") {
 		copyTreeForTest(t, filepath.Join(repository, "bundle", filepath.FromSlash(binding.UpstreamPath)), filepath.Join(snapshot, filepath.FromSlash(binding.UpstreamPath)))
 	}
 	var lock packsync.Lock

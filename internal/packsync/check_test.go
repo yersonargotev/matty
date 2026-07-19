@@ -892,7 +892,17 @@ func realSnapshot(t *testing.T, repository string, upstreamChanges bool) string 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, binding := range config.Sources[0].Resources {
+	var resources []Binding
+	for _, source := range config.Sources {
+		if source.ID == "mattpocock-skills" {
+			resources = source.Resources
+			break
+		}
+	}
+	if resources == nil {
+		t.Fatal("mattpocock-skills source is missing")
+	}
+	for _, binding := range resources {
 		copyTree(t, filepath.Join(repository, "bundle", filepath.FromSlash(binding.UpstreamPath)), filepath.Join(root, filepath.FromSlash(binding.UpstreamPath)))
 	}
 	if upstreamChanges {
