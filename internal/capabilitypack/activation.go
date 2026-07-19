@@ -188,11 +188,18 @@ type SurfaceAdapter interface {
 }
 
 type ActivationIntent struct {
-	PackID   string  `json:"pack_id"`
-	Surface  Surface `json:"surface"`
-	Version  string  `json:"version"`
-	Active   bool    `json:"active"`
-	Revision int     `json:"revision"`
+	PackID   string         `json:"pack_id"`
+	Surface  Surface        `json:"surface"`
+	Version  string         `json:"version"`
+	Active   bool           `json:"active"`
+	Revision int            `json:"revision"`
+	Aliases  []SurfaceAlias `json:"aliases"`
+}
+
+type SurfaceAlias struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type ProjectionOwnership struct {
@@ -790,21 +797,25 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	}
 
 	actions := flattenActions(request.Plan.phases)
-	state.SchemaVersion = 1
+	state.SchemaVersion = 2
 	if request.Plan.operation != OperationReconcile && !request.Plan.recovery {
 		previousIntents := activeIntents(state)
+		previousByID := map[string]ActivationIntent{}
+		for _, intent := range previousIntents {
+			previousByID[intent.PackID] = intent
+		}
 		activeTarget := request.Plan.operation != OperationDeactivate
 		targetVersion := pack.Version
 		if request.Plan.operation == OperationDeactivate && request.Plan.oldVersion != "" {
 			targetVersion = request.Plan.oldVersion
 		}
-		state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: targetVersion, Active: activeTarget, Revision: state.Intent.Revision + 1}
+		state.Intent = ActivationIntent{PackID: pack.ID, Surface: request.Plan.surface, Version: targetVersion, Active: activeTarget, Revision: state.Intent.Revision + 1, Aliases: cloneAliases(previousByID[pack.ID].Aliases)}
 		byID := map[string]ActivationIntent{}
 		for _, intent := range previousIntents {
 			byID[intent.PackID] = intent
 		}
 		for _, activation := range request.Plan.activations {
-			byID[activation.Pack.ID] = ActivationIntent{PackID: activation.Pack.ID, Surface: request.Plan.surface, Version: activation.Pack.Version, Active: true, Revision: state.Intent.Revision}
+			byID[activation.Pack.ID] = ActivationIntent{PackID: activation.Pack.ID, Surface: request.Plan.surface, Version: activation.Pack.Version, Active: true, Revision: state.Intent.Revision, Aliases: cloneAliases(previousByID[activation.Pack.ID].Aliases)}
 		}
 		if request.Plan.operation == OperationDeactivate {
 			byID[pack.ID] = state.Intent
@@ -1538,8 +1549,12 @@ func repairEligible(owners []ProjectionOwnership, projection ObservedProjection,
 	return owner.Fingerprint == projection.DesiredFingerprint && digestJSON(owner.Contributors) == digestJSON(c.contributorSet(projection.ID))
 }
 func cloneActivationState(state ActivationState) ActivationState {
+	state.Intent.Aliases = cloneAliases(state.Intent.Aliases)
 	state.Ownership = append([]ProjectionOwnership(nil), state.Ownership...)
 	state.Intents = append([]ActivationIntent(nil), state.Intents...)
+	for i := range state.Intents {
+		state.Intents[i].Aliases = cloneAliases(state.Intents[i].Aliases)
+	}
 	for i := range state.Ownership {
 		state.Ownership[i].Contributors = append([]string(nil), state.Ownership[i].Contributors...)
 	}
@@ -1557,6 +1572,13 @@ func cloneActivationState(state ActivationState) ActivationState {
 	}
 	state.External = append([]ExternalEffect(nil), state.External...)
 	return state
+}
+
+func cloneAliases(aliases []SurfaceAlias) []SurfaceAlias {
+	if aliases == nil {
+		return nil
+	}
+	return append([]SurfaceAlias{}, aliases...)
 }
 
 func cloneJournal(journal ApplyingJournal) ApplyingJournal {

@@ -10,13 +10,25 @@ import (
 	"sort"
 )
 
+const fileResourceRootPath = "."
+
 func inventory(root string) ([]FileEvidence, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("resource root %s is not a real directory", root)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("resource root %s is a symlink", root)
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("resource root %s is not a regular file or directory", root)
+		}
+		file, err := inventoryFile(root, fileResourceRootPath, info)
+		if err != nil {
+			return nil, err
+		}
+		return []FileEvidence{file}, nil
 	}
 	var files []FileEvidence
 	err = filepath.WalkDir(root, func(name string, entry fs.DirEntry, walkErr error) error {
@@ -31,7 +43,7 @@ func inventory(root string) ([]FileEvidence, error) {
 		if mode&os.ModeSymlink != 0 {
 			return fmt.Errorf("unsafe symlink: %s", name)
 		}
-		if mode.Perm()&0o022 != 0 || mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		if entry.IsDir() && unsafeInventoryMode(mode) {
 			return fmt.Errorf("unsafe permissions %04o: %s", mode.Perm(), name)
 		}
 		if entry.IsDir() {
@@ -39,10 +51,6 @@ func inventory(root string) ([]FileEvidence, error) {
 		}
 		if !mode.IsRegular() {
 			return fmt.Errorf("unsafe non-regular file: %s", name)
-		}
-		data, err := os.ReadFile(name)
-		if err != nil {
-			return err
 		}
 		relative, err := filepath.Rel(root, name)
 		if err != nil {
@@ -52,7 +60,11 @@ func inventory(root string) ([]FileEvidence, error) {
 		if !safeSlashPath(relative) {
 			return fmt.Errorf("unsafe inventoried path %q", relative)
 		}
-		files = append(files, FileEvidence{Path: relative, Size: int64(len(data)), Mode: uint32(mode.Perm()), SHA256: hashBytes(data)})
+		file, err := inventoryFile(name, relative, entryInfo)
+		if err != nil {
+			return err
+		}
+		files = append(files, file)
 		return nil
 	})
 	if err != nil {
@@ -63,6 +75,22 @@ func inventory(root string) ([]FileEvidence, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func inventoryFile(name, relative string, info fs.FileInfo) (FileEvidence, error) {
+	mode := info.Mode()
+	if unsafeInventoryMode(mode) {
+		return FileEvidence{}, fmt.Errorf("unsafe permissions %04o: %s", mode.Perm(), name)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return FileEvidence{}, err
+	}
+	return FileEvidence{Path: relative, Size: int64(len(data)), Mode: uint32(mode.Perm()), SHA256: hashBytes(data)}, nil
+}
+
+func unsafeInventoryMode(mode fs.FileMode) bool {
+	return mode.Perm()&0o022 != 0 || mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0
 }
 
 func resourceHash(files []FileEvidence) string {

@@ -615,6 +615,56 @@ func TestInventoryRejectsSymlinksAndUnsafePermissions(t *testing.T) {
 	}
 }
 
+func TestInventoryAcceptsAnInertRegularFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "idea-coach.md")
+	writeFile(t, root, "inert agent instructions\n")
+
+	files, err := inventory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []FileEvidence{{Path: ".", Size: 25, Mode: 0o644, SHA256: hashBytes([]byte("inert agent instructions\n"))}}
+	if !reflect.DeepEqual(files, want) {
+		t.Fatalf("file inventory = %#v, want %#v", files, want)
+	}
+}
+
+func TestCheckInventoriesManifestV2FileResourceWithoutExecutingIt(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	writeFile(t, filepath.Join(repository, "bundle", "sources.json"), `{"schema_version":1,"sources":[{"id":"mattpocock-skills","provider":"github","repository":"mattpocock/skills","selector":{"mode":"stable-release"},"resources":[{"pack_id":"addy","kind":"agent","resource_id":"idea-coach","upstream_path":"content/agents/idea-coach.md"},{"pack_id":"addy","kind":"asset","resource_id":"shared-reference","upstream_path":"content/references/shared.md"},{"pack_id":"addy","kind":"command","resource_id":"refine-idea","upstream_path":"content/commands/refine-idea.md"},{"pack_id":"addy","kind":"notice","resource_id":"license","upstream_path":"content/notices/MIT.txt"},{"pack_id":"addy","kind":"skill","resource_id":"idea-refine","upstream_path":"content/skills/idea-refine"}]}]}`)
+	writeFile(t, filepath.Join(repository, "bundle", "packs", "addy", "pack.json"), `{"schema_version":2,"id":"addy","version":"1.0.0","provides":["workflow:idea-refine"],"requires":{"capabilities":[],"tools":[]},"conflicts":[],"resources":[{"kind":"agent","id":"idea-coach","source":"content/agents/idea-coach.md","description":"Coaches idea refinement","mode":"subagent","tools":["browser"],"permissions":["browser","network"],"requires":["skill:idea-refine"],"bindings":[{"surface":"codex","projection":"agent","name":"idea-coach","invocation":"@idea-coach","mode":"native","sharing":"exclusive"},{"surface":"opencode","projection":"agent","name":"idea-coach","invocation":"@idea-coach","mode":"native","sharing":"exclusive"}]},{"kind":"asset","id":"shared-reference","source":"content/references/shared.md","requires":[]},{"kind":"command","id":"refine-idea","source":"content/commands/refine-idea.md","arguments":{"mode":"freeform","placeholder":"$ARGUMENTS"},"requires":["agent:idea-coach","asset:shared-reference","skill:idea-refine"],"bindings":[{"surface":"codex","projection":"skill","name":"refine-idea","invocation":"$refine-idea","mode":"degraded","degradation":"codex-command-as-workflow-skill","sharing":"exclusive"},{"surface":"opencode","projection":"command","name":"refine-idea","invocation":"/refine-idea","mode":"native","sharing":"exclusive"}]},{"kind":"notice","id":"license","source":"content/notices/MIT.txt","license":"MIT","attribution":"Copyright Addy contributors","requires":[]},{"kind":"skill","id":"idea-refine","source":"content/skills/idea-refine","requires":["asset:shared-reference"],"bindings":[{"surface":"codex","projection":"skill","name":"idea-refine","invocation":"$idea-refine","mode":"native","sharing":"exclusive"},{"surface":"opencode","projection":"skill","name":"idea-refine","invocation":"$idea-refine","mode":"native","sharing":"exclusive"}]}],"contract":{"exclusions":[{"id":"upstream-hooks","source_paths":["hooks/pre-commit"],"reason":"hooks are inert"}],"optional_modes":[{"id":"browser-research","authorities":["browser","network"],"fallback":"continue from supplied evidence"}]}}`)
+	contents := map[string]string{
+		"content/agents/idea-coach.md": "agent", "content/references/shared.md": "asset", "content/commands/refine-idea.md": "command", "content/notices/MIT.txt": "MIT", "content/skills/idea-refine/SKILL.md": "skill", "content/skills/idea-refine/idea-refine.sh": "#!/bin/sh\n",
+	}
+	for path, content := range contents {
+		writeFile(t, filepath.Join(repository, "bundle", filepath.FromSlash(path)), content)
+	}
+	os.RemoveAll(filepath.Join(repository, "bundle", "packs", "matty"))
+	os.RemoveAll(filepath.Join(repository, "bundle", "skills"))
+	os.RemoveAll(snapshot)
+	snapshot = t.TempDir()
+	for path, content := range contents {
+		writeFile(t, filepath.Join(snapshot, filepath.FromSlash(path)), content)
+	}
+
+	plan := checkWith(t, repository, &fixtureSource{root: snapshot, candidate: acceptedCandidate()})
+	if plan.Counts.Resources != 5 || plan.Counts.Files != 6 || len(plan.ProposedLock.Resources) != 5 {
+		t.Fatalf("file resource was not inventoried: counts=%#v lock=%#v blockers=%v", plan.Counts, plan.ProposedLock.Resources, plan.Blockers)
+	}
+	if got := plan.ProposedLock.Resources[0].Files[0].Path; got != "." {
+		t.Fatalf("file evidence path = %q, want root marker", got)
+	}
+}
+
+func TestCheckRejectsManifestV2ProducerRuntimeDisagreement(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	writeFile(t, filepath.Join(repository, "bundle", "packs", "matty", "pack.json"), `{"schema_version":2,"id":"matty","version":"2.0.0","resources":[]}`)
+	_, err := (Engine{allowBootstrap: true, Source: &fixtureSource{root: snapshot, candidate: acceptedCandidate()}}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, SourceID: "mattpocock-skills", AcquisitionDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "disagrees with capability-pack contract") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type fixtureSource struct {
 	root      string
 	candidate Candidate

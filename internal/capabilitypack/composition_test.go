@@ -5,6 +5,36 @@ import (
 	"testing"
 )
 
+func TestCompositionRejectsImplicitSharingAndStaleAliases(t *testing.T) {
+	binding := func(sharing string) []Binding {
+		return []Binding{{Surface: SurfaceCodex, Projection: "skill", Name: "review", Invocation: "$review", Mode: "native", Sharing: sharing}}
+	}
+	shared := Resource{Kind: "skill", ID: "review", Source: "content/review", Bindings: binding("exclusive")}
+	packs := []Pack{
+		{ID: "active", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{shared}},
+		{ID: "requested", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{shared}},
+	}
+	active := ActivationIntent{PackID: "active", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Aliases: []SurfaceAlias{{Kind: "command", ID: "removed", Name: "addy-removed"}}}
+	facade := NewFacade(Catalog{packs: packs})
+	result, err := facade.compose(packs[1], ActivationState{Intent: active}, SurfaceCodex, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.blockers) != 2 || result.blockers[0].Kind != BlockerAlias || result.blockers[1].Kind != BlockerSharing {
+		t.Fatalf("blockers = %+v", result.blockers)
+	}
+}
+
+func TestCompositionAcceptsIdenticalExplicitSharedContributions(t *testing.T) {
+	resource := Resource{Kind: "skill", ID: "review", Source: "content/review", Bindings: []Binding{{Surface: SurfaceCodex, Projection: "skill", Name: "review", Invocation: "$review", Mode: "native", Sharing: "shared"}}}
+	packs := []Pack{{ID: "active", Version: "1", Resources: []Resource{resource}}, {ID: "requested", Version: "1", Resources: []Resource{resource}}}
+	active := ActivationIntent{PackID: "active", Surface: SurfaceCodex, Version: "1", Active: true, Aliases: []SurfaceAlias{}}
+	result, err := NewFacade(Catalog{packs: packs}).compose(packs[1], ActivationState{Intent: active}, SurfaceCodex, true)
+	if err != nil || len(result.blockers) != 0 || len(result.contributorSet("skill:review")) != 2 {
+		t.Fatalf("composition = %+v, err = %v", result, err)
+	}
+}
+
 func TestPreviewIncludesInactiveTransitiveRequirementsInCanonicalComposition(t *testing.T) {
 	packs := []Pack{
 		{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"cap:b"}}, Resources: []Resource{{Kind: "instruction", ID: "app", Source: "app"}}},

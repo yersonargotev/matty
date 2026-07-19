@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -60,8 +61,11 @@ func (s *FileActivationStore) Save(_ context.Context, surface Surface, expectedR
 	if current.Intent.Revision != expectedRevision {
 		return StalePlanError{Precondition: fmt.Sprintf("activation intent revision changed from %d to %d before persistence; rerun activation to preview a fresh plan", expectedRevision, current.Intent.Revision)}
 	}
-	state.SchemaVersion = 1
+	state.SchemaVersion = 2
 	state.Intent.Surface = surface
+	if err := canonicalizeActivationState(&state); err != nil {
+		return err
+	}
 	replaced := false
 	for i := range document.Activations {
 		if document.Activations[i].Intent.Surface == surface {
@@ -76,7 +80,7 @@ func (s *FileActivationStore) Save(_ context.Context, surface Surface, expectedR
 	sort.Slice(document.Activations, func(i, j int) bool {
 		return document.Activations[i].Intent.Surface < document.Activations[j].Intent.Surface
 	})
-	document.SchemaVersion = 2
+	document.SchemaVersion = 3
 	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode capability-pack state: %w", err)
@@ -113,16 +117,95 @@ func (s *FileActivationStore) load() (activationDocument, error) {
 		if err := json.Unmarshal(data, &legacy); err != nil {
 			return activationDocument{}, err
 		}
-		return activationDocument{SchemaVersion: 2, Activations: []ActivationState{legacy}}, nil
+		document := activationDocument{SchemaVersion: 3, Activations: []ActivationState{legacy}}
+		if err := canonicalizeActivationDocument(&document); err != nil {
+			return activationDocument{}, err
+		}
+		return document, nil
 	case 2:
 		var document activationDocument
 		if err := json.Unmarshal(data, &document); err != nil {
+			return activationDocument{}, err
+		}
+		for _, state := range document.Activations {
+			if state.SchemaVersion != 1 {
+				return activationDocument{}, fmt.Errorf("read capability-pack state %s: document v2 contains unsupported activation schema_version %d", s.path, state.SchemaVersion)
+			}
+		}
+		if err := canonicalizeActivationDocument(&document); err != nil {
+			return activationDocument{}, err
+		}
+		return document, nil
+	case 3:
+		var document activationDocument
+		if err := json.Unmarshal(data, &document); err != nil {
+			return activationDocument{}, err
+		}
+		for _, state := range document.Activations {
+			if state.SchemaVersion != 2 {
+				return activationDocument{}, fmt.Errorf("read capability-pack state %s: document v3 contains unsupported activation schema_version %d", s.path, state.SchemaVersion)
+			}
+		}
+		if err := canonicalizeActivationDocument(&document); err != nil {
 			return activationDocument{}, err
 		}
 		return document, nil
 	default:
 		return activationDocument{}, fmt.Errorf("read capability-pack state %s: unsupported schema_version %d", s.path, header.SchemaVersion)
 	}
+}
+
+func canonicalizeActivationDocument(document *activationDocument) error {
+	document.SchemaVersion = 3
+	for i := range document.Activations {
+		if err := canonicalizeActivationState(&document.Activations[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func canonicalizeActivationState(state *ActivationState) error {
+	state.SchemaVersion = 2
+	if err := canonicalizeAliases(&state.Intent.Aliases); err != nil {
+		return err
+	}
+	for i := range state.Intents {
+		if err := canonicalizeAliases(&state.Intents[i].Aliases); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func canonicalizeAliases(aliases *[]SurfaceAlias) error {
+	if *aliases == nil {
+		*aliases = []SurfaceAlias{}
+	}
+	seen := map[string]bool{}
+	for _, alias := range *aliases {
+		if alias.Kind != "skill" && alias.Kind != "agent" && alias.Kind != "command" {
+			return fmt.Errorf("activation alias kind %q is unsupported", alias.Kind)
+		}
+		if !idPattern.MatchString(alias.ID) {
+			return fmt.Errorf("activation alias id %q is invalid", alias.ID)
+		}
+		if alias.Name == "" || strings.TrimSpace(alias.Name) != alias.Name {
+			return fmt.Errorf("activation alias name must be nonempty canonical text")
+		}
+		key := alias.Kind + ":" + alias.ID
+		if seen[key] {
+			return fmt.Errorf("activation alias identity %q is duplicated", key)
+		}
+		seen[key] = true
+	}
+	sort.Slice(*aliases, func(i, j int) bool {
+		if (*aliases)[i].Kind != (*aliases)[j].Kind {
+			return (*aliases)[i].Kind < (*aliases)[j].Kind
+		}
+		return (*aliases)[i].ID < (*aliases)[j].ID
+	})
+	return nil
 }
 
 func atomicWriteState(path string, data []byte) error {

@@ -204,7 +204,10 @@ func inspectHistoricalResource(root string, resource Resource) ([]historicalFile
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("source %q is a symlink", resource.Source)
 	}
-	if resource.Kind == "instruction" {
+	if historicalFileResource(resource.Kind) {
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("source %q has the wrong resource type", resource.Source)
+		}
 		file, err := inspectHistoricalFile(root, path)
 		if err != nil {
 			return nil, err
@@ -247,6 +250,15 @@ func inspectHistoricalResource(root string, resource Resource) ([]historicalFile
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func historicalFileResource(kind string) bool {
+	switch kind {
+	case "instruction", "agent", "command", "asset", "notice":
+		return true
+	default:
+		return false
+	}
 }
 
 func historicalTreeFiles(root string) ([]string, error) {

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/bundletransaction"
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 type packManifest struct {
@@ -583,7 +584,7 @@ func validateLockedResources(resources []ResourceEvidence) []string {
 		}
 		seenFiles := map[string]bool{}
 		for _, file := range resource.Files {
-			if !safeSlashPath(file.Path) || seenFiles[file.Path] || file.Size < 0 || !fullDigest(file.SHA256) || file.Mode&0o600 != 0o600 || file.Mode&0o022 != 0 || file.Mode&^uint32(0o777) != 0 {
+			if (file.Path == fileResourceRootPath && len(resource.Files) != 1) || (file.Path != fileResourceRootPath && !safeSlashPath(file.Path)) || seenFiles[file.Path] || file.Size < 0 || !fullDigest(file.SHA256) || file.Mode&0o600 != 0o600 || file.Mode&0o022 != 0 || file.Mode&^uint32(0o777) != 0 {
 				blockers = append(blockers, "production lock has unsafe or invalid file evidence: "+key+"/"+file.Path)
 				break
 			}
@@ -644,8 +645,17 @@ func loadManifests(root string) (map[string]packManifest, string, error) {
 		if err := json.Unmarshal(data, &manifest); err != nil {
 			return nil, "", fmt.Errorf("decode runtime manifest %s: %w", name, err)
 		}
-		if manifest.SchemaVersion != 1 || manifest.ID == "" || result[manifest.ID].ID != "" {
+		if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2) || manifest.ID == "" || result[manifest.ID].ID != "" {
 			return nil, "", fmt.Errorf("invalid or duplicate runtime manifest %s", name)
+		}
+		if manifest.SchemaVersion == 2 {
+			portable, err := capabilitypack.LoadPortableManifest(name, filepath.Join(root, "bundle"))
+			if err != nil {
+				return nil, "", fmt.Errorf("runtime manifest %s disagrees with capability-pack contract: %w", name, err)
+			}
+			if portable.ID != manifest.ID || portable.Version != manifest.Version {
+				return nil, "", fmt.Errorf("runtime manifest %s identity disagrees with capability-pack contract", name)
+			}
 		}
 		result[manifest.ID] = manifest
 		relative, err := filepath.Rel(root, name)
