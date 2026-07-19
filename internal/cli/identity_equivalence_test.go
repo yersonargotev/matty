@@ -62,11 +62,15 @@ func TestPackyRuntimeMatchesFrozenMattyBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var expected identityEquivalenceTranscript
 	if string(data) != string(want) {
-		var expected identityEquivalenceTranscript
 		if err := json.Unmarshal(want, &expected); err != nil {
 			t.Fatalf("decode frozen baseline: %v", err)
 		}
+		normalizeSliceFJSONTranscript(&expected)
+		normalizeSliceFJSONTranscript(&transcript)
+	}
+	if expected.Scenarios != nil && !reflect.DeepEqual(expected, transcript) {
 		t.Fatalf("Packy runtime diverged from identity-normalized Matty baseline %s: %s", frozenMattyBaseSHA, firstIdentityEquivalenceDifference(expected, transcript))
 	}
 	assertFreshPackyOwnershipPreservesLegacyMatty(t)
@@ -252,10 +256,45 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// retaining the baseline --version behavior; do not treat its help row as a
 	// lifecycle divergence.
 	value = regexp.MustCompile(`(?m)^  version\s+Print the \$Product version\n`).ReplaceAllString(value, "")
+	// Slice F intentionally deepens capability-pack lifecycle disclosure and
+	// preserves unobserved readiness as unknown. These are post-cutover product
+	// changes, not identity-cutover regressions covered by this frozen baseline.
+	value = regexp.MustCompile(`(?m)^(Binding|Exclusion|Optional mode|Invocation-time prompt authority|Activation grants only|Projection:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = strings.ReplaceAll(value, "authorized=unknown, usable=unknown", "authorized=no, usable=no")
+	value = strings.ReplaceAll(value, "authorized=yes, usable=unknown", "authorized=yes, usable=no")
+	value = strings.ReplaceAll(value, "authorized=no, usable=unknown", "authorized=no, usable=no")
 	value = identityPlanRE.ReplaceAllString(value, "plan-<ID>")
 	value = identityHashRE.ReplaceAllString(value, "<SHA256>")
 	value = identityTimeRE.ReplaceAllString(value, "<TIME>")
 	return value
+}
+
+func removeSliceFJSONFields(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		delete(value, "contract")
+		delete(value, "projection_details")
+		for _, child := range value {
+			removeSliceFJSONFields(child)
+		}
+	case []any:
+		for _, child := range value {
+			removeSliceFJSONFields(child)
+		}
+	}
+}
+
+func normalizeSliceFJSONTranscript(transcript *identityEquivalenceTranscript) {
+	for i := range transcript.Scenarios {
+		var document any
+		if json.Unmarshal([]byte(strings.TrimSpace(transcript.Scenarios[i].Output)), &document) != nil {
+			continue
+		}
+		removeSliceFJSONFields(document)
+		if normalized, err := json.Marshal(document); err == nil {
+			transcript.Scenarios[i].Output = string(normalized) + "\n"
+		}
+	}
 }
 
 func normalizeIdentityStrings(values []string, product string, roots map[string]string) []string {

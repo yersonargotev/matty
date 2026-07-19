@@ -50,9 +50,18 @@ automatically.`,
 func newPackReconcileCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
+	var aliasValues []string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use: "reconcile [pack]", Short: "Repair active capability packs on one CLI surface", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(aliasValues) > 0 && len(args) == 0 {
+				return fmt.Errorf("--alias is valid only for targeted reconcile of one pack")
+			}
+			aliases, err := parseSurfaceAliases(aliasValues)
+			if err != nil {
+				return err
+			}
 			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
@@ -61,18 +70,20 @@ func newPackReconcileCommand(opts Options, workstationResolver *workstation.Reso
 			if len(args) == 1 {
 				packID = args[0]
 			}
-			plan, err := facade.PreviewReconcile(cmd.Context(), capabilitypack.ReconcileRequest{PackID: packID, Surface: capabilitypack.Surface(surface)})
+			plan, err := facade.PreviewReconcile(cmd.Context(), capabilitypack.ReconcileRequest{PackID: packID, Surface: capabilitypack.Surface(surface), Aliases: aliases})
 			if err != nil {
+				return lifecycleFailure(cmd, jsonOutput, "preview", err, nil)
+			}
+			if err := renderActivationPlanOutput(cmd, plan, dryRun, jsonOutput); err != nil {
 				return err
 			}
-			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
-				return err
-			}
-			return applyPackPlan(cmd, opts, facade, plan, dryRun)
+			return applyPackPlan(cmd, opts, facade, plan, dryRun, jsonOutput)
 		},
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	cmd.Flags().StringArrayVar(&aliasValues, "alias", nil, "Set a surface-local alias (<kind>:<logical-id>=<host-name>); repeatable")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON events")
 	_ = cmd.MarkFlagRequired("surface")
 	return cmd
 }
@@ -80,6 +91,7 @@ func newPackReconcileCommand(opts Options, workstationResolver *workstation.Reso
 func newPackDeactivateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
+	var jsonOutput bool
 	cmd := &cobra.Command{Use: "deactivate <pack>", Short: "Deactivate a capability pack on one CLI surface", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		facade, err := activationFacade(opts, workstationResolver)
 		if err != nil {
@@ -87,15 +99,16 @@ func newPackDeactivateCommand(opts Options, workstationResolver *workstation.Res
 		}
 		plan, err := facade.PreviewDeactivate(cmd.Context(), capabilitypack.DeactivationRequest{PackID: args[0], Surface: capabilitypack.Surface(surface)})
 		if err != nil {
+			return lifecycleFailure(cmd, jsonOutput, "preview", err, nil)
+		}
+		if err := renderActivationPlanOutput(cmd, plan, dryRun, jsonOutput); err != nil {
 			return err
 		}
-		if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
-			return err
-		}
-		return applyPackPlan(cmd, opts, facade, plan, dryRun)
+		return applyPackPlan(cmd, opts, facade, plan, dryRun, jsonOutput)
 	}}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON events")
 	_ = cmd.MarkFlagRequired("surface")
 	return cmd
 }
@@ -103,32 +116,40 @@ func newPackDeactivateCommand(opts Options, workstationResolver *workstation.Res
 func newPackUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
+	var aliasValues []string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use: "update <pack>", Short: "Update an active capability pack to the catalog-current version", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			aliases, err := parseSurfaceAliases(aliasValues)
+			if err != nil {
+				return err
+			}
 			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
-			plan, err := facade.PreviewUpdate(cmd.Context(), capabilitypack.UpdateRequest{PackID: args[0], Surface: capabilitypack.Surface(surface)})
+			plan, err := facade.PreviewUpdate(cmd.Context(), capabilitypack.UpdateRequest{PackID: args[0], Surface: capabilitypack.Surface(surface), Aliases: aliases})
 			if err != nil {
+				return lifecycleFailure(cmd, jsonOutput, "preview", err, nil)
+			}
+			if err := renderActivationPlanOutput(cmd, plan, dryRun, jsonOutput); err != nil {
 				return err
 			}
-			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
-				return err
-			}
-			return applyPackPlan(cmd, opts, facade, plan, dryRun)
+			return applyPackPlan(cmd, opts, facade, plan, dryRun, jsonOutput)
 		},
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	cmd.Flags().StringArrayVar(&aliasValues, "alias", nil, "Set a surface-local alias (<kind>:<logical-id>=<host-name>); repeatable")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON events")
 	_ = cmd.MarkFlagRequired("surface")
 	return cmd
 }
 
-func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facade, plan capabilitypack.ReconciliationPlan, dryRun bool) error {
+func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facade, plan capabilitypack.ReconciliationPlan, dryRun, jsonOutput bool) error {
 	if !plan.Applicable() {
-		return capabilitypack.PlanNotActionableError{Disposition: plan.Disposition()}
+		return lifecycleFailure(cmd, jsonOutput, "blocked", capabilitypack.PlanNotActionableError{Disposition: plan.Disposition()}, &plan)
 	}
 	if dryRun || plan.NoOp() {
 		return nil
@@ -136,7 +157,10 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 	interactive := opts.Terminal.Interactive(cmd.InOrStdin())
 	if !interactive {
 		_, err := facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Interactive: false})
-		return err
+		if err != nil {
+			return lifecycleFailure(cmd, jsonOutput, "apply-noninteractive", err, &plan)
+		}
+		return nil
 	}
 	var receipts []capabilitypack.ApprovalReceipt
 	for _, phase := range plan.Phases() {
@@ -145,25 +169,28 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 		}
 		approved, err := opts.Terminal.Approve(cmd.InOrStdin(), cmd.OutOrStdout(), fmt.Sprintf("Approve %s phase for exact plan %s?", phase.Kind, plan.ID()))
 		if err != nil {
-			return err
+			return lifecycleFailure(cmd, jsonOutput, "approval", err, &plan)
 		}
 		if !approved {
 			operation := string(plan.Operation())
 			if plan.Operation() == capabilitypack.OperationActivate {
 				operation = "activation"
 			}
-			return fmt.Errorf("%s cancelled; plan %s was not approved", operation, plan.ID())
+			return lifecycleFailure(cmd, jsonOutput, "approval", fmt.Errorf("%s cancelled; plan %s was not approved", operation, plan.ID()), &plan)
 		}
 		receipts = append(receipts, facade.Approve(plan, phase.Kind))
 	}
 	result, err := facade.Apply(cmd.Context(), capabilitypack.ApplyRequest{Plan: plan, Approvals: receipts, Interactive: true})
 	if err != nil {
-		return err
+		return lifecycleFailure(cmd, jsonOutput, "apply", err, &plan)
+	}
+	if jsonOutput {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(capabilitypack.JSONApplyResultFor(plan, result))
 	}
 	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
 		return err
 	}
-	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", yesNo(result.Readiness.Configured), yesNo(result.Readiness.Authorized), yesNo(result.Readiness.Usable)); err != nil {
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", readinessValue(result.ReadinessObserved.Configured, result.Readiness.Configured), readinessValue(result.ReadinessObserved.Authorization, result.Readiness.Authorized), readinessValue(result.ReadinessObserved.Usability, result.Readiness.Usable)); err != nil {
 		return err
 	}
 	if len(result.PendingHumanActions) > 0 {
@@ -182,27 +209,57 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 func newPackActivateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
 	var surface string
 	var dryRun bool
+	var aliasValues []string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use: "activate <pack>", Short: "Activate a capability pack on one CLI surface", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			aliases, err := parseSurfaceAliases(aliasValues)
+			if err != nil {
+				return err
+			}
 			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
-			plan, err := facade.Preview(cmd.Context(), capabilitypack.ActivationRequest{PackID: args[0], Surface: capabilitypack.Surface(surface)})
+			plan, err := facade.Preview(cmd.Context(), capabilitypack.ActivationRequest{PackID: args[0], Surface: capabilitypack.Surface(surface), Aliases: aliases})
 			if err != nil {
+				return lifecycleFailure(cmd, jsonOutput, "preview", err, nil)
+			}
+			if err := renderActivationPlanOutput(cmd, plan, dryRun, jsonOutput); err != nil {
 				return err
 			}
-			if err := renderActivationPlan(cmd, plan, dryRun); err != nil {
-				return err
-			}
-			return applyPackPlan(cmd, opts, facade, plan, dryRun)
+			return applyPackPlan(cmd, opts, facade, plan, dryRun, jsonOutput)
 		},
 	}
 	cmd.Flags().StringVar(&surface, "surface", "", "CLI surface (codex or opencode)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the immutable plan without approval or mutation")
+	cmd.Flags().StringArrayVar(&aliasValues, "alias", nil, "Set a surface-local alias (<kind>:<logical-id>=<host-name>); repeatable")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON events")
 	_ = cmd.MarkFlagRequired("surface")
 	return cmd
+}
+
+func lifecycleFailure(cmd *cobra.Command, jsonOutput bool, stage string, err error, plan *capabilitypack.ReconciliationPlan) error {
+	if jsonOutput {
+		var approval *bool
+		var actions *int
+		if stage == "preview" || stage == "blocked" {
+			no, zero := false, 0
+			approval, actions = &no, &zero
+		} else if stage == "approval" {
+			yes, zero := true, 0
+			approval, actions = &yes, &zero
+		} else if stage == "apply-noninteractive" {
+			no := false
+			approval = &no
+		} else if stage == "apply" {
+			yes := true
+			approval = &yes
+		}
+		_ = json.NewEncoder(cmd.OutOrStdout()).Encode(capabilitypack.JSONFailureFor(stage, err, plan, approval, actions))
+	}
+	return err
 }
 
 func surfaceName(surface capabilitypack.Surface) string {
@@ -210,6 +267,32 @@ func surfaceName(surface capabilitypack.Surface) string {
 		return "OpenCode"
 	}
 	return "Codex"
+}
+
+func parseSurfaceAliases(values []string) ([]capabilitypack.SurfaceAlias, error) {
+	if values == nil {
+		return nil, nil
+	}
+	aliases := make([]capabilitypack.SurfaceAlias, 0, len(values))
+	for _, value := range values {
+		if strings.Count(value, "=") != 1 {
+			return nil, fmt.Errorf("invalid --alias %q: expected <kind>:<logical-id>=<host-name>", value)
+		}
+		identity, name, _ := strings.Cut(value, "=")
+		kind, id, ok := strings.Cut(identity, ":")
+		if !ok || kind == "" || id == "" || name == "" {
+			return nil, fmt.Errorf("invalid --alias %q: expected <kind>:<logical-id>=<host-name>", value)
+		}
+		aliases = append(aliases, capabilitypack.SurfaceAlias{Kind: kind, ID: id, Name: name})
+	}
+	return aliases, nil
+}
+
+func readinessValue(observed, value bool) string {
+	if !observed {
+		return "unknown"
+	}
+	return yesNo(value)
 }
 
 func activationFacade(opts Options, workstationResolver *workstation.Resolver) (capabilitypack.Facade, error) {
@@ -276,6 +359,23 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	}
 	for _, activation := range plan.Activations() {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Activation: %s %s %s\n", activation.Role, activation.Pack.ID, activation.Pack.Version); err != nil {
+			return err
+		}
+	}
+	for _, alias := range plan.Aliases() {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Alias: %s:%s=%s\n", alias.Kind, alias.ID, alias.Name); err != nil {
+			return err
+		}
+	}
+	if err := renderPackContract(cmd, plan.LifecycleContract()); err != nil {
+		return err
+	}
+	structured := plan.JSONReport(dryRun)
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Contract diff: added=%s changed=%s removed=%s retained=%s\n", joinFacts(structured.ContractDiff.Added), joinFacts(structured.ContractDiff.Changed), joinFacts(structured.ContractDiff.Removed), joinFacts(structured.ContractDiff.Retained)); err != nil {
+		return err
+	}
+	for _, migration := range structured.Migrations {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Migration: %s\n", migration); err != nil {
 			return err
 		}
 	}
@@ -372,6 +472,39 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 	return nil
 }
 
+func renderActivationPlanOutput(cmd *cobra.Command, plan capabilitypack.ReconciliationPlan, dryRun, jsonOutput bool) error {
+	if jsonOutput {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(plan.JSONReport(dryRun))
+	}
+	return renderActivationPlan(cmd, plan, dryRun)
+}
+
+func renderPackContract(cmd *cobra.Command, contract capabilitypack.LifecycleContract) error {
+	for _, binding := range contract.Bindings {
+		mode := binding.Mode
+		if binding.Degradation != "" {
+			mode += " (" + binding.Degradation + ")"
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Binding: %s:%s -> %s [%s]\n", binding.Kind, binding.ID, binding.Invocation, mode); err != nil {
+			return err
+		}
+	}
+	for _, exclusion := range contract.Exclusions {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Exclusion: %s — %s\n", exclusion.ID, exclusion.Reason); err != nil {
+			return err
+		}
+	}
+	for _, mode := range contract.OptionalModes {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Optional mode: %s — %s\n", mode.ID, strings.Join(mode.Authorities, ", ")); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Invocation-time prompt authority: %s\n%s\n", joinFacts(contract.PromptAuthorities), contract.AuthorityDisclosure); err != nil {
+		return err
+	}
+	return nil
+}
+
 func joinFacts(values []string) string {
 	if len(values) == 0 {
 		return "none"
@@ -432,15 +565,24 @@ func renderPackStatusOverview(cmd *cobra.Command, report capabilitypack.StatusRe
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(writer, "PACK\tSURFACE\tINTENT\tATTEMPT\tCONFIGURED\tAUTHORIZED\tUSABLE\tACTION")
 	for _, entry := range report.Entries {
-		configured, authorized, usable := yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable)
+		configured := readinessValue(entry.ReadinessObserved.Configured, entry.Readiness.Configured)
+		authorized := readinessValue(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized)
+		usable := readinessValue(entry.ReadinessObserved.Usability, entry.Readiness.Usable)
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", entry.Pack.ID, entry.Surface, renderIntent(entry.Intent), renderAttempt(entry.LatestAttempt), configured, authorized, usable, renderStatusAction(entry))
 	}
 	return writer.Flush()
 }
 
 func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry) error {
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nUpdate available: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderUpdateAvailability(entry), renderAttempt(entry.LatestAttempt), yesNo(entry.Readiness.Configured), yesNo(entry.Readiness.Authorized), yesNo(entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence))
-	return err
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nUpdate available: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderUpdateAvailability(entry), renderAttempt(entry.LatestAttempt), readinessValue(entry.ReadinessObserved.Configured, entry.Readiness.Configured), readinessValue(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), readinessValue(entry.ReadinessObserved.Usability, entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence)); err != nil {
+		return err
+	}
+	for _, projection := range entry.ProjectionDetails {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s owner=%s health=%s contributors=%s\n", projection.ID, projection.Owner, projection.Health, joinFacts(projection.Contributors)); err != nil {
+			return err
+		}
+	}
+	return renderPackContract(cmd, entry.Contract)
 }
 
 func renderStatusAction(entry capabilitypack.StatusEntry) string {

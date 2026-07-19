@@ -42,6 +42,7 @@ type ProjectionStatus struct {
 	ID, Target, ObservedFingerprint, DesiredFingerprint string
 	Health                                              ProjectionHealth
 	Contributors                                        []string
+	Owner                                               string
 }
 
 type ProjectionSummary struct {
@@ -73,6 +74,7 @@ type StatusEntry struct {
 	Blockers            []string
 	PendingHumanActions []string
 	Evidence            []string
+	Contract            LifecycleContract
 }
 
 type ReadinessObservationStatus struct {
@@ -156,6 +158,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	entry := StatusEntry{Pack: pack, Surface: surface}
 	evidencePack := pack
 	if intent, ok := intentForPack(state, pack.ID, surface); ok {
+		entry.Contract = LifecycleContractFor(pack, surface, intent.Aliases)
 		entry.Intent = IntentStatus{Active: intent.Active, Revision: intent.Revision, Version: intent.Version}
 		entry.IntentPresent = true
 		entry.UpdateAvailable = intent.Active && intent.Version != pack.Version
@@ -169,6 +172,9 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 		}
 	} else if evidencePack, err = f.catalog.Show(pack.ID); err != nil {
 		return StatusEntry{}, err
+	}
+	if entry.Contract.DependencyClosure == nil {
+		entry.Contract = LifecycleContractFor(pack, surface, nil)
 	}
 	entry.LatestAttempt = latestAttemptStatus(state, pack.ID, surface)
 	surfaceComposition, err := f.compose(evidencePack, state, surface, true)
@@ -245,6 +251,13 @@ func deriveProjectionStatus(packID string, observed []ObservedProjection, owners
 	for _, p := range observed {
 		status := ProjectionStatus{ID: p.ID, Target: p.Action.Target, ObservedFingerprint: p.ObservedFingerprint, DesiredFingerprint: p.DesiredFingerprint, Contributors: c.contributorSet(p.ID)}
 		owner, owned := ownershipByID(ownership, p.ID)
+		if p.ExternallyManaged {
+			status.Owner = "external"
+		} else if owned {
+			status.Owner = "packy"
+		} else {
+			status.Owner = "unmanaged"
+		}
 		switch {
 		case !p.Exists:
 			status.Health = ProjectionMissing

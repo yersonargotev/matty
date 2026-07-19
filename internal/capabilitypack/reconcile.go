@@ -17,7 +17,7 @@ func (f Facade) PreviewReconcile(ctx context.Context, request ReconcileRequest) 
 
 func (f Facade) previewReconcile(ctx context.Context, request ReconcileRequest) (ReconciliationPlan, error) {
 	if request.PackID != "" {
-		activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface}
+		activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface, Aliases: request.Aliases}
 		_, _, state, err := f.activationInputsForOperation(ctx, activation, OperationReconcile)
 		if err != nil {
 			return ReconciliationPlan{}, err
@@ -37,6 +37,9 @@ func (f Facade) previewReconcile(ctx context.Context, request ReconcileRequest) 
 		plan.limitReconcileTo(request.PackID)
 		plan.seal()
 		return plan, nil
+	}
+	if len(request.Aliases) > 0 {
+		return ReconciliationPlan{}, fmt.Errorf("surface-wide reconcile does not accept aliases")
 	}
 
 	if f.activation == nil || f.activation.store == nil {

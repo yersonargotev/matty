@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -23,6 +24,98 @@ func (a alwaysUsableAdapter) InspectSurface(ctx context.Context, transition capa
 	inspection, err := a.delegate.InspectSurface(ctx, transition)
 	inspection.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: true, Authorized: true, UsabilityObserved: true, Usable: true, Evidence: []string{"fake runtime loaded capability"}}
 	return inspection, err
+}
+
+func TestParseSurfaceAliasesAcceptsRepeatableQualifiedAliases(t *testing.T) {
+	if aliases, err := parseSurfaceAliases(nil); err != nil || aliases != nil {
+		t.Fatalf("omitted aliases = %+v, err=%v; want nil intent-preserving input", aliases, err)
+	}
+	aliases, err := parseSurfaceAliases([]string{"command:build=addy-build", "agent:reviewer=addy-reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []capabilitypack.SurfaceAlias{{Kind: "command", ID: "build", Name: "addy-build"}, {Kind: "agent", ID: "reviewer", Name: "addy-reviewer"}}
+	if !reflect.DeepEqual(aliases, want) {
+		t.Fatalf("aliases = %+v, want %+v", aliases, want)
+	}
+}
+
+func TestParseSurfaceAliasesRejectsMalformedInput(t *testing.T) {
+	for _, input := range []string{"build", "command:build", "command:=name", ":build=name", "command:build=", "command:build=name=extra"} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := parseSurfaceAliases([]string{input}); err == nil || !strings.Contains(err.Error(), "--alias") {
+				t.Fatalf("parse error = %v", err)
+			}
+		})
+	}
+}
+
+func TestReadinessValuePreservesUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		observed bool
+		value    bool
+		want     string
+	}{{false, false, "unknown"}, {false, true, "unknown"}, {true, false, "no"}, {true, true, "yes"}} {
+		if got := readinessValue(tc.observed, tc.value); got != tc.want {
+			t.Fatalf("readinessValue(%v, %v) = %q, want %q", tc.observed, tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestPackLifecycleJSONPreviewUsesCanonicalStructuredContract(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	before := snapshotTree(t, home)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "ma"+"tty", "--surface", "codex", "--dry-run", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report capabilitypack.JSONLifecyclePlan
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("invalid lifecycle JSON: %v\n%s", err, out)
+	}
+	if report.Report != "pack-lifecycle-preview" || !report.DryRun || report.Operation != capabilitypack.OperationActivate || report.Contract.Bindings == nil || report.Contract.Exclusions == nil || report.Contract.OptionalModes == nil || report.Contract.PromptAuthorities == nil || report.Aliases == nil || report.Phases == nil || report.Blockers == nil || report.PendingHumanActions == nil {
+		t.Fatalf("incomplete lifecycle contract: %#v", report)
+	}
+	if terminal.calls != 0 || snapshotTree(t, home) != before {
+		t.Fatal("JSON dry-run prompted or mutated sandbox")
+	}
+}
+
+func TestPackLifecycleJSONFailureIsStructuredAndEffectFree(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: true}
+	opts, home, _ := packActivationOptions(t, terminal)
+	before := snapshotTree(t, home)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "ma"+"tty", "--surface", "codex", "--alias", "command:missing=alias", "--json")
+	if err == nil {
+		t.Fatal("invalid alias unexpectedly succeeded")
+	}
+	var failure capabilitypack.JSONLifecycleFailure
+	if json.Unmarshal([]byte(out), &failure) != nil || failure.Report != "pack-lifecycle-failure" || failure.Stage != "preview" || failure.ActionsExecuted == nil || *failure.ActionsExecuted != 0 || failure.ApprovalRequested == nil || *failure.ApprovalRequested {
+		t.Fatalf("failure contract=%#v\n%s", failure, out)
+	}
+	if terminal.calls != 0 || snapshotTree(t, home) != before {
+		t.Fatal("blocked JSON preview prompted or mutated sandbox")
+	}
+}
+
+func TestPackLifecycleJSONCancellationReportsRequestedApprovalAndZeroEffects(t *testing.T) {
+	terminal := &fakeTerminal{interactive: true, approve: false}
+	opts, home, _ := packActivationOptions(t, terminal)
+	before := snapshotTree(t, home)
+	out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "ma"+"tty", "--surface", "codex", "--json")
+	if err == nil {
+		t.Fatal("cancelled activation unexpectedly succeeded")
+	}
+	decoder := json.NewDecoder(strings.NewReader(out))
+	var preview capabilitypack.JSONLifecyclePlan
+	var failure capabilitypack.JSONLifecycleFailure
+	if decoder.Decode(&preview) != nil || decoder.Decode(&failure) != nil || failure.Stage != "approval" || failure.ApprovalRequested == nil || !*failure.ApprovalRequested || failure.ActionsExecuted == nil || *failure.ActionsExecuted != 0 {
+		t.Fatalf("cancellation events: preview=%#v failure=%#v\n%s", preview, failure, out)
+	}
+	if terminal.calls != 1 || snapshotTree(t, home) != before {
+		t.Fatal("cancelled JSON activation mutated sandbox or requested extra approval")
+	}
 }
 
 func (a alwaysUsableAdapter) ApplyProjections(ctx context.Context, actions []capabilitypack.ProjectionAction) *capabilitypack.ProjectionActionError {
@@ -671,7 +764,7 @@ func TestPackStatusRendersBaselineWithoutSideEffects(t *testing.T) {
 	}
 	for _, want := range []string{
 		"engram 1.0.0 on codex", "Intent: inactive", "Latest attempt: none",
-		"Readiness: configured=no, authorized=no, usable=no",
+		"Readiness: configured=no, authorized=no, usable=unknown",
 		"Projections: 0 verified; 0 drifted; 0 ambiguous", "Pending human actions: none",
 	} {
 		if !strings.Contains(detail, want) {
@@ -811,13 +904,13 @@ func TestPackActivatePackyAndFreshStatusAgreeRuntimeUsabilityIsPending(t *testin
 			if err != nil {
 				t.Fatalf("activate: %v\n%s", err, out)
 			}
-			for _, want := range []string{"Readiness: configured=yes, authorized=yes, usable=no", "reload " + map[string]string{"codex": "Codex", "opencode": "OpenCode"}[surface]} {
+			for _, want := range []string{"Readiness: configured=yes, authorized=yes, usable=unknown", "reload " + map[string]string{"codex": "Codex", "opencode": "OpenCode"}[surface]} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("activate output missing %q:\n%s", want, out)
 				}
 			}
 			status, err := executeCommand(t, NewRootCommand(opts), "pack", "status", "matty", "--surface", surface, "--require", "usable")
-			if err == nil || !strings.Contains(status, "Readiness: configured=yes, authorized=yes, usable=no") {
+			if err == nil || !strings.Contains(status, "Readiness: configured=yes, authorized=yes, usable=unknown") {
 				t.Fatalf("usable gate: err=%v\n%s", err, status)
 			}
 		})
@@ -993,7 +1086,7 @@ func TestPackActivateEngramPromptsForExternalAuthorityAndReportsPendingActions(t
 	if len(runner.calls) != 1 || !strings.Contains(callStrings(runner.calls)[0], "setup codex") {
 		t.Fatalf("external calls = %#v", runner.calls)
 	}
-	for _, want := range []string{"Readiness: configured=yes, authorized=no, usable=no", "Pending human actions:", "/hooks", "reload Codex"} {
+	for _, want := range []string{"Readiness: configured=yes, authorized=no, usable=unknown", "Pending human actions:", "/hooks", "reload Codex"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
