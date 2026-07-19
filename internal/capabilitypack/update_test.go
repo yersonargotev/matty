@@ -173,6 +173,22 @@ func TestUpdateRejectsStaleIntentOwnershipAndHostFactsWithZeroEffects(t *testing
 	}
 }
 
+func TestUpdateRejectsChangedSurfaceAliasWithZeroEffects(t *testing.T) {
+	pack := Pack{ID: "addy", Version: "2.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "command", ID: "review", Source: "review.md", Bindings: []Binding{{Surface: SurfaceCodex, Projection: "skill", Name: "review", Invocation: "$review", Mode: "degraded", Degradation: "codex-command-as-workflow-skill", Sharing: "exclusive"}}}}}
+	preview := SurfaceInspection{Revision: "host", Projections: []ObservedProjection{{ID: "workflow:review", Goal: ProjectionPresent, ObservedFingerprint: "old", DesiredFingerprint: "new", Action: ProjectionAction{ID: "workflow:review"}}}}
+	state := ActivationState{Intent: ActivationIntent{PackID: "addy", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 4, Aliases: []SurfaceAlias{}}}
+	facade, adapter, store := updateFixture([]Pack{pack}, state, preview)
+	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "addy", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.state.Intent.Aliases = []SurfaceAlias{{Kind: "command", ID: "review", Name: "addy-review"}}
+	_, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
+	if !errors.Is(err, ErrStalePlan) || len(store.saves) != 0 || len(adapter.actions) != 0 {
+		t.Fatalf("alias change effects: err=%v saves=%d actions=%d", err, len(store.saves), len(adapter.actions))
+	}
+}
+
 func TestUpdateExternalPhasesUseTypedApprovalsAndStopAtBarrier(t *testing.T) {
 	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{missingEngramResolution()}}
 	executor := &fakeExternalExecutor{failID: "external:engram:setup:codex", failErr: errors.New("setup failed")}

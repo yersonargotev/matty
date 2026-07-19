@@ -366,6 +366,9 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 		}
 	}
 	agent, _ := os.ReadFile(filepath.Join(root, "home", ".codex", "agents", "addy-coach.toml"))
+	if len(verified.OccupiedNames) != 3 || verified.OccupiedNames[0].Namespace != "agent" || verified.OccupiedNames[0].OwnerType != "packy" || verified.OccupiedNames[1].Name != "addy-idea" || verified.OccupiedNames[2].Name != "addy-refine" {
+		t.Fatalf("occupied names = %+v", verified.OccupiedNames)
+	}
 	for _, preserved := range []string{"Keep the agent policy exact.", `mode=subagent`, `tools=[\"browser\"]`, `permissions=[\"browser\", \"network\"]`, "Preserve these constraints when executing."} {
 		if !strings.Contains(string(agent), preserved) {
 			t.Fatalf("agent lost %q: %s", preserved, agent)

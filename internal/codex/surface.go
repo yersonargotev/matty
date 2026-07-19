@@ -207,7 +207,60 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 	}
 	sort.Strings(revisionParts)
 	sort.Slice(projections, func(i, j int) bool { return projections[i].ID < projections[j].ID })
-	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
+	occupied, err := a.inspectOccupiedNames(pack, projections)
+	if err != nil {
+		return capabilitypack.SurfaceInspection{}, err
+	}
+	for _, name := range occupied {
+		revisionParts = append(revisionParts, "occupied:"+name.Namespace+":"+name.Name+"="+name.OwnerType+":"+name.OwnerID+":"+name.Fingerprint)
+	}
+	sort.Strings(revisionParts)
+	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, OccupiedNames: occupied, PendingHumanActions: pendingActions(pack)}, nil
+}
+
+func (a *SurfaceAdapter) inspectOccupiedNames(pack capabilitypack.Pack, projections []capabilitypack.ObservedProjection) ([]capabilitypack.OccupiedName, error) {
+	desired := map[string]capabilitypack.ObservedProjection{}
+	for _, projection := range projections {
+		if projection.Action.Target != "" {
+			desired[filepath.Clean(projection.Action.Target)] = projection
+		}
+	}
+	var result []capabilitypack.OccupiedName
+	for _, namespace := range []struct{ name, dir, suffix string }{{"skill", a.skillsDir, ""}, {"agent", filepath.Join(filepath.Dir(a.promptFile), "agents"), ".toml"}} {
+		entries, err := os.ReadDir(namespace.dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect Codex %s namespace: %w", namespace.name, err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") || (namespace.suffix != "" && filepath.Ext(entry.Name()) != namespace.suffix) {
+				continue
+			}
+			path := filepath.Join(namespace.dir, entry.Name())
+			fingerprint, exists, err := localprojection.FingerprintPath(path)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				continue
+			}
+			name := strings.TrimSuffix(entry.Name(), namespace.suffix)
+			occupied := capabilitypack.OccupiedName{Namespace: namespace.name, Name: name, OwnerType: "unmanaged", Fingerprint: fingerprint}
+			if projection, ok := desired[filepath.Clean(path)]; ok && projection.DesiredFingerprint == fingerprint {
+				occupied.OwnerType, occupied.OwnerID = "packy", pack.ID
+			}
+			result = append(result, occupied)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Namespace != result[j].Namespace {
+			return result[i].Namespace < result[j].Namespace
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
 }
 
 func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {

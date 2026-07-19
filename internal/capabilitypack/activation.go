@@ -59,6 +59,7 @@ const (
 	ActionCodexMCPConfig          ProjectionActionKind = "codex-mcp-config"
 	ActionCodexAgentFile          ProjectionActionKind = "codex-agent-file"
 	ActionCodexWorkflowSkill      ProjectionActionKind = "codex-workflow-skill"
+	ActionCodexAssetFile          ProjectionActionKind = "codex-asset-file"
 	ActionOpenCodeMCPConfig       ProjectionActionKind = "opencode-mcp-config"
 	ActionExternalCommand         ProjectionActionKind = "external-command"
 	ActionHostFollowUp            ProjectionActionKind = "host-follow-up"
@@ -180,8 +181,19 @@ type SurfaceTransition struct {
 type SurfaceInspection struct {
 	Revision            string
 	Projections         []ObservedProjection
+	OccupiedNames       []OccupiedName
 	Readiness           ReadinessObservation
 	PendingHumanActions []string
+}
+
+// OccupiedName is one freshly observed host namespace entry relied on by a
+// surface plan. OwnerType is reserved, unmanaged, or packy.
+type OccupiedName struct {
+	Namespace   string
+	Name        string
+	OwnerType   string
+	OwnerID     string
+	Fingerprint string
 }
 
 type SurfaceAdapter interface {
@@ -1667,7 +1679,24 @@ func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition Surf
 			return SurfaceInspection{}, fmt.Errorf("surface adapter returned zero goal for projection %q", projection.ID)
 		}
 	}
+	occupied := make(map[string]struct{}, len(observation.OccupiedNames))
+	for _, name := range observation.OccupiedNames {
+		key := name.Namespace + ":" + name.Name
+		if name.Namespace == "" || name.Name == "" || name.Fingerprint == "" || (name.OwnerType != "reserved" && name.OwnerType != "unmanaged" && name.OwnerType != "packy") {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned malformed occupied name %q", key)
+		}
+		if _, duplicate := occupied[key]; duplicate {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned duplicate occupied name %q", key)
+		}
+		occupied[key] = struct{}{}
+	}
 	sort.Slice(observation.Projections, func(i, j int) bool { return observation.Projections[i].ID < observation.Projections[j].ID })
+	sort.Slice(observation.OccupiedNames, func(i, j int) bool {
+		if observation.OccupiedNames[i].Namespace != observation.OccupiedNames[j].Namespace {
+			return observation.OccupiedNames[i].Namespace < observation.OccupiedNames[j].Namespace
+		}
+		return observation.OccupiedNames[i].Name < observation.OccupiedNames[j].Name
+	})
 	sort.Strings(observation.PendingHumanActions)
 	sort.Strings(observation.Readiness.PendingHumanActions)
 	sort.Strings(observation.Readiness.Evidence)
@@ -1695,6 +1724,7 @@ func cloneSurfaceTransition(value SurfaceTransition) SurfaceTransition {
 
 func cloneSurfaceInspection(value SurfaceInspection) SurfaceInspection {
 	value.Projections = append([]ObservedProjection(nil), value.Projections...)
+	value.OccupiedNames = append([]OccupiedName(nil), value.OccupiedNames...)
 	for i := range value.Projections {
 		value.Projections[i].Action.Args = append([]string(nil), value.Projections[i].Action.Args...)
 	}
