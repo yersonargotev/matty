@@ -311,15 +311,22 @@ func TestCheckFailsClosedWhenMajorMigrationEvidenceOrReplacementSemanticsDrift(t
 			if err := json.Unmarshal(mustReadFile(t, name), &config); err != nil {
 				t.Fatal(err)
 			}
-			legacyPackID := "ma" + "tty"
+			found := false
 			for _, rawSource := range config["sources"].([]any) {
 				source := rawSource.(map[string]any)
-				resources := source["resources"].([]any)
-				if len(resources) == 0 || resources[0].(map[string]any)["pack_id"] != legacyPackID {
+				if source["id"] != "mattpocock-skills" {
 					continue
 				}
+				resources := source["resources"].([]any)
+				if len(resources) == 0 {
+					t.Fatal("target source has no resources")
+				}
 				source["resources"] = resources[:len(resources)-1]
+				found = true
 				break
+			}
+			if !found {
+				t.Fatal("target source is missing")
 			}
 			writeJSON(t, name, config)
 		}},
