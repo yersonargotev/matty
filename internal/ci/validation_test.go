@@ -21,6 +21,7 @@ import (
 
 var packyOwnedPackages = []string{
 	"./cmd/packy",
+	"./internal/addyacceptance",
 	"./internal/bootstrap",
 	"./internal/bundletransaction",
 	"./internal/capabilitypack",
