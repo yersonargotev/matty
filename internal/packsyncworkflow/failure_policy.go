@@ -14,8 +14,9 @@ type FailureArtifactContext struct {
 	PlanID       string
 	BaseSHA      string
 	CandidateSHA string
-	RunURL       string
-	Blockers     []string
+	ArtifactProvenance
+	RunURL   string
+	Blockers []string
 }
 
 func NewFailureArtifact(context FailureArtifactContext, err error) FailureArtifact {
@@ -48,7 +49,12 @@ func NewFailureArtifact(context FailureArtifactContext, err error) FailureArtifa
 	if failure.Recovery != "" {
 		recovery = failure.Recovery
 	}
-	return FailureArtifact{SchemaVersion: 1, State: "blocked", SourceID: context.SourceID, PlanID: context.PlanID, BaseSHA: context.BaseSHA, CandidateSHA: context.CandidateSHA, Blockers: blockers, Recovery: []string{recovery}, RunURL: context.RunURL, ContainsSecrets: false, ContainsUpstreamBytes: false}
+	schemaVersion := 1
+	provenance := ArtifactProvenance{}
+	if context.PlanID != "" {
+		schemaVersion, provenance = 2, context.ArtifactProvenance
+	}
+	return FailureArtifact{SchemaVersion: schemaVersion, State: "blocked", SourceID: context.SourceID, PlanID: context.PlanID, BaseSHA: context.BaseSHA, CandidateSHA: context.CandidateSHA, ArtifactProvenance: provenance, Blockers: blockers, Recovery: []string{recovery}, RunURL: context.RunURL, ContainsSecrets: false, ContainsUpstreamBytes: false}
 }
 
 func uniqueNonEmptyStrings(values []string) []string {

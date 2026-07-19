@@ -27,10 +27,11 @@ func LoadConfig(r io.Reader) (Config, error) {
 		return Config{}, errors.New("source configuration has no sources")
 	}
 	seenSources := map[string]bool{}
+	ownedBindings := map[string]string{}
 	for i := range config.Sources {
 		source := &config.Sources[i]
-		if source.ID == "" || seenSources[source.ID] {
-			return Config{}, fmt.Errorf("source id %q is empty or duplicated", source.ID)
+		if !canonicalSourceIDPattern.MatchString(source.ID) || seenSources[source.ID] {
+			return Config{}, fmt.Errorf("source id %q is not path-safe or is duplicated", source.ID)
 		}
 		seenSources[source.ID] = true
 		if source.Provider != "github" {
@@ -56,7 +57,11 @@ func LoadConfig(r io.Reader) (Config, error) {
 			if seenBindings[key] {
 				return Config{}, fmt.Errorf("source %s duplicates binding %s", source.ID, key)
 			}
+			if owner, exists := ownedBindings[key]; exists {
+				return Config{}, fmt.Errorf("binding %s has multiple source owners %s and %s", key, owner, source.ID)
+			}
 			seenBindings[key] = true
+			ownedBindings[key] = source.ID
 		}
 		sort.Slice(source.Resources, func(i, j int) bool { return bindingKey(source.Resources[i]) < bindingKey(source.Resources[j]) })
 	}

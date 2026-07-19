@@ -186,11 +186,12 @@ type Counts struct {
 }
 
 type Preconditions struct {
-	BaseCommit      string `json:"base_commit,omitempty"`
-	ConfigSHA256    string `json:"config_sha256"`
-	ManifestsSHA256 string `json:"manifests_sha256"`
-	BundleSHA256    string `json:"bundle_sha256"`
-	LockSHA256      string `json:"lock_sha256,omitempty"`
+	BaseCommit       string `json:"base_commit,omitempty"`
+	ConfigSHA256     string `json:"config_sha256"`
+	ManifestsSHA256  string `json:"manifests_sha256"`
+	BundleSHA256     string `json:"bundle_sha256"`
+	SourceLockSHA256 string `json:"source_lock_sha256,omitempty"`
+	LockSetSHA256    string `json:"lock_set_sha256,omitempty"`
 }
 
 type Plan struct {
@@ -207,6 +208,8 @@ type Plan struct {
 	Discoveries            []string      `json:"unselected_discoveries"`
 	Blockers               []string      `json:"blockers"`
 	Preconditions          Preconditions `json:"preconditions"`
+	SourceLockSHA256       string        `json:"source_lock_sha256"`
+	LockSetSHA256          string        `json:"lock_set_sha256"`
 	PreviousSnapshotSHA256 string        `json:"previous_snapshot_sha256,omitempty"`
 	ProposedLock           Lock          `json:"proposed_lock"`
 	LegacyEvidence         bool          `json:"legacy_root_lock_present"`
@@ -220,9 +223,10 @@ type CheckRequest struct {
 }
 
 type Engine struct {
-	Source   Source
-	Validate BundleValidator
-	Fault    FaultInjector
+	Source         Source
+	Validate       BundleValidator
+	Fault          FaultInjector
+	allowBootstrap bool
 }
 
 type BundleValidator interface {

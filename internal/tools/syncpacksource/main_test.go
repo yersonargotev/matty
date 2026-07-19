@@ -266,7 +266,7 @@ func prepareInspectFixture(t *testing.T) (string, string, packsync.Lock) {
 		copyTreeForTest(t, filepath.Join(repository, "bundle", filepath.FromSlash(binding.UpstreamPath)), filepath.Join(snapshot, filepath.FromSlash(binding.UpstreamPath)))
 	}
 	var lock packsync.Lock
-	readJSONForTest(t, filepath.Join(repository, "bundle", "sources.lock.json"), &lock)
+	readJSONForTest(t, filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"), &lock)
 	gitForTest(t, repository, "init", "-q")
 	gitForTest(t, repository, "config", "user.name", "fixture")
 	gitForTest(t, repository, "config", "user.email", "fixture@example.com")
@@ -305,7 +305,7 @@ func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing
 	t.Setenv("PACKY_SELECTOR_REF", strings.Repeat("a", 40))
 	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
 	t.Setenv("PACKY_REQUEST_REASON", "fixture")
-	request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: strings.Repeat("a", 40), ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "fixture"}
+	request := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: packsyncworkflow.OperationSynchronize, SourceID: "source", Selector: packsyncworkflow.SelectorCommit, SelectorRef: strings.Repeat("a", 40), ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "fixture"}
 	digest, err := request.Digest()
 	if err != nil {
 		t.Fatal(err)
@@ -370,7 +370,7 @@ func TestInvalidDispatchStillEmitsCanonicalFailureArtifact(t *testing.T) {
 
 func TestInspectBoundaryEmitsCanonicalNoopArtifact(t *testing.T) {
 	output := t.TempDir()
-	plan := packsync.Plan{SchemaVersion: 1, PlanID: "plan-noop", Status: "no-op", SourceID: "source", Candidate: packsync.Candidate{Commit: strings.Repeat("a", 40)}, Preconditions: packsync.Preconditions{BaseCommit: strings.Repeat("b", 40)}}
+	plan := packsync.Plan{SchemaVersion: 1, PlanID: "plan-noop", Status: "no-op", SourceID: "source", Candidate: packsync.Candidate{Commit: strings.Repeat("a", 40)}, SourceLockSHA256: strings.Repeat("c", 64), LockSetSHA256: strings.Repeat("d", 64), Preconditions: packsync.Preconditions{BaseCommit: strings.Repeat("b", 40), ConfigSHA256: strings.Repeat("e", 64), ManifestsSHA256: strings.Repeat("f", 64)}}
 	if err := writeNoopArtifact(output, plan.SourceID, plan); err != nil {
 		t.Fatal(err)
 	}

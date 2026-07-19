@@ -22,17 +22,20 @@ var ErrRecoveryEvidence = errors.New("bundle recovery evidence is absent or inva
 const recoveryMarkerSchema = 1
 
 type recoveryMarker struct {
-	SchemaVersion int    `json:"schema_version"`
-	PlanID        string `json:"plan_id"`
-	Phase         string `json:"phase"`
-	Bundle        string `json:"bundle"`
-	Backup        string `json:"backup"`
-	Staged        string `json:"staged"`
-	OldSHA256     string `json:"old_sha256"`
-	NewSHA256     string `json:"new_sha256"`
-	Legacy        string `json:"legacy,omitempty"`
-	LegacySHA256  string `json:"legacy_sha256,omitempty"`
-	Seal          string `json:"seal"`
+	SchemaVersion    int    `json:"schema_version"`
+	PlanID           string `json:"plan_id"`
+	Phase            string `json:"phase"`
+	Bundle           string `json:"bundle"`
+	Backup           string `json:"backup"`
+	Staged           string `json:"staged"`
+	OldSHA256        string `json:"old_sha256"`
+	NewSHA256        string `json:"new_sha256"`
+	SourceID         string `json:"source_id"`
+	SourceLockSHA256 string `json:"source_lock_sha256"`
+	LockSetSHA256    string `json:"lock_set_sha256"`
+	Legacy           string `json:"legacy,omitempty"`
+	LegacySHA256     string `json:"legacy_sha256,omitempty"`
+	Seal             string `json:"seal"`
 }
 
 func (engine Engine) Apply(ctx context.Context, request ApplyRequest) (ApplyResult, error) {
@@ -148,10 +151,10 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 		}
 		return ApplyResult{Status: "no-op", PlanID: plan.PlanID}, nil
 	}
-	if !applicablePlan(plan) {
+	if !engine.applicablePlan(plan) {
 		return ApplyResult{}, fmt.Errorf("plan status %q is not applicable", plan.Status)
 	}
-	if err := validatePreconditions(request.RepositoryRoot, plan.Preconditions); err != nil {
+	if err := validatePreconditions(request.RepositoryRoot, plan.SourceID, plan.Preconditions, engine.allowBootstrap); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := engine.Validate.ValidateBundle(ctx, request.RepositoryRoot, bundle); err != nil {
@@ -173,7 +176,7 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 			_ = os.RemoveAll(staged)
 		}
 	}()
-	currentLock, _, currentLockPresent, err := readLock(filepath.Join(bundle, "sources.lock.json"))
+	currentLock, _, currentLockPresent, err := readLock(filepath.Join(bundle, "sources", plan.SourceID+".lock.json"))
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -183,7 +186,7 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 	if err := materializeClassifiedVersions(staged, plan, request.ClassificationEvidence); err != nil {
 		return ApplyResult{}, err
 	}
-	if err := writeCanonicalLock(filepath.Join(staged, "sources.lock.json"), plan.ProposedLock); err != nil {
+	if err := writeCanonicalLock(filepath.Join(staged, "sources", plan.SourceID+".lock.json"), plan.ProposedLock); err != nil {
 		return ApplyResult{}, err
 	}
 	oldHash, err := treeHash(bundle)
@@ -200,7 +203,7 @@ func (engine Engine) applyLocked(ctx context.Context, request ApplyRequest, cand
 	if err := engine.inject(FaultBeforeSwap); err != nil {
 		return ApplyResult{}, err
 	}
-	marker := recoveryMarker{SchemaVersion: recoveryMarkerSchema, PlanID: plan.PlanID, Phase: "prepared", Bundle: bundle, Backup: backup, Staged: staged, OldSHA256: oldHash, NewSHA256: newHash}
+	marker := recoveryMarker{SchemaVersion: recoveryMarkerSchema, PlanID: plan.PlanID, Phase: "prepared", Bundle: bundle, Backup: backup, Staged: staged, OldSHA256: oldHash, NewSHA256: newHash, SourceID: plan.SourceID, SourceLockSHA256: plan.SourceLockSHA256, LockSetSHA256: plan.LockSetSHA256}
 	if data, err := os.ReadFile(legacy); err == nil {
 		marker.Legacy, marker.LegacySHA256 = legacy, hashBytes(data)
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -350,8 +353,9 @@ func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged,
 		return err
 	}
 	bindings, blockers := deriveDestinations(source.Resources, manifests)
-	lock, _, present, err := readLock(filepath.Join(viewBundle, "sources.lock.json"))
-	if err != nil || !present || lockDigest(lock) != lockDigest(plan.ProposedLock) {
+	lockSet, err := loadSourceLockSet(viewBundle, config)
+	lock, present := lockSet.Locks[plan.SourceID]
+	if err != nil || !present || lockSet.Digests[plan.SourceID] != plan.SourceLockSHA256 || lockSet.LockSetSHA256 != plan.LockSetSHA256 || lockDigest(lock) != lockDigest(plan.ProposedLock) {
 		return errors.New("staged production provenance lock does not match the sealed plan")
 	}
 	stagedPlan := Plan{Candidate: plan.Candidate, Selector: plan.Selector}
@@ -492,11 +496,11 @@ func (engine Engine) finishRollback(ctx context.Context, repositoryRoot, markerP
 	return ApplyResult{Status: "rolled-back", PlanID: marker.PlanID, Recovered: true}, nil
 }
 
-func applicablePlan(plan Plan) bool {
+func (engine Engine) applicablePlan(plan Plan) bool {
 	if plan.Status == "review-required" && plan.Authoritative && len(plan.Blockers) == 0 {
 		return true
 	}
-	return plan.Status == "blocked" && !plan.Authoritative && len(plan.Changes) == 0 && len(plan.Blockers) == 1 && strings.Contains(plan.Blockers[0], "production provenance lock is absent")
+	return engine.allowBootstrap && plan.Status == "blocked" && !plan.Authoritative && len(plan.Changes) == 0 && len(plan.Blockers) == 1 && strings.Contains(plan.Blockers[0], "production provenance lock is absent")
 }
 
 func materializeSelectedResources(staged, snapshotRoot string, current Lock, currentPresent bool, next Lock) error {
@@ -546,7 +550,7 @@ func convergedBootstrap(bundle, legacy string, plan Plan) (bool, error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	lock, _, present, err := readLock(filepath.Join(bundle, "sources.lock.json"))
+	lock, _, present, err := readLock(filepath.Join(bundle, "sources", plan.SourceID+".lock.json"))
 	if err != nil || !present || lockDigest(lock) != lockDigest(plan.ProposedLock) {
 		return false, err
 	}
@@ -559,7 +563,7 @@ func convergedBootstrap(bundle, legacy string, plan Plan) (bool, error) {
 	return true, nil
 }
 
-func validatePreconditions(repositoryRoot string, expected Preconditions) error {
+func validatePreconditions(repositoryRoot, sourceID string, expected Preconditions, allowBootstrap bool) error {
 	if base, err := repositoryBase(repositoryRoot); err != nil || base != expected.BaseCommit {
 		return fmt.Errorf("stale plan: repository base changed after Check")
 	}
@@ -571,16 +575,24 @@ func validatePreconditions(repositoryRoot string, expected Preconditions) error 
 	if err != nil || manifests != expected.ManifestsSHA256 {
 		return errors.New("stale plan: runtime manifests changed after Check")
 	}
-	_, lockBytes, present, err := readLock(filepath.Join(repositoryRoot, "bundle", "sources.lock.json"))
+	parsedConfig, err := LoadConfig(bytes.NewReader(config))
 	if err != nil {
 		return err
 	}
-	lockHash := ""
-	if present {
-		lockHash = hashBytes(lockBytes)
+	var lockSet sourceLockSet
+	if allowBootstrap {
+		lockSet, err = loadSourceLockSetForTarget(filepath.Join(repositoryRoot, "bundle"), parsedConfig, sourceID, true)
+	} else {
+		lockSet, err = loadSourceLockSet(filepath.Join(repositoryRoot, "bundle"), parsedConfig)
 	}
-	if lockHash != expected.LockSHA256 {
-		return errors.New("stale plan: production provenance lock changed after Check")
+	if err != nil {
+		return err
+	}
+	if lockSet.Digests[sourceID] != expected.SourceLockSHA256 {
+		return errors.New("stale plan: target source provenance lock changed after Check")
+	}
+	if lockSet.LockSetSHA256 != expected.LockSetSHA256 {
+		return errors.New("stale plan: complete provenance lock set changed after Check")
 	}
 	bundle, err := treeHash(filepath.Join(repositoryRoot, "bundle"))
 	if err != nil || bundle != expected.BundleSHA256 {
@@ -615,11 +627,14 @@ func verifySnapshot(snapshotRoot string, lock Lock) error {
 }
 
 func writeCanonicalLock(path string, lock Lock) error {
-	data, err := json.MarshalIndent(lock, "", "  ")
+	data, _, err := CanonicalSourceLock(lock)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 func transactionPaths(repositoryRoot, planID string) (string, string) {
@@ -695,7 +710,7 @@ func readRecoveryMarker(path string) (recoveryMarker, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return recoveryMarker{}, fmt.Errorf("%w: marker has trailing data", ErrRecoveryEvidence)
 	}
-	if marker.SchemaVersion != recoveryMarkerSchema || marker.PlanID == "" || marker.Seal == "" || marker.Seal != markerSeal(marker) || !fullDigest(marker.OldSHA256) || !fullDigest(marker.NewSHA256) {
+	if marker.SchemaVersion != recoveryMarkerSchema || !canonicalSourceIDPattern.MatchString(marker.SourceID) || !fullDigest(marker.SourceLockSHA256) || !fullDigest(marker.LockSetSHA256) || marker.PlanID == "" || marker.Seal == "" || marker.Seal != markerSeal(marker) || !fullDigest(marker.OldSHA256) || !fullDigest(marker.NewSHA256) {
 		return recoveryMarker{}, fmt.Errorf("%w: marker identity or seal is invalid", ErrRecoveryEvidence)
 	}
 	return marker, nil

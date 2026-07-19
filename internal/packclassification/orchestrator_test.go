@@ -2,10 +2,14 @@ package packclassification
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -153,18 +157,13 @@ func newClassificationFixture(t *testing.T) classificationFixture {
 		write(t, filepath.Join(repository, "bundle", "packs", pack, "pack.json"), `{"schema_version":1,"id":"`+pack+`","version":"1.0.0","resources":[{"kind":"skill","id":"main","source":"skills/`+pack+`"}]}`)
 		write(t, filepath.Join(repository, "bundle", "skills", pack, "SKILL.md"), "old "+pack+"\n")
 	}
-	initializeGit(t, repository)
 	oldSnapshot := t.TempDir()
 	for _, pack := range []string{"alpha", "beta"} {
 		write(t, filepath.Join(oldSnapshot, "skills", pack, "SKILL.md"), "old "+pack+"\n")
 	}
 	old := fixtureCandidate(strings.Repeat("a", 40), strings.Repeat("1", 40))
-	bootstrapSource := &fixtureSource{snapshots: map[string]string{old.Commit: oldSnapshot}, candidates: map[string]packsync.Candidate{old.Commit: old}}
-	bootstrap := check(t, repository, bootstrapSource)
-	engine := packsync.Engine{Source: bootstrapSource, Validate: packsync.BundleValidatorFunc(func(context.Context, string, string) error { return nil })}
-	if _, err := engine.Apply(context.Background(), packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: repository, SourceID: "fixture", AcquisitionDir: t.TempDir()}, Plan: bootstrap}); err != nil {
-		t.Fatal(err)
-	}
+	writeFixtureLock(t, repository, old)
+	initializeGit(t, repository)
 
 	newCommit := strings.Repeat("b", 40)
 	write(t, filepath.Join(repository, "bundle", "sources.json"), sourceConfig(newCommit))
@@ -179,6 +178,44 @@ func newClassificationFixture(t *testing.T) classificationFixture {
 		t.Fatalf("classification fixture plan = %#v", plan)
 	}
 	return classificationFixture{repository: repository, source: source, plan: plan}
+}
+
+func writeFixtureLock(t *testing.T, repository string, candidate packsync.Candidate) {
+	t.Helper()
+	resources := make([]packsync.ResourceEvidence, 0, 2)
+	for _, pack := range []string{"alpha", "beta"} {
+		content := []byte("old " + pack + "\n\n")
+		fileSum := sha256.Sum256(content)
+		file := packsync.FileEvidence{Path: "SKILL.md", Size: int64(len(content)), Mode: 0o644, SHA256: hex.EncodeToString(fileSum[:])}
+		binding := packsync.Binding{PackID: pack, Kind: "skill", ResourceID: "main", UpstreamPath: "skills/" + pack, VendoredPath: "bundle/skills/" + pack}
+		resources = append(resources, packsync.ResourceEvidence{Binding: binding, Files: []packsync.FileEvidence{file}, SHA256: fixtureEvidenceHash([]packsync.FileEvidence{file})})
+	}
+	lock := packsync.Lock{SchemaVersion: 1, Generator: packsync.LockGeneratorName, GeneratorVersion: packsync.LockGeneratorVersion, Provider: "github", ProviderAPIVersion: packsync.GitHubAPIVersion, SourceID: "fixture", Repository: candidate.Repository, RepositoryID: candidate.RepositoryID, Owner: candidate.Owner, OwnerID: candidate.OwnerID, Selector: packsync.Selector{Mode: packsync.SelectorCommit, Ref: candidate.Commit}, Candidate: candidate, Resources: resources}
+	hash := sha256.New()
+	for _, resource := range resources {
+		fmt.Fprintf(hash, "%s/%s/%s\x00%s\x00%s\x00%s\n", resource.PackID, resource.Kind, resource.ResourceID, resource.UpstreamPath, resource.VendoredPath, resource.SHA256)
+	}
+	lock.Snapshot = hex.EncodeToString(hash.Sum(nil))
+	data, _, err := packsync.CanonicalSourceLock(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(repository, "bundle", "sources", "fixture.lock.json")
+	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fixtureEvidenceHash(files []packsync.FileEvidence) string {
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	hash := sha256.New()
+	for _, file := range files {
+		fmt.Fprintf(hash, "%s\x00%d\x00%04o\x00%s\n", file.Path, file.Size, file.Mode, file.SHA256)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func (fixture classificationFixture) check(t *testing.T) packsync.Plan {

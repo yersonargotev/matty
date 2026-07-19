@@ -38,7 +38,7 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 	if err := requireEmptyDirectory(request.AcquisitionDir); err != nil {
 		return Plan{}, fmt.Errorf("acquisition directory: %w", err)
 	}
-	initial, err := readCheckInputs(ctx, request)
+	initial, err := readCheckInputs(ctx, request, engine.allowBootstrap)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -67,11 +67,11 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 			return err
 		}
 		defer guard.Release()
-		fresh, err := readCheckInputsUnlocked(request)
+		fresh, err := readCheckInputsUnlocked(request, engine.allowBootstrap)
 		if err != nil {
 			return err
 		}
-		if !bytesEqual(initial.configBytes, fresh.configBytes) || !bytesEqual(initial.lockBytes, fresh.lockBytes) || initial.lockPresent != fresh.lockPresent || !reflect.DeepEqual(initial.source, fresh.source) || initial.selector != fresh.selector {
+		if !bytesEqual(initial.configBytes, fresh.configBytes) || !bytesEqual(initial.lockBytes, fresh.lockBytes) || initial.lockPresent != fresh.lockPresent || initial.lockSet.LockSetSHA256 != fresh.lockSet.LockSetSHA256 || !reflect.DeepEqual(initial.source, fresh.source) || initial.selector != fresh.selector {
 			return errors.New("local source configuration or provenance lock changed during Check; retry")
 		}
 		manifests, manifestsHash, err := loadManifests(request.RepositoryRoot)
@@ -87,19 +87,28 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		if err != nil {
 			return fmt.Errorf("resolve repository base: %w", err)
 		}
-		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, LockSHA256: hashBytes(fresh.lockBytes)}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json"))}
+		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, SourceLockSHA256: fresh.lockSet.Digests[fresh.source.ID], LockSetSHA256: fresh.lockSet.LockSetSHA256}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json"))}
 		if fresh.lockPresent {
 			plan.PreviousSnapshotSHA256 = fresh.lock.Snapshot
 		}
 		if !fresh.lockPresent {
-			plan.Preconditions.LockSHA256 = ""
+			plan.Preconditions.SourceLockSHA256 = ""
 			plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
 		} else {
 			plan.Blockers = append(plan.Blockers, validateLock(fresh.lock, fresh.source, candidate, fresh.selector)...)
 			plan.Blockers = append(plan.Blockers, continuityBlockers...)
 		}
 		plan.Blockers = append(plan.Blockers, validateCandidate(fresh.source, candidate, fresh.selector)...)
-		return buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, &plan)
+		if err := buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, &plan); err != nil {
+			return err
+		}
+		_, proposedDigest, err := CanonicalSourceLock(plan.ProposedLock)
+		if err != nil {
+			return err
+		}
+		plan.SourceLockSHA256 = proposedDigest
+		plan.LockSetSHA256, err = fresh.lockSet.withTarget(fresh.source.ID, proposedDigest)
+		return err
 	})
 	if err != nil {
 		return Plan{}, fmt.Errorf("inspect acquired snapshot: %w", err)
@@ -132,18 +141,19 @@ type checkInputs struct {
 	lock        Lock
 	lockBytes   []byte
 	lockPresent bool
+	lockSet     sourceLockSet
 }
 
-func readCheckInputs(ctx context.Context, request CheckRequest) (checkInputs, error) {
+func readCheckInputs(ctx context.Context, request CheckRequest, allowMissing bool) (checkInputs, error) {
 	guard, err := bundletransaction.Acquire(ctx, request.RepositoryRoot)
 	if err != nil {
 		return checkInputs{}, err
 	}
 	defer guard.Release()
-	return readCheckInputsUnlocked(request)
+	return readCheckInputsUnlocked(request, allowMissing)
 }
 
-func readCheckInputsUnlocked(request CheckRequest) (checkInputs, error) {
+func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInputs, error) {
 	configBytes, err := os.ReadFile(filepath.Join(request.RepositoryRoot, "bundle", "sources.json"))
 	if err != nil {
 		return checkInputs{}, fmt.Errorf("read source configuration: %w", err)
@@ -163,11 +173,23 @@ func readCheckInputsUnlocked(request CheckRequest) (checkInputs, error) {
 	if err := validateSelector(selector); err != nil {
 		return checkInputs{}, err
 	}
-	lock, lockBytes, lockPresent, err := readLock(filepath.Join(request.RepositoryRoot, "bundle", "sources.lock.json"))
+	lockSet, err := loadSourceLockSetForTarget(filepath.Join(request.RepositoryRoot, "bundle"), config, source.ID, allowMissing)
 	if err != nil {
 		return checkInputs{}, err
 	}
-	return checkInputs{configBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent}, nil
+	lock, lockPresent := lockSet.Locks[source.ID]
+	var lockBytes []byte
+	if lockPresent {
+		lockBytes, err = os.ReadFile(sourceLockPath(request.RepositoryRoot, source.ID))
+		if err != nil {
+			return checkInputs{}, err
+		}
+	}
+	return checkInputs{configBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent, lockSet: lockSet}, nil
+}
+
+func sourceLockPath(repositoryRoot, sourceID string) string {
+	return filepath.Join(repositoryRoot, "bundle", "sources", sourceID+".lock.json")
 }
 
 func bytesEqual(left, right []byte) bool { return string(left) == string(right) }
@@ -322,7 +344,7 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 	plan.ProposedLock = Lock{SchemaVersion: 1, Generator: LockGeneratorName, GeneratorVersion: LockGeneratorVersion, Provider: source.Provider, ProviderAPIVersion: GitHubAPIVersion, SourceID: source.ID, Repository: plan.Candidate.Repository, RepositoryID: plan.Candidate.RepositoryID, Owner: plan.Candidate.Owner, OwnerID: plan.Candidate.OwnerID, Selector: plan.Selector, Candidate: plan.Candidate, Resources: resources}
 	plan.ProposedLock.Snapshot = snapshotHash(resources)
 	if lockPresent && lockDigest(oldLock) != lockDigest(plan.ProposedLock) {
-		plan.Changes = append(plan.Changes, Change{Kind: "provenance-updated", Path: "bundle/sources.lock.json", Before: lockDigest(oldLock), After: lockDigest(plan.ProposedLock)})
+		plan.Changes = append(plan.Changes, Change{Kind: "provenance-updated", Path: "bundle/sources/" + source.ID + ".lock.json", Before: lockDigest(oldLock), After: lockDigest(plan.ProposedLock)})
 	}
 	plan.Discoveries = discoverUnselected(snapshotRoot, bindings)
 	plan.Counts.Discoveries = len(plan.Discoveries)

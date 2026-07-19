@@ -232,7 +232,7 @@ func TestSemanticPackIdentitySurvivesFieldByField(t *testing.T) {
 		"workflow_conventions": filepath.Join("bundle", "instructions", token+"-workflow-conventions.md"),
 		"pack_manifest":        filepath.Join("bundle", "packs", token, "pack.json"),
 		"sources":              filepath.Join("bundle", "sources.json"),
-		"sources_lock":         filepath.Join("bundle", "sources.lock.json"),
+		"sources_lock":         filepath.Join("bundle", "sources/mattpocock-skills.lock.json"),
 	}
 	if !stagedValidation() {
 		for role, rel := range semanticPaths {

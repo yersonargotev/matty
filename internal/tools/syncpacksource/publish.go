@@ -103,7 +103,10 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	if err := os.WriteFile(filepath.Join(option.outputDir, "proposal-brief.md"), []byte(markdown), 0o600); err != nil {
 		return err
 	}
-	artifact := map[string]any{"schema_version": 1, "source_id": dispatch.SourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "result_tree_sha": result.Proposal.ResultTreeSHA, "head_sha": result.Proposal.HeadSHA, "provenance_sha256": builder.provenance, "branch_name": result.Decision.Branch, "pr_number": result.PullRequest.Number, "pr_state_sha256": result.PullRequest.MetadataHash, "managed_title": result.Proposal.ManagedTitle, "managed_metadata_hash": result.PullRequest.MetadataHash, "validation": result.Readiness.Gates, "decision_ready": result.Readiness.DecisionReady, "auto_merge": false, "manual_merge_required": true, "upstream_content_executed": false, "invalidation_conditions": result.Proposal.InvalidationConditions}
+	artifact := packsyncworkflow.PublicationArtifact{SchemaVersion: 2, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, ArtifactProvenance: artifactProvenance(plan), ResultTreeSHA: result.Proposal.ResultTreeSHA, HeadSHA: result.Proposal.HeadSHA, ProvenanceSHA256: builder.provenance, BranchName: result.Decision.Branch, PRNumber: result.PullRequest.Number, PRStateSHA256: result.PullRequest.MetadataHash, ManagedTitle: result.Proposal.ManagedTitle, ManagedMetadataHash: result.PullRequest.MetadataHash, Validation: result.Readiness.Gates, DecisionReady: result.Readiness.DecisionReady, AutoMerge: false, ManualMergeRequired: true, UpstreamContentExecuted: false, InvalidationConditions: result.Proposal.InvalidationConditions}
+	if err := artifact.Validate(); err != nil {
+		return err
+	}
 	if err := writeCanonical(filepath.Join(option.outputDir, "publication.json"), artifact); err != nil {
 		return err
 	}
@@ -147,7 +150,14 @@ func validateSandbox(ctx context.Context, option options, output io.Writer) erro
 	if err := validator.Validate(ctx, option.repositoryRoot); err != nil {
 		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: err}
 	}
-	artifact := packsyncworkflow.ValidationArtifact{SchemaVersion: 1, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, PackySuite: true, Apply: true, UpstreamBytes: false}
+	if err := stageAll(ctx, option.repositoryRoot); err != nil {
+		return err
+	}
+	resultTree, err := command(ctx, option.repositoryRoot, "git", "write-tree")
+	if err != nil {
+		return err
+	}
+	artifact := packsyncworkflow.ValidationArtifact{SchemaVersion: 2, SourceID: dispatch.SourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, ArtifactProvenance: artifactProvenance(plan), ResultTreeSHA: strings.TrimSpace(resultTree), PackySuite: true, Apply: true, UpstreamBytes: false}
 	if err := artifact.Validate(); err != nil {
 		return err
 	}
@@ -218,7 +228,7 @@ func (builder *publicationBuilder) Build(ctx context.Context, repositoryRoot str
 	if err := stageAll(ctx, repositoryRoot); err != nil {
 		return packsyncworkflow.Proposal{}, err
 	}
-	provenance, err := fileHash(filepath.Join(repositoryRoot, "bundle", "sources.lock.json"))
+	provenance, err := fileHash(filepath.Join(repositoryRoot, "bundle", "sources", builder.dispatch.SourceID+".lock.json"))
 	if err != nil {
 		return packsyncworkflow.Proposal{}, err
 	}

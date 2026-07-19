@@ -113,6 +113,7 @@ func writeFailureArtifact(option options, failure error) error {
 		context.PlanID = plan.PlanID
 		context.BaseSHA = plan.Preconditions.BaseCommit
 		context.CandidateSHA = plan.Candidate.Commit
+		context.ArtifactProvenance = artifactProvenance(plan)
 		if plan.Status == "blocked" {
 			context.Blockers = append([]string(nil), plan.Blockers...)
 		}
@@ -178,13 +179,21 @@ func inspect(ctx context.Context, option options, output io.Writer) error {
 }
 
 func writeNoopArtifact(outputDir, sourceID string, plan packsync.Plan) error {
-	return writeCanonical(filepath.Join(outputDir, "no-op.json"), map[string]any{"schema_version": 1, "state": "no-op", "source_id": sourceID, "plan_id": plan.PlanID, "base_sha": plan.Preconditions.BaseCommit, "candidate_sha": plan.Candidate.Commit, "contains_secrets": false, "contains_upstream_bytes": false})
+	artifact := packsyncworkflow.NoopArtifact{SchemaVersion: 2, State: "no-op", SourceID: sourceID, PlanID: plan.PlanID, BaseSHA: plan.Preconditions.BaseCommit, CandidateSHA: plan.Candidate.Commit, ArtifactProvenance: artifactProvenance(plan)}
+	if err := artifact.Validate(); err != nil {
+		return err
+	}
+	return writeCanonical(filepath.Join(outputDir, "no-op.json"), artifact)
+}
+
+func artifactProvenance(plan packsync.Plan) packsyncworkflow.ArtifactProvenance {
+	return packsyncworkflow.ArtifactProvenance{SourceLockSHA256: plan.SourceLockSHA256, LockSetSHA256: plan.LockSetSHA256, ConfigSHA256: plan.Preconditions.ConfigSHA256, ManifestsSHA256: plan.Preconditions.ManifestsSHA256}
 }
 
 func inspectRequest(option options) (packsyncworkflow.DispatchRequest, packsync.CheckRequest, error) {
 	if option.requestPath == "" {
 		if os.Getenv("PACKY_SOURCE_ID") != "" {
-			request := packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: os.Getenv("PACKY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("PACKY_SELECTOR")), SelectorRef: os.Getenv("PACKY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("PACKY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("PACKY_REQUEST_REASON"), RetryOfRun: os.Getenv("PACKY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("PACKY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("PACKY_EXPECTED_BASE_SHA")}
+			request := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: packsyncworkflow.OperationSynchronize, SourceID: os.Getenv("PACKY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("PACKY_SELECTOR")), SelectorRef: os.Getenv("PACKY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("PACKY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("PACKY_REQUEST_REASON"), RetryOfRun: os.Getenv("PACKY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("PACKY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("PACKY_EXPECTED_BASE_SHA")}
 			if raw := os.Getenv("PACKY_HUMAN_EVIDENCE_JSON"); raw != "" {
 				request.HumanEvidence = json.RawMessage(raw)
 			}

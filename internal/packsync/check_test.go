@@ -46,7 +46,7 @@ func TestCheckAcquiresCandidateOutsideLockThenLocksLocalObservation(t *testing.T
 			return
 		}
 		defer os.RemoveAll(acquisition)
-		_, err = (Engine{Source: provider}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, AcquisitionDir: acquisition})
+		_, err = (Engine{allowBootstrap: true, Source: provider}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, AcquisitionDir: acquisition})
 		done <- err
 	}()
 	<-provider.acquired
@@ -118,7 +118,7 @@ func TestCheckSealsOneClassificationImpactPerAffectedPack(t *testing.T) {
 	repository, oldSnapshot := tinyRepository(t)
 	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, repository, bootstrapSource)
-	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	engine := Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}
 	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 	repository, snapshot := tinyRepository(t)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, repository, provider)
-	writeJSON(t, filepath.Join(repository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+	writeJSON(t, filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"), bootstrap.ProposedLock)
 	authoritative := checkWith(t, repository, provider)
 	if authoritative.Status != "no-op" || !authoritative.Authoritative || len(authoritative.Blockers) != 0 {
 		t.Fatalf("authoritative baseline = %#v", authoritative)
@@ -388,10 +388,11 @@ func TestCheckFailsClosedForMovedIdentityTagMovementLossAndDrift(t *testing.T) {
 		lock.Candidate.Tree = ""
 		lock.Resources = append(lock.Resources, lock.Resources[0])
 		lock.Snapshot = snapshotHash(lock.Resources)
-		writeJSON(t, filepath.Join(copyRoot, "bundle", "sources.lock.json"), lock)
-		plan := checkWith(t, copyRoot, provider)
-		assertBlocker(t, plan, "retained provenance is invalid")
-		assertBlocker(t, plan, "duplicate selected resource")
+		writeJSON(t, filepath.Join(copyRoot, "bundle", "sources/mattpocock-skills.lock.json"), lock)
+		_, err := (Engine{allowBootstrap: true, Source: provider}).Check(context.Background(), newCheckRequest(t, copyRoot))
+		if err == nil || !strings.Contains(err.Error(), "duplicate source-lock resource") {
+			t.Fatalf("malformed lock error = %v", err)
+		}
 	})
 }
 
@@ -399,7 +400,7 @@ func TestNewReleaseWithIdenticalBytesProducesProvenanceUpdate(t *testing.T) {
 	repository, snapshot := tinyRepository(t)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, repository, provider)
-	writeJSON(t, filepath.Join(repository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+	writeJSON(t, filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"), bootstrap.ProposedLock)
 	newer := *provider
 	release := *provider.candidate.Release
 	release.ID++
@@ -426,7 +427,7 @@ func TestCheckReResolvesMovedLockedTagBeforeSelectingNewerRelease(t *testing.T) 
 	repository, snapshot := tinyRepository(t)
 	locked := acceptedCandidate()
 	bootstrap := checkWith(t, repository, &fixtureSource{root: snapshot, candidate: locked})
-	writeJSON(t, filepath.Join(repository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+	writeJSON(t, filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"), bootstrap.ProposedLock)
 
 	newer := locked
 	newRelease := *locked.Release
@@ -456,7 +457,7 @@ func TestAuthoritativeDiffReportsResourceAddRemoveAndMove(t *testing.T) {
 	baseRepository, baseSnapshot := tinyRepository(t)
 	provider := &fixtureSource{root: baseSnapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, baseRepository, provider)
-	writeJSON(t, filepath.Join(baseRepository, "bundle", "sources.lock.json"), bootstrap.ProposedLock)
+	writeJSON(t, filepath.Join(baseRepository, "bundle", "sources/mattpocock-skills.lock.json"), bootstrap.ProposedLock)
 
 	t.Run("move", func(t *testing.T) {
 		repository := t.TempDir()
@@ -503,7 +504,7 @@ func TestSelectorsRejectFloatingAndResolveDeterministically(t *testing.T) {
 		{ID: 2, Tag: "v2", PublishedAt: now},
 		{ID: 4, Tag: "v4-beta", PublishedAt: now.Add(time.Hour), Prerelease: true},
 	}}
-	engine := Engine{Source: provider}
+	engine := Engine{allowBootstrap: true, Source: provider}
 	source := SourceConfig{Repository: "mattpocock/skills"}
 	candidate, err := engine.resolve(context.Background(), source, Selector{Mode: "stable-release"})
 	if err != nil || candidate.Release == nil || candidate.Release.Tag != "v2" {
@@ -762,7 +763,7 @@ func acceptedCandidate() Candidate {
 func checkWith(t *testing.T, repository string, source Source) Plan {
 	t.Helper()
 	acquisition := t.TempDir()
-	plan, err := (Engine{Source: source}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, SourceID: "mattpocock-skills", AcquisitionDir: acquisition})
+	plan, err := (Engine{allowBootstrap: true, Source: source}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, SourceID: "mattpocock-skills", AcquisitionDir: acquisition})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -859,7 +860,7 @@ func bootstrapRepository(t *testing.T, source string) string {
 
 func removeProductionLock(t *testing.T, repository string) {
 	t.Helper()
-	err := os.Remove(filepath.Join(repository, "bundle", "sources.lock.json"))
+	err := os.Remove(filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}

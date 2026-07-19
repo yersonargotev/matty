@@ -37,7 +37,7 @@ func TestSandboxTracerRunsInspectClassifyValidatePublishWithoutExternalWrites(t 
 		t.Fatal(err)
 	}
 	var lock packsync.Lock
-	readJSONForTest(t, filepath.Join(base, "bundle", "sources.lock.json"), &lock)
+	readJSONForTest(t, filepath.Join(base, "bundle", "sources/mattpocock-skills.lock.json"), &lock)
 	candidate := lock.Candidate
 	candidate.Commit = candidateA
 	candidate.Tree = strings.Repeat("f", 40)

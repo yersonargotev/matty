@@ -19,7 +19,7 @@ func TestInitialApplyBootstrapsTruthfulProvenanceWithoutSelectedContentChange(t 
 	plan := checkWith(t, repository, provider)
 	selectedBefore := hashSelectedResources(t, repository, plan.ProposedLock)
 	validated := 0
-	engine := Engine{Source: provider, Validate: BundleValidatorFunc(func(_ context.Context, _, bundle string) error {
+	engine := Engine{allowBootstrap: true, Source: provider, Validate: BundleValidatorFunc(func(_ context.Context, _, bundle string) error {
 		validated++
 		_, err := treeHash(bundle)
 		return err
@@ -38,7 +38,7 @@ func TestInitialApplyBootstrapsTruthfulProvenanceWithoutSelectedContentChange(t 
 	if _, err := os.Stat(filepath.Join(repository, "skills-lock.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("legacy evidence still present: %v", err)
 	}
-	production, _, present, err := readLock(filepath.Join(repository, "bundle", "sources.lock.json"))
+	production, _, present, err := readLock(filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"))
 	if err != nil || !present || lockDigest(production) != lockDigest(plan.ProposedLock) {
 		t.Fatalf("production lock = %#v, present=%t, err=%v", production, present, err)
 	}
@@ -72,7 +72,7 @@ func TestApplyFaultsAndRecoverDeterministically(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(test.point)}
+			engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(test.point)}
 			_, applyErr := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan})
 			if applyErr == nil {
 				t.Fatal("faulted Apply unexpectedly succeeded")
@@ -90,7 +90,7 @@ func TestApplyFaultsAndRecoverDeterministically(t *testing.T) {
 					t.Fatalf("bundle exists between renames: %v", err)
 				}
 			case "new":
-				if _, _, present, err := readLock(filepath.Join(bundle, "sources.lock.json")); err != nil || !present {
+				if _, _, present, err := readLock(filepath.Join(bundle, "sources/mattpocock-skills.lock.json")); err != nil || !present {
 					t.Fatalf("new bundle is not installed: present=%t err=%v", present, err)
 				}
 			}
@@ -105,7 +105,7 @@ func TestApplyFaultsAndRecoverDeterministically(t *testing.T) {
 
 func TestRecoverFailsClosedForMissingManipulatedAndIncompatibleEvidence(t *testing.T) {
 	repository := t.TempDir()
-	engine := Engine{Validate: acceptingBundleValidator()}
+	engine := Engine{allowBootstrap: true, Validate: acceptingBundleValidator()}
 	if _, err := engine.Recover(context.Background(), RecoverRequest{RepositoryRoot: repository}); !errors.Is(err, ErrRecoveryEvidence) {
 		t.Fatalf("missing marker error = %v", err)
 	}
@@ -147,8 +147,8 @@ func TestApplyRejectsEverySealedFreshnessBoundary(t *testing.T) {
 			name := filepath.Join(repository, "bundle", "skills", "engineering", "one", "SKILL.md")
 			writeFile(t, name, "drift\n")
 		}},
-		{name: "production-lock", want: "production provenance lock changed", mutate: func(t *testing.T, repository string, _ *fixtureSource, _ *Plan, _ *Engine) {
-			writeFile(t, filepath.Join(repository, "bundle", "sources.lock.json"), "{}\n")
+		{name: "production-lock", want: "source lock mattpocock-skills", mutate: func(t *testing.T, repository string, _ *fixtureSource, _ *Plan, _ *Engine) {
+			writeFile(t, filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"), "{}\n")
 		}},
 		{name: "Packy-owned-suite", want: "fresh Packy-owned validation", mutate: func(_ *testing.T, _ string, _ *fixtureSource, _ *Plan, engine *Engine) {
 			engine.Validate = BundleValidatorFunc(func(context.Context, string, string) error { return errors.New("suite rejected hostile content") })
@@ -160,7 +160,7 @@ func TestApplyRejectsEverySealedFreshnessBoundary(t *testing.T) {
 			writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 			provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 			plan := checkWith(t, repository, provider)
-			engine := Engine{Source: provider, Validate: acceptingBundleValidator()}
+			engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator()}
 			test.mutate(t, repository, provider, &plan, &engine)
 			_, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -177,17 +177,17 @@ func TestPublicationProvenanceRevalidationRejectsMovedCandidate(t *testing.T) {
 	repository, snapshot := tinyRepository(t)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	plan := checkWith(t, repository, provider)
-	if err := (Engine{Source: provider}).RevalidateCandidate(context.Background(), plan); err != nil {
+	if err := (Engine{allowBootstrap: true, Source: provider}).RevalidateCandidate(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
 	provider.candidate.RepositoryID++
-	if err := (Engine{Source: provider}).RevalidateCandidate(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "provenance changed") {
+	if err := (Engine{allowBootstrap: true, Source: provider}).RevalidateCandidate(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "provenance changed") {
 		t.Fatalf("moved provenance error = %v", err)
 	}
 }
 
 func TestRecoverPendingTreatsAbsentMarkerAsCleanState(t *testing.T) {
-	result, pending, err := (Engine{}).RecoverPending(context.Background(), t.TempDir())
+	result, pending, err := (Engine{allowBootstrap: true}).RecoverPending(context.Background(), t.TempDir())
 	if err != nil || pending || result.Status != "" {
 		t.Fatalf("clean recovery state = %#v pending=%v err=%v", result, pending, err)
 	}
@@ -217,7 +217,7 @@ func TestRecoverRetainsEvidenceForIncompleteBackupAndAmbiguousSiblings(t *testin
 			writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 			provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 			plan := checkWith(t, repository, provider)
-			engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterFirstRename)}
+			engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterFirstRename)}
 			if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
 				t.Fatal("faulted Apply unexpectedly succeeded")
 			}
@@ -243,7 +243,7 @@ func TestApplyAndRecoverHoldSharedLockForEveryMutationAndRepairPhase(t *testing.
 			writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 			provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 			plan := checkWith(t, repository, provider)
-			engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: func(observed FaultPoint) error {
+			engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: func(observed FaultPoint) error {
 				if observed != point {
 					return nil
 				}
@@ -283,7 +283,7 @@ func TestRecoverFinishesCleanupIdempotentlyAfterEffectsCompleted(t *testing.T) {
 	writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	plan := checkWith(t, repository, provider)
-	engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultDuringCleanup)}
+	engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultDuringCleanup)}
 	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
 		t.Fatal("cleanup fault unexpectedly succeeded")
 	}
@@ -311,7 +311,7 @@ func TestStagedSuiteFailureLeavesRepositoryUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	validations := 0
-	engine := Engine{Source: provider, Validate: BundleValidatorFunc(func(context.Context, string, string) error {
+	engine := Engine{allowBootstrap: true, Source: provider, Validate: BundleValidatorFunc(func(context.Context, string, string) error {
 		validations++
 		if validations == 2 {
 			return errors.New("staged suite failed")
@@ -337,7 +337,7 @@ func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 	oldCandidate := acceptedCandidate()
 	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: oldCandidate}
 	bootstrap := checkWith(t, repository, bootstrapSource)
-	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	engine := Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}
 	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestApplyMaterializesCompleteAuthoritativeCandidateBundle(t *testing.T) {
 	if !strings.Contains(string(manifest), `"version": "1.0.1"`) {
 		t.Fatalf("classified exact version was not materialized: %s", manifest)
 	}
-	lock, _, present, err := readLock(filepath.Join(repository, "bundle", "sources.lock.json"))
+	lock, _, present, err := readLock(filepath.Join(repository, "bundle", "sources/mattpocock-skills.lock.json"))
 	if err != nil || !present || lock.Candidate.Commit != newCandidate.Commit {
 		t.Fatalf("updated lock = %#v, present=%t, err=%v", lock, present, err)
 	}
@@ -387,7 +387,7 @@ func TestApplyRejectsAffectedPlanWithoutCompleteClassificationEvidence(t *testin
 	initializeFixtureGit(t, repository)
 	bootstrapSource := &fixtureSource{root: oldSnapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, repository, bootstrapSource)
-	engine := Engine{Source: bootstrapSource, Validate: acceptingBundleValidator()}
+	engine := Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}
 	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestApplyRemovesObsoleteDestinationWhenManifestMovesBinding(t *testing.T) {
 	repository, snapshot := tinyRepository(t)
 	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 	bootstrap := checkWith(t, repository, provider)
-	engine := Engine{Source: provider, Validate: acceptingBundleValidator()}
+	engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator()}
 	if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestRecoverResumesAfterItsOwnRollbackAndCleanupEffects(t *testing.T) {
 		writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 		provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 		plan := checkWith(t, repository, provider)
-		engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterFirstRename)}
+		engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterFirstRename)}
 		if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
 			t.Fatal("faulted Apply unexpectedly succeeded")
 		}
@@ -477,7 +477,7 @@ func TestRecoverResumesAfterItsOwnRollbackAndCleanupEffects(t *testing.T) {
 		writeFile(t, filepath.Join(repository, "skills-lock.json"), "legacy\n")
 		provider := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
 		plan := checkWith(t, repository, provider)
-		engine := Engine{Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterSecondRename)}
+		engine := Engine{allowBootstrap: true, Source: provider, Validate: acceptingBundleValidator(), Fault: failOnce(FaultAfterSecondRename)}
 		if _, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: plan}); err == nil {
 			t.Fatal("faulted Apply unexpectedly succeeded")
 		}
