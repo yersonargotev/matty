@@ -101,6 +101,13 @@ printf validated > "${XDG_CONFIG_HOME}/proof"
 	if err := (commandValidator{}).ValidateBundle(context.Background(), repository, staged); err != nil {
 		t.Fatal(err)
 	}
+	productionScript := strings.Replace(script, `= "staged"`, `= "production"`, 1)
+	if err := os.WriteFile(filepath.Join(repository, "scripts", "validate-packy.sh"), []byte(productionScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (commandValidator{}).ValidateBundle(context.Background(), repository, filepath.Join(repository, "bundle")); err != nil {
+		t.Fatalf("production bundle validation did not use a disposable checkout: %v", err)
+	}
 	for _, path := range []string{operatorHome, operatorXDG} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("staged validation wrote operator configuration path %s: %v", path, err)

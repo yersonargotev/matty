@@ -253,9 +253,6 @@ type commandValidator struct {
 const stagedValidationEnvironment = "PACKY_VALIDATION_STAGED=1"
 
 func (validator commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
-	if filepath.Clean(bundleRoot) == filepath.Join(filepath.Clean(repositoryRoot), "bundle") {
-		return validator.Validate(ctx, repositoryRoot)
-	}
 	sandbox, err := os.MkdirTemp("", "packy-staged-validation-")
 	if err != nil {
 		return err
