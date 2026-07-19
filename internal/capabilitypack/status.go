@@ -192,7 +192,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 			}
 		}
 	}
-	observation, inspectErr := inspectSurface(ctx, adapter, SurfaceTransition{Desired: relevantPack, ResolvedExecutables: resolutions})
+	observation, inspectErr := inspectSurface(ctx, adapter, SurfaceTransition{Desired: relevantPack, CurrentOwnership: state.Ownership, ResolvedExecutables: resolutions})
 	if inspectErr != nil {
 		return StatusEntry{}, inspectErr
 	}

@@ -356,7 +356,20 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 	if err := adapter.ApplyProjections(context.Background(), projectionActions(first.Projections)); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	unowned, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, occupied := range unowned.OccupiedNames {
+		if occupied.OwnerType != "unmanaged" {
+			t.Fatalf("matching unmanaged content was adopted: %+v", occupied)
+		}
+	}
+	var recorded []capabilitypack.ProjectionOwnership
+	for _, projection := range first.Projections {
+		recorded = append(recorded, capabilitypack.ProjectionOwnership{ID: projection.ID, Contributors: []string{pack.ID}, Fingerprint: projection.DesiredFingerprint})
+	}
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, CurrentOwnership: recorded})
 	if err != nil {
 		t.Fatal(err)
 	}

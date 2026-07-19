@@ -43,6 +43,7 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
 	}
+	applyRecordedOccupancyOwnership(&observation, transition.CurrentOwnership)
 	observation.Readiness, err = a.inspectReadiness(ctx, transition.Desired, observation, transition.ResolvedExecutables)
 	return observation, err
 }
@@ -207,7 +208,7 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 	}
 	sort.Strings(revisionParts)
 	sort.Slice(projections, func(i, j int) bool { return projections[i].ID < projections[j].ID })
-	occupied, err := a.inspectOccupiedNames(pack, projections)
+	occupied, err := a.inspectOccupiedNames()
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
 	}
@@ -218,13 +219,7 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, OccupiedNames: occupied, PendingHumanActions: pendingActions(pack)}, nil
 }
 
-func (a *SurfaceAdapter) inspectOccupiedNames(pack capabilitypack.Pack, projections []capabilitypack.ObservedProjection) ([]capabilitypack.OccupiedName, error) {
-	desired := map[string]capabilitypack.ObservedProjection{}
-	for _, projection := range projections {
-		if projection.Action.Target != "" {
-			desired[filepath.Clean(projection.Action.Target)] = projection
-		}
-	}
+func (a *SurfaceAdapter) inspectOccupiedNames() ([]capabilitypack.OccupiedName, error) {
 	var result []capabilitypack.OccupiedName
 	for _, namespace := range []struct{ name, dir, suffix string }{{"skill", a.skillsDir, ""}, {"agent", filepath.Join(filepath.Dir(a.promptFile), "agents"), ".toml"}} {
 		entries, err := os.ReadDir(namespace.dir)
@@ -248,9 +243,6 @@ func (a *SurfaceAdapter) inspectOccupiedNames(pack capabilitypack.Pack, projecti
 			}
 			name := strings.TrimSuffix(entry.Name(), namespace.suffix)
 			occupied := capabilitypack.OccupiedName{Namespace: namespace.name, Name: name, OwnerType: "unmanaged", Fingerprint: fingerprint}
-			if projection, ok := desired[filepath.Clean(path)]; ok && projection.DesiredFingerprint == fingerprint {
-				occupied.OwnerType, occupied.OwnerID = "packy", pack.ID
-			}
 			result = append(result, occupied)
 		}
 	}
@@ -261,6 +253,29 @@ func (a *SurfaceAdapter) inspectOccupiedNames(pack capabilitypack.Pack, projecti
 		return result[i].Name < result[j].Name
 	})
 	return result, nil
+}
+
+func applyRecordedOccupancyOwnership(observation *capabilitypack.SurfaceInspection, ownership []capabilitypack.ProjectionOwnership) {
+	byID := make(map[string]capabilitypack.ProjectionOwnership, len(ownership))
+	for _, owner := range ownership {
+		byID[owner.ID] = owner
+	}
+	for i := range observation.OccupiedNames {
+		occupied := &observation.OccupiedNames[i]
+		for _, projection := range observation.Projections {
+			if !projection.Exists || projection.ObservedFingerprint != occupied.Fingerprint {
+				continue
+			}
+			namespace, name, ok := strings.Cut(projection.ID, ":")
+			if !ok || namespace != occupied.Namespace || name != occupied.Name {
+				continue
+			}
+			owner, recorded := byID[projection.ID]
+			if recorded && owner.Fingerprint == occupied.Fingerprint {
+				occupied.OwnerType, occupied.OwnerID = "packy", strings.Join(owner.Contributors, ",")
+			}
+		}
+	}
 }
 
 func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {

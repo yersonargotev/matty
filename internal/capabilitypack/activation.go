@@ -174,6 +174,7 @@ const (
 type SurfaceTransition struct {
 	Prior               Pack
 	Desired             Pack
+	CurrentOwnership    []ProjectionOwnership
 	ResidualOwnership   []ProjectionOwnership
 	ResolvedExecutables []ExecutableResolution
 }
@@ -1704,7 +1705,7 @@ func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition Surf
 }
 
 func surfaceTransitionFacts(operation Operation, prior, desired Pack, ownership []ProjectionOwnership, resolutions []ExecutableResolution) SurfaceTransition {
-	transition := SurfaceTransition{Desired: desired, ResolvedExecutables: resolutions}
+	transition := SurfaceTransition{Desired: desired, CurrentOwnership: ownership, ResolvedExecutables: resolutions}
 	switch operation {
 	case OperationDeactivate:
 		transition.Prior = prior
@@ -1717,6 +1718,7 @@ func surfaceTransitionFacts(operation Operation, prior, desired Pack, ownership 
 func cloneSurfaceTransition(value SurfaceTransition) SurfaceTransition {
 	value.Prior = clonePack(value.Prior)
 	value.Desired = clonePack(value.Desired)
+	value.CurrentOwnership = cloneOwnership(value.CurrentOwnership)
 	value.ResidualOwnership = cloneOwnership(value.ResidualOwnership)
 	value.ResolvedExecutables = cloneResolutions(value.ResolvedExecutables)
 	return value
