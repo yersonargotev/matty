@@ -29,6 +29,7 @@ func TestAddyRegistrationTracerProvesExactEndToEndAdmission(t *testing.T) {
 
 	base := t.TempDir()
 	copyTreeForTest(t, filepath.Join(repositoryRootForTest(t), "bundle"), filepath.Join(base, "bundle"))
+	removeConfiguredAddyForTracer(t, filepath.Join(base, "bundle"))
 	if err := os.RemoveAll(filepath.Join(base, "bundle", "packs", "addy")); err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +164,36 @@ func TestAddyRegistrationTracerProvesExactEndToEndAdmission(t *testing.T) {
 			t.Fatalf("pre-gate failure wrote GitHub state: pushes=%d creates=%d err=%v", fakeGitHub.pushCalls-beforePush, fakeGitHub.createCalls-beforeCreate, err)
 		}
 	})
+}
+
+func removeConfiguredAddyForTracer(t *testing.T, bundleRoot string) {
+	t.Helper()
+	configPath := filepath.Join(bundleRoot, "sources.json")
+	var config packsync.Config
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	sources := config.Sources[:0]
+	for _, source := range config.Sources {
+		if source.ID != "addy" {
+			sources = append(sources, source)
+		}
+	}
+	config.Sources = sources
+	data, err = json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(bundleRoot, "sources", "addy.lock.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
 }
 
 type exactAddySource struct {
