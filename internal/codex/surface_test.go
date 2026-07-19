@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
 func TestEngramCodexSetupContractIsObservedWithoutCompetingLocalWrites(t *testing.T) {
@@ -310,6 +311,7 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 	write(filepath.Join(root, "content", "agents", "coach.md"), "Keep the agent policy exact.\n")
 	write(filepath.Join(root, "content", "commands", "refine.md"), "Use the coach and read shared.md. Input: $ARGUMENTS\n")
 	write(filepath.Join(root, "content", "references", "shared.md"), "dependency bytes\x00exact\n")
+	write(filepath.Join(root, "content", "references", "unrelated.md"), "must stay inert\n")
 	write(filepath.Join(root, "content", "notices", "MIT.txt"), "display only\n")
 
 	codexBinding := func(projection, name, invocation, mode, degradation string) []capabilitypack.Binding {
@@ -319,6 +321,7 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 		{Kind: "notice", ID: "license", Source: "content/notices/MIT.txt"},
 		{Kind: "command", ID: "refine", Source: "content/commands/refine.md", Description: "Refine an idea", Arguments: capabilitypack.CommandArguments{Mode: "freeform", Placeholder: "$ARGUMENTS"}, Requires: []string{"agent:coach", "asset:shared", "skill:idea"}, Bindings: codexBinding("skill", "addy-refine", "$addy-refine", "degraded", "codex-command-as-workflow-skill")},
 		{Kind: "asset", ID: "shared", Source: "content/references/shared.md"},
+		{Kind: "asset", ID: "unrelated", Source: "content/references/unrelated.md"},
 		{Kind: "agent", ID: "coach", Source: "content/agents/coach.md", Description: "Coach ideas", Mode: "subagent", Tools: []string{"browser"}, Permissions: []string{"browser", "network"}, Bindings: codexBinding("agent", "addy-coach", "@addy-coach", "native", "")},
 		{Kind: "skill", ID: "idea", Source: "content/skills/idea", Bindings: codexBinding("skill", "addy-idea", "$addy-idea", "native", "")},
 	}, Contract: capabilitypack.Contract{Exclusions: []capabilitypack.Exclusion{{ID: "hooks", SourcePaths: []string{"hooks/pre-commit"}, Reason: "inert"}}}}
@@ -335,7 +338,7 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 	if first.Revision != second.Revision {
 		t.Fatalf("revision is not deterministic: %q != %q", first.Revision, second.Revision)
 	}
-	wantIDs := []string{"agent:addy-coach", "asset:shared", "skill:addy-idea", "workflow:addy-refine"}
+	wantIDs := []string{"agent:addy-coach", "asset:workflow:addy-refine:shared:shared.md", "skill:addy-idea", "workflow:addy-refine"}
 	if len(first.Projections) != len(wantIDs) {
 		t.Fatalf("projections = %+v", first.Projections)
 	}
@@ -343,6 +346,9 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 		if projection.ID != wantIDs[i] {
 			t.Fatalf("projection[%d] = %q, want %q", i, projection.ID, wantIDs[i])
 		}
+	}
+	if first.Projections[1].Action.Kind != capabilitypack.ActionCodexAssetFile {
+		t.Fatalf("asset action kind = %q", first.Projections[1].Action.Kind)
 	}
 	if first.Readiness.UsabilityObserved || first.Readiness.Usable {
 		t.Fatalf("host usability was guessed: %+v", first.Readiness)
@@ -360,7 +366,7 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 		}
 	}
 	agent, _ := os.ReadFile(filepath.Join(root, "home", ".codex", "agents", "addy-coach.toml"))
-	for _, preserved := range []string{"Keep the agent policy exact.", `mode = "subagent"`, `tools = ["browser"]`, `permissions = ["browser", "network"]`} {
+	for _, preserved := range []string{"Keep the agent policy exact.", `mode=subagent`, `tools=[\"browser\"]`, `permissions=[\"browser\", \"network\"]`, "Preserve these constraints when executing."} {
 		if !strings.Contains(string(agent), preserved) {
 			t.Fatalf("agent lost %q: %s", preserved, agent)
 		}
@@ -371,7 +377,7 @@ func TestPortableCodexWorkflowProjectsNativeBindingsAndRequiredDegradation(t *te
 			t.Fatalf("workflow lost %q: %s", preserved, workflow)
 		}
 	}
-	asset, _ := os.ReadFile(filepath.Join(root, "home", ".agents", "skills", ".packy-assets", "shared"))
+	asset, _ := os.ReadFile(filepath.Join(root, "home", ".agents", "skills", "addy-refine", "shared.md"))
 	if string(asset) != "dependency bytes\x00exact\n" {
 		t.Fatalf("asset bytes = %q", asset)
 	}
@@ -416,6 +422,61 @@ func TestPortableCodexWorkflowRejectsOverlappingNativeSkillTarget(t *testing.T) 
 	adapter := NewSurfaceAdapter(root, filepath.Join(root, "home", "skills"), filepath.Join(root, "home", ".codex", "AGENTS.md"))
 	if _, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack}); err == nil || !strings.Contains(err.Error(), "overlapping targets") {
 		t.Fatalf("collision was not rejected: %v", err)
+	}
+}
+
+func TestCodexApplyRollsBackWhenAProjectionCannotBeStaged(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, ".codex", "AGENTS.md"))
+	first := filepath.Join(root, ".codex", "agents", "first.toml")
+	err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{
+		{ID: "agent:first", Kind: capabilitypack.ActionCodexAgentFile, Target: first, Content: "first"},
+		{ID: "agent:blocked", Kind: capabilitypack.ActionCodexAgentFile, Target: filepath.Join(blocker, "blocked.toml"), Content: "blocked"},
+	})
+	if err == nil {
+		t.Fatal("partial failure unexpectedly succeeded")
+	}
+	if _, statErr := os.Stat(first); !os.IsNotExist(statErr) {
+		t.Fatalf("first projection leaked after failure: %v", statErr)
+	}
+	got, _ := os.ReadFile(blocker)
+	if string(got) != "keep" {
+		t.Fatalf("blocker changed: %q", got)
+	}
+}
+
+func TestCodexResidualInspectionReportsDriftBeforeOwnedRemoval(t *testing.T) {
+	root := t.TempDir()
+	prompt := filepath.Join(root, ".codex", "AGENTS.md")
+	target := filepath.Join(root, ".codex", "agents", "coach.toml")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), prompt)
+	initial, exists, err := localprojection.FingerprintPath(target)
+	if err != nil || !exists {
+		t.Fatalf("fingerprint: %q %v %v", initial, exists, err)
+	}
+	if err := os.WriteFile(target, []byte("drifted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: capabilitypack.Pack{ID: "empty"}, ResidualOwnership: []capabilitypack.ProjectionOwnership{{ID: "agent:coach", Fingerprint: initial, Contributors: []string{"pack"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.Projections) != 1 {
+		t.Fatalf("projections = %+v", inspection.Projections)
+	}
+	projection := inspection.Projections[0]
+	if projection.ObservedFingerprint == initial || projection.Action.Mode != capabilitypack.ProjectionDeleteTarget {
+		t.Fatalf("drift was hidden: %+v", projection)
 	}
 }
 

@@ -182,19 +182,14 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 			}
 			projections = append(projections, projection)
 			revisionParts = append(revisionParts, revision)
-		case "asset":
-			source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
-			content, err := os.ReadFile(source)
-			if err != nil {
-				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read asset %q: %w", resource.ID, err)
-			}
-			target := filepath.Join(a.skillsDir, ".packy-assets", resource.ID)
-			projection, revision, err := fileProjection("asset:"+resource.ID, capabilitypack.ActionCodexWorkflowSkill, target, string(content), fmt.Sprintf("materialize Codex dependency asset %s at %s", resource.ID, target))
+			assets, err := a.consumerAssetProjections(pack, resource, "workflow:"+name, filepath.Dir(target))
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			projections = append(projections, projection)
-			revisionParts = append(revisionParts, revision)
+			for _, asset := range assets {
+				projections = append(projections, asset)
+				revisionParts = append(revisionParts, asset.ID+"="+asset.ObservedFingerprint)
+			}
 		}
 	}
 	for i := range projections {
@@ -246,7 +241,7 @@ func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, des
 		switch projection.Action.Kind {
 		case capabilitypack.ActionSkillLink:
 			mode = capabilitypack.ProjectionDeleteTarget
-		case capabilitypack.ActionCodexAgentFile, capabilitypack.ActionCodexWorkflowSkill:
+		case capabilitypack.ActionCodexAgentFile, capabilitypack.ActionCodexWorkflowSkill, capabilitypack.ActionCodexAssetFile:
 			mode = capabilitypack.ProjectionDeleteTarget
 		case capabilitypack.ActionInstructionFile:
 			id := strings.TrimPrefix(projection.ID, "instruction:")
@@ -371,11 +366,15 @@ func (a *SurfaceAdapter) inspectOwnedProjection(id, promptContent, configContent
 		projection.Exists, projection.ObservedFingerprint = exists, observed
 		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexWorkflowSkill, Target: target}
 		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove Codex projection %s", id)), true, err
-	case strings.HasPrefix(id, "asset:"):
-		target := filepath.Join(a.skillsDir, ".packy-assets", strings.TrimPrefix(id, "asset:"))
+	case strings.HasPrefix(id, "asset:workflow:"):
+		parts := strings.Split(id, ":")
+		if len(parts) != 5 {
+			return capabilitypack.ObservedProjection{}, false, nil
+		}
+		target := filepath.Join(a.skillsDir, parts[2], parts[4])
 		observed, exists, err := localprojection.FingerprintPath(target)
 		projection.Exists, projection.ObservedFingerprint = exists, observed
-		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexWorkflowSkill, Target: target}
+		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionCodexAssetFile, Target: target}
 		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove Codex projection %s", id)), true, err
 	default:
 		return capabilitypack.ObservedProjection{}, false, nil
@@ -391,6 +390,7 @@ func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilit
 			capabilitypack.ActionCodexMCPConfig:     true,
 			capabilitypack.ActionCodexAgentFile:     true,
 			capabilitypack.ActionCodexWorkflowSkill: true,
+			capabilitypack.ActionCodexAssetFile:     true,
 		},
 	}
 	err := executor.Apply(actions)
@@ -453,7 +453,8 @@ func codexAgentTOML(resource capabilitypack.Resource, name string, prompt []byte
 		}
 		return "[" + strings.Join(encoded, ", ") + "]"
 	}
-	return fmt.Sprintf("# packy-mode = %s\n# packy-tools = %s\n# packy-permissions = %s\nname = %s\ndescription = %s\ndeveloper_instructions = %s\n", quote(resource.Mode), values(resource.Tools), values(resource.Permissions), quote(name), quote(resource.Description), quote(string(prompt)))
+	policy := fmt.Sprintf("Packy agent policy (required): mode=%s; tools=%s; permissions=%s. Preserve these constraints when executing.\n\n", resource.Mode, values(resource.Tools), values(resource.Permissions))
+	return fmt.Sprintf("name = %s\ndescription = %s\ndeveloper_instructions = %s\n", quote(name), quote(resource.Description), quote(policy+string(prompt)))
 }
 
 func codexWorkflowSkill(resource capabilitypack.Resource, name string, prompt []byte) string {
@@ -467,6 +468,51 @@ func codexWorkflowSkill(resource capabilitypack.Resource, name string, prompt []
 	}
 	encodedDescription, _ := json.Marshal(description)
 	return fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n> Codex degradation: invoke this workflow as `$%s`; this does not provide or claim `/%s`.\n\n%s\n\n%s\n", name, encodedDescription, name, name, argumentNotice, strings.TrimSpace(string(prompt)))
+}
+
+func (a *SurfaceAdapter) consumerAssetProjections(pack capabilitypack.Pack, consumer capabilitypack.Resource, consumerID, targetDir string) ([]capabilitypack.ObservedProjection, error) {
+	byIdentity := make(map[string]capabilitypack.Resource, len(pack.Resources))
+	for _, resource := range pack.Resources {
+		byIdentity[resource.Kind+":"+resource.ID] = resource
+	}
+	seen := map[string]bool{}
+	var assets []capabilitypack.Resource
+	var visit func(string)
+	visit = func(identity string) {
+		if seen[identity] {
+			return
+		}
+		seen[identity] = true
+		resource, ok := byIdentity[identity]
+		if !ok {
+			return
+		}
+		if resource.Kind == "asset" {
+			assets = append(assets, resource)
+		}
+		for _, requirement := range resource.Requires {
+			visit(requirement)
+		}
+	}
+	for _, requirement := range consumer.Requires {
+		visit(requirement)
+	}
+	sort.Slice(assets, func(i, j int) bool { return assets[i].ID < assets[j].ID })
+	result := make([]capabilitypack.ObservedProjection, 0, len(assets))
+	for _, asset := range assets {
+		content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(asset.Source)))
+		if err != nil {
+			return nil, fmt.Errorf("read asset %q for %s: %w", asset.ID, consumerID, err)
+		}
+		filename := filepath.Base(asset.Source)
+		id := "asset:" + consumerID + ":" + asset.ID + ":" + filename
+		projection, _, err := fileProjection(id, capabilitypack.ActionCodexAssetFile, filepath.Join(targetDir, filename), string(content), fmt.Sprintf("materialize dependency asset %s for %s", asset.ID, consumerID))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, projection)
+	}
+	return result, nil
 }
 
 func fileProjection(id string, kind capabilitypack.ProjectionActionKind, target, content, description string) (capabilitypack.ObservedProjection, string, error) {
@@ -489,7 +535,7 @@ func pathsOverlap(left, right string) bool {
 }
 
 func exclusivePathKind(kind capabilitypack.ProjectionActionKind) bool {
-	return kind == capabilitypack.ActionSkillLink || kind == capabilitypack.ActionCodexWorkflowSkill
+	return kind == capabilitypack.ActionSkillLink || kind == capabilitypack.ActionCodexWorkflowSkill || kind == capabilitypack.ActionCodexAssetFile
 }
 
 func extractBlock(content, startMarker, endMarker string) (string, bool) {
