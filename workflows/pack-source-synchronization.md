@@ -16,20 +16,23 @@ exact version selection, evidence validation, Apply, or Recover. Those remain
 owned by `internal/packsync` and `internal/packclassification` under ADR 0007
 and ADR 0008.
 
-The complete immutable schema suite is checked in under
-`schemas/pack-source/v1.0.0/`. It consists of the dispatch, validation, no-op,
-operational-artifact, and publication schema files. Repository validation
-registers all five locally by their canonical GitHub Pages IDs. Packy runtime
+The complete immutable schema suites are checked in under
+`schemas/pack-source/v1.0.0/` and `schemas/pack-source/v2.0.0/`. Each consists
+of the dispatch, validation, no-op, operational-artifact, and publication
+schema files. Version 1 remains the synchronization contract; version 2 adds
+sealed source registration and source-scoped provenance. Repository validation
+registers every schema locally by its canonical GitHub Pages ID. Packy runtime
 validates domain values directly and never resolves schemas over the network.
 
 ## Canonical dispatch
 
-Every request conforms to
-`schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json` (canonical ID
-`https://yersonargotev.github.io/packy/schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json`).
-It names one configured `source_id`, an explicit candidate selector, an
-explicit `ai` or `human` classification mode, and an operator reason. There are
-no automatic triggers.
+Every request conforms to the dispatch schema for its declared version. A
+version 1 request synchronizes one configured `source_id`. A version 2 request
+also names an explicit `synchronize` or `register` operation. Registration is
+allowed only when the source is absent and seals the complete strict source
+configuration plus its canonical SHA-256. Every request carries an explicit
+candidate selector, an explicit `ai` or `human` classification mode, and an
+operator reason. There are no automatic triggers.
 
 The workflow transport additionally requires `request_digest`, the lowercase
 SHA-256 of the sorted compact canonical request JSON including its trailing

@@ -430,7 +430,7 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 		if runtimeErr == nil {
 			runtimeErr = request.Validate()
 		}
-		schemaErr := validateSchemaInstance(t, "pack-source-dispatch.schema.json", fixture.Request)
+		schemaErr := validateSchemaInstanceForSuite(t, fmt.Sprintf("v%d.0.0", request.SchemaVersion), "pack-source-dispatch.schema.json", fixture.Request)
 		if (runtimeErr == nil) != fixture.Valid || (schemaErr == nil) != fixture.Valid {
 			t.Fatalf("request fixture %s valid=%t runtime=%v schema=%v", fixture.Name, fixture.Valid, runtimeErr, schemaErr)
 		}
@@ -438,7 +438,11 @@ func TestMaintainerSkillFixturesCoverCanonicalRequestsAndMonitoring(t *testing.T
 			t.Fatalf("request fixture %s has no maintainer intent", fixture.Name)
 		}
 	}
-	testMaintainerDispatchRenderer(t, fixtures.Requests[0].Request)
+	for _, fixture := range fixtures.Requests {
+		if fixture.Valid {
+			testMaintainerDispatchRenderer(t, fixture.Request)
+		}
+	}
 	var canonical packsyncworkflow.DispatchRequest
 	if err := json.Unmarshal(fixtures.Requests[0].Request, &canonical); err != nil {
 		t.Fatal(err)
@@ -598,6 +602,15 @@ echo https://github.com/yersonargotev/packy/actions/runs/42
 	digest, _ := canonical.Digest()
 	if inputs["request_digest"] != digest || inputs["source_id"] != canonical.SourceID || inputs["selector"] != string(canonical.Selector) || inputs["classification_mode"] != string(canonical.ClassificationMode) || inputs["request_reason"] != canonical.RequestReason {
 		t.Fatalf("workflow inputs = %#v", inputs)
+	}
+	if canonical.SchemaVersion == 2 {
+		registration, _ := json.Marshal(canonical.Registration)
+		if inputs["operation"] != string(canonical.Operation) || inputs["registration_json"] != string(registration) || inputs["registration_sha256"] != canonical.RegistrationSHA256 {
+			t.Fatalf("registration workflow inputs = %#v", inputs)
+		}
+		if _, present := inputs["registration"]; present {
+			t.Fatal("workflow transport contains unmapped registration")
+		}
 	}
 	if _, present := inputs["schema_version"]; present {
 		t.Fatal("workflow transport contains schema_version")

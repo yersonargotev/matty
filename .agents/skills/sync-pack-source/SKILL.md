@@ -18,9 +18,10 @@ that it belongs to `yersonargotev/packy` and the canonical workflow, then go
 directly to **Monitor and conclude** using its owner-produced request and
 artifacts. Recovery or retry continues through normalization below.
 
-Follow [REQUESTS.md](REQUESTS.md). Resolve the source and selector exclusively
-from remote `main`, render the exact canonical JSON request, and reject every
-ambiguity or forbidden override before any write.
+Follow [REQUESTS.md](REQUESTS.md). Resolve a configured source, or an explicitly
+requested absent-source registration, and its selector exclusively from remote
+`main`; render the exact canonical JSON request and reject every ambiguity or
+forbidden override before any write.
 
 **Complete when:** one schema-valid request is shown verbatim, or the operation
 is explicitly blocked with the missing decision named.

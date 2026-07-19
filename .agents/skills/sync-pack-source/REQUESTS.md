@@ -8,7 +8,7 @@ Load this reference for normalization, preflight, attachment, or dispatch.
   `yersonargotev/packy`, but read authority with `gh api` from remote `main`.
 - Require `git`, `gh`, `jq`, active authentication, read access to repository
   contents/Actions/branches/pull requests, and actual workflow-dispatch access.
-- Read `bundle/sources.json`, the dispatch schema, and
+- Read `bundle/sources.json`, both versioned dispatch schemas, and
   `.github/workflows/sync-pack-source.yml` through GitHub's contents API at
   `ref=main`. Confirm the workflow is active and remote `main` resolves.
 - Download `scripts/request.sh`, `attach.sh`, `dispatch.sh`, and
@@ -38,9 +38,23 @@ Use that same `remote_main_sha` for every subsequent remote contents read.
 
 ## Normalize intent
 
-Infer `source_id` only when an explicitly named configured source, repository,
-or pack has exactly one match in remote `bundle/sources.json`. Ask when zero or
-multiple sources match.
+Use schema version 1 for `synchronize` requests. Use schema version 2 with
+`operation: register` only when the maintainer explicitly requests admission
+of an absent source. A registration request must contain the complete strict
+`SourceConfig` as `registration`; its `id` must equal `source_id`, its selector
+must agree with the request selector, and its resources must bind the complete
+intended source contribution. Canonicalize the configuration by the runtime
+rules (including binding order), encode it as two-space-indented JSON with one
+trailing newline, and set `registration_sha256` to the lowercase SHA-256 of
+those exact bytes. Never infer an absent source registration from an update
+request.
+
+Infer `source_id` for synchronization only when an explicitly named configured
+source, repository, or pack has exactly one match in remote
+`bundle/sources.json`. Ask when zero or multiple sources match. For explicit
+registration, require the named source to be absent and derive its complete
+configuration from an already reviewed, Packy-owned manifest or specification;
+ambiguity in any binding blocks before dispatch.
 
 | Intent | Canonical selector |
 | --- | --- |
@@ -63,12 +77,11 @@ PR, base, version, provenance, validation, permission, credential, secret,
 auto-merge, upstream-byte, executable, repair, or bypass inputs.
 
 Build JSON with `jq`, omitting absent optional properties. Its allowed keys are
-exactly those in
-`schemas/pack-source/v1.0.0/pack-source-dispatch.schema.json`. Validate it
-against that checked-in schema by its canonical `$id`; do not resolve it over
-the network. Show the exact JSON before dispatch. Map
-`human_evidence` to the workflow transport input `human_evidence_json` without
-changing its canonical JSON.
+exactly those in the matching versioned dispatch schema. Validate it against
+that checked-in schema by its canonical `$id`; do not resolve it over the
+network. Show the exact JSON before dispatch. Map `human_evidence` to the
+workflow transport input `human_evidence_json` and `registration` to
+`registration_json` without changing either canonical JSON value.
 
 ## Attach or dispatch
 
