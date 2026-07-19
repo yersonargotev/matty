@@ -33,6 +33,47 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 	}
 }
 
+func TestHistoricalArtifactRoundTripsManifestV2FileAndDirectoryResources(t *testing.T) {
+	fixture, _ := writeManifestV2Fixture(t)
+	bundle := filepath.Join(t.TempDir(), "bundle")
+	root := filepath.Join(bundle, "history", "addy", "1.0.0")
+	copyHistoricalTree(t, filepath.Join(fixture, "content"), filepath.Join(root, "content"))
+	mustWrite(t, filepath.Join(root, "pack.json"), mustRead(t, filepath.Join(fixture, "packs", "addy", "pack.json")), 0o600)
+	mustWrite(t, filepath.Join(root, "artifact.json"), []byte("{}\n"), 0o600)
+
+	pack := mustDecodeHistoricalManifest(t, root)
+	artifact, err := inspectHistoricalArtifact(root, pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHistoricalArtifact(t, root, artifact)
+
+	if _, err := loadHistoricalArtifact(root, bundle, "addy", "1.0.0"); err == nil || !strings.Contains(err.Error(), "no trusted immutable aggregate") {
+		t.Fatalf("synthetic history was accepted without an explicit trust root: %v", err)
+	}
+	trustKey := "addy@1.0.0"
+	trustedHistoricalAggregates[trustKey] = artifact.AggregateSHA256
+	t.Cleanup(func() { delete(trustedHistoricalAggregates, trustKey) })
+
+	loaded, err := loadHistoricalArtifact(root, bundle, "addy", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Resources) != len(pack.Resources) {
+		t.Fatalf("loaded %d resources, want %d", len(loaded.Resources), len(pack.Resources))
+	}
+	for i := range loaded.Resources {
+		want := pack.Resources[i]
+		want.Source = filepath.ToSlash(filepath.Join("history", "addy", "1.0.0", filepath.FromSlash(want.Source)))
+		if !reflect.DeepEqual(loaded.Resources[i], want) {
+			t.Fatalf("resource %d changed across historical round-trip:\n got: %#v\nwant: %#v", i, loaded.Resources[i], want)
+		}
+	}
+	if got := len(artifact.Resources); got != 5 {
+		t.Fatalf("artifact evidence contains %d resources, want 5", got)
+	}
+}
+
 func TestCheckedInMattyTwoPreservesWorkflowConventionsInOneOwnedInstruction(t *testing.T) {
 	bundleRoot := filepath.Join("..", "..", "bundle")
 	catalog, err := Discover(bundleRoot)

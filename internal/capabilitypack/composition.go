@@ -18,6 +18,8 @@ const (
 	BlockerOwnership                BlockerKind    = "ownership"
 	BlockerGlobalRequirement        BlockerKind    = "global-requirement"
 	BlockerActiveDependent          BlockerKind    = "active-dependent"
+	BlockerAlias                    BlockerKind    = "alias"
+	BlockerSharing                  BlockerKind    = "sharing"
 )
 
 type PlannedActivation struct {
@@ -196,11 +198,23 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 	}
 	resources := map[string]Resource{}
 	for _, pack := range result.packs {
+		intent := intentByPackID(active, pack.ID)
+		for _, alias := range intent.Aliases {
+			if !packHasAliasTarget(pack, alias, surface) {
+				result.blockers = append(result.blockers, PlanBlocker{BlockerAlias, alias.Kind + ":" + alias.ID, "saved surface alias no longer targets a bound portable resource"})
+			}
+		}
 		for _, resource := range pack.Resources {
 			key := resource.Kind + ":" + resource.ID
-			if previous, ok := resources[key]; ok && digestJSON(previous) != digestJSON(resource) {
-				result.blockers = append(result.blockers, PlanBlocker{BlockerIncompatibleContribution, key, "contributors declare different portable resources"})
-				continue
+			if previous, ok := resources[key]; ok {
+				if digestJSON(previous) != digestJSON(resource) {
+					result.blockers = append(result.blockers, PlanBlocker{BlockerIncompatibleContribution, key, "contributors declare different portable resources"})
+					continue
+				}
+				previousSharing, currentSharing := bindingSharing(previous, surface), bindingSharing(resource, surface)
+				if (previousSharing != "" || currentSharing != "") && (previousSharing != "shared" || currentSharing != "shared") {
+					result.blockers = append(result.blockers, PlanBlocker{BlockerSharing, key, "every contributor must explicitly declare shared for an overlapping surface binding"})
+				}
 			}
 			resources[key] = resource
 			result.contributors[key] = append(result.contributors[key], pack.ID)
@@ -211,6 +225,33 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 	}
 	sortBlockers(result.blockers)
 	return result, nil
+}
+
+func intentByPackID(intents []ActivationIntent, packID string) ActivationIntent {
+	for _, intent := range intents {
+		if intent.PackID == packID {
+			return intent
+		}
+	}
+	return ActivationIntent{}
+}
+
+func packHasAliasTarget(pack Pack, alias SurfaceAlias, surface Surface) bool {
+	for _, resource := range pack.Resources {
+		if resource.Kind == alias.Kind && resource.ID == alias.ID && bindingSharing(resource, surface) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func bindingSharing(resource Resource, surface Surface) string {
+	for _, binding := range resource.Bindings {
+		if binding.Surface == surface {
+			return binding.Sharing
+		}
+	}
+	return ""
 }
 
 // composeWithout builds the complete desired state for a surface after one

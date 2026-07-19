@@ -345,6 +345,13 @@ func decodeManifest(path, bundleRoot string) (Pack, error) {
 	return decodeManifestWithSourceValidation(path, bundleRoot, true)
 }
 
+// LoadPortableManifest exposes capability-pack's strict runtime decoder to
+// Packy-owned producers and validators so they cannot accept a weaker wire
+// contract than catalog discovery.
+func LoadPortableManifest(path, bundleRoot string) (Pack, error) {
+	return decodeManifestWithSourceValidation(path, bundleRoot, false)
+}
+
 func decodeManifestWithSourceValidation(path, bundleRoot string, validateSources bool) (Pack, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

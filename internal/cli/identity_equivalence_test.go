@@ -189,9 +189,10 @@ func normalizeIdentityArgs(args []string) []string {
 }
 
 var (
-	identityPlanRE = regexp.MustCompile(`plan-[0-9a-f]+`)
-	identityHashRE = regexp.MustCompile(`\b[0-9a-f]{64}\b`)
-	identityTimeRE = regexp.MustCompile(`2026-07-17T12:00:00Z`)
+	identityPlanRE         = regexp.MustCompile(`plan-[0-9a-f]+`)
+	identityHashRE         = regexp.MustCompile(`\b[0-9a-f]{64}\b`)
+	identityTimeRE         = regexp.MustCompile(`2026-07-17T12:00:00Z`)
+	identityEmptyAliasesRE = regexp.MustCompile(`,\n(\s*)"aliases": \[\]`)
 )
 
 func normalizeIdentityEvidence(value, product string, roots map[string]string) string {
@@ -258,6 +259,9 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 }
 
 func normalizeIdentityStrings(values []string, product string, roots map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
 	result := make([]string, len(values))
 	for i, value := range values {
 		result[i] = normalizeIdentityEvidence(value, product, roots)
@@ -319,6 +323,9 @@ func identityEvidenceSnapshot(t *testing.T, root, product string, roots map[stri
 			if err != nil {
 				return err
 			}
+			if rel == filepath.Join("."+product, "packs.json") {
+				data = []byte(normalizeIdentityStateEvolution(string(data)))
+			}
 			entries = append(entries, fact{Path: normalizeIdentityEvidence(rel, product, roots), Kind: "file", Content: normalizeIdentityEvidence(string(data), product, roots)})
 		}
 		return nil
@@ -332,6 +339,12 @@ func identityEvidenceSnapshot(t *testing.T, root, product string, roots map[stri
 		t.Fatalf("marshal identity evidence: %v", err)
 	}
 	return string(data)
+}
+
+func normalizeIdentityStateEvolution(value string) string {
+	value = strings.ReplaceAll(value, `"schema_version": 2`, `"schema_version": 1`)
+	value = strings.Replace(value, `"schema_version": 3`, `"schema_version": 2`, 1)
+	return identityEmptyAliasesRE.ReplaceAllString(value, "")
 }
 
 func createIdentityEquivalenceSourceRepository(t *testing.T) string {

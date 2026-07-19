@@ -27,6 +27,22 @@ func TestDiscoverLoadsManifestV2Contract(t *testing.T) {
 	}
 }
 
+func TestManifestV2FixtureRoundTripsCatalogAndComposition(t *testing.T) {
+	bundle, entries := writeManifestV2Fixture(t)
+	catalog, err := discoverCatalog(bundle, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := catalog.Show("addy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewFacade(catalog).compose(pack, ActivationState{}, SurfaceCodex, true)
+	if err != nil || len(result.blockers) != 0 || len(result.combinedPack().Resources) != 5 {
+		t.Fatalf("composition = %+v, err = %v", result, err)
+	}
+}
+
 func TestDiscoverRejectsInvalidManifestV2Contracts(t *testing.T) {
 	tests := []struct {
 		name string
@@ -47,6 +63,9 @@ func TestDiscoverRejectsInvalidManifestV2Contracts(t *testing.T) {
 		{"notice dependency", func(m map[string]any) {
 			resource(m, "skill", "idea-refine")["requires"] = []any{"notice:license"}
 		}, "may not target notice"},
+		{"notice projection", func(m map[string]any) {
+			resource(m, "notice", "license")["bindings"] = nativeBindings("skill", "license", "$license")
+		}, "unknown field"},
 		{"missing surface binding", func(m map[string]any) {
 			bindings := resource(m, "skill", "idea-refine")["bindings"].([]any)
 			resource(m, "skill", "idea-refine")["bindings"] = bindings[:1]
