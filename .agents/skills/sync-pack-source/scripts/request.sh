@@ -12,6 +12,7 @@ workflow_inputs() {
     del(.schema_version)
     | with_entries(.value |= if type == "object" or type == "array" then tojson else tostring end)
     | if has("human_evidence") then .human_evidence_json=.human_evidence | del(.human_evidence) else . end
+    | if has("registration") then .registration_json=.registration | del(.registration) else . end
     | .request_digest=$request_digest
   ' "$request"
 }

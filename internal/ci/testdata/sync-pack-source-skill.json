@@ -83,6 +83,36 @@
       }
     },
     {
+      "name": "register-source-human-inspection",
+      "intent": "Registra una fuente ausente usando clasificación humana.",
+      "valid": true,
+      "request": {
+        "schema_version": 2,
+        "operation": "register",
+        "source_id": "example-source",
+        "selector": "latest-stable",
+        "classification_mode": "human",
+        "request_reason": "Registra una fuente ausente usando clasificación humana.",
+        "registration": {
+          "id": "example-source",
+          "provider": "github",
+          "repository": "example/source",
+          "selector": {
+            "mode": "stable-release"
+          },
+          "resources": [
+            {
+              "pack_id": "example",
+              "kind": "skill",
+              "resource_id": "example",
+              "upstream_path": "skills/example"
+            }
+          ]
+        },
+        "registration_sha256": "54c4adac1a46cce54ee049b08b34a27b312e40c67136bc1b15842b32859d52c8"
+      }
+    },
+    {
       "name": "floating-branch",
       "intent": "Actualiza desde main.",
       "valid": false,
