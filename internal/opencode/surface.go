@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if err != nil {
 		return capabilitypack.SurfaceInspection{}, err
 	}
+	applyRecordedOccupancyOwnership(&observation, transition.CurrentOwnership)
 	observation.Readiness, err = a.inspectReadiness(ctx, transition.Desired, observation, transition.ResolvedExecutables)
 	return observation, err
 }
@@ -64,14 +66,26 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, fmt.Errorf("fingerprint skill %q: %w", resource.ID, err)
 			}
-			target := filepath.Join(a.skillsDir, resource.ID)
+			name, ok := openCodeBindingName(resource, "skill")
+			if !ok {
+				continue
+			}
+			target := filepath.Join(a.skillsDir, name)
 			observed, exists, err := localprojection.FingerprintPath(target)
 			if err != nil {
 				return capabilitypack.SurfaceInspection{}, err
 			}
-			id := "skill:" + resource.ID
+			id := "skill:" + name
 			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeSkillLink, Source: source, Target: target, Description: fmt.Sprintf("link OpenCode skill %s at %s", resource.ID, target)}})
 			revisionParts = append(revisionParts, id+"="+observed)
+			assets, err := a.consumerAssetProjections(pack, resource, id, filepath.Join(a.skillsDir, ".packy-assets"))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, err
+			}
+			for _, asset := range assets {
+				projections = append(projections, asset)
+				revisionParts = append(revisionParts, asset.ID+"="+asset.ObservedFingerprint)
+			}
 		case "instruction":
 			source := filepath.Join(a.bundleRoot, filepath.Clean(resource.Source))
 			content, err := os.ReadFile(source)
@@ -145,6 +159,54 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 			id := "mcp_server:" + resource.ID
 			projections = append(projections, capabilitypack.ObservedProjection{ID: id, Exists: inspection.Exists, ObservedFingerprint: inspection.ObservedFingerprint, DesiredFingerprint: inspection.DesiredFingerprint, Action: capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile, Content: merged, Command: command, Args: append([]string(nil), resource.Args...), Description: fmt.Sprintf("configure OpenCode MCP server %s in %s", resource.ID, a.configFile)}})
 			revisionParts = append(revisionParts, "config="+localprojection.FingerprintBytes([]byte(currentConfig)))
+		case "agent":
+			name, ok := openCodeBindingName(resource, "agent")
+			if !ok {
+				continue
+			}
+			prompt, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(resource.Source)))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read agent %q: %w", resource.ID, err)
+			}
+			target := filepath.Join(filepath.Dir(a.configFile), "agents", name+".md")
+			projection, revision, err := fileProjection("agent:"+name, capabilitypack.ActionOpenCodeAgentFile, target, openCodeAgentMarkdown(pack, resource, prompt), fmt.Sprintf("write OpenCode agent %s at %s", name, target))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, err
+			}
+			projections = append(projections, projection)
+			revisionParts = append(revisionParts, revision)
+			assets, err := a.consumerAssetProjections(pack, resource, "agent:"+name, filepath.Join(filepath.Dir(a.configFile), "agents"))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, err
+			}
+			for _, asset := range assets {
+				projections = append(projections, asset)
+				revisionParts = append(revisionParts, asset.ID+"="+asset.ObservedFingerprint)
+			}
+		case "command":
+			name, ok := openCodeBindingName(resource, "command")
+			if !ok {
+				continue
+			}
+			prompt, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(resource.Source)))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("read command %q: %w", resource.ID, err)
+			}
+			target := filepath.Join(filepath.Dir(a.configFile), "commands", name+".md")
+			projection, revision, err := fileProjection("command:"+name, capabilitypack.ActionOpenCodeCommandFile, target, openCodeCommandMarkdown(pack, resource, prompt), fmt.Sprintf("write OpenCode command %s at %s", name, target))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, err
+			}
+			projections = append(projections, projection)
+			revisionParts = append(revisionParts, revision)
+			assets, err := a.consumerAssetProjections(pack, resource, "command:"+name, filepath.Dir(target))
+			if err != nil {
+				return capabilitypack.SurfaceInspection{}, err
+			}
+			for _, asset := range assets {
+				projections = append(projections, asset)
+				revisionParts = append(revisionParts, asset.ID+"="+asset.ObservedFingerprint)
+			}
 		}
 	}
 	if configLoaded {
@@ -157,8 +219,27 @@ func (a *SurfaceAdapter) inspectDesired(_ context.Context, pack capabilitypack.P
 	for i := range projections {
 		projections[i].Goal = capabilitypack.ProjectionPresent
 	}
+	for i, projection := range projections {
+		for _, prior := range projections[:i] {
+			if (!exclusivePathKind(projection.Action.Kind) && !exclusivePathKind(prior.Action.Kind)) || projection.Action.Target == "" || prior.Action.Target == "" {
+				continue
+			}
+			if pathsOverlap(prior.Action.Target, projection.Action.Target) {
+				return capabilitypack.SurfaceInspection{}, fmt.Errorf("OpenCode projections %s and %s have overlapping targets %s and %s", prior.ID, projection.ID, prior.Action.Target, projection.Action.Target)
+			}
+		}
+	}
+	sort.Slice(projections, func(i, j int) bool { return projections[i].ID < projections[j].ID })
 	sort.Strings(revisionParts)
-	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, PendingHumanActions: pendingActions(pack)}, nil
+	occupied, err := a.inspectOccupiedNames()
+	if err != nil {
+		return capabilitypack.SurfaceInspection{}, err
+	}
+	for _, name := range occupied {
+		revisionParts = append(revisionParts, "occupied:"+name.Namespace+":"+name.Name+"="+name.OwnerType+":"+name.OwnerID+":"+name.Fingerprint)
+	}
+	sort.Strings(revisionParts)
+	return capabilitypack.SurfaceInspection{Revision: localprojection.FingerprintBytes([]byte(strings.Join(revisionParts, "\n"))), Projections: projections, OccupiedNames: occupied, PendingHumanActions: pendingActions(pack)}, nil
 }
 
 func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, desired capabilitypack.Pack, resolutions []capabilitypack.ExecutableResolution) (capabilitypack.SurfaceInspection, error) {
@@ -186,7 +267,7 @@ func (a *SurfaceAdapter) inspectPriorTransition(ctx context.Context, active, des
 		mode := capabilitypack.ProjectionRemoveContent
 		projection.Action.Content = ""
 		switch projection.Action.Kind {
-		case capabilitypack.ActionOpenCodeSkillLink, capabilitypack.ActionOpenCodeInstructionFile:
+		case capabilitypack.ActionOpenCodeSkillLink, capabilitypack.ActionOpenCodeInstructionFile, capabilitypack.ActionOpenCodeAgentFile, capabilitypack.ActionOpenCodeCommandFile, capabilitypack.ActionOpenCodeAssetFile:
 			mode = capabilitypack.ProjectionDeleteTarget
 		case capabilitypack.ActionOpenCodeConfigReference:
 			id := strings.TrimPrefix(projection.ID, "opencode-instruction-reference:")
@@ -294,6 +375,25 @@ func (a *SurfaceAdapter) inspectOwnedProjection(id, configContent string) (capab
 		content, err := RemoveMCPProjection(configContent, a.configFile, resourceID)
 		projection.Action = capabilitypack.ProjectionAction{ID: id, Kind: capabilitypack.ActionOpenCodeMCPConfig, Target: a.configFile}
 		return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionRemoveContent, content, fmt.Sprintf("remove OpenCode projection %s", id)), true, err
+	case strings.HasPrefix(id, "agent:"):
+		target := filepath.Join(filepath.Dir(a.configFile), "agents", strings.TrimPrefix(id, "agent:")+".md")
+		return a.ownedFileRemoval(projection, capabilitypack.ActionOpenCodeAgentFile, target)
+	case strings.HasPrefix(id, "command:"):
+		target := filepath.Join(filepath.Dir(a.configFile), "commands", strings.TrimPrefix(id, "command:")+".md")
+		return a.ownedFileRemoval(projection, capabilitypack.ActionOpenCodeCommandFile, target)
+	case strings.HasPrefix(id, "asset:skill:"), strings.HasPrefix(id, "asset:agent:"), strings.HasPrefix(id, "asset:command:"):
+		parts := strings.Split(id, ":")
+		if len(parts) != 5 {
+			return capabilitypack.ObservedProjection{}, false, nil
+		}
+		var target string
+		switch parts[1] {
+		case "skill":
+			target = filepath.Join(a.skillsDir, ".packy-assets", parts[2], parts[4])
+		case "agent", "command":
+			target = filepath.Join(filepath.Dir(a.configFile), parts[1]+"s", parts[2], parts[4])
+		}
+		return a.ownedFileRemoval(projection, capabilitypack.ActionOpenCodeAssetFile, target)
 	default:
 		return capabilitypack.ObservedProjection{}, false, nil
 	}
@@ -332,6 +432,7 @@ func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilit
 		SymlinkKinds: map[capabilitypack.ProjectionActionKind]bool{capabilitypack.ActionOpenCodeSkillLink: true},
 		FileKinds: map[capabilitypack.ProjectionActionKind]bool{
 			capabilitypack.ActionOpenCodeInstructionFile: true, capabilitypack.ActionOpenCodeConfigReference: true, capabilitypack.ActionOpenCodeMCPConfig: true,
+			capabilitypack.ActionOpenCodeAgentFile: true, capabilitypack.ActionOpenCodeCommandFile: true, capabilitypack.ActionOpenCodeAssetFile: true,
 		},
 	}
 	err := executor.Apply(actions)
@@ -342,6 +443,246 @@ func (a *SurfaceAdapter) ApplyProjections(_ context.Context, actions []capabilit
 		return &actionErr
 	}
 	return &capabilitypack.ProjectionActionError{ID: actions[0].ID, Err: err}
+}
+
+func (a *SurfaceAdapter) ownedFileRemoval(projection capabilitypack.ObservedProjection, kind capabilitypack.ProjectionActionKind, target string) (capabilitypack.ObservedProjection, bool, error) {
+	observed, exists, err := localprojection.FingerprintPath(target)
+	projection.Exists, projection.ObservedFingerprint = exists, observed
+	projection.Action = capabilitypack.ProjectionAction{ID: projection.ID, Kind: kind, Target: target}
+	return capabilitypack.RemovalCandidate(projection, capabilitypack.ProjectionDeleteTarget, "", fmt.Sprintf("remove OpenCode projection %s", projection.ID)), true, err
+}
+
+func openCodeBindingName(resource capabilitypack.Resource, projection string) (string, bool) {
+	for _, binding := range resource.Bindings {
+		if binding.Surface == capabilitypack.SurfaceOpenCode && binding.Projection == projection {
+			return binding.Name, true
+		}
+	}
+	if len(resource.Bindings) == 0 && resource.Kind == projection {
+		return resource.ID, true
+	}
+	return "", false
+}
+
+func openCodeAgentMarkdown(pack capabilitypack.Pack, resource capabilitypack.Resource, prompt []byte) string {
+	description, _ := json.Marshal(resource.Description)
+	permissions := append(append([]string(nil), resource.Tools...), resource.Permissions...)
+	sort.Strings(permissions)
+	permissionLines := make([]string, 0, len(permissions))
+	for i, permission := range permissions {
+		if i > 0 && permission == permissions[i-1] {
+			continue
+		}
+		key, _ := json.Marshal(permission)
+		permissionLines = append(permissionLines, "  "+string(key)+": allow")
+	}
+	permissionBlock := ""
+	if len(permissionLines) > 0 {
+		permissionBlock = "permission:\n" + strings.Join(permissionLines, "\n") + "\n"
+	}
+	_, composition := openCodeComposition(pack, resource)
+	return fmt.Sprintf("---\ndescription: %s\nmode: %s\n%s---\n\nPacky agent policy (required): tools=%s; permissions=%s; composition=%s. Preserve these constraints and load the named native skills when executing.\n\n%s\n", description, resource.Mode, permissionBlock, strings.Join(resource.Tools, ","), strings.Join(resource.Permissions, ","), composition, strings.TrimSpace(string(prompt)))
+}
+
+func openCodeCommandMarkdown(pack capabilitypack.Pack, resource capabilitypack.Resource, prompt []byte) string {
+	description := resource.Description
+	if description == "" {
+		description = "Run the " + resource.ID + " command."
+	}
+	argumentPolicy := "This command accepts no arguments."
+	if resource.Arguments.Mode == "freeform" {
+		argumentPolicy = "Treat $ARGUMENTS as the caller's free-form command input; preserve it without narrowing or reinterpretation."
+	}
+	encodedDescription, _ := json.Marshal(description)
+	agent, composition := openCodeComposition(pack, resource)
+	agentLine := ""
+	if agent != "" {
+		agentLine = "agent: " + agent + "\n"
+	}
+	return fmt.Sprintf("---\ndescription: %s\n%s---\n\n%s\n\nPacky composition (required): %s. Invoke the named native skills and agent as part of this workflow.\n\n%s\n", encodedDescription, agentLine, argumentPolicy, composition, strings.TrimSpace(string(prompt)))
+}
+
+func openCodeComposition(pack capabilitypack.Pack, consumer capabilitypack.Resource) (string, string) {
+	byIdentity := make(map[string]capabilitypack.Resource, len(pack.Resources))
+	for _, resource := range pack.Resources {
+		byIdentity[resource.Kind+":"+resource.ID] = resource
+	}
+	var agent string
+	var translated []string
+	seen := map[string]bool{}
+	var visit func(string)
+	visit = func(requirement string) {
+		if seen[requirement] {
+			return
+		}
+		seen[requirement] = true
+		resource, ok := byIdentity[requirement]
+		if !ok {
+			return
+		}
+		if resource.Kind == "asset" {
+			return
+		}
+		name, bound := openCodeBindingName(resource, resource.Kind)
+		if !bound {
+			translated = append(translated, requirement)
+			return
+		}
+		if resource.Kind == "agent" && agent == "" {
+			agent = name
+		}
+		translated = append(translated, resource.Kind+":"+name)
+		for _, nested := range resource.Requires {
+			visit(nested)
+		}
+	}
+	for _, requirement := range consumer.Requires {
+		visit(requirement)
+	}
+	return agent, strings.Join(translated, ", ")
+}
+
+func (a *SurfaceAdapter) consumerAssetProjections(pack capabilitypack.Pack, consumer capabilitypack.Resource, consumerID, targetDir string) ([]capabilitypack.ObservedProjection, error) {
+	byIdentity := map[string]capabilitypack.Resource{}
+	for _, resource := range pack.Resources {
+		byIdentity[resource.Kind+":"+resource.ID] = resource
+	}
+	seen := map[string]bool{}
+	var assets []capabilitypack.Resource
+	var visit func(string)
+	visit = func(identity string) {
+		if seen[identity] {
+			return
+		}
+		seen[identity] = true
+		resource, ok := byIdentity[identity]
+		if !ok {
+			return
+		}
+		if resource.Kind == "asset" {
+			assets = append(assets, resource)
+		}
+		for _, requirement := range resource.Requires {
+			visit(requirement)
+		}
+	}
+	for _, requirement := range consumer.Requires {
+		visit(requirement)
+	}
+	sort.Slice(assets, func(i, j int) bool { return assets[i].ID < assets[j].ID })
+	result := make([]capabilitypack.ObservedProjection, 0, len(assets))
+	for _, asset := range assets {
+		content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(asset.Source)))
+		if err != nil {
+			return nil, fmt.Errorf("read asset %q for %s: %w", asset.ID, consumerID, err)
+		}
+		filename := filepath.Base(asset.Source)
+		id := "asset:" + consumerID + ":" + asset.ID + ":" + filename
+		_, consumerName, _ := strings.Cut(consumerID, ":")
+		projection, _, err := fileProjection(id, capabilitypack.ActionOpenCodeAssetFile, filepath.Join(targetDir, consumerName, filename), string(content), fmt.Sprintf("materialize dependency asset %s for %s", asset.ID, consumerID))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, projection)
+	}
+	return result, nil
+}
+
+func fileProjection(id string, kind capabilitypack.ProjectionActionKind, target, content, description string) (capabilitypack.ObservedProjection, string, error) {
+	observed, exists, err := localprojection.FingerprintPath(target)
+	if err != nil {
+		return capabilitypack.ObservedProjection{}, "", err
+	}
+	desired := localprojection.FingerprintBytes([]byte(content))
+	return capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: kind, Target: target, Content: content, Description: description}}, id + "=" + observed, nil
+}
+
+func pathsOverlap(left, right string) bool {
+	for _, pair := range [][2]string{{left, right}, {right, left}} {
+		rel, err := filepath.Rel(pair[0], pair[1])
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+func exclusivePathKind(kind capabilitypack.ProjectionActionKind) bool {
+	return kind == capabilitypack.ActionOpenCodeSkillLink || kind == capabilitypack.ActionOpenCodeAgentFile || kind == capabilitypack.ActionOpenCodeCommandFile || kind == capabilitypack.ActionOpenCodeAssetFile
+}
+
+func (a *SurfaceAdapter) inspectOccupiedNames() ([]capabilitypack.OccupiedName, error) {
+	result := []capabilitypack.OccupiedName{
+		{Namespace: "agent", Name: "build", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "agent", Name: "explore", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "agent", Name: "general", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "agent", Name: "plan", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "agent", Name: "scout", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "command", Name: "help", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "command", Name: "init", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "command", Name: "redo", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "command", Name: "share", OwnerType: "reserved", Fingerprint: "native"},
+		{Namespace: "command", Name: "undo", OwnerType: "reserved", Fingerprint: "native"},
+	}
+	for _, namespace := range []struct{ name, dir, suffix string }{{"skill", a.skillsDir, ""}, {"agent", filepath.Join(filepath.Dir(a.configFile), "agents"), ".md"}, {"command", filepath.Join(filepath.Dir(a.configFile), "commands"), ".md"}} {
+		entries, err := os.ReadDir(namespace.dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect OpenCode %s namespace: %w", namespace.name, err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") || (namespace.suffix != "" && filepath.Ext(entry.Name()) != namespace.suffix) {
+				continue
+			}
+			fingerprint, exists, err := localprojection.FingerprintPath(filepath.Join(namespace.dir, entry.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if exists && !hasOccupiedName(result, namespace.name, strings.TrimSuffix(entry.Name(), namespace.suffix)) {
+				result = append(result, capabilitypack.OccupiedName{Namespace: namespace.name, Name: strings.TrimSuffix(entry.Name(), namespace.suffix), OwnerType: "unmanaged", Fingerprint: fingerprint})
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Namespace != result[j].Namespace {
+			return result[i].Namespace < result[j].Namespace
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func hasOccupiedName(values []capabilitypack.OccupiedName, namespace, name string) bool {
+	for _, value := range values {
+		if value.Namespace == namespace && value.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func applyRecordedOccupancyOwnership(observation *capabilitypack.SurfaceInspection, ownership []capabilitypack.ProjectionOwnership) {
+	byID := map[string]capabilitypack.ProjectionOwnership{}
+	for _, owner := range ownership {
+		byID[owner.ID] = owner
+	}
+	for i := range observation.OccupiedNames {
+		occupied := &observation.OccupiedNames[i]
+		for _, projection := range observation.Projections {
+			if !projection.Exists || projection.ObservedFingerprint != occupied.Fingerprint {
+				continue
+			}
+			namespace, name, ok := strings.Cut(projection.ID, ":")
+			if !ok || namespace != occupied.Namespace || name != occupied.Name {
+				continue
+			}
+			owner, recorded := byID[projection.ID]
+			if recorded && owner.Fingerprint == occupied.Fingerprint {
+				occupied.OwnerType, occupied.OwnerID = "packy", strings.Join(owner.Contributors, ",")
+			}
+		}
+	}
 }
 
 func (a *SurfaceAdapter) instructionPath(id string) string {

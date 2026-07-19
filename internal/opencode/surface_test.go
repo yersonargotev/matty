@@ -53,7 +53,7 @@ func TestSurfaceAdapterAppliesHostSpecificProjectionsAndPreservesJSONC(t *testin
 	for _, projection := range observed.Projections {
 		actions = append(actions, projection.Action)
 	}
-	if actions[0].Kind != capabilitypack.ActionOpenCodeSkillLink || actions[1].Kind != capabilitypack.ActionOpenCodeInstructionFile || actions[2].Kind != capabilitypack.ActionOpenCodeConfigReference {
+	if actions[0].Kind != capabilitypack.ActionOpenCodeInstructionFile || actions[1].Kind != capabilitypack.ActionOpenCodeConfigReference || actions[2].Kind != capabilitypack.ActionOpenCodeSkillLink {
 		t.Fatalf("OpenCode action kinds = %+v", actions)
 	}
 	if err := adapter.ApplyProjections(context.Background(), actions); err != nil {
@@ -189,6 +189,163 @@ func TestSurfaceAdapterInspectDoesNotWrite(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(config)); !os.IsNotExist(err) {
 		t.Fatalf("inspection wrote OpenCode config: %v", err)
 	}
+}
+
+func TestPortableOpenCodeResourcesUseNativeBindingsAndConsumerAssets(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, "skill", "SKILL.md"), "skill\n")
+	write(filepath.Join(root, "agent.md"), "coach policy\n")
+	write(filepath.Join(root, "command.md"), "run $ARGUMENTS\n")
+	write(filepath.Join(root, "asset.md"), "asset bytes\x00\n")
+	bind := func(projection, name string) []capabilitypack.Binding {
+		return []capabilitypack.Binding{{Surface: capabilitypack.SurfaceOpenCode, Projection: projection, Name: name, Mode: "native", Sharing: "exclusive"}}
+	}
+	pack := capabilitypack.Pack{ID: "portable", Resources: []capabilitypack.Resource{
+		{Kind: "skill", ID: "skill", Source: "skill", Requires: []string{"asset:asset"}, Bindings: bind("skill", "native-skill")},
+		{Kind: "agent", ID: "agent", Source: "agent.md", Mode: "subagent", Tools: []string{"browser"}, Permissions: []string{"network"}, Requires: []string{"skill:skill"}, Bindings: bind("agent", "native-agent")},
+		{Kind: "asset", ID: "asset", Source: "asset.md"},
+		{Kind: "command", ID: "command", Source: "command.md", Arguments: capabilitypack.CommandArguments{Mode: "freeform", Placeholder: "$ARGUMENTS"}, Requires: []string{"agent:agent", "asset:asset"}, Bindings: bind("command", "native-command")},
+		{Kind: "notice", ID: "notice", Source: "notice.txt"},
+	}}
+	config := filepath.Join(root, "home", "opencode", "opencode.json")
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "home", "skills"), config, filepath.Join(root, "home", "opencode", "packy.md"))
+	inspection, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"skill:native-skill": true, "agent:native-agent": true, "command:native-command": true, "asset:skill:native-skill:asset:asset.md": true, "asset:agent:native-agent:asset:asset.md": true, "asset:command:native-command:asset:asset.md": true}
+	for _, projection := range inspection.Projections {
+		delete(want, projection.ID)
+	}
+	if len(want) != 0 || len(inspection.Projections) != 6 {
+		t.Fatalf("projections=%+v missing=%v", inspection.Projections, want)
+	}
+	repeated, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil || repeated.Revision != inspection.Revision {
+		t.Fatalf("inspection is not deterministic: revision=%q repeated=%q err=%v", inspection.Revision, repeated.Revision, err)
+	}
+	if inspection.Readiness.UsabilityObserved || inspection.Readiness.Usable {
+		t.Fatalf("host usability was guessed: %+v", inspection.Readiness)
+	}
+	if err := adapter.ApplyProjections(context.Background(), projectionActions(inspection.Projections)); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := os.ReadFile(filepath.Join(root, "home", "opencode", "commands", "native-command.md"))
+	if !strings.Contains(string(command), "$ARGUMENTS") || !strings.Contains(string(command), "agent: native-agent") || !strings.Contains(string(command), "skill:native-skill") {
+		t.Fatalf("command=%s", command)
+	}
+	asset, _ := os.ReadFile(filepath.Join(root, "home", "opencode", "commands", "native-command", "asset.md"))
+	if string(asset) != "asset bytes\x00\n" {
+		t.Fatalf("asset=%q", asset)
+	}
+	skillAsset, _ := os.ReadFile(filepath.Join(root, "home", "skills", ".packy-assets", "native-skill", "asset.md"))
+	if string(skillAsset) != "asset bytes\x00\n" {
+		t.Fatalf("skill asset=%q", skillAsset)
+	}
+	agent, _ := os.ReadFile(filepath.Join(root, "home", "opencode", "agents", "native-agent.md"))
+	for _, want := range []string{"mode: subagent", `"browser": allow`, `"network": allow`, "tools=browser", "permissions=network", "composition=skill:native-skill", "coach policy"} {
+		if !strings.Contains(string(agent), want) {
+			t.Fatalf("agent lost %q: %s", want, agent)
+		}
+	}
+	unowned, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, occupied := range unowned.OccupiedNames {
+		if occupied.Name == "native-agent" || occupied.Name == "native-command" || occupied.Name == "native-skill" {
+			if occupied.OwnerType != "unmanaged" {
+				t.Fatalf("matching unowned content was adopted: %+v", occupied)
+			}
+		}
+	}
+	owners := make([]capabilitypack.ProjectionOwnership, 0, len(inspection.Projections))
+	for _, projection := range inspection.Projections {
+		owners = append(owners, capabilitypack.ProjectionOwnership{ID: projection.ID, Fingerprint: projection.DesiredFingerprint, Contributors: []string{pack.ID}})
+	}
+	verified, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack, CurrentOwnership: owners})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, occupied := range verified.OccupiedNames {
+		if occupied.Name == "native-agent" || occupied.Name == "native-command" || occupied.Name == "native-skill" {
+			if occupied.OwnerType != "packy" {
+				t.Fatalf("recorded ownership not recognized: %+v", occupied)
+			}
+		}
+	}
+}
+
+func TestPortableOpenCodeResourcesRejectOverlappingNativeTargets(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "command.md"), []byte("command"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binding := func(name string) []capabilitypack.Binding {
+		return []capabilitypack.Binding{{Surface: capabilitypack.SurfaceOpenCode, Projection: "command", Name: name, Mode: "native", Sharing: "exclusive"}}
+	}
+	pack := capabilitypack.Pack{ID: "portable", Resources: []capabilitypack.Resource{
+		{Kind: "command", ID: "one", Source: "command.md", Arguments: capabilitypack.CommandArguments{Mode: "none"}, Bindings: binding("same")},
+		{Kind: "command", ID: "two", Source: "command.md", Arguments: capabilitypack.CommandArguments{Mode: "none"}, Bindings: binding("same")},
+	}}
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "config", "opencode.json"), filepath.Join(root, "prompt.md"))
+	if _, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack}); err == nil {
+		t.Fatal("overlapping native command targets were accepted")
+	}
+}
+
+func TestPortableOpenCodeResidualRemovalPreservesDrift(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "opencode", "commands", "owned.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("operator drift"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode", "opencode.json"), filepath.Join(root, "prompt.md"))
+	owner := capabilitypack.ProjectionOwnership{ID: "command:owned", Fingerprint: "recorded-before-drift", Contributors: []string{"portable"}}
+	inspection, err := adapter.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: capabilitypack.Pack{ID: "desired"}, ResidualOwnership: []capabilitypack.ProjectionOwnership{owner}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.Projections) != 1 || inspection.Projections[0].ObservedFingerprint == owner.Fingerprint || inspection.Projections[0].Action.Mode != capabilitypack.ProjectionDeleteTarget {
+		t.Fatalf("drifted removal observation=%+v", inspection.Projections)
+	}
+}
+
+func TestOpenCodeApplyRollsBackPortableFiles(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "blocker")
+	if err := os.WriteFile(blocker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewSurfaceAdapter(root, filepath.Join(root, "skills"), filepath.Join(root, "opencode.json"), filepath.Join(root, "prompt.md"))
+	first := filepath.Join(root, "agents", "first.md")
+	err := adapter.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{{ID: "agent:first", Kind: capabilitypack.ActionOpenCodeAgentFile, Target: first, Content: "first"}, {ID: "agent:blocked", Kind: capabilitypack.ActionOpenCodeAgentFile, Target: filepath.Join(blocker, "blocked.md"), Content: "blocked"}})
+	if err == nil {
+		t.Fatal("partial failure unexpectedly succeeded")
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("first projection leaked: %v", err)
+	}
+}
+
+func projectionActions(projections []capabilitypack.ObservedProjection) []capabilitypack.ProjectionAction {
+	result := make([]capabilitypack.ProjectionAction, len(projections))
+	for i := range projections {
+		result[i] = projections[i].Action
+	}
+	return result
 }
 
 func TestEngramProjectionIsOpenCodeSpecificAndPreservesJSONC(t *testing.T) {
