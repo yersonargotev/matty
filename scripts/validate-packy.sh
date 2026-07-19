@@ -9,6 +9,7 @@ cd "$root"
 # here before CI or the synchronization publisher can load or execute it.
 readonly packages=(
   ./cmd/packy
+  ./internal/addyacceptance
   ./internal/bootstrap
   ./internal/bundletransaction
   ./internal/capabilitypack
@@ -59,6 +60,8 @@ export GOCACHE="$go_cache"
 export GOMODCACHE="$go_mod_cache"
 export GOPATH="$go_path"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+
+./scripts/validate-addy-acceptance.sh
 
 shopt -s nullglob
 go_files=()
