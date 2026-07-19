@@ -418,6 +418,13 @@ func extractArchive(source io.Reader, destination string) error {
 			if closeErr != nil {
 				return closeErr
 			}
+		case tar.TypeSymlink:
+			// Repository symlinks are never materialized. A link that resolves
+			// within the archive root is inert metadata; selected resources that
+			// exist only through it remain absent and fail closed later.
+			if !safeArchiveLink(relative, header.Linkname) {
+				return fmt.Errorf("archive contains unsafe symlink %s", relative)
+			}
 		default:
 			return fmt.Errorf("archive contains forbidden link or special entry %s", relative)
 		}
@@ -426,6 +433,14 @@ func extractArchive(source io.Reader, destination string) error {
 		return errors.New("archive is empty")
 	}
 	return nil
+}
+
+func safeArchiveLink(relative, link string) bool {
+	if link == "" || path.IsAbs(link) || strings.Contains(link, "\\") {
+		return false
+	}
+	resolved := path.Clean(path.Join(path.Dir(relative), link))
+	return resolved != "." && resolved != ".." && !strings.HasPrefix(resolved, "../")
 }
 
 func safeArchivePath(value string) bool {

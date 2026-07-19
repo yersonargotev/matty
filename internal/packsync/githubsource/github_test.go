@@ -27,6 +27,7 @@ func TestPublicGitHubAcquisitionUsesNoCredentialsNeverExecutesAndCleans(t *testi
 	archive := archiveBytes(t, []tarEntry{
 		{name: "repo-root/", mode: 0o775, kind: tar.TypeDir},
 		{name: "repo-root/skills/hostile/SKILL.md", mode: 0o664, data: []byte("never execute\n")},
+		{name: "repo-root/.opencode/skills", mode: 0o777, kind: tar.TypeSymlink, link: "../skills/"},
 		{name: "repo-root/hostile.sh", mode: 0o775, data: []byte("#!/bin/sh\ntouch " + sentinel + "\n")},
 	})
 	var sawAuthorization bool
@@ -69,6 +70,9 @@ func TestPublicGitHubAcquisitionUsesNoCredentialsNeverExecutesAndCleans(t *testi
 	}
 	temporary := t.TempDir()
 	err = client.WithSnapshot(context.Background(), candidate, temporary, func(root string) error {
+		if _, err := os.Lstat(filepath.Join(root, ".opencode", "skills")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("safe repository symlink was materialized: %v", err)
+		}
 		data, err := os.ReadFile(filepath.Join(root, "hostile.sh"))
 		if err != nil || !bytes.Contains(data, []byte("touch")) {
 			t.Fatalf("inert hostile bytes unavailable: %q, %v", data, err)
