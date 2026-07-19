@@ -29,7 +29,7 @@ func TestAddyRegistrationTracerProvesExactEndToEndAdmission(t *testing.T) {
 
 	base := t.TempDir()
 	copyTreeForTest(t, filepath.Join(repositoryRootForTest(t), "bundle"), filepath.Join(base, "bundle"))
-	removeConfiguredAddyForTracer(t, filepath.Join(base, "bundle"))
+	removeConfiguredAddyForTracer(t, filepath.Join(base, "bundle"), fixture)
 	if err := os.RemoveAll(filepath.Join(base, "bundle", "packs", "addy")); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestAddyRegistrationTracerProvesExactEndToEndAdmission(t *testing.T) {
 	})
 }
 
-func removeConfiguredAddyForTracer(t *testing.T, bundleRoot string) {
+func removeConfiguredAddyForTracer(t *testing.T, bundleRoot string, fixture addyacceptance.Fixture) {
 	t.Helper()
 	configPath := filepath.Join(bundleRoot, "sources.json")
 	var config packsync.Config
@@ -193,6 +193,11 @@ func removeConfiguredAddyForTracer(t *testing.T, bundleRoot string) {
 	}
 	if err := os.Remove(filepath.Join(bundleRoot, "sources", "addy.lock.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
+	}
+	for _, resource := range fixture.Manifest.Resources {
+		if err := os.RemoveAll(filepath.Join(bundleRoot, filepath.FromSlash(resource.Source))); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
