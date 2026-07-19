@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -139,8 +140,8 @@ func TestAddyRegistrationTracerProvesExactEndToEndAdmission(t *testing.T) {
 	var publication packsyncworkflow.PublicationArtifact
 	readJSONForTest(t, filepath.Join(validationDir, "validation.json"), &validation)
 	readJSONForTest(t, filepath.Join(publicationDir, "publication.json"), &publication)
-	if source.acquisitions < 3 || source.executions != 0 || validator.bundleCalls < 2 || validator.suiteCalls < 2 {
-		t.Fatalf("reacquisition/gates = acquisitions:%d executions:%d bundle:%d suite:%d", source.acquisitions, source.executions, validator.bundleCalls, validator.suiteCalls)
+	if source.acquisitions < 3 || source.executions != 0 || validator.bundleCalls < 2 || validator.suiteCalls < 2 || validator.commands < 2 {
+		t.Fatalf("reacquisition/gates = acquisitions:%d executions:%d bundle:%d suite:%d commands:%d", source.acquisitions, source.executions, validator.bundleCalls, validator.suiteCalls, validator.commands)
 	}
 	if validation.ResultTreeSHA == "" || publication.ResultTreeSHA != validation.ResultTreeSHA || publication.BranchName != "sync/addy" || publication.PRNumber != 7 || !publication.DecisionReady || publication.AutoMerge || publication.UpstreamContentExecuted || fakeGitHub.createCalls != 1 || fakeGitHub.pushCalls != 1 {
 		t.Fatalf("registration publication = validation:%#v publication:%#v", validation, publication)
@@ -198,15 +199,31 @@ func (source *exactAddySource) WithSnapshot(_ context.Context, _ packsync.Candid
 	return cleanup
 }
 
-type exactAddyValidator struct{ bundleCalls, suiteCalls int }
-
-func (validator *exactAddyValidator) ValidateBundle(_ context.Context, _, bundleRoot string) error {
-	validator.bundleCalls++
-	return validateExactAddyResult(bundleRoot)
+type exactAddyValidator struct {
+	bundleCalls, suiteCalls int
+	commands                int
 }
-func (validator *exactAddyValidator) Validate(_ context.Context, repositoryRoot string) error {
+
+func (validator *exactAddyValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
+	validator.bundleCalls++
+	if err := validateExactAddyResult(bundleRoot); err != nil {
+		return err
+	}
+	return (commandValidator{run: validator.captureValidationCommand}).ValidateBundle(ctx, repositoryRoot, bundleRoot)
+}
+func (validator *exactAddyValidator) Validate(ctx context.Context, repositoryRoot string) error {
 	validator.suiteCalls++
-	return validateExactAddyResult(filepath.Join(repositoryRoot, "bundle"))
+	if err := validateExactAddyResult(filepath.Join(repositoryRoot, "bundle")); err != nil {
+		return err
+	}
+	return (commandValidator{run: validator.captureValidationCommand}).Validate(ctx, repositoryRoot)
+}
+func (validator *exactAddyValidator) captureValidationCommand(cmd *exec.Cmd) ([]byte, error) {
+	validator.commands++
+	if cmd.Dir == "" || len(cmd.Args) != 2 || cmd.Args[0] != "bash" || cmd.Args[1] != "./scripts/validate-packy.sh" {
+		return nil, errors.New("validation did not invoke Packy's full authority")
+	}
+	return nil, nil
 }
 func validateExactAddyResult(bundleRoot string) error {
 	var manifest addyacceptance.Manifest

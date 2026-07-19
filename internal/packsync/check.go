@@ -103,7 +103,7 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 			plan.Blockers = append(plan.Blockers, continuityBlockers...)
 		}
 		plan.Blockers = append(plan.Blockers, validateCandidate(fresh.source, candidate, fresh.selector)...)
-		if err := buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, &plan); err != nil {
+		if err := buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, fresh.existingPacks, &plan); err != nil {
 			return err
 		}
 		if fresh.registration != nil {
@@ -152,6 +152,7 @@ type checkInputs struct {
 	lockSet             sourceLockSet
 	registration        *SourceConfig
 	registrationSHA256  string
+	existingPacks       map[string]bool
 }
 
 func readCheckInputs(ctx context.Context, request CheckRequest, allowMissing bool) (checkInputs, error) {
@@ -171,6 +172,12 @@ func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInpu
 	config, err := LoadConfig(strings.NewReader(string(configBytes)))
 	if err != nil {
 		return checkInputs{}, err
+	}
+	existingPacks := map[string]bool{}
+	for _, configuredSource := range config.Sources {
+		for _, binding := range configuredSource.Resources {
+			existingPacks[binding.PackID] = true
+		}
 	}
 	var source SourceConfig
 	var registration *SourceConfig
@@ -221,7 +228,7 @@ func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInpu
 			return checkInputs{}, err
 		}
 	}
-	return checkInputs{configBytes: configBytes, originalConfigBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent, lockSet: lockSet, registration: registration, registrationSHA256: registrationSHA256}, nil
+	return checkInputs{configBytes: configBytes, originalConfigBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent, lockSet: lockSet, registration: registration, registrationSHA256: registrationSHA256, existingPacks: existingPacks}, nil
 }
 
 func sourceLockPath(repositoryRoot, sourceID string) string {
@@ -313,7 +320,7 @@ func (engine Engine) lockedContinuity(ctx context.Context, source SourceConfig, 
 	return blockers, nil
 }
 
-func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, bindings []Binding, manifests map[string]packManifest, oldLock Lock, lockPresent bool, plan *Plan) error {
+func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, bindings []Binding, manifests map[string]packManifest, oldLock Lock, lockPresent bool, existingPacks map[string]bool, plan *Plan) error {
 	oldByKey := mapResources(oldLock.Resources)
 	newByKey := map[string]ResourceEvidence{}
 	for _, binding := range bindings {
@@ -391,6 +398,9 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 	plan.AffectedPacks = derivePackImpacts(plan.Changes, manifests, &plan.Blockers)
 	if plan.Registration != nil {
 		for i := range plan.AffectedPacks {
+			if existingPacks[plan.AffectedPacks[i].PackID] {
+				continue
+			}
 			plan.AffectedPacks[i].CurrentVersion = "0.0.0"
 			plan.AffectedPacks[i].MechanicalFloor = LevelMajor
 			plan.AffectedPacks[i].SemanticEvidenceRequired = true

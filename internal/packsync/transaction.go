@@ -381,7 +381,11 @@ func (engine Engine) validateStaged(ctx context.Context, repositoryRoot, staged,
 		return errors.New("staged production provenance lock does not match the sealed plan")
 	}
 	stagedPlan := Plan{Candidate: plan.Candidate, Selector: plan.Selector}
-	if err := buildPlan(snapshotRoot, view, source, bindings, manifests, lock, true, &stagedPlan); err != nil {
+	existingPacks := map[string]bool{}
+	for _, impact := range plan.AffectedPacks {
+		existingPacks[impact.PackID] = impact.CurrentVersion != "0.0.0"
+	}
+	if err := buildPlan(snapshotRoot, view, source, bindings, manifests, lock, true, existingPacks, &stagedPlan); err != nil {
 		return err
 	}
 	blockers = append(blockers, stagedPlan.Blockers...)

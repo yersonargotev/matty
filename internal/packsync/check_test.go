@@ -89,8 +89,8 @@ func TestCheckSealsAbsentSourceRegistrationWithoutPersistingIt(t *testing.T) {
 	if !plan.Authoritative || plan.Status != "review-required" || plan.Registration == nil || plan.RegistrationSHA256 == "" || !plan.VerifySeal() {
 		t.Fatalf("registration plan = %#v", plan)
 	}
-	if len(plan.AffectedPacks) != 1 || plan.AffectedPacks[0].CurrentVersion != "0.0.0" || plan.AffectedPacks[0].MechanicalFloor != LevelMajor {
-		t.Fatalf("initial registration classification floor = %#v", plan.AffectedPacks)
+	if len(plan.AffectedPacks) != 1 || plan.AffectedPacks[0].CurrentVersion != "1.0.0" || plan.AffectedPacks[0].MechanicalFloor != LevelNone {
+		t.Fatalf("registration into an existing Pack classification = %#v", plan.AffectedPacks)
 	}
 	if got := mustReadFile(t, filepath.Join(repository, "bundle", "sources.json")); !reflect.DeepEqual(got, before) {
 		t.Fatal("Check persisted proposed registration")

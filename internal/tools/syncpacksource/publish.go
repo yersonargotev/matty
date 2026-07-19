@@ -246,13 +246,15 @@ func (builder *publicationBuilder) Build(ctx context.Context, repositoryRoot str
 	return proposal, nil
 }
 
-type commandValidator struct{}
+type commandValidator struct {
+	run func(*exec.Cmd) ([]byte, error)
+}
 
 const stagedValidationEnvironment = "PACKY_VALIDATION_STAGED=1"
 
-func (commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
+func (validator commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bundleRoot string) error {
 	if filepath.Clean(bundleRoot) == filepath.Join(filepath.Clean(repositoryRoot), "bundle") {
-		return commandValidator{}.Validate(ctx, repositoryRoot)
+		return validator.Validate(ctx, repositoryRoot)
 	}
 	sandbox, err := os.MkdirTemp("", "packy-staged-validation-")
 	if err != nil {
@@ -263,14 +265,14 @@ func (commandValidator) ValidateBundle(ctx context.Context, repositoryRoot, bund
 	if err := copyForValidation(repositoryRoot, checkout, bundleRoot); err != nil {
 		return err
 	}
-	return commandValidator{}.validate(ctx, checkout, true)
+	return validator.validate(ctx, checkout, true)
 }
 
-func (commandValidator) Validate(ctx context.Context, repositoryRoot string) error {
-	return commandValidator{}.validate(ctx, repositoryRoot, false)
+func (validator commandValidator) Validate(ctx context.Context, repositoryRoot string) error {
+	return validator.validate(ctx, repositoryRoot, false)
 }
 
-func (commandValidator) validate(ctx context.Context, repositoryRoot string, staged bool) error {
+func (validator commandValidator) validate(ctx context.Context, repositoryRoot string, staged bool) error {
 	home, err := os.MkdirTemp("", "packy-validation-home-")
 	if err != nil {
 		return err
@@ -284,7 +286,11 @@ func (commandValidator) validate(ctx context.Context, repositoryRoot string, sta
 		environment = append(environment, stagedValidationEnvironment)
 	}
 	cmd.Env = environment
-	output, err := cmd.CombinedOutput()
+	run := validator.run
+	if run == nil {
+		run = func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() }
+	}
+	output, err := run(cmd)
 	if err != nil {
 		return fmt.Errorf("Packy-owned validation failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
