@@ -257,11 +257,22 @@ func TestSemanticPackIdentitySurvivesFieldByField(t *testing.T) {
 
 	var sources semanticSources
 	readJSONFile(t, filepath.Join(root, semanticPaths["sources"]), &sources)
-	if sources.SchemaVersion != 1 || len(sources.Sources) != 1 {
+	if sources.SchemaVersion != 1 || len(sources.Sources) == 0 {
 		t.Fatalf("semantic source envelope changed: %+v", sources)
 	}
-	source := sources.Sources[0]
-	if source.ID != "mattpocock-skills" || source.Provider != "github" || source.Repository != "mattpocock/skills" || source.Selector.Mode != "stable-release" {
+	expectedSourceID := strings.TrimSuffix(filepath.Base(semanticPaths["sources_lock"]), ".lock.json")
+	sourceIndex := -1
+	for index, candidate := range sources.Sources {
+		if candidate.ID == expectedSourceID {
+			sourceIndex = index
+			break
+		}
+	}
+	if sourceIndex < 0 {
+		t.Fatalf("expected semantic source is missing: %+v", sources)
+	}
+	source := sources.Sources[sourceIndex]
+	if source.ID != expectedSourceID || source.Provider != "github" || source.Repository != "mattpocock/skills" || source.Selector.Mode != "stable-release" {
 		t.Fatalf("semantic source identity changed: %+v", source)
 	}
 	assertSemanticSourceResources(t, token, expectedResources, source.Resources)
