@@ -38,6 +38,7 @@ type PlanBlocker struct {
 }
 
 type composition struct {
+	surface      Surface
 	requested    Pack
 	packs        []Pack
 	activations  []PlannedActivation
@@ -54,10 +55,12 @@ func (c composition) combinedPack() Pack {
 	resources := map[string]Resource{}
 	tools := map[string]bool{}
 	for _, pack := range c.packs {
+		intent := intentByPackID(c.intentFacts, pack.ID)
 		for _, tool := range pack.Requires.Tools {
 			tools[tool] = true
 		}
 		for _, r := range pack.Resources {
+			r = resourceWithSurfaceAlias(r, intent.Aliases, c.surface)
 			key := r.Kind + ":" + r.ID
 			if _, ok := resources[key]; !ok {
 				resources[key] = r
@@ -112,7 +115,7 @@ func (c composition) contributorSet(projectionID string) []string {
 }
 
 func (f Facade) compose(requested Pack, state ActivationState, surface Surface, useRequestedIntent bool) (composition, error) {
-	result := composition{requested: requested, contributors: map[string][]string{}}
+	result := composition{requested: requested, surface: surface, contributors: map[string][]string{}}
 	selected := map[string]Pack{}
 	active := activeIntents(state)
 	activeIDs := map[string]bool{}
@@ -225,6 +228,31 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 	}
 	sortBlockers(result.blockers)
 	return result, nil
+}
+
+func resourceWithSurfaceAlias(resource Resource, aliases []SurfaceAlias, surface Surface) Resource {
+	for _, alias := range aliases {
+		if alias.Kind != resource.Kind || alias.ID != resource.ID {
+			continue
+		}
+		resource.Bindings = append([]Binding(nil), resource.Bindings...)
+		for i := range resource.Bindings {
+			if resource.Bindings[i].Surface != surface {
+				continue
+			}
+			resource.Bindings[i].Name = alias.Name
+			switch resource.Bindings[i].Projection {
+			case "skill":
+				resource.Bindings[i].Invocation = "$" + alias.Name
+			case "command":
+				resource.Bindings[i].Invocation = "/" + alias.Name
+			case "agent":
+				resource.Bindings[i].Invocation = "@" + alias.Name
+			}
+		}
+		return resource
+	}
+	return resource
 }
 
 func intentByPackID(intents []ActivationIntent, packID string) ActivationIntent {

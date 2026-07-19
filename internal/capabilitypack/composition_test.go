@@ -35,6 +35,23 @@ func TestCompositionAcceptsIdenticalExplicitSharedContributions(t *testing.T) {
 	}
 }
 
+func TestCompositionAppliesOnlyExplicitSurfaceAliasToHostBinding(t *testing.T) {
+	resource := Resource{Kind: "command", ID: "review", Bindings: []Binding{
+		{Surface: SurfaceCodex, Projection: "skill", Name: "review", Invocation: "$review", Mode: "degraded", Degradation: "codex-command-as-workflow-skill", Sharing: "exclusive"},
+		{Surface: SurfaceOpenCode, Projection: "command", Name: "review", Invocation: "/review", Mode: "native", Sharing: "exclusive"},
+	}}
+	pack := Pack{ID: "addy", Version: "1", Resources: []Resource{resource}}
+	intent := ActivationIntent{PackID: "addy", Surface: SurfaceCodex, Version: "1", Active: true, Aliases: []SurfaceAlias{{Kind: "command", ID: "review", Name: "addy-review"}}}
+	result, err := NewFacade(Catalog{packs: []Pack{pack}}).compose(pack, ActivationState{Intent: intent}, SurfaceCodex, true)
+	if err != nil || len(result.blockers) != 0 {
+		t.Fatalf("composition = %+v, err = %v", result, err)
+	}
+	bindings := result.combinedPack().Resources[0].Bindings
+	if bindings[0].Name != "addy-review" || bindings[0].Invocation != "$addy-review" || bindings[1].Name != "review" || bindings[1].Invocation != "/review" {
+		t.Fatalf("bindings = %+v", bindings)
+	}
+}
+
 func TestPreviewIncludesInactiveTransitiveRequirementsInCanonicalComposition(t *testing.T) {
 	packs := []Pack{
 		{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"cap:b"}}, Resources: []Resource{{Kind: "instruction", ID: "app", Source: "app"}}},

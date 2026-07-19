@@ -55,6 +55,7 @@ func TestSurfaceGatewayClonesAndCanonicalizesTransitionAndInspection(t *testing.
 	}
 	adapter := &gatewayAdapter{
 		inspection: SurfaceInspection{
+			OccupiedNames: []OccupiedName{{Namespace: "skill", Name: "z", OwnerType: "unmanaged", Fingerprint: "z"}, {Namespace: "agent", Name: "a", OwnerType: "packy", OwnerID: "app", Fingerprint: "a"}},
 			Projections: []ObservedProjection{
 				{Goal: ProjectionPresent, ID: "z", DesiredFingerprint: "z", Action: ProjectionAction{ID: "z", Args: []string{"z"}}},
 				{Goal: ProjectionPresent, ID: "a", DesiredFingerprint: "a", Action: ProjectionAction{ID: "a", Args: []string{"a"}}},
@@ -76,8 +77,19 @@ func TestSurfaceGatewayClonesAndCanonicalizesTransitionAndInspection(t *testing.
 	if transition.Desired.Resources[0].Args[0] != "original" || transition.ResidualOwnership[0].Contributors[0] != "app" || transition.ResolvedExecutables[0].AcquisitionArgs[0] != "install" {
 		t.Fatalf("adapter mutated gateway input: %+v", transition)
 	}
-	if got.Projections[0].ID != "a" || got.Projections[1].ID != "z" || got.Projections[1].Action.Args[0] != "z" || got.PendingHumanActions[0] != "a" || got.Readiness.PendingHumanActions[0] != "a" || got.Readiness.Evidence[0] != "a" {
+	if got.Projections[0].ID != "a" || got.Projections[1].ID != "z" || got.Projections[1].Action.Args[0] != "z" || got.OccupiedNames[0].Namespace != "agent" || got.OccupiedNames[1].Name != "z" || got.PendingHumanActions[0] != "a" || got.Readiness.PendingHumanActions[0] != "a" || got.Readiness.Evidence[0] != "a" {
 		t.Fatalf("gateway result was not cloned/canonicalized: %+v", got)
+	}
+}
+
+func TestSurfaceGatewayRejectsMalformedOccupiedNames(t *testing.T) {
+	for _, names := range [][]OccupiedName{
+		{{Namespace: "skill", Name: "review", OwnerType: "unknown", Fingerprint: "x"}},
+		{{Namespace: "skill", Name: "review", OwnerType: "unmanaged", Fingerprint: "x"}, {Namespace: "skill", Name: "review", OwnerType: "packy", OwnerID: "app", Fingerprint: "x"}},
+	} {
+		if _, err := inspectSurface(context.Background(), &gatewayAdapter{inspection: SurfaceInspection{OccupiedNames: names}}, SurfaceTransition{}); err == nil {
+			t.Fatalf("occupied names were accepted: %+v", names)
+		}
 	}
 }
 
