@@ -1,6 +1,8 @@
 package packsync
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,35 @@ import (
 	"sort"
 	"strings"
 )
+
+func canonicalRegistration(registration SourceConfig) (SourceConfig, string, error) {
+	if registration.Resources == nil {
+		return SourceConfig{}, "", errors.New("registration resources is a required array")
+	}
+	data, err := json.Marshal(Config{SchemaVersion: 1, Sources: []SourceConfig{registration}})
+	if err != nil {
+		return SourceConfig{}, "", err
+	}
+	config, err := LoadConfig(bytes.NewReader(data))
+	if err != nil {
+		return SourceConfig{}, "", fmt.Errorf("invalid registration: %w", err)
+	}
+	canonical, err := json.MarshalIndent(config.Sources[0], "", "  ")
+	if err != nil {
+		return SourceConfig{}, "", err
+	}
+	canonical = append(canonical, '\n')
+	sum := sha256.Sum256(canonical)
+	return config.Sources[0], fmt.Sprintf("%x", sum), nil
+}
+
+func canonicalConfig(config Config) ([]byte, error) {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
 
 func LoadConfig(r io.Reader) (Config, error) {
 	decoder := json.NewDecoder(r)

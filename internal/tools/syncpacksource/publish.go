@@ -65,7 +65,7 @@ func publish(ctx context.Context, option options, output io.Writer) error {
 	defer os.RemoveAll(acquisition)
 	validator := workflowValidatorFactory()
 	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
-	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
+	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition, Registration: plan.Registration}, Plan: plan, ClassificationEvidence: evidence}
 	if plan.Status == "no-op" {
 		return writeNoopArtifact(option.outputDir, dispatch.SourceID, plan)
 	}
@@ -143,7 +143,7 @@ func validateSandbox(ctx context.Context, option options, output io.Writer) erro
 	defer os.RemoveAll(acquisition)
 	validator := workflowValidatorFactory()
 	engine := packsync.Engine{Source: workflowSourceFactory(), Validate: validator}
-	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition}, Plan: plan, ClassificationEvidence: evidence}
+	apply := packsync.ApplyRequest{CheckRequest: packsync.CheckRequest{RepositoryRoot: option.repositoryRoot, SourceID: dispatch.SourceID, AcquisitionDir: acquisition, Registration: plan.Registration}, Plan: plan, ClassificationEvidence: evidence}
 	if _, err := engine.Apply(ctx, apply); err != nil {
 		return err
 	}

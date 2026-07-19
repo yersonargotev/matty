@@ -1,6 +1,7 @@
 package packsync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -88,13 +89,15 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		if err != nil {
 			return fmt.Errorf("resolve repository base: %w", err)
 		}
-		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.configBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, SourceLockSHA256: fresh.lockSet.Digests[fresh.source.ID], LockSetSHA256: fresh.lockSet.LockSetSHA256}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json"))}
+		plan = Plan{SchemaVersion: 1, Status: "blocked", Authoritative: fresh.lockPresent || fresh.registration != nil, SourceID: fresh.source.ID, Selector: fresh.selector, Candidate: candidate, Blockers: append([]string(nil), bindingBlockers...), Preconditions: Preconditions{BaseCommit: baseCommit, ConfigSHA256: hashBytes(fresh.originalConfigBytes), ManifestsSHA256: manifestsHash, BundleSHA256: bundleHash, SourceLockSHA256: fresh.lockSet.Digests[fresh.source.ID], LockSetSHA256: fresh.lockSet.LockSetSHA256}, LegacyEvidence: fileExists(filepath.Join(request.RepositoryRoot, "skills-lock.json")), Registration: fresh.registration, RegistrationSHA256: fresh.registrationSHA256}
 		if fresh.lockPresent {
 			plan.PreviousSnapshotSHA256 = fresh.lock.Snapshot
 		}
 		if !fresh.lockPresent {
 			plan.Preconditions.SourceLockSHA256 = ""
-			plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
+			if fresh.registration == nil {
+				plan.Blockers = append(plan.Blockers, "production provenance lock is absent; this sealed bootstrap plan is non-authoritative")
+			}
 		} else {
 			plan.Blockers = append(plan.Blockers, validateLock(fresh.lock, fresh.source, candidate, fresh.selector)...)
 			plan.Blockers = append(plan.Blockers, continuityBlockers...)
@@ -102,6 +105,9 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 		plan.Blockers = append(plan.Blockers, validateCandidate(fresh.source, candidate, fresh.selector)...)
 		if err := buildPlan(snapshotRoot, request.RepositoryRoot, fresh.source, bindings, manifests, fresh.lock, fresh.lockPresent, &plan); err != nil {
 			return err
+		}
+		if fresh.registration != nil {
+			plan.Changes = append(plan.Changes, Change{Kind: "source-registered", Path: "bundle/sources.json", After: fresh.registrationSHA256})
 		}
 		_, proposedDigest, err := CanonicalSourceLock(plan.ProposedLock)
 		if err != nil {
@@ -136,13 +142,16 @@ func (engine Engine) Check(ctx context.Context, request CheckRequest) (Plan, err
 }
 
 type checkInputs struct {
-	configBytes []byte
-	source      SourceConfig
-	selector    Selector
-	lock        Lock
-	lockBytes   []byte
-	lockPresent bool
-	lockSet     sourceLockSet
+	configBytes         []byte
+	originalConfigBytes []byte
+	source              SourceConfig
+	selector            Selector
+	lock                Lock
+	lockBytes           []byte
+	lockPresent         bool
+	lockSet             sourceLockSet
+	registration        *SourceConfig
+	registrationSHA256  string
 }
 
 func readCheckInputs(ctx context.Context, request CheckRequest, allowMissing bool) (checkInputs, error) {
@@ -163,7 +172,33 @@ func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInpu
 	if err != nil {
 		return checkInputs{}, err
 	}
-	source, err := selectSource(config, request.SourceID)
+	var source SourceConfig
+	var registration *SourceConfig
+	var registrationSHA256 string
+	if request.Registration != nil {
+		if _, foundErr := selectSource(config, request.SourceID); foundErr == nil {
+			return checkInputs{}, fmt.Errorf("source %q is already configured", request.SourceID)
+		}
+		normalized, digest, normalizeErr := canonicalRegistration(*request.Registration)
+		if normalizeErr != nil {
+			return checkInputs{}, normalizeErr
+		}
+		if normalized.ID != request.SourceID {
+			return checkInputs{}, errors.New("registration id must equal requested source id")
+		}
+		combined, marshalErr := json.Marshal(Config{SchemaVersion: config.SchemaVersion, Sources: append(append([]SourceConfig(nil), config.Sources...), normalized)})
+		if marshalErr != nil {
+			return checkInputs{}, marshalErr
+		}
+		config, err = LoadConfig(bytes.NewReader(combined))
+		if err != nil {
+			return checkInputs{}, fmt.Errorf("proposed source configuration: %w", err)
+		}
+		source, err = selectSource(config, request.SourceID)
+		registration, registrationSHA256 = &normalized, digest
+	} else {
+		source, err = selectSource(config, request.SourceID)
+	}
 	if err != nil {
 		return checkInputs{}, err
 	}
@@ -174,7 +209,7 @@ func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInpu
 	if err := validateSelector(selector); err != nil {
 		return checkInputs{}, err
 	}
-	lockSet, err := loadSourceLockSetForTarget(filepath.Join(request.RepositoryRoot, "bundle"), config, source.ID, allowMissing)
+	lockSet, err := loadSourceLockSetForTarget(filepath.Join(request.RepositoryRoot, "bundle"), config, source.ID, allowMissing || registration != nil)
 	if err != nil {
 		return checkInputs{}, err
 	}
@@ -186,7 +221,7 @@ func readCheckInputsUnlocked(request CheckRequest, allowMissing bool) (checkInpu
 			return checkInputs{}, err
 		}
 	}
-	return checkInputs{configBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent, lockSet: lockSet}, nil
+	return checkInputs{configBytes: configBytes, originalConfigBytes: configBytes, source: source, selector: selector, lock: lock, lockBytes: lockBytes, lockPresent: lockPresent, lockSet: lockSet, registration: registration, registrationSHA256: registrationSHA256}, nil
 }
 
 func sourceLockPath(repositoryRoot, sourceID string) string {
@@ -295,8 +330,12 @@ func buildPlan(snapshotRoot, repositoryRoot string, source SourceConfig, binding
 		}
 		localFiles, err := inventory(filepath.Join(repositoryRoot, filepath.FromSlash(binding.VendoredPath)))
 		if err != nil {
-			plan.Blockers = append(plan.Blockers, "vendored resource unavailable or unsafe: "+bindingKey(binding)+": "+err.Error())
-			continue
+			if plan.Registration != nil && errors.Is(err, fs.ErrNotExist) {
+				localFiles = []FileEvidence{}
+			} else {
+				plan.Blockers = append(plan.Blockers, "vendored resource unavailable or unsafe: "+bindingKey(binding)+": "+err.Error())
+				continue
+			}
 		}
 		resource := ResourceEvidence{Binding: binding, SHA256: resourceHash(candidateFiles), Files: candidateFiles}
 		newByKey[bindingKey(binding)] = resource

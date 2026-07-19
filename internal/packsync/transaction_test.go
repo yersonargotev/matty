@@ -3,6 +3,7 @@ package packsync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,68 @@ func TestInitialApplyBootstrapsTruthfulProvenanceWithoutSelectedContentChange(t 
 	if err != nil || retry.Status != "no-op" || retry.Changed {
 		t.Fatalf("repeated Apply = %#v, %v", retry, err)
 	}
+}
+
+func TestApplyCommitsRegistrationConfigurationLockAndContributionAtomically(t *testing.T) {
+	repository, existingSnapshot := tinyRepository(t)
+	initializeFixtureGit(t, repository)
+	bootstrapSource := &fixtureSource{root: existingSnapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	if _, err := (Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}).Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	legacyPackID := "ma" + "tty"
+	writeFile(t, filepath.Join(repository, "bundle", "packs", legacyPackID, "pack.json"), fmt.Sprintf(`{"schema_version":1,"id":%q,"version":"1.0.0","resources":[{"kind":"skill","id":"one","source":"skills/engineering/one"},{"kind":"skill","id":"two","source":"skills/engineering/two"}]}`, legacyPackID))
+	snapshot := t.TempDir()
+	writeFile(t, filepath.Join(snapshot, "skills", "engineering", "two", "SKILL.md"), "new\n")
+	registration := SourceConfig{ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills", Selector: Selector{Mode: SelectorStableRelease}, Resources: []Binding{{PackID: legacyPackID, Kind: "skill", ResourceID: "two", UpstreamPath: "skills/engineering/two"}}}
+	provider := &fixtureSource{root: snapshot, candidate: acceptedCandidateFor("addyosmani/agent-skills")}
+	engine := Engine{Source: provider, Validate: acceptingBundleValidator()}
+	request := CheckRequest{RepositoryRoot: repository, SourceID: "addy", Registration: &registration, AcquisitionDir: t.TempDir()}
+	plan, err := engine.Check(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := classificationEvidenceForPlan(t, plan, ClassifierAI, "fixture-model", LevelMinor)
+	result, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: request, Plan: plan, ClassificationEvidence: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "applied" || !result.Changed {
+		t.Fatalf("result = %#v", result)
+	}
+	config, err := os.Open(filepath.Join(repository, "bundle", "sources.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer config.Close()
+	parsed, err := LoadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sources) != 2 || parsed.Sources[0].ID != "addy" {
+		t.Fatalf("config = %#v", parsed)
+	}
+	if _, _, present, err := readLock(sourceLockPath(repository, "addy")); err != nil || !present {
+		t.Fatalf("lock present=%t err=%v", present, err)
+	}
+	if string(mustReadFile(t, filepath.Join(repository, "bundle", "skills", "engineering", "two", "SKILL.md"))) != "new\n" {
+		t.Fatal("contribution missing")
+	}
+	if retry, err := engine.Apply(context.Background(), ApplyRequest{CheckRequest: request, Plan: plan, ClassificationEvidence: evidence}); err == nil || retry.Status == "no-op" {
+		t.Fatalf("initial registration replay = %#v, %v", retry, err)
+	}
+}
+
+func acceptedCandidateFor(repository string) Candidate {
+	candidate := acceptedCandidate()
+	candidate.Repository = repository
+	owner := strings.Split(repository, "/")[0]
+	candidate.Owner = owner
+	candidate.RepositoryHTML = "https://github.com/" + repository
+	candidate.RepositoryClone = candidate.RepositoryHTML + ".git"
+	candidate.RepositoryAPI = "https://api.github.com/repos/" + repository
+	return candidate
 }
 
 func TestApplyFaultsAndRecoverDeterministically(t *testing.T) {

@@ -8,6 +8,22 @@ on:
         description: Configured source identifier
         required: true
         type: string
+      operation:
+        description: Synchronize an existing source or register an absent source
+        required: true
+        type: choice
+        default: synchronize
+        options:
+          - synchronize
+          - register
+      registration_json:
+        description: Register only; complete strict SourceConfig JSON
+        required: false
+        type: string
+      registration_sha256:
+        description: Register only; canonical SourceConfig SHA-256
+        required: false
+        type: string
       request_digest:
         description: SHA-256 identity of the canonical request JSON
         required: true
@@ -90,6 +106,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PACKY_SOURCE_ID: ${{ inputs.source_id }}
+          PACKY_OPERATION: ${{ inputs.operation }}
+          PACKY_REGISTRATION_JSON: ${{ inputs.registration_json }}
+          PACKY_REGISTRATION_SHA256: ${{ inputs.registration_sha256 }}
           PACKY_SELECTOR: ${{ inputs.selector }}
           PACKY_SELECTOR_REF: ${{ inputs.selector_ref }}
           PACKY_CLASSIFICATION_MODE: ${{ inputs.classification_mode }}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -65,6 +66,59 @@ func TestCheckAcquiresCandidateOutsideLockThenLocksLocalObservation(t *testing.T
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckSealsAbsentSourceRegistrationWithoutPersistingIt(t *testing.T) {
+	repository, existingSnapshot := tinyRepository(t)
+	bootstrapSource := &fixtureSource{root: existingSnapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	if _, err := (Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}).Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	legacyPackID := "ma" + "tty"
+	writeFile(t, filepath.Join(repository, "bundle", "packs", legacyPackID, "pack.json"), fmt.Sprintf(`{"schema_version":1,"id":%q,"version":"1.0.0","resources":[{"kind":"skill","id":"one","source":"skills/engineering/one"},{"kind":"skill","id":"two","source":"skills/engineering/two"}]}`, legacyPackID))
+	snapshot := t.TempDir()
+	writeFile(t, filepath.Join(snapshot, "skills", "engineering", "two", "SKILL.md"), "new\n")
+	registration := SourceConfig{ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills", Selector: Selector{Mode: SelectorStableRelease}, Resources: []Binding{{PackID: legacyPackID, Kind: "skill", ResourceID: "two", UpstreamPath: "skills/engineering/two"}}}
+	before := mustReadFile(t, filepath.Join(repository, "bundle", "sources.json"))
+	plan, err := (Engine{Source: &fixtureSource{root: snapshot, candidate: acceptedCandidateFor("addyosmani/agent-skills")}}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, SourceID: "addy", Registration: &registration, AcquisitionDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Authoritative || plan.Status != "review-required" || plan.Registration == nil || plan.RegistrationSHA256 == "" || !plan.VerifySeal() {
+		t.Fatalf("registration plan = %#v", plan)
+	}
+	if got := mustReadFile(t, filepath.Join(repository, "bundle", "sources.json")); !reflect.DeepEqual(got, before) {
+		t.Fatal("Check persisted proposed registration")
+	}
+}
+
+func TestCheckRejectsRegistrationWithExistingSourceOrBindingOwner(t *testing.T) {
+	repository, snapshot := tinyRepository(t)
+	bootstrapSource := &fixtureSource{root: snapshot, candidate: acceptedCandidate()}
+	bootstrap := checkWith(t, repository, bootstrapSource)
+	if _, err := (Engine{allowBootstrap: true, Source: bootstrapSource, Validate: acceptingBundleValidator()}).Apply(context.Background(), ApplyRequest{CheckRequest: newCheckRequest(t, repository), Plan: bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	base := SourceConfig{ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills", Selector: Selector{Mode: SelectorStableRelease}, Resources: []Binding{}}
+	for _, test := range []struct {
+		name         string
+		registration SourceConfig
+	}{
+		{name: "source", registration: SourceConfig{ID: "mattpocock-skills", Provider: "github", Repository: "mattpocock/skills", Selector: Selector{Mode: SelectorStableRelease}, Resources: []Binding{}}},
+		{name: "binding", registration: func() SourceConfig {
+			value := base
+			value.Resources = []Binding{{PackID: "ma" + "tty", Kind: "skill", ResourceID: "one", UpstreamPath: "other"}}
+			return value
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := (Engine{Source: &fixtureSource{root: snapshot, candidate: acceptedCandidate()}}).Check(context.Background(), CheckRequest{RepositoryRoot: repository, SourceID: test.registration.ID, Registration: &test.registration, AcquisitionDir: t.TempDir()})
+			if err == nil {
+				t.Fatal("invalid registration accepted")
+			}
+		})
 	}
 }
 

@@ -193,7 +193,21 @@ func artifactProvenance(plan packsync.Plan) packsyncworkflow.ArtifactProvenance 
 func inspectRequest(option options) (packsyncworkflow.DispatchRequest, packsync.CheckRequest, error) {
 	if option.requestPath == "" {
 		if os.Getenv("PACKY_SOURCE_ID") != "" {
-			request := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: packsyncworkflow.OperationSynchronize, SourceID: os.Getenv("PACKY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("PACKY_SELECTOR")), SelectorRef: os.Getenv("PACKY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("PACKY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("PACKY_REQUEST_REASON"), RetryOfRun: os.Getenv("PACKY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("PACKY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("PACKY_EXPECTED_BASE_SHA")}
+			operation := packsyncworkflow.DispatchOperation(os.Getenv("PACKY_OPERATION"))
+			if operation == "" {
+				operation = packsyncworkflow.OperationSynchronize
+			}
+			request := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: operation, SourceID: os.Getenv("PACKY_SOURCE_ID"), Selector: packsyncworkflow.Selector(os.Getenv("PACKY_SELECTOR")), SelectorRef: os.Getenv("PACKY_SELECTOR_REF"), ClassificationMode: packsyncworkflow.ClassificationMode(os.Getenv("PACKY_CLASSIFICATION_MODE")), RequestReason: os.Getenv("PACKY_REQUEST_REASON"), RetryOfRun: os.Getenv("PACKY_RETRY_OF_RUN"), ExpectedPlanID: os.Getenv("PACKY_EXPECTED_PLAN_ID"), ExpectedBaseSHA: os.Getenv("PACKY_EXPECTED_BASE_SHA")}
+			if raw := os.Getenv("PACKY_REGISTRATION_JSON"); raw != "" {
+				var registration packsync.SourceConfig
+				decoder := json.NewDecoder(strings.NewReader(raw))
+				decoder.DisallowUnknownFields()
+				if err := decoder.Decode(&registration); err != nil {
+					return request, packsync.CheckRequest{}, fmt.Errorf("decode registration: %w", err)
+				}
+				request.Registration = &registration
+				request.RegistrationSHA256 = os.Getenv("PACKY_REGISTRATION_SHA256")
+			}
 			if raw := os.Getenv("PACKY_HUMAN_EVIDENCE_JSON"); raw != "" {
 				request.HumanEvidence = json.RawMessage(raw)
 			}
@@ -253,7 +267,7 @@ func checkRequestForDispatch(repositoryRoot string, request packsyncworkflow.Dis
 	case packsyncworkflow.SelectorCommit:
 		selector.Mode, selector.Ref = packsync.SelectorCommit, request.SelectorRef
 	}
-	return packsync.CheckRequest{RepositoryRoot: repositoryRoot, SourceID: request.SourceID, Selector: &selector}, nil
+	return packsync.CheckRequest{RepositoryRoot: repositoryRoot, SourceID: request.SourceID, Selector: &selector, Registration: request.Registration}, nil
 }
 
 func classify(ctx context.Context, option options, output io.Writer) error {

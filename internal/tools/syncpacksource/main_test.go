@@ -317,6 +317,33 @@ func TestInspectNormalizesWorkflowEnvironmentThroughCanonicalDispatch(t *testing
 	}
 }
 
+func TestInspectCarriesStrictRegistrationIntoCheck(t *testing.T) {
+	registration := packsync.SourceConfig{ID: "addy", Provider: "github", Repository: "addyosmani/agent-skills", Selector: packsync.Selector{Mode: packsync.SelectorStableRelease}, Resources: []packsync.Binding{{PackID: "addy", Kind: "skill", ResourceID: "fixture", UpstreamPath: "skills/fixture"}}}
+	digest, err := packsyncworkflow.CanonicalRegistrationSHA256(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(registration)
+	t.Setenv("PACKY_SOURCE_ID", "addy")
+	t.Setenv("PACKY_OPERATION", "register")
+	t.Setenv("PACKY_REGISTRATION_JSON", string(data))
+	t.Setenv("PACKY_REGISTRATION_SHA256", digest)
+	t.Setenv("PACKY_SELECTOR", "latest-stable")
+	t.Setenv("PACKY_CLASSIFICATION_MODE", "ai")
+	t.Setenv("PACKY_REQUEST_REASON", "admit Addy")
+	request := packsyncworkflow.DispatchRequest{SchemaVersion: 2, Operation: packsyncworkflow.OperationRegister, SourceID: "addy", Selector: packsyncworkflow.SelectorLatestStable, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "admit Addy", Registration: &registration, RegistrationSHA256: digest}
+	requestDigest, _ := request.Digest()
+	t.Setenv("PACKY_REQUEST_DIGEST", requestDigest)
+
+	got, check, err := inspectRequest(options{repositoryRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Operation != packsyncworkflow.OperationRegister || check.Registration == nil || !reflect.DeepEqual(*check.Registration, registration) {
+		t.Fatalf("registration dispatch lost authority: request=%#v check=%#v", got, check)
+	}
+}
+
 func TestInspectDoesNotAdoptLegacyMattyWorkflowEnvironment(t *testing.T) {
 	t.Setenv("PACKY_SOURCE_ID", "")
 	t.Setenv("MATTY_SOURCE_ID", "legacy-source")

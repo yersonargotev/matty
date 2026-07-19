@@ -213,6 +213,8 @@ type Plan struct {
 	PreviousSnapshotSHA256 string        `json:"previous_snapshot_sha256,omitempty"`
 	ProposedLock           Lock          `json:"proposed_lock"`
 	LegacyEvidence         bool          `json:"legacy_root_lock_present"`
+	Registration           *SourceConfig `json:"registration,omitempty"`
+	RegistrationSHA256     string        `json:"registration_sha256,omitempty"`
 }
 
 type CheckRequest struct {
@@ -220,6 +222,7 @@ type CheckRequest struct {
 	SourceID       string
 	Selector       *Selector
 	AcquisitionDir string
+	Registration   *SourceConfig
 }
 
 type Engine struct {
