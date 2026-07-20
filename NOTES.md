@@ -14,7 +14,9 @@
 
 ## Canonical loops
 
-- **Issue delivery**: the end-to-end path from a requested GitHub issue through
-  validation, implementation, review, pull request, merge, and branch cleanup.
+- **Issue delivery**: qualify locally, optionally diagnose uncertain bugs, then
+  repeat a local `implement -> code-review` loop whose review covers only the
+  preceding implementation delta; after local proof, create the PR, wait for
+  green CI, merge, and clean up.
 - **Release**: publication of a verified `main` commit through the existing
   `release-packy` gate.
