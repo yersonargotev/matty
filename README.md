@@ -120,5 +120,8 @@ established safely, or a cross-cutting/unknown path changed. The focused command
 is only a local feedback aid: `./scripts/validate-packy.sh` remains required
 before final delivery and is the command used by CI.
 
+The post-optimization CI timings and validation-phase counts are recorded in
+[the CI validation performance evidence](docs/research/ci-validation-performance-evidence.md).
+
 Until vendored upstream Go content exists, `go test ./...` also remains a
 supported compatibility check.
