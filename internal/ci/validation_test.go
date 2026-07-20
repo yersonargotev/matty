@@ -2,6 +2,7 @@ package ci_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/yersonargotev/packy/internal/packsync"
@@ -801,10 +803,6 @@ func workflowSection(t *testing.T, workflow, start, end string) string {
 }
 
 func TestValidationEntrypointIgnoresHostileUnownedGoContent(t *testing.T) {
-	if os.Getenv("PACKY_VALIDATION_NESTED") == "1" {
-		t.Skip("nested validation invoked by hostile-content tracer")
-	}
-
 	sourceRoot := repositoryRoot(t)
 	tempRoot := filepath.Join(t.TempDir(), "repo")
 	copyRepository(t, sourceRoot, tempRoot)
@@ -829,20 +827,88 @@ func TestHostile(t *testing.T) {
 
 	operatorHome := filepath.Join(tempRoot, "operator-home")
 	operatorXDG := filepath.Join(tempRoot, "operator-xdg")
-	cmd := exec.Command("bash", filepath.Join(tempRoot, "scripts", "validate-packy.sh"))
+	validationTemp := filepath.Join(tempRoot, "validation-tmp")
+	if err := os.MkdirAll(validationTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commandLog := filepath.Join(tempRoot, "validation-commands.log")
+	shimRoot := filepath.Join(tempRoot, "validation-bin")
+	// Exercise the real entrypoint while recording, rather than executing, its
+	// expensive validation children. The bash shim makes recursion observable.
+	for _, command := range []string{"go", "gofmt", "bash"} {
+		contents := "#!/bin/sh\n" +
+			"printf '" + command + "\\t%s\\t%s' \"$HOME\" \"$XDG_CONFIG_HOME\" >> \"$PACKY_VALIDATION_COMMAND_LOG\"\n" +
+			"for arg in \"$@\"; do printf '\\t%s' \"$arg\" >> \"$PACKY_VALIDATION_COMMAND_LOG\"; done\n" +
+			"printf '\\n' >> \"$PACKY_VALIDATION_COMMAND_LOG\"\n"
+		if command == "bash" {
+			contents += "exec /bin/bash \"$@\"\n"
+		}
+		writeExecutable(t, filepath.Join(shimRoot, command), contents)
+	}
+	// Addy acceptance owns its own execution contract; this tracer is scoped to
+	// the repository entrypoint's package selection and validation classes.
+	writeExecutable(t, filepath.Join(tempRoot, "scripts", "validate-addy-acceptance.sh"), "#!/bin/sh\nexit 0\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/bash", filepath.Join(tempRoot, "scripts", "validate-packy.sh"))
 	cmd.Dir = tempRoot
 	cmd.Env = append(os.Environ(),
 		"HOME="+operatorHome,
 		"XDG_CONFIG_HOME="+operatorXDG,
-		"GOCACHE="+goEnv(t, "GOCACHE"),
-		"GOMODCACHE="+goEnv(t, "GOMODCACHE"),
-		"GOPATH="+goEnv(t, "GOPATH"),
+		"GOCACHE="+filepath.Join(tempRoot, "go-cache"),
+		"GOMODCACHE="+filepath.Join(tempRoot, "go-mod-cache"),
+		"GOPATH="+filepath.Join(tempRoot, "go-path"),
 		"HOSTILE_SENTINEL="+sentinel,
-		"PACKY_VALIDATION_NESTED=1",
+		"PACKY_VALIDATION_COMMAND_LOG="+commandLog,
+		"PATH="+shimRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+validationTemp,
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("validation entrypoint recursively invoked itself: %v\n%s", ctx.Err(), output)
+		}
 		t.Fatalf("validation entrypoint failed with hostile unowned content: %v\n%s", err, output)
+	}
+
+	invocations := validationInvocations(t, commandLog)
+	wantInvocations := [][]string{
+		append([]string{"build"}, validationBuildPackages()...),
+		append([]string{"vet"}, packyOwnedPackages...),
+		append([]string{"test"}, packyOwnedPackages...),
+		append([]string{"test", "-race", "-timeout", "10m"}, packyOwnedPackages...),
+	}
+	var goInvocations [][]string
+	formatInvocations := 0
+	for _, invocation := range invocations {
+		if !validationRootsAreSandboxed(validationTemp, invocation.home, invocation.xdg) {
+			t.Fatalf("validation child escaped the entrypoint sandbox: %#v", invocation)
+		}
+		switch invocation.command {
+		case "go":
+			goInvocations = append(goInvocations, invocation.args)
+		case "gofmt":
+			if len(invocation.args) < 2 || invocation.args[0] != "-l" {
+				t.Fatalf("format invocation = %#v, want gofmt -l with allowlisted files", invocation.args)
+			}
+			for _, path := range invocation.args[1:] {
+				if !validationPathIsOwned(tempRoot, path) {
+					t.Fatalf("format invocation loaded unowned path %q", path)
+				}
+			}
+			formatInvocations++
+		case "bash":
+			t.Fatalf("validation entrypoint recursively launched bash: %#v", invocation.args)
+		default:
+			t.Fatalf("unexpected validation command: %#v", invocation)
+		}
+	}
+	if !reflect.DeepEqual(goInvocations, wantInvocations) {
+		t.Fatalf("validation Go invocations = %#v, want %#v", goInvocations, wantInvocations)
+	}
+	if formatInvocations != 1 {
+		t.Fatalf("format invocation count = %d, want 1", formatInvocations)
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatalf("hostile vendored test executed: %v", err)
@@ -854,13 +920,61 @@ func TestHostile(t *testing.T) {
 	}
 }
 
-func goEnv(t *testing.T, key string) string {
+type validationInvocation struct {
+	command string
+	home    string
+	xdg     string
+	args    []string
+}
+
+func validationInvocations(t *testing.T, path string) []validationInvocation {
 	t.Helper()
-	output, err := exec.Command("go", "env", key).CombinedOutput()
+	contents, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("go env %s: %v: %s", key, err, output)
+		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(output))
+	var invocations []validationInvocation
+	for _, line := range strings.Split(strings.TrimSpace(string(contents)), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 3 {
+			t.Fatalf("malformed validation command log line %q", line)
+		}
+		invocations = append(invocations, validationInvocation{
+			command: fields[0],
+			home:    fields[1],
+			xdg:     fields[2],
+			args:    fields[3:],
+		})
+	}
+	return invocations
+}
+
+func validationBuildPackages() []string {
+	var packages []string
+	for _, packagePath := range packyOwnedPackages {
+		if packagePath != "./internal/ci" && packagePath != "./internal/release" {
+			packages = append(packages, packagePath)
+		}
+	}
+	return packages
+}
+
+func validationPathIsOwned(root, path string) bool {
+	for _, packagePath := range packyOwnedPackages {
+		packageRoot := filepath.Join(root, strings.TrimPrefix(packagePath, "./"))
+		if filepath.Dir(path) == packageRoot && filepath.Ext(path) == ".go" {
+			return true
+		}
+	}
+	return false
+}
+
+func validationRootsAreSandboxed(tempRoot, home, xdg string) bool {
+	sandbox := filepath.Dir(home)
+	return filepath.Base(home) == "home" &&
+		xdg == filepath.Join(sandbox, "xdg") &&
+		filepath.Dir(sandbox) == tempRoot &&
+		strings.HasPrefix(filepath.Base(sandbox), "packy-validation.")
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -963,6 +1077,16 @@ func writeFile(t *testing.T, path, contents string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
