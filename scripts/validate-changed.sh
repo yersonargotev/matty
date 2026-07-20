@@ -85,7 +85,7 @@ classify_path() {
     *.go)
       code=true
       add_owner "$path"
-      if [[ "$current" == true && -e "$path" ]]; then
+      if [[ "$current" == true ]]; then
         if [[ -L "$path" || ! -f "$path" ]]; then
           unsafe_reason="changed Go path is not a regular repository file: $path"
         else

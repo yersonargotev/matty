@@ -138,6 +138,11 @@ func TestChangedValidationClassifiesTheCompleteWorkingTree(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, want: []string{"mode=exhaustive", "changed Go path is not a regular repository file"}, wantFull: true},
+		{name: "dangling Go symlink fails closed", change: func(t *testing.T, root string) {
+			if err := os.Symlink(filepath.Join(filepath.Dir(root), "missing.go"), filepath.Join(root, "internal/prompt/link.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, want: []string{"mode=exhaustive", "changed Go path is not a regular repository file"}, wantFull: true},
 		{name: "deleted Go file retains owner", change: func(t *testing.T, root string) {
 			if err := os.Remove(filepath.Join(root, "internal/prompt/existing.go")); err != nil {
 				t.Fatal(err)
