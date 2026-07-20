@@ -313,7 +313,7 @@ func copyForValidation(repositoryRoot, checkout, bundleRoot string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() == ".git" || entry.Name() == ".codegraph" || entry.Name() == ".scratch" || entry.Name() == "bundle" {
+		if entry.Name() == ".git" || entry.Name() == ".codegraph" || entry.Name() == ".scratch" || entry.Name() == "bundle" || isPackyTransactionArtifact(entry.Name()) {
 			continue
 		}
 		if err := copyPath(filepath.Join(repositoryRoot, entry.Name()), filepath.Join(checkout, entry.Name())); err != nil {
@@ -321,6 +321,12 @@ func copyForValidation(repositoryRoot, checkout, bundleRoot string) error {
 		}
 	}
 	return copyPath(bundleRoot, filepath.Join(checkout, "bundle"))
+}
+
+func isPackyTransactionArtifact(name string) bool {
+	return name == ".packy-bundle-recovery.json" ||
+		strings.HasPrefix(name, ".packy-bundle-validation-") ||
+		strings.HasPrefix(name, ".packy-bundle-") && (strings.HasSuffix(name, ".staged") || strings.HasSuffix(name, ".backup"))
 }
 
 func copyPath(source, destination string) error {

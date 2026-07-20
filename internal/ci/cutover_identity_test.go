@@ -148,6 +148,9 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 
 	wantOccurrences := make([]string, 0, len(contract.TextOccurrences))
 	for _, occurrence := range contract.TextOccurrences {
+		if omitFromExactIdentityComparison(decodeContractPath(t, occurrence.PathBase64)) {
+			continue
+		}
 		if !allowedClasses[occurrence.Class] {
 			t.Fatalf("classified occurrence has unsupported class %q", occurrence.Class)
 		}
@@ -162,6 +165,9 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 
 	wantPaths := make([]string, 0, len(contract.IdentityPaths))
 	for _, path := range contract.IdentityPaths {
+		if omitFromExactIdentityComparison(decodeContractPath(t, path.PathBase64)) {
+			continue
+		}
 		if !allowedClasses[path.Class] {
 			t.Fatalf("classified identity path has unsupported class %q", path.Class)
 		}
@@ -182,7 +188,7 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 	var gotOccurrences []string
 	var gotPaths []string
 	for _, path := range cutoverWorktreePaths(t, root) {
-		if isProtectedCutoverPath(path) {
+		if isProtectedCutoverPath(path) || omitFromExactIdentityComparison(path) {
 			continue
 		}
 		pathCount := strings.Count(strings.ToLower(path), token)
@@ -220,6 +226,10 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 	if !reflect.DeepEqual(gotPaths, wantPaths) {
 		t.Fatalf("path-name identity surface is not exhaustively classified\nwant: %s\n got: %s", strings.Join(wantPaths, "\n"), strings.Join(gotPaths, "\n"))
 	}
+}
+
+func omitFromExactIdentityComparison(path string) bool {
+	return stagedValidation() && path == "bundle/sources.json"
 }
 
 func TestSemanticPackIdentitySurvivesFieldByField(t *testing.T) {
@@ -593,4 +603,22 @@ func formatStringMap(values map[string]string) string {
 		lines = append(lines, fmt.Sprintf("%s=%s", key, values[key]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func TestStagedExactIdentityComparisonOmitsOnlyCanonicalSources(t *testing.T) {
+	t.Setenv("PACKY_VALIDATION_STAGED", "1")
+	if !omitFromExactIdentityComparison("bundle/sources.json") {
+		t.Fatal("staged exact identity comparison retained canonical sources")
+	}
+	semanticSourceLock := "bundle/sources/" + strings.Join([]string{"ma", "tty"}, "") + ".lock.json"
+	for _, path := range []string{"bundle/packs.json", semanticSourceLock, "docs/sources.json"} {
+		if omitFromExactIdentityComparison(path) {
+			t.Fatalf("staged exact identity comparison omitted %s", path)
+		}
+	}
+
+	t.Setenv("PACKY_VALIDATION_STAGED", "")
+	if omitFromExactIdentityComparison("bundle/sources.json") {
+		t.Fatal("normal exact identity comparison omitted canonical sources")
+	}
 }

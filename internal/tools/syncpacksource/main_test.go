@@ -115,6 +115,56 @@ printf validated > "${XDG_CONFIG_HOME}/proof"
 	}
 }
 
+func TestCopyForValidationExcludesOnlyPackyTransactionArtifacts(t *testing.T) {
+	repository := t.TempDir()
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	selectedBundle := filepath.Join(t.TempDir(), "selected-bundle")
+	for path, data := range map[string]string{
+		".ordinary-hidden":                   "hidden",
+		".packy-bundle-marker-example.tmp":   "ordinary",
+		".packy-bundle-recovery.json":        "recovery",
+		".packy-bundle-example.staged/file":  "staged",
+		".packy-bundle-example.backup/file":  "backup",
+		".packy-bundle-validation-1234/file": "validation",
+		"bundle/identity":                    "production",
+	} {
+		fullPath := filepath.Join(repository, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(selectedBundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selectedBundle, "identity"), []byte("selected"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyForValidation(repository, checkout, selectedBundle); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".ordinary-hidden", ".packy-bundle-marker-example.tmp", "bundle/identity"} {
+		if _, err := os.Stat(filepath.Join(checkout, path)); err != nil {
+			t.Fatalf("expected copied path %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{".packy-bundle-recovery.json", ".packy-bundle-example.staged", ".packy-bundle-example.backup", ".packy-bundle-validation-1234"} {
+		if _, err := os.Stat(filepath.Join(checkout, path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Packy transaction artifact %s was copied: %v", path, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(checkout, "bundle", "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "selected" {
+		t.Fatalf("copied bundle identity = %q", data)
+	}
+}
+
 func TestPublicSourceRetriesRateLimit403AndContinuesAfterSuccess(t *testing.T) {
 	underlying := &sourceFailureFixture{failures: []error{githubsource.HTTPError{Operation: "test", StatusCode: http.StatusForbidden, Status: "403 Forbidden", RetryAfter: "4", RateLimitRemaining: "0"}}}
 	sleeper := &sourceSleeper{}
