@@ -125,9 +125,19 @@ func TestChangedValidationClassifiesTheCompleteWorkingTree(t *testing.T) {
 			writeFile(t, filepath.Join(root, "go.mod"), "module changed\n")
 			writeFile(t, filepath.Join(root, "docs/note.md"), "note\n")
 		}, want: []string{"mode=exhaustive", "cross-cutting or dependency path changed"}, wantFull: true},
+		{name: "validation infrastructure is cross cutting", change: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "internal/ci/new.go"), "package ci\n")
+		}, want: []string{"mode=exhaustive", "cross-cutting or dependency path changed: internal/ci/new.go"}, wantFull: true},
 		{name: "unknown untracked path fails closed", change: func(t *testing.T, root string) {
 			writeFile(t, filepath.Join(root, "new-package/file.txt"), "unknown\n")
 		}, want: []string{"mode=exhaustive", "unknown path changed"}, wantFull: true},
+		{name: "Go symlink fails closed before formatting", change: func(t *testing.T, root string) {
+			target := filepath.Join(filepath.Dir(root), "outside.go")
+			writeFile(t, target, "package outside\n")
+			if err := os.Symlink(target, filepath.Join(root, "internal/prompt/link.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, want: []string{"mode=exhaustive", "changed Go path is not a regular repository file"}, wantFull: true},
 		{name: "deleted Go file retains owner", change: func(t *testing.T, root string) {
 			if err := os.Remove(filepath.Join(root, "internal/prompt/existing.go")); err != nil {
 				t.Fatal(err)

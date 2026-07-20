@@ -79,13 +79,19 @@ classify_path() {
   local path="$1" current="${2:-false}"
   changed_paths+=("$path")
   case "$path" in
-    go.mod|go.sum|scripts/*|.github/workflows/*|workflows/*|schemas/*|bundle/*)
+    go.mod|go.sum|scripts/*|internal/ci/*|.github/workflows/*|workflows/*|schemas/*|bundle/*)
       unsafe_reason="cross-cutting or dependency path changed: $path" ;;
     README.md|AGENTS.md|docs/*) documentation=true ;;
     *.go)
       code=true
       add_owner "$path"
-      if [[ "$current" == true && -e "$path" ]]; then format_files+=("$root/$path"); fi ;;
+      if [[ "$current" == true && -e "$path" ]]; then
+        if [[ -L "$path" || ! -f "$path" ]]; then
+          unsafe_reason="changed Go path is not a regular repository file: $path"
+        else
+          format_files+=("$root/$path")
+        fi
+      fi ;;
     *) unsafe_reason="unknown path changed: $path" ;;
   esac
 }
