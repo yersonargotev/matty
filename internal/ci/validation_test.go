@@ -827,6 +827,10 @@ func TestHostile(t *testing.T) {
 
 	operatorHome := filepath.Join(tempRoot, "operator-home")
 	operatorXDG := filepath.Join(tempRoot, "operator-xdg")
+	validationTemp := filepath.Join(tempRoot, "validation-tmp")
+	if err := os.MkdirAll(validationTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	commandLog := filepath.Join(tempRoot, "validation-commands.log")
 	shimRoot := filepath.Join(tempRoot, "validation-bin")
 	// Exercise the real entrypoint while recording, rather than executing, its
@@ -858,6 +862,7 @@ func TestHostile(t *testing.T) {
 		"HOSTILE_SENTINEL="+sentinel,
 		"PACKY_VALIDATION_COMMAND_LOG="+commandLog,
 		"PATH="+shimRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+validationTemp,
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -877,8 +882,8 @@ func TestHostile(t *testing.T) {
 	var goInvocations [][]string
 	formatInvocations := 0
 	for _, invocation := range invocations {
-		if invocation.home == "" || invocation.xdg == "" || invocation.home == operatorHome || invocation.xdg == operatorXDG {
-			t.Fatalf("validation child inherited operator roots: %#v", invocation)
+		if !validationRootsAreSandboxed(validationTemp, invocation.home, invocation.xdg) {
+			t.Fatalf("validation child escaped the entrypoint sandbox: %#v", invocation)
 		}
 		switch invocation.command {
 		case "go":
@@ -962,6 +967,14 @@ func validationPathIsOwned(root, path string) bool {
 		}
 	}
 	return false
+}
+
+func validationRootsAreSandboxed(tempRoot, home, xdg string) bool {
+	sandbox := filepath.Dir(home)
+	return filepath.Base(home) == "home" &&
+		xdg == filepath.Join(sandbox, "xdg") &&
+		filepath.Dir(sandbox) == tempRoot &&
+		strings.HasPrefix(filepath.Base(sandbox), "packy-validation.")
 }
 
 func repositoryRoot(t *testing.T) string {
