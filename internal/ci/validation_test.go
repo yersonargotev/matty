@@ -96,6 +96,85 @@ func TestValidationEntrypointOwnsTheExactPackageAllowlist(t *testing.T) {
 	}
 }
 
+func TestChangedValidationOwnsTheExactPackageAllowlist(t *testing.T) {
+	script := readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-changed.sh"))
+	if packages := shellArray(t, script, "readonly packages=("); !reflect.DeepEqual(packages, packyOwnedPackages) {
+		t.Fatalf("changed validation package allowlist = %#v, want %#v", packages, packyOwnedPackages)
+	}
+}
+
+func TestChangedValidationClassifiesTheCompleteWorkingTree(t *testing.T) {
+	tests := []struct {
+		name       string
+		change     func(*testing.T, string)
+		want       []string
+		wantTest   bool
+		wantFormat bool
+		wantFull   bool
+	}{
+		{name: "empty delta", change: func(t *testing.T, root string) {}, want: []string{"mode=focused", "scope=empty", "changed paths=(none)"}},
+		{name: "changed owner includes test-import reverse dependent", change: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "internal/prompt/new.go"), "package prompt\n")
+		}, want: []string{"mode=focused", "./internal/cli ./internal/prompt", "remains required before final delivery"}, wantTest: true, wantFormat: true},
+		{name: "Go and documentation remain focused", change: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "internal/prompt/new.go"), "package prompt\n")
+			writeFile(t, filepath.Join(root, "docs/note.md"), "note\n")
+		}, want: []string{"mode=focused", "scope=go and documentation"}, wantTest: true, wantFormat: true},
+		{name: "documentation only", change: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "docs/note.md"), "note\n") }, want: []string{"mode=focused", "scope=documentation-only", "package scope=(none)"}},
+		{name: "cross cutting dominates mixed delta", change: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "go.mod"), "module changed\n")
+			writeFile(t, filepath.Join(root, "docs/note.md"), "note\n")
+		}, want: []string{"mode=exhaustive", "cross-cutting or dependency path changed"}, wantFull: true},
+		{name: "unknown untracked path fails closed", change: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "new-package/file.txt"), "unknown\n")
+		}, want: []string{"mode=exhaustive", "unknown path changed"}, wantFull: true},
+		{name: "deleted Go file retains owner", change: func(t *testing.T, root string) {
+			if err := os.Remove(filepath.Join(root, "internal/prompt/existing.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, want: []string{"mode=focused", "./internal/cli ./internal/prompt"}, wantTest: true},
+		{name: "rename classifies old and new owners", change: func(t *testing.T, root string) {
+			runGit(t, root, "mv", "internal/prompt/existing.go", "internal/cli/moved.go")
+		}, want: []string{"mode=focused", "./internal/cli ./internal/prompt", "changed paths=internal/prompt/existing.go internal/cli/moved.go"}, wantTest: true, wantFormat: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, operatorHome, operatorXDG := changedValidationFixture(t)
+			test.change(t, root)
+			cmd := exec.Command("/bin/bash", filepath.Join(root, "scripts/validate-changed.sh"), "HEAD")
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"), "HOME="+operatorHome, "XDG_CONFIG_HOME="+operatorXDG, "COMMAND_LOG="+filepath.Join(root, "commands.log"), "TMPDIR="+filepath.Join(root, "tmp"))
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("changed validation failed: %v\n%s", err, output)
+			}
+			for _, text := range test.want {
+				if !strings.Contains(string(output), text) {
+					t.Fatalf("output missing %q:\n%s", text, output)
+				}
+			}
+			log := readFile(t, filepath.Join(root, "commands.log"))
+			if (strings.Count("\n"+log, "\ngo test ") == 1) != test.wantTest {
+				t.Fatalf("test invocation mismatch:\n%s", log)
+			}
+			if strings.Contains(log, "gofmt\t") != test.wantFormat {
+				t.Fatalf("format invocation mismatch:\n%s", log)
+			}
+			if test.wantFormat && !strings.Contains(log, "\t-w ") {
+				t.Fatalf("changed Go files were not formatted in place:\n%s", log)
+			}
+			if strings.Contains(log, "exhaustive\t") != test.wantFull {
+				t.Fatalf("exhaustive invocation mismatch:\n%s", log)
+			}
+			for _, path := range []string{operatorHome, operatorXDG} {
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("operator root touched: %s", path)
+				}
+			}
+		})
+	}
+}
+
 func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 	workflow := readFile(t, filepath.Join(repositoryRoot(t), ".github", "workflows", "ci.yml"))
 	if strings.Count(workflow, "run: ./scripts/validate-packy.sh") != 1 {
@@ -1330,5 +1409,47 @@ func writeExecutable(t *testing.T, path, contents string) {
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func changedValidationFixture(t *testing.T) (string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	writeExecutable(t, filepath.Join(root, "scripts", "validate-changed.sh"), readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-changed.sh")))
+	writeExecutable(t, filepath.Join(root, "scripts", "validate-packy.sh"), "#!/bin/sh\nprintf 'exhaustive\\t%s\\t%s\\n' \"$HOME\" \"$XDG_CONFIG_HOME\" >>\"$COMMAND_LOG\"\n")
+	writeFile(t, filepath.Join(root, "internal", "prompt", "existing.go"), "package prompt\n")
+	writeFile(t, filepath.Join(root, "internal", "cli", "existing.go"), "package cli\n")
+	writeFile(t, filepath.Join(root, "README.md"), "fixture\n")
+	writeFile(t, filepath.Join(root, ".gitignore"), "bin/\ncommands.log\ntmp/\n")
+	writeFile(t, filepath.Join(root, "commands.log"), "")
+	if err := os.MkdirAll(filepath.Join(root, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(root, "bin", "gofmt"), `#!/bin/sh
+printf 'gofmt\t%s\t%s\t%s\n' "$HOME" "$XDG_CONFIG_HOME" "$*" >>"$COMMAND_LOG"
+`)
+	writeExecutable(t, filepath.Join(root, "bin", "go"), `#!/bin/sh
+printf 'go %s\t%s\t%s\n' "$*" "$HOME" "$XDG_CONFIG_HOME" >>"$COMMAND_LOG"
+if [ "$1" = env ]; then printf '%s\n' "${TMPDIR}/fake-$2"; exit 0; fi
+if [ "$1" = list ] && [ "$2" = -deps ]; then
+  candidate="${6}"
+  printf 'github.com/yersonargotev/packy/%s\n' "${candidate#./}"
+  [ "$candidate" != ./internal/cli ] || printf '%s\n' github.com/yersonargotev/packy/internal/prompt
+fi
+`)
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "config", "user.email", "fixture@example.test")
+	runGit(t, root, "config", "user.name", "Fixture")
+	runGit(t, root, "add", "README.md", ".gitignore", "scripts", "internal")
+	runGit(t, root, "commit", "-qm", "base")
+	return root, filepath.Join(root, "operator-home"), filepath.Join(root, "operator-xdg")
+}
+
+func runGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 }

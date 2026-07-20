@@ -104,5 +104,21 @@ discovered or executed:
 ./scripts/validate-packy.sh
 ```
 
+For a faster, non-authoritative local check, validate only the impact of the
+complete base-to-working-tree change set:
+
+```sh
+./scripts/validate-changed.sh             # base defaults to origin/main
+./scripts/validate-changed.sh <base>      # optional branch, tag, or commit
+```
+
+The command reports `mode=focused` when it can safely format changed Packy Go
+files and test their owning packages and reverse dependents (or skip tests for
+documentation-only or empty changes). It reports `mode=exhaustive` and
+delegates to `./scripts/validate-packy.sh` whenever the base or impact cannot be
+established safely, or a cross-cutting/unknown path changed. The focused command
+is only a local feedback aid: `./scripts/validate-packy.sh` remains required
+before final delivery and is the command used by CI.
+
 Until vendored upstream Go content exists, `go test ./...` also remains a
 supported compatibility check.
