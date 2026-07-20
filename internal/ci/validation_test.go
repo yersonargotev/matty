@@ -108,6 +108,131 @@ func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 	}
 }
 
+func TestAddyAcceptanceValidationKeepsStableRowsAndBatchesFreshExactTests(t *testing.T) {
+	script := readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-addy-acceptance.sh"))
+	mappings, pairs := addyAcceptanceMappings(t, script)
+	wantMappings := []string{
+		"map_row 1 ./internal/addyacceptance TestExactUpstreamArchiveInventoryAndSupportRemainInert",
+		"map_row 2 ./internal/addyacceptance TestUnsafeArchiveTwinBlocksAndCleansBeforeExecution TestExactUpstreamArchiveInventoryAndSupportRemainInert",
+		"map_row 4 ./internal/packsync TestLoadConfigRejectsPathUnsafeSourceIDsAndSharedBindings TestValidatePreconditionsRejectsUnrelatedSourceGenerationWithoutMutation",
+		"map_row 6 ./internal/addyacceptance TestCanonicalInventoryAndDeterminism TestOneFactNegativeTwinBlocksCompleteInventory",
+		"map_row 7 ./internal/capabilitypack TestDiscoverRejectsInvalidManifestV2Contracts TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp",
+		"map_row 8 ./internal/addyacceptance TestExactUpstreamArchiveInventoryAndSupportRemainInert TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 9 ./internal/ci TestPackSourceV2SchemasAcceptCanonicalRuntimeContracts TestSynchronizationSchemasAcceptCanonicalRuntimeArtifacts",
+		"map_row 10 ./internal/packclassification TestHumanClassificationRequiresInspectionThenBoundEvidenceDispatch",
+		"map_row 11 ./internal/addyacceptance TestLifecycleOracleExposesExactCountsAuthoritiesAndSurfaceBindings",
+		"map_row 12 ./internal/addyacceptance TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 13 ./internal/addyacceptance TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 14 ./internal/capabilitypack TestCompleteAddyCollisionBlocksUntilExactSurfaceAliasReplans",
+		"map_row 15 ./internal/capabilitypack TestCompleteAddyCohortStalePreflightAndAtomicFailureRequireFreshRecovery",
+		"map_row 16 ./internal/capabilitypack TestCompleteAddyDualSurfaceFailurePreservesAuthorizedOtherSurface TestCompleteAddyAliasesRemainSurfaceLocalAndSharedRemovalRetainsContributor",
+		"map_row 17 ./internal/capabilitypack TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp",
+		"map_row 18 ./internal/capabilitypack TestCompleteAddyAtomicAdapterFailureRecordsAttemptAndRequiresFreshRecoveryPlan",
+		"map_row 19 ./internal/capabilitypack TestCompleteAddyReadinessKeepsUnknownPendingOptionalAndExcludedDistinct",
+		"map_row 19 ./internal/cli TestPackStatusJSONRequireEmitsDocumentBeforeGateError TestPackStatusRequireUsableIsIndependentNonInteractiveGate",
+		"map_row 20 ./internal/capabilitypack TestCompleteAddyReadinessKeepsUnknownPendingOptionalAndExcludedDistinct",
+		"map_row 21 ./internal/capabilitypack TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp TestUpdateRejectsStaleCatalogAndExactPlanApproval",
+		"map_row 22 ./internal/capabilitypack TestCompleteAddyExactOwnershipRemovalBlocksDriftWithoutEffects TestCompleteAddyAliasesRemainSurfaceLocalAndSharedRemovalRetainsContributor",
+		"map_row 23 ./internal/tools/syncpacksource TestAddyRegistrationTracerProvesExactEndToEndAdmission",
+		"map_row 23 ./internal/packsync TestCheckSealsAbsentSourceRegistrationWithoutPersistingIt TestApplyCommitsRegistrationConfigurationLockAndContributionAtomically",
+		"map_row 24 ./internal/packsync TestCheckRejectsRegistrationWithExistingSourceOrBindingOwner TestApplyCommitsRegistrationConfigurationLockAndContributionAtomically",
+		"map_row 24 ./internal/tools/syncpacksource TestAddyRegistrationTracerProvesExactEndToEndAdmission",
+		"map_row 24 ./internal/ci TestPackSourceV2RegistrationSemanticAndNullArrayValidation TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated",
+	}
+	if !reflect.DeepEqual(mappings, wantMappings) {
+		t.Fatalf("Addy acceptance mappings = %#v, want stable matrix %#v", mappings, wantMappings)
+	}
+	if len(pairs) != 29 {
+		t.Fatalf("Addy acceptance unique package/test pairs = %d, want 29", len(pairs))
+	}
+
+	result := runAddyAcceptanceValidation(t, script, nil)
+	if result.err != nil {
+		t.Fatalf("validation failed: %v\n%s", result.err, result.output)
+	}
+	invocations := strings.Split(strings.TrimSpace(result.log), "\n")
+	if len(invocations) != 14 { // seven package listings, then seven executions
+		t.Fatalf("go invocations = %d, want 14:\n%s", len(invocations), result.log)
+	}
+	seenExecution := false
+	seenPairs := make(map[string]int)
+	for _, invocation := range invocations {
+		fields := strings.Split(invocation, "\t")
+		if len(fields) < 4 || fields[0] != "test" {
+			t.Fatalf("malformed fake-go invocation %q", invocation)
+		}
+		packagePath := fields[1]
+		if fields[2] == "-list" {
+			if seenExecution {
+				t.Fatalf("listing occurred after execution began: %q", invocation)
+			}
+			continue
+		}
+		seenExecution = true
+		joined := strings.Join(fields[2:], "\t")
+		if !strings.Contains(joined, "\t-count=1") {
+			t.Fatalf("execution is not fresh: %q", invocation)
+		}
+		runIndex := -1
+		for i, field := range fields {
+			if field == "-run" {
+				runIndex = i
+				break
+			}
+		}
+		if runIndex < 0 || runIndex+1 >= len(fields) {
+			t.Fatalf("execution lacks exact run expression: %q", invocation)
+		}
+		expression := strings.TrimSuffix(strings.TrimPrefix(fields[runIndex+1], "^("), ")$")
+		for _, testName := range strings.Split(expression, "|") {
+			seenPairs[packagePath+"/"+testName]++
+		}
+	}
+	if !reflect.DeepEqual(seenPairs, pairs) {
+		t.Fatalf("executed package/test pairs = %#v, want each mapped pair once %#v", seenPairs, pairs)
+	}
+}
+
+func TestAddyAcceptanceValidationFailsClosedBeforeExecution(t *testing.T) {
+	script := readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-addy-acceptance.sh"))
+	tests := []struct {
+		name        string
+		script      string
+		environment map[string]string
+		want        string
+	}{
+		{name: "malformed mapping", script: strings.Replace(script, "map_row 1 ./internal/addyacceptance", "map_row nope ./internal/addyacceptance", 1), want: "malformed Addy acceptance mapping"},
+		{name: "unknown package", script: script, environment: map[string]string{"FAIL_LIST_PACKAGE": "./internal/cli"}, want: "package validation failed for ./internal/cli (rows 19)"},
+		{name: "missing exact test", script: script, environment: map[string]string{"OMIT_TEST": "TestLifecycleOracleExposesExactCountsAuthoritiesAndSurfaceBindings"}, want: "missing exact test ./internal/addyacceptance/TestLifecycleOracleExposesExactCountsAuthoritiesAndSurfaceBindings (rows 11)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runAddyAcceptanceValidation(t, test.script, test.environment)
+			if result.err == nil || !strings.Contains(result.output, test.want) {
+				t.Fatalf("result = %v\n%s, want failure containing %q", result.err, result.output, test.want)
+			}
+			for _, invocation := range strings.Split(strings.TrimSpace(result.log), "\n") {
+				if strings.Contains(invocation, "\t-run\t") {
+					t.Fatalf("test execution occurred before complete validation: %q", invocation)
+				}
+			}
+		})
+	}
+}
+
+func TestAddyAcceptanceFailureDiagnosticsRetainEveryAffectedRow(t *testing.T) {
+	script := readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-addy-acceptance.sh"))
+	result := runAddyAcceptanceValidation(t, script, map[string]string{"FAIL_TEST": "TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent"})
+	if result.err == nil || !strings.Contains(result.output, "rows 8, 12, 13") {
+		t.Fatalf("duplicate test failure lost reverse row trace:\n%s", result.output)
+	}
+
+	result = runAddyAcceptanceValidation(t, script, map[string]string{"FAIL_EXEC_PACKAGE": "./internal/cli"})
+	if result.err == nil || !strings.Contains(result.output, "package execution failed for ./internal/cli (rows 19)") {
+		t.Fatalf("package failure lost affected rows:\n%s", result.output)
+	}
+}
+
 func TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated(t *testing.T) {
 	workflow := readFile(t, filepath.Join(repositoryRoot(t), ".github", "workflows", "sync-pack-source.yml"))
 	for _, forbidden := range []string{"schedule:", "push:", "pull_request:", "repository_dispatch:", "cancel-in-progress: true", "issues: write", "actions: write", "auto-merge"} {
@@ -925,6 +1050,88 @@ type validationInvocation struct {
 	home    string
 	xdg     string
 	args    []string
+}
+
+type addyValidationResult struct {
+	output string
+	log    string
+	err    error
+}
+
+func addyAcceptanceMappings(t *testing.T, script string) ([]string, map[string]int) {
+	t.Helper()
+	var mappings []string
+	pairs := make(map[string]int)
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[0] != "map_row" {
+			continue
+		}
+		mappings = append(mappings, strings.Join(fields, " "))
+		for _, testName := range fields[3:] {
+			pairs[fields[2]+"/"+testName] = 1
+		}
+	}
+	return mappings, pairs
+}
+
+func runAddyAcceptanceValidation(t *testing.T, script string, environment map[string]string) addyValidationResult {
+	t.Helper()
+	root := t.TempDir()
+	path := filepath.Join(root, "scripts", "validate-addy-acceptance.sh")
+	writeExecutable(t, path, script)
+	_, pairs := addyAcceptanceMappings(t, script)
+	available := filepath.Join(root, "available-tests")
+	var names []string
+	for pair := range pairs {
+		names = append(names, pair[strings.LastIndex(pair, "/")+1:])
+	}
+	writeFile(t, available, strings.Join(names, "\n")+"\n")
+	bin := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "go.log")
+	writeExecutable(t, filepath.Join(bin, "go"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\t' "$@" >>"$GO_LOG"
+printf '\n' >>"$GO_LOG"
+package="${2-}"
+if [[ "${3-}" == "-list" ]]; then
+  if [[ "$package" == "${FAIL_LIST_PACKAGE-}" ]]; then
+    echo "unknown package $package" >&2
+    exit 1
+  fi
+  while IFS= read -r test; do
+    [[ "$test" == "${OMIT_TEST-}" ]] || printf '%s\n' "$test"
+  done <"$AVAILABLE_TESTS"
+  echo "ok status is not a test name"
+  exit 0
+fi
+if [[ "$package" == "${FAIL_EXEC_PACKAGE-}" ]]; then
+  echo "package compile failed" >&2
+  exit 1
+fi
+if [[ -n "${FAIL_TEST-}" && " $* " == *"${FAIL_TEST}"* ]]; then
+  echo "--- FAIL: ${FAIL_TEST} (0.00s)" >&2
+  exit 1
+fi
+echo "ok $package"
+`)
+	cmd := exec.Command("/bin/bash", path)
+	cmd.Env = append(os.Environ(),
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"GO_LOG="+logPath,
+		"AVAILABLE_TESTS="+available,
+		"HOME="+filepath.Join(root, "home"),
+		"XDG_CONFIG_HOME="+filepath.Join(root, "xdg"),
+	)
+	for key, value := range environment {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	output, err := cmd.CombinedOutput()
+	log, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	return addyValidationResult{output: string(output), log: string(log), err: err}
 }
 
 func validationInvocations(t *testing.T, path string) []validationInvocation {
