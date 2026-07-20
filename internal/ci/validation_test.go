@@ -110,9 +110,37 @@ func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 
 func TestAddyAcceptanceValidationKeepsStableRowsAndBatchesFreshExactTests(t *testing.T) {
 	script := readFile(t, filepath.Join(repositoryRoot(t), "scripts", "validate-addy-acceptance.sh"))
-	rows, pairs := addyAcceptanceMappings(t, script)
-	if len(rows) != 26 {
-		t.Fatalf("Addy acceptance declarations = %d, want stable 26", len(rows))
+	mappings, pairs := addyAcceptanceMappings(t, script)
+	wantMappings := []string{
+		"map_row 1 ./internal/addyacceptance TestExactUpstreamArchiveInventoryAndSupportRemainInert",
+		"map_row 2 ./internal/addyacceptance TestUnsafeArchiveTwinBlocksAndCleansBeforeExecution TestExactUpstreamArchiveInventoryAndSupportRemainInert",
+		"map_row 4 ./internal/packsync TestLoadConfigRejectsPathUnsafeSourceIDsAndSharedBindings TestValidatePreconditionsRejectsUnrelatedSourceGenerationWithoutMutation",
+		"map_row 6 ./internal/addyacceptance TestCanonicalInventoryAndDeterminism TestOneFactNegativeTwinBlocksCompleteInventory",
+		"map_row 7 ./internal/capabilitypack TestDiscoverRejectsInvalidManifestV2Contracts TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp",
+		"map_row 8 ./internal/addyacceptance TestExactUpstreamArchiveInventoryAndSupportRemainInert TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 9 ./internal/ci TestPackSourceV2SchemasAcceptCanonicalRuntimeContracts TestSynchronizationSchemasAcceptCanonicalRuntimeArtifacts",
+		"map_row 10 ./internal/packclassification TestHumanClassificationRequiresInspectionThenBoundEvidenceDispatch",
+		"map_row 11 ./internal/addyacceptance TestLifecycleOracleExposesExactCountsAuthoritiesAndSurfaceBindings",
+		"map_row 12 ./internal/addyacceptance TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 13 ./internal/addyacceptance TestCompleteSurfaceCohortsAreDeterministicInertAndIndependent",
+		"map_row 14 ./internal/capabilitypack TestCompleteAddyCollisionBlocksUntilExactSurfaceAliasReplans",
+		"map_row 15 ./internal/capabilitypack TestCompleteAddyCohortStalePreflightAndAtomicFailureRequireFreshRecovery",
+		"map_row 16 ./internal/capabilitypack TestCompleteAddyDualSurfaceFailurePreservesAuthorizedOtherSurface TestCompleteAddyAliasesRemainSurfaceLocalAndSharedRemovalRetainsContributor",
+		"map_row 17 ./internal/capabilitypack TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp",
+		"map_row 18 ./internal/capabilitypack TestCompleteAddyAtomicAdapterFailureRecordsAttemptAndRequiresFreshRecoveryPlan",
+		"map_row 19 ./internal/capabilitypack TestCompleteAddyReadinessKeepsUnknownPendingOptionalAndExcludedDistinct",
+		"map_row 19 ./internal/cli TestPackStatusJSONRequireEmitsDocumentBeforeGateError TestPackStatusRequireUsableIsIndependentNonInteractiveGate",
+		"map_row 20 ./internal/capabilitypack TestCompleteAddyReadinessKeepsUnknownPendingOptionalAndExcludedDistinct",
+		"map_row 21 ./internal/capabilitypack TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp TestUpdateRejectsStaleCatalogAndExactPlanApproval",
+		"map_row 22 ./internal/capabilitypack TestCompleteAddyExactOwnershipRemovalBlocksDriftWithoutEffects TestCompleteAddyAliasesRemainSurfaceLocalAndSharedRemovalRetainsContributor",
+		"map_row 23 ./internal/tools/syncpacksource TestAddyRegistrationTracerProvesExactEndToEndAdmission",
+		"map_row 23 ./internal/packsync TestCheckSealsAbsentSourceRegistrationWithoutPersistingIt TestApplyCommitsRegistrationConfigurationLockAndContributionAtomically",
+		"map_row 24 ./internal/packsync TestCheckRejectsRegistrationWithExistingSourceOrBindingOwner TestApplyCommitsRegistrationConfigurationLockAndContributionAtomically",
+		"map_row 24 ./internal/tools/syncpacksource TestAddyRegistrationTracerProvesExactEndToEndAdmission",
+		"map_row 24 ./internal/ci TestPackSourceV2RegistrationSemanticAndNullArrayValidation TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated",
+	}
+	if !reflect.DeepEqual(mappings, wantMappings) {
+		t.Fatalf("Addy acceptance mappings = %#v, want stable matrix %#v", mappings, wantMappings)
 	}
 	if len(pairs) != 29 {
 		t.Fatalf("Addy acceptance unique package/test pairs = %d, want 29", len(pairs))
@@ -1032,19 +1060,19 @@ type addyValidationResult struct {
 
 func addyAcceptanceMappings(t *testing.T, script string) ([]string, map[string]int) {
 	t.Helper()
-	var rows []string
+	var mappings []string
 	pairs := make(map[string]int)
 	for _, line := range strings.Split(script, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 || fields[0] != "map_row" {
 			continue
 		}
-		rows = append(rows, fields[1])
+		mappings = append(mappings, strings.Join(fields, " "))
 		for _, testName := range fields[3:] {
 			pairs[fields[2]+"/"+testName] = 1
 		}
 	}
-	return rows, pairs
+	return mappings, pairs
 }
 
 func runAddyAcceptanceValidation(t *testing.T, script string, environment map[string]string) addyValidationResult {
