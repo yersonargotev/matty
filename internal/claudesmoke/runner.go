@@ -40,10 +40,37 @@ type CommandEvidence struct {
 	Stdout   string   `json:"stdout,omitempty"`
 	Stderr   string   `json:"stderr,omitempty"`
 }
+type phaseKind uint8
+
+const (
+	phaseClaudeVersion phaseKind = iota
+	phasePackyVersion
+	phaseInit
+	phaseInstallPreview
+	phaseInstall
+	phaseDoctorInstalled
+	phaseUpdatePreview
+	phaseUpdate
+	phaseUninstallPreview
+	phaseUninstall
+	phaseDoctorFinal
+)
+
 type smokePhase struct {
-	Name   string
+	Kind   phaseKind
 	Argv   []string
 	DryRun bool
+}
+type foreignFixture struct {
+	InstructionPath, MCPPath string
+	Instruction, MCP         []byte
+	MCPMarker, Sensitive     string
+}
+type lifecycleContext struct {
+	EvidencePath, Sandbox                                       string
+	Env                                                         []string
+	Packy, ClaudeInterposer, ClaudeLog, InstallRepo, InstallRef string
+	Foreign                                                     foreignFixture
 }
 
 type sandboxLayout struct {
@@ -286,7 +313,7 @@ esac
 	e.Assertions.EngramStubProtocolVerified = probeErr == nil && engramProbe
 	e.Assertions.SensitiveFixtureRedacted = true
 	e.Safety = SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, NoInteractiveClaude: true, WriteBoundaryEnforced: probeErr == nil}
-	e, err = executeLifecycle(ctx, e, cfg.EvidencePath, sandbox, env, packy, claudeInterposer, claudeLog, installRepo, installRef, foreignInstructionPath, foreignMCPPath, foreignInstruction, foreignMCP, foreignMCPMarker, sensitiveFixture)
+	e, err = executeLifecycle(ctx, e, lifecycleContext{EvidencePath: cfg.EvidencePath, Sandbox: sandbox, Env: env, Packy: packy, ClaudeInterposer: claudeInterposer, ClaudeLog: claudeLog, InstallRepo: installRepo, InstallRef: installRef, Foreign: foreignFixture{foreignInstructionPath, foreignMCPPath, foreignInstruction, foreignMCP, foreignMCPMarker, sensitiveFixture}})
 	if err != nil {
 		return e, err
 	}
@@ -311,20 +338,27 @@ esac
 	return e, nil
 }
 
-func executeLifecycle(ctx context.Context, e Evidence, evidencePath, sandbox string, env []string, packy, claudeInterposer, claudeLog, installRepo, installRef, foreignInstructionPath, foreignMCPPath string, foreignInstruction, foreignMCP []byte, foreignMCPMarker, sensitiveFixture string) (Evidence, error) {
+func executeLifecycle(ctx context.Context, e Evidence, lc lifecycleContext) (Evidence, error) {
+	evidencePath, sandbox, env := lc.EvidencePath, lc.Sandbox, lc.Env
+	packy, claudeInterposer, claudeLog := lc.Packy, lc.ClaudeInterposer, lc.ClaudeLog
+	installRepo, installRef := lc.InstallRepo, lc.InstallRef
+	foreignInstructionPath, foreignMCPPath := lc.Foreign.InstructionPath, lc.Foreign.MCPPath
+	foreignInstruction, foreignMCP := lc.Foreign.Instruction, lc.Foreign.MCP
+	foreignMCPMarker, sensitiveFixture := lc.Foreign.MCPMarker, lc.Foreign.Sensitive
+
 	var err error
 	phases := []smokePhase{
-		{Name: "claude-version", Argv: []string{claudeInterposer, "--version"}},
-		{Name: "packy-version", Argv: []string{packy, "version"}},
-		{Name: "init", Argv: []string{packy, "init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", installRepo, "--repository-ref", installRef}},
-		{Name: "install-preview", Argv: []string{packy, "install", "--dry-run"}, DryRun: true},
-		{Name: "install", Argv: []string{packy, "install"}},
-		{Name: "doctor-installed", Argv: []string{packy, "doctor"}},
-		{Name: "update-preview", Argv: []string{packy, "update", "--dry-run"}, DryRun: true},
-		{Name: "update", Argv: []string{packy, "update"}},
-		{Name: "uninstall-preview", Argv: []string{packy, "uninstall", "--dry-run"}, DryRun: true},
-		{Name: "uninstall", Argv: []string{packy, "uninstall"}},
-		{Name: "doctor-final", Argv: []string{packy, "doctor"}},
+		{Kind: phaseClaudeVersion, Argv: []string{claudeInterposer, "--version"}},
+		{Kind: phasePackyVersion, Argv: []string{packy, "version"}},
+		{Kind: phaseInit, Argv: []string{packy, "init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", installRepo, "--repository-ref", installRef}},
+		{Kind: phaseInstallPreview, Argv: []string{packy, "install", "--dry-run"}, DryRun: true},
+		{Kind: phaseInstall, Argv: []string{packy, "install"}},
+		{Kind: phaseDoctorInstalled, Argv: []string{packy, "doctor"}},
+		{Kind: phaseUpdatePreview, Argv: []string{packy, "update", "--dry-run"}, DryRun: true},
+		{Kind: phaseUpdate, Argv: []string{packy, "update"}},
+		{Kind: phaseUninstallPreview, Argv: []string{packy, "uninstall", "--dry-run"}, DryRun: true},
+		{Kind: phaseUninstall, Argv: []string{packy, "uninstall"}},
+		{Kind: phaseDoctorFinal, Argv: []string{packy, "doctor"}},
 	}
 	for _, phase := range phases {
 		var dryBefore []FileEvidence
@@ -347,10 +381,10 @@ func executeLifecycle(ctx context.Context, e Evidence, evidencePath, sandbox str
 			if manifestErr != nil {
 				return e, manifestErr
 			}
-			e.Assertions.DryRunsUnchanged = (phase.Name == "install-preview" || e.Assertions.DryRunsUnchanged) && reflect.DeepEqual(dryBefore, dryAfter)
+			e.Assertions.DryRunsUnchanged = (phase.Kind == phaseInstallPreview || e.Assertions.DryRunsUnchanged) && reflect.DeepEqual(dryBefore, dryAfter)
 		}
-		switch phase.Name {
-		case "install":
+		switch phase.Kind {
+		case phaseInstall:
 			_, stateErr := os.Stat(filepath.Join(sandbox, "home", ".packy", "config.json"))
 			e.Assertions.InstallCreatedManagedState = stateErr == nil
 			e.Assertions.InstallCreatedManagedProjections = classicSkillTopologyExact(filepath.Join(sandbox, "home"), filepath.Join(sandbox, "installed-source", "bundle", "skills")) && exactClaudeClassicProjections(filepath.Join(sandbox, "home"))
@@ -367,7 +401,7 @@ func executeLifecycle(ctx context.Context, e Evidence, evidencePath, sandbox str
 			e.Assertions.ForeignMCPExactAfterInstall = exactMCPSubtree(installedMCP, foreignMCP, "foreign")
 			managed, _ := mcpSubtree(installedMCP, "engram")
 			e.Assertions.SensitiveFixtureRedacted = e.Assertions.SensitiveFixtureRedacted && !bytes.Contains(managed, []byte(sensitiveFixture))
-		case "update":
+		case phaseUpdate:
 			updatedInstruction, readErr := os.ReadFile(foreignInstructionPath)
 			if readErr != nil {
 				return e, readErr
@@ -380,7 +414,7 @@ func executeLifecycle(ctx context.Context, e Evidence, evidencePath, sandbox str
 			e.Assertions.ForeignMCPExactAfterUpdate = exactMCPSubtree(updatedMCP, foreignMCP, "foreign")
 			managed, _ := mcpSubtree(updatedMCP, "engram")
 			e.Assertions.SensitiveFixtureRedacted = e.Assertions.SensitiveFixtureRedacted && !bytes.Contains(managed, []byte(sensitiveFixture))
-		case "uninstall":
+		case phaseUninstall:
 			_, stateErr := os.Stat(filepath.Join(sandbox, "home", ".packy", "config.json"))
 			if stateErr != nil && !os.IsNotExist(stateErr) {
 				return e, stateErr
@@ -615,7 +649,6 @@ func ValidateEvidence(e Evidence) error {
 	}
 	return nil
 }
-func fileExists(path string) bool { info, err := os.Stat(path); return err == nil && !info.IsDir() }
 func directoryAbsentOrEmpty(path string) (bool, error) {
 	entries, err := os.ReadDir(path)
 	if os.IsNotExist(err) {

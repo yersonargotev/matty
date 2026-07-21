@@ -344,10 +344,20 @@ func TestPackyTriggeredClaudeInvocationIsRecorded(t *testing.T) {
 func TestPrepareInstallableSourceAdaptsFullSHAWithoutMutatingCheckout(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
+	gitHome, gitConfig := filepath.Join(root, "git-home"), filepath.Join(root, "git-config")
+	if err := os.MkdirAll(gitConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitEnv := []string{"HOME=" + gitHome, "XDG_CONFIG_HOME=" + gitConfig, "PATH=" + filepath.Dir(gitExecutable) + ":/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 	runGit := func(dir string, args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command(gitExecutable, args...)
 		cmd.Dir = dir
+		cmd.Env = gitEnv
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
