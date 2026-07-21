@@ -196,6 +196,32 @@ func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T
 	assertNoStateTemps(t, path)
 }
 
+func TestObserveStateCopiesClaudeOwnershipDeeply(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	state := DesiredState(StateConfig{StateFile: path, AgentSkillsDir: "/skills"}, time.Unix(4, 0), nil)
+	state.ClaudeOwnership = []ClaudeOwnership{{
+		ID: "claude-mcp", Kind: "mcp", Target: "engram", Contributors: []string{"classic"},
+		Args: []string{"serve"}, EnvironmentKeys: []string{"TOKEN"},
+	}}
+	if err := SaveState(path, state); err != nil {
+		t.Fatal(err)
+	}
+
+	observation := ObserveState(path)
+	ownership := observation.Ownership()
+	if len(ownership.ClaudeOwnership) != 1 || ownership.ClaudeOwnership[0].ID != "claude-mcp" {
+		t.Fatalf("Claude ownership = %#v", ownership.ClaudeOwnership)
+	}
+	ownership.ClaudeOwnership[0].Contributors[0] = "changed"
+	ownership.ClaudeOwnership[0].Args[0] = "changed"
+	ownership.ClaudeOwnership[0].EnvironmentKeys[0] = "changed"
+
+	again := observation.Ownership().ClaudeOwnership[0]
+	if again.Contributors[0] != "classic" || again.Args[0] != "serve" || again.EnvironmentKeys[0] != "TOKEN" {
+		t.Fatalf("observation exposed mutable Claude ownership: %#v", again)
+	}
+}
+
 func TestObserveManagedSkillLinksReportsReadOnlyFilesystemFacts(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

@@ -35,6 +35,7 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	appendSmokeSourceTag(t, sourceRepo, sandbox, "v0.99.0")
 	writeSmokeStub(t, stubBin, "engram", externalLog)
 	writeSmokeStub(t, stubBin, "brew", externalLog)
+	writeSmokeVersionStub(t, stubBin, "claude", externalLog, "2.1.202")
 
 	env := append(os.Environ(),
 		"HOME="+home,
@@ -78,7 +79,7 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	runSmokeCommand(t, binary, outsideCheckout, env, "install", "--dry-run")
 	assertSmokePathMissing(t, filepath.Join(home, ".packy"), "install --dry-run must not write state")
 	assertSmokePathMissing(t, filepath.Join(home, ".agents"), "install --dry-run must not write skill links")
-	assertSmokeExternalCalls(t, externalLog, nil)
+	assertSmokeExternalCalls(t, externalLog, []string{"claude --version"})
 
 	runSmokeCommand(t, binary, outsideCheckout, env, "install")
 	assertSmokePathExists(t, filepath.Join(home, ".packy", "config.json"), "install should write state")
@@ -105,7 +106,7 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	if err := json.Unmarshal([]byte(doctorJSON), &doctor); err != nil {
 		t.Fatalf("doctor --json emitted invalid JSON: %v\n%s", err, doctorJSON)
 	}
-	if doctor.SchemaVersion != 1 || doctor.Report != "doctor" || len(doctor.Checks) == 0 || doctor.Summary.Status == "" {
+	if doctor.SchemaVersion != 2 || doctor.Report != "doctor" || len(doctor.Checks) == 0 || doctor.Summary.Status == "" {
 		t.Fatalf("doctor --json emitted unexpected shape: %#v", doctor)
 	}
 
@@ -133,15 +134,24 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	runSmokeCommand(t, binary, outsideCheckout, env, "doctor")
 	assertSmokePathExists(t, filepath.Join(home, ".local", "share", "packy", "bundle", "skills"), "uninstall should keep initialized source")
 	assertSmokeExternalCalls(t, externalLog, []string{
+		"claude --version",
+		"claude --version",
 		"engram setup codex",
 		"engram setup opencode",
+		"claude --version",
 		"engram setup codex",
 		"engram setup opencode",
+		"claude --version",
 		"engram --version",
+		"claude --version",
+		"claude --version",
 		"brew update",
 		"brew upgrade engram",
 		"engram setup codex",
 		"engram setup opencode",
+		"claude --version",
+		"claude --version",
+		"claude --version",
 		"engram --version",
 	})
 }
@@ -221,6 +231,14 @@ func writeSmokeStub(t *testing.T, dir, name, logPath string) {
 	script := "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> " + shellQuote(logPath) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 		t.Fatalf("write %s stub: %v", name, err)
+	}
+}
+
+func writeSmokeVersionStub(t *testing.T, dir, name, logPath, version string) {
+	t.Helper()
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> " + shellQuote(logPath) + "\nprintf '%s\\n' " + shellQuote(version) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatalf("write %s version stub: %v", name, err)
 	}
 }
 

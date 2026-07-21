@@ -57,12 +57,14 @@ type MCPObservation struct {
 	Err                   error
 }
 type SetupObservation struct {
-	Version      VersionObservation
-	Skills       []SkillObservation
-	Instructions InstructionObservation
-	Agents       []AgentObservation
-	Hooks        HookObservation
-	MCP          []MCPObservation
+	Version         VersionObservation
+	Skills          []SkillObservation
+	Instructions    InstructionObservation
+	Agents          []AgentObservation
+	Hooks           HookObservation
+	MCP             []MCPObservation
+	Authorization   AuthorizationObservation
+	RuntimeEvidence []RuntimeEvidence
 }
 type RuntimeEvidence struct{ Kind, ID, Signal, Revision string }
 type AuthorizationObservation struct {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/corelifecycle"
 	"github.com/yersonargotev/packy/internal/engrambin"
@@ -50,20 +51,21 @@ type Report struct {
 
 // Diagnose builds the stable setup-health report from detached observations
 // supplied by the modules that own each artifact.
-func Diagnose(homeDir, configHome string, lifecycle corelifecycle.SetupObservation, engram engrambin.SetupObservation, codexObservation codex.SetupObservation, openCodeObservation opencode.SetupObservation) Report {
+func Diagnose(homeDir, configHome string, lifecycle corelifecycle.SetupObservation, engram engrambin.SetupObservation, codexObservation codex.SetupObservation, openCodeObservation opencode.SetupObservation, claudeObservation claudecode.SetupObservation) Report {
 	state := lifecycle.State()
 	checks := []Check{stateCheck(lifecycle)}
 	checks = append(checks, skillChecks(lifecycle)...)
 	checks = append(checks, engramChecks(engram, state)...)
 	checks = append(checks, codexChecks(codexObservation)...)
 	checks = append(checks, openCodeChecks(openCodeObservation)...)
+	checks = append(checks, claudeChecks(claudeObservation, state)...)
 	summary := summarize(checks)
 	stateStatus := "missing"
 	if state.Found() {
 		stateStatus = "present"
 	}
 	return Report{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Kind:          "doctor",
 		Context: Context{
 			HomeDir:        homeDir,
@@ -75,6 +77,181 @@ func Diagnose(homeDir, configHome string, lifecycle corelifecycle.SetupObservati
 		Checks:  checks,
 		Summary: summary,
 	}
+}
+
+func claudeChecks(observation claudecode.SetupObservation, state corelifecycle.StateObservation) []Check {
+	compatibility := claudecode.ClassifyVersion(observation.Version)
+	binary := Check{Severity: Pass, Name: "claude-binary", Detail: "Claude Code executable found at " + observation.Version.Executable}
+	if compatibility == claudecode.CompatibilityMissing {
+		binary = Check{Severity: Warn, Name: "claude-binary", Detail: "Claude Code executable is not available on PATH; " + compatibility.Remediation()}
+	}
+	version := Check{Severity: Pass, Name: "claude-version", Detail: "Claude Code " + observation.Version.Version + " is supported"}
+	if compatibility != claudecode.CompatibilitySupported {
+		version = Check{Severity: Warn, Name: "claude-version", Detail: claudeVersionDetail(compatibility, observation.Version)}
+	}
+	ownership := state.Ownership().ClaudeOwnership
+	checks := []Check{binary, version}
+	checks = append(checks,
+		claudeSkillCheck(observation.Skills, ownership),
+		claudeInstructionCheck(observation.Instructions, ownership),
+		claudeHookCheck(observation.Hooks, ownership),
+		claudeMCPCheck(observation.MCP, ownership),
+		claudeReadinessCheck(observation, state, len(ownership) > 0),
+	)
+	return checks
+}
+
+func claudeVersionDetail(compatibility claudecode.Compatibility, observation claudecode.VersionObservation) string {
+	switch compatibility {
+	case claudecode.CompatibilityMissing:
+		return "Claude Code version is unknown because the executable is missing; " + compatibility.Remediation()
+	case claudecode.CompatibilityBelowFloor:
+		return "Claude Code " + observation.Version + " is below the supported minimum; " + compatibility.Remediation()
+	case claudecode.CompatibilityPrerelease:
+		return "Claude Code " + observation.Version + " is a prerelease; " + compatibility.Remediation()
+	case claudecode.CompatibilityTimedOut:
+		return "Claude Code version inspection timed out; " + compatibility.Remediation()
+	case claudecode.CompatibilityUnreadable:
+		return "Claude Code version output could not be parsed; " + compatibility.Remediation()
+	default:
+		detail := "Claude Code version inspection failed"
+		if observation.Err != nil {
+			detail += ": " + observation.Err.Error()
+		}
+		return detail + "; " + compatibility.Remediation()
+	}
+}
+
+func claudeSkillCheck(observed []claudecode.SkillObservation, ownership []corelifecycle.ClaudeOwnership) Check {
+	wanted := claudeOwnershipKind(ownership, "skill")
+	if len(wanted) == 0 {
+		for _, item := range observed {
+			if item.Err != nil {
+				return Check{Severity: Warn, Name: "claude-skills", Detail: "could not observe Claude skills: " + item.Err.Error() + "; inspect the Claude skills directory"}
+			}
+		}
+	}
+	for _, owner := range wanted {
+		var found *claudecode.SkillObservation
+		for i := range observed {
+			if observed[i].Path == owner.Target {
+				found = &observed[i]
+				break
+			}
+		}
+		if found == nil || found.Kind == claudecode.PathMissing {
+			return Check{Severity: Fail, Name: "claude-skills", Detail: "recorded Claude skill is missing at " + owner.Target + "; run packy update"}
+		}
+		if found.Err != nil || found.Kind != claudecode.PathSymlink || found.ResolvedTarget != owner.LinkTarget || found.TreeFingerprint != owner.Fingerprint {
+			return Check{Severity: Fail, Name: "claude-skills", Detail: "recorded Claude skill has drifted at " + owner.Target + "; inspect the collision, then run packy update"}
+		}
+	}
+	return Check{Severity: Pass, Name: "claude-skills", Detail: fmt.Sprintf("%d recorded Claude skill projections match", len(wanted))}
+}
+
+func claudeInstructionCheck(observed claudecode.InstructionObservation, ownership []corelifecycle.ClaudeOwnership) Check {
+	wanted := claudeOwnershipKind(ownership, "instruction")
+	if len(wanted) == 0 && observed.Err != nil {
+		return Check{Severity: Warn, Name: "claude-instructions", Detail: "could not observe Claude instructions: " + observed.Err.Error() + "; inspect the shared document"}
+	}
+	if len(wanted) > 0 && observed.Err != nil {
+		return Check{Severity: Fail, Name: "claude-instructions", Detail: "Claude instructions are unreadable or invalid: " + observed.Err.Error() + "; repair the shared document, then run packy update"}
+	}
+	for _, owner := range wanted {
+		matched := false
+		for _, contributor := range owner.Contributors {
+			if observed.Contributions[contributor] == owner.Fingerprint {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return Check{Severity: Fail, Name: "claude-instructions", Detail: "recorded Claude instruction contribution is missing or drifted at " + owner.Target + "; inspect the collision, then run packy update"}
+		}
+	}
+	return Check{Severity: Pass, Name: "claude-instructions", Detail: fmt.Sprintf("%d recorded Claude instruction projections match", len(wanted))}
+}
+
+func claudeHookCheck(observed claudecode.HookObservation, ownership []corelifecycle.ClaudeOwnership) Check {
+	wanted := claudeOwnershipKind(ownership, "hook")
+	if len(wanted) == 0 && observed.Err != nil {
+		return Check{Severity: Warn, Name: "claude-hooks", Detail: "could not observe Claude hooks: " + observed.Err.Error() + "; inspect Claude settings"}
+	}
+	if len(wanted) > 0 && observed.Err != nil {
+		return Check{Severity: Fail, Name: "claude-hooks", Detail: "Claude hook settings are unreadable or invalid: " + observed.Err.Error() + "; repair the shared document, then run packy update"}
+	}
+	if len(wanted) > 0 && (observed.Disabled || observed.Shadowed) {
+		return Check{Severity: Fail, Name: "claude-hooks", Detail: "Claude policy disables or shadows a recorded Packy hook; update Claude policy, then run packy update"}
+	}
+	for _, owner := range wanted {
+		if observed.EntryFingerprint != owner.Fingerprint || len(observed.MatchingEntries) != 1 {
+			return Check{Severity: Fail, Name: "claude-hooks", Detail: "recorded Claude hook is missing, duplicated, or drifted at " + owner.Target + "; inspect the collision, then run packy update"}
+		}
+	}
+	return Check{Severity: Pass, Name: "claude-hooks", Detail: fmt.Sprintf("%d recorded Claude hook projections match", len(wanted))}
+}
+
+func claudeMCPCheck(observed []claudecode.MCPObservation, ownership []corelifecycle.ClaudeOwnership) Check {
+	wanted := claudeOwnershipKind(ownership, "mcp")
+	if len(wanted) == 0 {
+		for _, item := range observed {
+			if item.Err != nil {
+				return Check{Severity: Warn, Name: "claude-mcp", Detail: "could not observe Claude user MCP entries: " + item.Err.Error() + "; inspect the shared document"}
+			}
+		}
+	}
+	for _, owner := range wanted {
+		var found *claudecode.MCPObservation
+		for i := range observed {
+			if observed[i].Name == owner.Target {
+				found = &observed[i]
+				break
+			}
+		}
+		if found != nil && found.Err != nil {
+			return Check{Severity: Fail, Name: "claude-mcp", Detail: "recorded Claude user MCP entry is unreadable: " + owner.Target + "; inspect the shared document, then run packy update"}
+		}
+		if found == nil || !found.Present {
+			return Check{Severity: Fail, Name: "claude-mcp", Detail: "recorded Claude user MCP entry is missing: " + owner.Target + "; run packy update"}
+		}
+		if found.DefinitionFingerprint != owner.Fingerprint {
+			return Check{Severity: Fail, Name: "claude-mcp", Detail: "recorded Claude user MCP entry is unreadable or drifted: " + owner.Target + "; inspect the collision, then run packy update"}
+		}
+	}
+	return Check{Severity: Pass, Name: "claude-mcp", Detail: fmt.Sprintf("%d recorded Claude user MCP projections match", len(wanted))}
+}
+
+func claudeOwnershipKind(ownership []corelifecycle.ClaudeOwnership, kind string) []corelifecycle.ClaudeOwnership {
+	var out []corelifecycle.ClaudeOwnership
+	for _, owner := range ownership {
+		if owner.Kind == kind {
+			out = append(out, owner)
+		}
+	}
+	return out
+}
+
+func claudeReadinessCheck(observation claudecode.SetupObservation, state corelifecycle.StateObservation, desired bool) Check {
+	if state.Legacy() {
+		return Check{Severity: Warn, Name: "claude-readiness", Detail: "classic state schema v1 awaits migration; run packy update"}
+	}
+	if desired && (state.Condition() == corelifecycle.StateRecoveryRequired || state.Condition() == corelifecycle.StateUninstallIncomplete) {
+		return Check{Severity: Fail, Name: "claude-readiness", Detail: "classic Claude ownership is not ready while lifecycle recovery or cleanup is incomplete; run packy install, packy update, or packy uninstall to resolve recorded ownership"}
+	}
+	authorization := observation.Authorization
+	if !desired && authorization.Err != nil {
+		return Check{Severity: Warn, Name: "claude-readiness", Detail: "Claude authorization observation failed: " + authorization.Err.Error() + "; inspect Claude policy and tool permissions"}
+	}
+	if desired && authorization.Err != nil {
+		return Check{Severity: Fail, Name: "claude-readiness", Detail: "Claude authorization could not be observed: " + authorization.Err.Error() + "; inspect Claude policy and tool permissions"}
+	}
+	if desired && (authorization.Disabled || authorization.Shadowed) {
+		return Check{Severity: Fail, Name: "claude-readiness", Detail: "Claude policy disables or shadows a desired Packy integration; update Claude policy and tool permissions"}
+	}
+	if authorization.PolicyObserved && authorization.ToolPermissionObserved && len(observation.RuntimeEvidence) > 0 {
+		return Check{Severity: Pass, Name: "claude-readiness", Detail: "Claude authorization and explicit current runtime evidence are present"}
+	}
+	return Check{Severity: Warn, Name: "claude-readiness", Detail: "Claude runtime usability is unknown; start Claude Code explicitly to verify loading, connection, and hook firing"}
 }
 
 func summarize(checks []Check) Summary {
@@ -107,6 +284,12 @@ func stateCheck(lifecycle corelifecycle.SetupObservation) Check {
 	}
 	if state.Condition() == corelifecycle.StateRecoveryRequired {
 		return Check{Severity: Fail, Name: "packy-state", Detail: "classic installation was interrupted and requires recovery; run packy install or packy update to retry safely, or packy uninstall to remove only verified Packy-owned artifacts"}
+	}
+	if state.Condition() == corelifecycle.StateUninstallIncomplete {
+		return Check{Severity: Fail, Name: "packy-state", Detail: "classic uninstall is incomplete and recorded ownership remains; run packy uninstall to retry safe cleanup"}
+	}
+	if state.Condition() == corelifecycle.StateLegacy {
+		return Check{Severity: Warn, Name: "packy-state", Detail: "legacy state schema v1 is valid but awaits migration; run packy update"}
 	}
 	return Check{Severity: Pass, Name: "packy-state", Detail: "present at " + lifecycle.StateFile()}
 }

@@ -399,6 +399,7 @@ const (
 // RecordedOwnership is the deletion authority recorded by classic state.
 type RecordedOwnership struct {
 	ManagedSkills     []ManagedSkill
+	ClaudeOwnership   []ClaudeOwnership
 	CreatedContainers []ownedcontainer.Record
 }
 
@@ -438,8 +439,15 @@ func (observation StateObservation) Found() bool {
 func (observation StateObservation) Err() error { return observation.err }
 
 func (observation StateObservation) Ownership() RecordedOwnership {
+	claudeOwnership := append([]ClaudeOwnership(nil), observation.state.ClaudeOwnership...)
+	for i := range claudeOwnership {
+		claudeOwnership[i].Contributors = append([]string(nil), claudeOwnership[i].Contributors...)
+		claudeOwnership[i].Args = append([]string(nil), claudeOwnership[i].Args...)
+		claudeOwnership[i].EnvironmentKeys = append([]string(nil), claudeOwnership[i].EnvironmentKeys...)
+	}
 	return RecordedOwnership{
 		ManagedSkills:     append([]ManagedSkill(nil), observation.state.ManagedSkills...),
+		ClaudeOwnership:   claudeOwnership,
 		CreatedContainers: append([]ownedcontainer.Record(nil), observation.state.CreatedContainers...),
 	}
 }
