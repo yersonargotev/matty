@@ -172,6 +172,74 @@ func TestCapabilityPackOwnershipProviderReturnsHookAndMCPIdentity(t *testing.T) 
 	}
 }
 
+func TestCapabilityPackOwnershipProviderUsesAllActiveIntentsAndPersistedAliases(t *testing.T) {
+	home := t.TempDir()
+	layout := NewCanonicalLayout(home)
+	command := func(id, name string) capabilitypack.Resource {
+		return capabilitypack.Resource{Kind: "command", ID: id, Bindings: []capabilitypack.Binding{{Surface: capabilitypack.SurfaceClaude, Projection: "skill", Name: name}}}
+	}
+	packs := map[string]capabilitypack.Pack{
+		"one": {ID: "one", Version: "1", Resources: []capabilitypack.Resource{command("run", "run")}},
+		"two": {ID: "two", Version: "2", Resources: []capabilitypack.Resource{command("check", "check")}},
+	}
+	for _, name := range []string{"one-run", "two-check"} {
+		target := filepath.Join(layout.SkillsDir, name)
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := capabilitypack.ActivationState{
+		Intent: capabilitypack.ActivationIntent{PackID: "retired", Version: "9", Surface: capabilitypack.SurfaceClaude, Active: false},
+		Intents: []capabilitypack.ActivationIntent{
+			{PackID: "retired", Version: "9", Surface: capabilitypack.SurfaceClaude, Active: false},
+			{PackID: "one", Version: "1", Surface: capabilitypack.SurfaceClaude, Active: true, Aliases: []capabilitypack.SurfaceAlias{{Kind: "command", ID: "run", Name: "one-run"}}},
+			{PackID: "two", Version: "2", Surface: capabilitypack.SurfaceClaude, Active: true, Aliases: []capabilitypack.SurfaceAlias{{Kind: "command", ID: "check", Name: "two-check"}}},
+		},
+		Ownership: []capabilitypack.ProjectionOwnership{{ID: "command:one-run", Contributors: []string{"one"}}, {ID: "command:two-check", Contributors: []string{"two"}}},
+	}
+	snapshot, err := NewCapabilityPackOwnershipProvider(ownershipStore{state}, packs, layout, t.TempDir()).ObserveOwnership(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Records) != 2 || snapshot.Records[0].ID != "command:one-run" || snapshot.Records[1].ID != "command:two-check" {
+		t.Fatalf("records=%+v", snapshot.Records)
+	}
+}
+
+func TestCompleteRuntimeEvidenceDoesNotRequestMoreRuntimeEvidence(t *testing.T) {
+	pack := capabilitypack.Pack{ID: "p", Version: "1", Resources: []capabilitypack.Resource{{Kind: "mcp_server", ID: "memory", Command: "engram", Args: []string{"mcp"}, Bindings: []capabilitypack.Binding{{Surface: capabilitypack.SurfaceClaude, Projection: "mcp_server", Name: "memory"}}}}}
+	home := t.TempDir()
+	layout := NewCanonicalLayout(home)
+	if err := os.MkdirAll(layout.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.UserMCPFile, []byte(`{"mcpServers":{"memory":{"command":"engram","args":["mcp"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := AuthorizationObservation{PolicyObserved: true, ToolPermissionObserved: true}
+	base := NewSurfaceAdapterWithAuthorization("", layout, filepath.Join(home, "state"), "claude", &recordingRunner{result: Result{Stdout: "2.1.203"}}, StaticOwnershipSnapshot(OwnershipSnapshot{}), AuthorizationObserverFunc(func(context.Context) AuthorizationObservation { return auth }))
+	first, err := base.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []RuntimeEvidence{NewRuntimeEvidence(pack, first.Projections[0], "2.1.203", auth, "connection")}
+	complete, err := base.WithRuntimeEvidence(staticRuntimeEvidence(evidence)).InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete.Readiness.UsabilityObserved || !complete.Readiness.Usable {
+		t.Fatalf("readiness=%+v", complete.Readiness)
+	}
+	for _, action := range complete.Readiness.PendingHumanActions {
+		if strings.Contains(action, "runtime evidence") {
+			t.Fatalf("unexpected runtime request: %v", complete.Readiness.PendingHumanActions)
+		}
+	}
+}
+
 func TestMultipleTypedHooksShareOneSealedSettingsDocument(t *testing.T) {
 	home := t.TempDir()
 	layout := NewCanonicalLayout(home)

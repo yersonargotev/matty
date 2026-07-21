@@ -68,6 +68,30 @@ func TestAdapterExecutableProjectionUsesPlanBoundExternalConsent(t *testing.T) {
 	}
 }
 
+func TestApplyPersistsTypedHookMergeProvenance(t *testing.T) {
+	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceClaude}}
+	pending := SurfaceInspection{Revision: "one", Projections: []ObservedProjection{{ID: "lifecycle:start", ObservedFingerprint: "missing", DesiredFingerprint: "hook", Action: ProjectionAction{ID: "lifecycle:start", Kind: "claude-command-hook", Source: "hooks,event", Consent: ConsentExecutableExternal}}}}
+	verified := pending
+	verified.Revision = "two"
+	verified.Projections = append([]ObservedProjection(nil), pending.Projections...)
+	verified.Projections[0].Exists = true
+	verified.Projections[0].ObservedFingerprint = "hook"
+	verified.Projections[0].Action.Source = ""
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, pending, verified}}
+	store := &fakeActivationStore{}
+	facade := NewFacade(Catalog{packs: []Pack{pack}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceClaude: adapter}))
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.state.Ownership) != 1 || store.state.Ownership[0].AdapterProvenance != "hooks,event" {
+		t.Fatalf("ownership=%+v", store.state.Ownership)
+	}
+}
+
 func (f *fakeSurfaceAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
 	f.inspectCalls++
 	kind := "desired"

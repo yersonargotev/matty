@@ -225,9 +225,10 @@ type SurfaceAlias struct {
 }
 
 type ProjectionOwnership struct {
-	ID           string   `json:"id"`
-	Contributors []string `json:"contributors"`
-	Fingerprint  string   `json:"fingerprint"`
+	ID                string   `json:"id"`
+	Contributors      []string `json:"contributors"`
+	Fingerprint       string   `json:"fingerprint"`
+	AdapterProvenance string   `json:"adapter_provenance,omitempty"`
 }
 
 // DeletionAuthorized is lifecycle-owned policy: only the last contributor may
@@ -1082,7 +1083,14 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		if projection.ExternallyManaged || projection.DesiredFingerprint == "" || hasPhaseActionID(request.Plan.phases, ConsentDestructiveCleanup, projection.ID) || (request.Plan.operation == OperationReconcile && request.Plan.reconcileScope == ReconcileTargeted && !hasExpectation(request.Plan.desired, projection.ID)) {
 			continue
 		}
-		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: currentComposition.contributorSet(projection.ID), Fingerprint: projection.DesiredFingerprint})
+		provenance := ""
+		if previous, ok := ownershipByID(previousOwnership, projection.ID); ok {
+			provenance = previous.AdapterProvenance
+		}
+		if action, ok := phaseActionByID(request.Plan.phases, projection.ID); ok && action.Consent == ConsentExecutableExternal && action.Source != "" {
+			provenance = action.Source
+		}
+		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: currentComposition.contributorSet(projection.ID), Fingerprint: projection.DesiredFingerprint, AdapterProvenance: provenance})
 	}
 	sort.Slice(state.Ownership, func(i, j int) bool { return state.Ownership[i].ID < state.Ownership[j].ID })
 	if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
@@ -1417,6 +1425,17 @@ func ownershipByID(values []ProjectionOwnership, id string) (ProjectionOwnership
 		}
 	}
 	return ProjectionOwnership{}, false
+}
+
+func phaseActionByID(phases []PlanPhase, id string) (ProjectionAction, bool) {
+	for _, phase := range phases {
+		for _, action := range phase.Actions {
+			if action.ID == id {
+				return action, true
+			}
+		}
+	}
+	return ProjectionAction{}, false
 }
 
 func appendPhaseAction(phases []PlanPhase, kind ConsentKind, action ProjectionAction) []PlanPhase {

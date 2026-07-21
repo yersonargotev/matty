@@ -308,7 +308,7 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	}
 	authorizationObserved := versionObserved && auth.Err == nil && auth.PolicyObserved && auth.ToolPermissionObserved
 	authorized := authorizationObserved && configured && supported && !auth.Disabled && !auth.Shadowed
-	pending := []string{"supply explicit Claude Code runtime loading evidence"}
+	pending := []string{}
 	if !supported {
 		pending = append(pending, ClassifyVersion(version).Remediation())
 	}
