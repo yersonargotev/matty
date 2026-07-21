@@ -174,8 +174,12 @@ func TestClassicPrototypeVerifiedV1MigrationPublishesV2OnlyAfterMCPVerification(
 	if err != nil || plan.StateTransition().FromSchemaVersion != LegacySchemaVersion {
 		t.Fatalf("migration preview=%+v err=%v", plan.StateTransition(), err)
 	}
-	if _, err := facade.Apply(context.Background(), plan); err != nil {
+	result, err := facade.Apply(context.Background(), plan)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallConfirmed {
+		t.Fatalf("migration publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	state, found, err := LoadState(config.State.StateFile())
 	if err != nil || !found || state.SchemaVersion != SchemaVersion || state.InstallStatus != InstallConfirmed {
@@ -406,8 +410,12 @@ func TestSchemaV2BlockedClaudeProjectionRetainsResidualOwnership(t *testing.T) {
 	if err != nil || plan.Outcome() != OutcomeBlocked {
 		t.Fatalf("plan outcome=%s blockers=%v err=%v", plan.Outcome(), plan.Blockers(), err)
 	}
-	if _, err := facade.Apply(context.Background(), plan); err != nil {
+	result, err := facade.Apply(context.Background(), plan)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallConfirmed {
+		t.Fatalf("blocked publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	got, _, err := LoadState(config.State.StateFile())
 	if err != nil || len(got.ClaudeOwnership) != 1 || got.ClaudeOwnership[0].ID != "classic:skill:owned" {

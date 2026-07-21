@@ -555,9 +555,18 @@ func (facade *Facade) applyInstall(ctx context.Context, plan Plan) (applyResult 
 func (plan Plan) withPublicationFacts(result Result) Result {
 	result.stateTransition = plan.transition
 	switch result.outcome {
-	case "", OutcomeBlocked:
+	case "":
 		result.stateTransition.ToSchemaVersion = result.stateTransition.FromSchemaVersion
 		result.stateTransition.ToStatus = result.stateTransition.FromStatus
+	case OutcomeBlocked:
+		if plan.legacyMigration {
+			result.stateTransition.ToSchemaVersion = result.stateTransition.FromSchemaVersion
+			result.stateTransition.ToStatus = result.stateTransition.FromStatus
+			return result
+		}
+		result.committed = true
+		result.stateTransition.ToSchemaVersion = SchemaVersion
+		result.stateTransition.ToStatus = InstallConfirmed
 	case OutcomeConverged, OutcomeApplied, OutcomeAppliedWithPendingPrerequisite:
 		result.committed = true
 	case OutcomeRolledBack, OutcomePartiallyApplied:
