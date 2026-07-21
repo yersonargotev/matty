@@ -326,6 +326,55 @@ func TestPublicationLifecycleCreatesUpdatesAndNoOpsOnlyForPristineOwnership(t *t
 	}
 }
 
+func TestPublicationUpdatesSameCandidateOnlyWhenFreshCheckSealsNewBase(t *testing.T) {
+	proposal := validProposal()
+	proposal.BaseSHA = baseB
+	proposal.PlanID = "plan-2"
+	proposal.ResultTreeSHA = headB
+	proposal.HeadSHA = headB
+	state := pristineState()
+	state.BaseSHA = baseB
+
+	decision, err := EvaluatePublication(proposal, state)
+	if err != nil || decision.Action != PublicationUpdate || decision.PRNumber != 7 {
+		t.Fatalf("new-base same-candidate update = %#v, %v", decision, err)
+	}
+
+	state.Record.BaseSHA = baseB
+	decision, err = EvaluatePublication(proposal, state)
+	if err == nil || decision.Action != PublicationBlock || !strings.Contains(strings.Join(decision.Blockers, " "), "plan or result identity is stale") {
+		t.Fatalf("same-base stale identity = %#v, %v", decision, err)
+	}
+}
+
+func TestPublicationStillBlocksAdvancingCandidateWithStaleRecordBase(t *testing.T) {
+	proposal := validProposal()
+	proposal.BaseSHA = baseB
+	proposal.CandidateSHA = candidateB
+	proposal.PlanID = "plan-2"
+	proposal.ResultTreeSHA = headB
+	proposal.HeadSHA = headB
+	state := pristineState()
+	state.BaseSHA = baseB
+	state.CandidateRelation = CandidateAdvancing
+
+	decision, err := EvaluatePublication(proposal, state)
+	if err == nil || decision.Action != PublicationBlock || !strings.Contains(strings.Join(decision.Blockers, " "), "publication record base") {
+		t.Fatalf("advancing candidate with stale record base = %#v, %v", decision, err)
+	}
+}
+
+func TestClosedPRWithAbsentBranchRequiresExactManualRestore(t *testing.T) {
+	state := pristineState()
+	state.Branch = BranchState{}
+	state.PR.Open = false
+	decision, err := EvaluatePublication(validProposal(), state)
+	var failure Failure
+	if err == nil || !errors.As(err, &failure) || decision.Action != PublicationBlock || !strings.Contains(failure.Recovery, "exact recorded automation-owned branch") || !strings.Contains(failure.Recovery, "reopen the exact pull request") || !strings.Contains(failure.Recovery, "automation must not restore or reopen") {
+		t.Fatalf("closed/absent recovery = %#v, %#v, %v", decision, failure, err)
+	}
+}
+
 func TestPublicationFailsClosedBeforeWritingReviewerOrStaleState(t *testing.T) {
 	proposal := validProposal()
 	cases := map[string]func(*PublicationState){
