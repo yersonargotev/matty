@@ -461,8 +461,12 @@ func TestInstallPersistenceFailuresPreserveTruthfulRecovery(t *testing.T) {
 		original := saveInstallState
 		saveInstallState = func(string, State) error { return errors.New("preparation interrupted") }
 		t.Cleanup(func() { saveInstallState = original })
-		if _, err := facade.Apply(context.Background(), plan); err == nil {
+		result, err := facade.Apply(context.Background(), plan)
+		if err == nil {
 			t.Fatal("Apply unexpectedly succeeded")
+		}
+		if result.Outcome() != "" || result.Committed() || result.StateTransition().ToSchemaVersion != result.StateTransition().FromSchemaVersion || result.StateTransition().ToStatus != result.StateTransition().FromStatus {
+			t.Fatalf("unpublished result = %+v transition=%+v", result, result.StateTransition())
 		}
 		if got := installTestSnapshot(t, installTestHome(config)); got != before {
 			t.Fatalf("preparation failure left writes:\nbefore:\n%s\nafter:\n%s", before, got)

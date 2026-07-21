@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/cli/v2/lifecycle-contract.schema.json",
+  "title": "Packy capability-pack lifecycle contract v2",
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "required": ["Skills", "Instructions", "MCPServers", "Lifecycles", "Agents", "Commands", "Assets", "Notices"],
+      "properties": {"Skills": {"type": "integer", "minimum": 0}, "Instructions": {"type": "integer", "minimum": 0}, "MCPServers": {"type": "integer", "minimum": 0}, "Lifecycles": {"type": "integer", "minimum": 0}, "Agents": {"type": "integer", "minimum": 0}, "Commands": {"type": "integer", "minimum": 0}, "Assets": {"type": "integer", "minimum": 0}, "Notices": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "binding": {
+      "type": "object", "required": ["kind", "id", "projection", "name", "invocation", "mode", "sharing"],
+      "properties": {"kind": {"type": "string"}, "id": {"type": "string"}, "projection": {"type": "string"}, "name": {"type": "string"}, "invocation": {"type": "string"}, "mode": {"type": "string"}, "degradation": {"type": "string"}, "sharing": {"type": "string"}}, "additionalProperties": false
+    },
+    "exclusion": {
+      "type": "object", "required": ["id", "source_paths", "reason"],
+      "properties": {"id": {"type": "string"}, "resource_kind": {"type": "string"}, "surface": {"enum": ["claude", "codex", "opencode"]}, "mode": {"type": "string"}, "code": {"type": "string"}, "source_paths": {"type": "array", "items": {"type": "string"}}, "reason": {"type": "string"}}, "additionalProperties": false
+    },
+    "optional_mode": {
+      "type": "object", "required": ["id", "authorities", "fallback"],
+      "properties": {"id": {"type": "string"}, "authorities": {"type": "array", "items": {"type": "string"}}, "fallback": {"type": "string"}}, "additionalProperties": false
+    },
+    "alias": {
+      "type": "object", "required": ["kind", "id", "name"],
+      "properties": {"kind": {"type": "string"}, "id": {"type": "string"}, "name": {"type": "string"}}, "additionalProperties": false
+    },
+    "contract": {
+      "type": "object",
+      "required": ["logical_resource_counts", "dependency_closure", "bindings", "exclusions", "optional_modes", "prompt_authorities", "aliases", "authority_disclosure"],
+      "properties": {
+        "compatibility": {"enum": ["complete", "degraded", "blocked"]},
+        "logical_resource_counts": {"$ref": "#/$defs/counts"},
+        "dependency_closure": {"type": "array", "items": {"type": "string"}},
+        "bindings": {"type": "array", "items": {"$ref": "#/$defs/binding"}},
+        "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}},
+        "optional_modes": {"type": "array", "items": {"$ref": "#/$defs/optional_mode"}},
+        "prompt_authorities": {"type": "array", "items": {"type": "string"}},
+        "aliases": {"type": "array", "items": {"$ref": "#/$defs/alias"}},
+        "authority_disclosure": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$ref": "#/$defs/contract"
+}

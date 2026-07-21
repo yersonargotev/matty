@@ -3,6 +3,8 @@ package capabilitypack
 import (
 	"errors"
 	"sort"
+
+	"github.com/yersonargotev/packy/internal/reportredaction"
 )
 
 const LifecycleJSONSchemaVersion = 2
@@ -263,7 +265,10 @@ type JSONLifecyclePlan struct {
 }
 
 type JSONContractDiff struct {
-	Added, Changed, Removed, Retained []string
+	Added    []string `json:"added"`
+	Changed  []string `json:"changed"`
+	Removed  []string `json:"removed"`
+	Retained []string `json:"retained"`
 }
 
 func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
@@ -274,12 +279,9 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 		for i := range actions {
 			actions[i] = actionForReport(actions[i])
 		}
-		sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
 		phases = append(phases, JSONLifecyclePhase{Kind: phase.Kind, Digest: phase.Digest, ApprovalRequired: phase.ApprovalRequired, Actions: actions})
 		mandatory = append(mandatory, actions...)
 	}
-	sort.Slice(phases, func(i, j int) bool { return phases[i].Kind < phases[j].Kind })
-	sort.Slice(mandatory, func(i, j int) bool { return mandatory[i].ID < mandatory[j].ID })
 	contributors := p.Contributors()
 	if contributors == nil {
 		contributors = map[string][]string{}
@@ -317,12 +319,11 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 }
 
 func actionForReport(action ProjectionAction) ProjectionAction {
-	// Typed host effects can carry a complete merged host document so the
-	// adapter can apply the sealed plan. Reports disclose the exact action but
-	// never render that mixed-store content.
-	if action.Consent == ConsentExecutableExternal {
-		action.Content = ""
-	}
+	// Host effects can carry complete merged documents so an adapter can apply
+	// the sealed plan. Structured reports disclose the ordered redacted effect,
+	// never raw owned or mixed-store content.
+	action.Content = ""
+	action.Args = reportredaction.EnvironmentArguments(action.Args)
 	return action
 }
 
@@ -383,6 +384,7 @@ type JSONLifecycleFailure struct {
 }
 
 func JSONFailureFor(stage string, err error, plan *ReconciliationPlan, approvalRequested *bool, actionsExecuted *int) JSONLifecycleFailure {
+	err = ReportSafeError(err, plan)
 	result := JSONLifecycleFailure{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-failure", Stage: stage, Error: err.Error()}
 	result.ApprovalRequested, result.ActionsExecuted = approvalRequested, actionsExecuted
 	if plan != nil {
@@ -393,6 +395,23 @@ func JSONFailureFor(stage string, err error, plan *ReconciliationPlan, approvalR
 		result.Plan = &report
 	}
 	return result
+}
+
+// ReportSafeError removes sealed action payloads and environment values from
+// lifecycle diagnostics without changing their errors.Is/As identity.
+func ReportSafeError(err error, plan *ReconciliationPlan) error {
+	if plan == nil {
+		return err
+	}
+	argumentSets := make([][]string, 0)
+	sealedPayloads := make([]string, 0)
+	for _, phase := range plan.phases {
+		for _, action := range phase.Actions {
+			argumentSets = append(argumentSets, action.Args)
+			sealedPayloads = append(sealedPayloads, action.Content)
+		}
+	}
+	return reportredaction.Error(err, argumentSets, sealedPayloads)
 }
 
 type JSONApplyResult struct {

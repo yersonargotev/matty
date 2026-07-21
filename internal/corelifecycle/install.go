@@ -179,6 +179,8 @@ type Result struct {
 	stateFile         string
 	hasWork           bool
 	outcome           Outcome
+	committed         bool
+	stateTransition   StateTransitionView
 	completedEffects  []string
 	failedEffect      string
 	notStartedEffects []string
@@ -189,6 +191,10 @@ func (result Result) ManagedSkillCount() int { return result.managedSkillCount }
 func (result Result) StateFile() string      { return result.stateFile }
 func (result Result) HasWork() bool          { return result.hasWork }
 func (result Result) Outcome() Outcome       { return result.outcome }
+func (result Result) Committed() bool        { return result.committed }
+func (result Result) StateTransition() StateTransitionView {
+	return result.stateTransition
+}
 func (result Result) CompletedEffects() []string {
 	return append([]string(nil), result.completedEffects...)
 }
@@ -357,12 +363,29 @@ var saveInstallState = SaveState
 var saveUpdateState = SaveState
 
 func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
-	if plan.owner == facade && plan.operation == Uninstall {
-		return facade.applyUninstall(ctx, plan)
-	}
-	if plan.owner != facade || (plan.operation != Install && plan.operation != Update) {
+	if plan.owner != facade {
 		return Result{}, ErrForeignPlan
 	}
+	var result Result
+	var err error
+	switch plan.operation {
+	case Uninstall:
+		result, err = facade.applyUninstall(ctx, plan)
+	case Install, Update:
+		result, err = facade.applyInstall(ctx, plan)
+	default:
+		return Result{}, ErrForeignPlan
+	}
+	return plan.withPublicationFacts(result), err
+}
+
+func (facade *Facade) applyInstall(ctx context.Context, plan Plan) (applyResult Result, err error) {
+	recoveryPublished := false
+	defer func() {
+		if err != nil && recoveryPublished && applyResult.outcome == "" {
+			applyResult = Result{outcome: OutcomeRecoveryRequired}
+		}
+	}()
 	if plan.legacyMigration && len(plan.blockers) > 0 {
 		return Result{outcome: OutcomeBlocked, notStartedEffects: actionEffectIDs(plan.actions)}, fmt.Errorf("%w: legacy state remains authoritative", ErrBlockedPlan)
 	}
@@ -390,6 +413,7 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 			}
 			return Result{}, err
 		}
+		recoveryPublished = true
 	}
 	created, provisionErr := ownedcontainer.Provision(facade.effectContainerRecords())
 	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
@@ -526,6 +550,44 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	}
 	completed := append(actionEffectIDs(plan.actions), claudeResult.Completed...)
 	return Result{warnings: warnings, managedSkillCount: len(plan.desired.ManagedSkills), stateFile: facade.config.State.StateFile(), hasWork: true, outcome: plan.outcome, completedEffects: completed}, nil
+}
+
+func (plan Plan) withPublicationFacts(result Result) Result {
+	result.stateTransition = plan.transition
+	switch result.outcome {
+	case "":
+		result.stateTransition.ToSchemaVersion = result.stateTransition.FromSchemaVersion
+		result.stateTransition.ToStatus = result.stateTransition.FromStatus
+	case OutcomeBlocked:
+		if plan.legacyMigration {
+			result.stateTransition.ToSchemaVersion = result.stateTransition.FromSchemaVersion
+			result.stateTransition.ToStatus = result.stateTransition.FromStatus
+			return result
+		}
+		result.committed = true
+		result.stateTransition.ToSchemaVersion = SchemaVersion
+		result.stateTransition.ToStatus = InstallConfirmed
+	case OutcomeConverged, OutcomeApplied, OutcomeAppliedWithPendingPrerequisite:
+		result.committed = true
+	case OutcomeRolledBack, OutcomePartiallyApplied:
+		if plan.legacyMigration {
+			result.stateTransition.ToSchemaVersion = result.stateTransition.FromSchemaVersion
+			result.stateTransition.ToStatus = result.stateTransition.FromStatus
+			return result
+		}
+		result.committed = true
+		result.stateTransition.ToSchemaVersion = SchemaVersion
+		result.stateTransition.ToStatus = InstallConfirmed
+	case OutcomeRecoveryRequired:
+		result.committed = true
+		result.stateTransition.ToSchemaVersion = SchemaVersion
+		result.stateTransition.ToStatus = InstallRecoveryRequired
+	case OutcomeUninstallIncomplete:
+		result.committed = true
+		result.stateTransition.ToSchemaVersion = SchemaVersion
+		result.stateTransition.ToStatus = InstallUninstallIncomplete
+	}
+	return result
 }
 
 func defaultClaudeDesired() claudecode.ClassicDesired {

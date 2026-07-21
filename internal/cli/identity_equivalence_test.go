@@ -278,7 +278,7 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// Issue #144 intentionally adds Claude classic disclosure and projections.
 	// Keep this frozen rename gate focused on pre-existing behavior while the
 	// owner-layered Claude tests prove the new lifecycle contract directly.
-	value = regexp.MustCompile(`(?m)^(Outcome:|Desired surfaces:|State transition:|Pending prerequisite:|Preserved:|Blocker:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(Outcome:|Desired surfaces:|State transition:|Pending prerequisite:|Pending prerequisites:|Preserved:|Blocker:|Lifecycle blockers:|Recovery:|Completed effects:|Failed effect:|Not started effects:)[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^- claude-[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^(?:PASS|WARN|FAIL) claude-[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^(\$PRODUCT (?:install|update): synced[^\n]+) \(outcome: [^)]+\)$`).ReplaceAllString(value, "$1")

@@ -137,7 +137,9 @@ func (facade *Facade) applyUninstall(ctx context.Context, plan Plan) (Result, er
 			state := plan.desired
 			state.InstallStatus = InstallRecoveryRequired
 			state.LatestAttempt = &LatestAttempt{Operation: Uninstall, Outcome: AttemptRecoveryRequired, CompletedEffects: result.Completed, FailedEffect: result.Failed, NotStartedEffects: result.NotStarted}
-			_ = SaveState(facade.config.State.StateFile(), state)
+			if saveErr := SaveState(facade.config.State.StateFile(), state); saveErr != nil {
+				return Result{}, fmt.Errorf("%w; publish uninstall recovery state: %v", err, saveErr)
+			}
 			return Result{outcome: OutcomeRecoveryRequired, completedEffects: result.Completed, failedEffect: result.Failed, notStartedEffects: result.NotStarted}, err
 		}
 		if len(plan.pending) > 0 || len(plan.blockers) > 0 {

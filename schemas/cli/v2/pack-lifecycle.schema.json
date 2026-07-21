@@ -1,0 +1,448 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/cli/v2/pack-lifecycle.schema.json",
+  "title": "Packy capability-pack lifecycle reports v2",
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": [
+        "id",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "consent": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "optional_bool": {
+      "type": "object",
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": { "enum": ["known", "unknown"] },
+        "value": { "type": ["boolean", "null"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": { "const": "known" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "unknown" },
+            "value": { "type": "null" }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "readiness": {
+      "type": "object",
+      "required": [
+        "configured",
+        "authorized",
+        "usable"
+      ],
+      "properties": {
+        "configured": {
+          "$ref": "#/$defs/optional_bool"
+        },
+        "authorized": {
+          "$ref": "#/$defs/optional_bool"
+        },
+        "usable": {
+          "$ref": "#/$defs/optional_bool"
+        }
+      },
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "report",
+        "plan_id",
+        "operation",
+        "disposition",
+        "digest",
+        "pack",
+        "pack_version",
+        "surface",
+        "intent_revision",
+        "contract",
+        "aliases",
+        "contributors",
+        "blockers",
+        "phases",
+        "pending_human_actions",
+        "expected_readiness",
+        "readiness_observed",
+        "evidence",
+        "pending_evidence",
+        "recovery",
+        "mandatory_actions",
+        "contract_diff",
+        "migrations",
+        "retained_projections",
+        "removed_contributors",
+        "dry_run"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "report": {
+          "const": "pack-lifecycle-preview"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "activate",
+            "update",
+            "deactivate",
+            "reconcile"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "converged",
+            "applicable",
+            "blocked",
+            "mixed"
+          ]
+        },
+        "digest": {
+          "type": "string"
+        },
+        "pack": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        },
+        "surface": {
+          "enum": [
+            "claude",
+            "codex",
+            "opencode"
+          ]
+        },
+        "intent_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contract": {
+          "$ref": "lifecycle-contract.schema.json"
+        },
+        "aliases": {
+          "type": "array"
+        },
+        "contributors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "Kind",
+              "Subject",
+              "Detail"
+            ],
+            "properties": {
+              "Kind": {
+                "type": "string"
+              },
+              "Subject": {
+                "type": "string"
+              },
+              "Detail": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "digest",
+              "approval_required",
+              "actions"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "approval_required": {
+                "type": "boolean"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/action"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "pending_human_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_readiness": {
+          "type": "object",
+          "required": [
+            "Configured",
+            "Authorized",
+            "Usable"
+          ],
+          "properties": {
+            "Configured": {
+              "type": "boolean"
+            },
+            "Authorized": {
+              "type": "boolean"
+            },
+            "Usable": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "readiness_observed": {
+          "type": "object",
+          "required": [
+            "Configured",
+            "Authorization",
+            "Usability"
+          ],
+          "properties": {
+            "Configured": {
+              "type": "boolean"
+            },
+            "Authorization": {
+              "type": "boolean"
+            },
+            "Usability": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pending_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recovery": {
+          "type": "boolean"
+        },
+        "mandatory_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "contract_diff": {
+          "type": "object",
+          "required": [
+            "added",
+            "changed",
+            "removed",
+            "retained"
+          ],
+          "properties": {
+            "added": {
+              "type": "array"
+            },
+            "changed": {
+              "type": "array"
+            },
+            "removed": {
+              "type": "array"
+            },
+            "retained": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": false
+        },
+        "migrations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retained_projections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ID",
+              "Contributors"
+            ],
+            "properties": {
+              "ID": {
+                "type": "string"
+              },
+              "Contributors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "removed_contributors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "dry_run": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/plan"
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "report",
+        "plan",
+        "verified",
+        "projections",
+        "readiness",
+        "pending_human_actions"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "report": {
+          "const": "pack-lifecycle-apply"
+        },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "projections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness"
+        },
+        "pending_human_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "report",
+        "stage",
+        "error"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "report": {
+          "const": "pack-lifecycle-failure"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "actions_executed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approval_requested": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

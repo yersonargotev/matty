@@ -86,6 +86,98 @@ func TestDoctorJSONHealthyWarningsAndFailures(t *testing.T) {
 	})
 }
 
+func TestClassicLifecycleJSONV2PreviewAndResults(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+
+	for _, operation := range []string{"install", "update", "uninstall"} {
+		t.Run(operation+" preview", func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), operation, "--dry-run", "--json")
+			if err != nil {
+				t.Fatalf("%s preview: %v\n%s", operation, err, out)
+			}
+			var report classicLifecyclePlanJSON
+			if err := json.Unmarshal([]byte(out), &report); err != nil {
+				t.Fatalf("invalid JSON: %v\n%s", err, out)
+			}
+			if report.SchemaVersion != 2 || report.Report != "classic-lifecycle-preview" || string(report.Operation) != operation || !report.DryRun || report.DesiredSurfaces == nil || report.PendingPrerequisites == nil || report.Preserved == nil || report.Blockers == nil || report.Recovery == nil || report.Actions == nil {
+				t.Fatalf("preview contract = %#v", report)
+			}
+			if strings.Contains(out, "Skill source:") || strings.Contains(out, "planned actions") {
+				t.Fatalf("human output mixed into JSON: %s", out)
+			}
+		})
+	}
+
+	for _, operation := range []string{"install", "update", "uninstall"} {
+		t.Run(operation+" result", func(t *testing.T) {
+			out, err := executeCommand(t, NewRootCommand(opts), operation, "--json")
+			if err != nil {
+				t.Fatalf("%s result: %v\n%s", operation, err, out)
+			}
+			var report classicLifecycleResultJSON
+			if err := json.Unmarshal([]byte(out), &report); err != nil {
+				t.Fatalf("invalid JSON: %v\n%s", err, out)
+			}
+			if report.SchemaVersion != 2 || report.Report != "classic-lifecycle-result" || string(report.Operation) != operation || !report.Committed || report.DesiredSurfaces == nil || report.PendingPrerequisites == nil || report.Preserved == nil || report.Blockers == nil || report.Recovery == nil || report.CompletedEffects == nil || report.NotStartedEffects == nil || report.Warnings == nil {
+				t.Fatalf("result contract = %#v", report)
+			}
+		})
+	}
+}
+
+func TestClassicLifecycleHumanResultHasStableEvidenceOrder(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	out, err := executeCommand(t, NewRootCommand(opts), "install")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	wants := []string{
+		"Outcome:", "Desired surfaces:", "State transition:", "Pending prerequisites:",
+		"Preserved:", "Lifecycle blockers:", "Recovery:", "Completed effects:",
+		"Failed effect:", "Not started effects:", "packy install: synced",
+	}
+	prior := -1
+	for _, want := range wants {
+		index := strings.Index(out, want)
+		if index < 0 || index <= prior {
+			t.Fatalf("%q missing or out of order:\n%s", want, out)
+		}
+		prior = index
+	}
+	if !strings.Contains(out, "install Claude Code 2.1.203 or newer") {
+		t.Fatalf("pending prerequisite lacks remediation: %s", out)
+	}
+}
+
+func TestClassicLifecycleOutcomeExitMappingIsStable(t *testing.T) {
+	for _, outcome := range []corelifecycle.Outcome{corelifecycle.OutcomeConverged, corelifecycle.OutcomeApplied, corelifecycle.OutcomeAppliedWithPendingPrerequisite} {
+		if err := classicLifecycleOutcomeError(outcome); err != nil {
+			t.Fatalf("%s returned %v", outcome, err)
+		}
+	}
+	for _, outcome := range []corelifecycle.Outcome{corelifecycle.OutcomeBlocked, corelifecycle.OutcomePartiallyApplied, corelifecycle.OutcomeRolledBack, corelifecycle.OutcomeRecoveryRequired, corelifecycle.OutcomeUninstallIncomplete} {
+		if err := classicLifecycleOutcomeError(outcome); !errors.Is(err, ErrClassicLifecycleIncomplete) {
+			t.Fatalf("%s returned %v", outcome, err)
+		}
+	}
+}
+
+func TestDoctorCompositionAcceptsExplicitClaudeEvidence(t *testing.T) {
+	opts, _, _ := sandboxOptions(t)
+	observer := &countingClaudeObserver{}
+	opts.ClaudeLookPath = func(string) (string, error) { return "/sandbox/bin/claude", nil }
+	opts.ClaudeRunner = observer
+	opts.ClaudeAuthorization = observer
+	opts.ClaudeRuntimeEvidence = observer
+	out, err := executeCommand(t, NewRootCommand(opts), "doctor", "--json")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if observer.runnerCalls == 0 || observer.authorizationCalls == 0 || observer.runtimeCalls == 0 {
+		t.Fatalf("evidence calls runner=%d authorization=%d runtime=%d", observer.runnerCalls, observer.authorizationCalls, observer.runtimeCalls)
+	}
+}
+
 type fakeRunner struct {
 	calls []fakeCall
 	path  map[string]string
@@ -1047,8 +1139,16 @@ func TestInterruptedInstallIsExplicitAndPersistsRecoveryState(t *testing.T) {
 	fixture := newCLITestFixture(t, opts)
 	runner.fail = map[string]error{fixture.engram.ExpectedPath() + " setup codex": errors.New("interrupted")}
 
-	if out, err := executeCommand(t, NewRootCommand(opts), "install"); err == nil {
+	out, applyErr := executeCommand(t, NewRootCommand(opts), "install", "--json")
+	if applyErr == nil {
 		t.Fatalf("install unexpectedly succeeded:\n%s", out)
+	}
+	var report classicLifecycleResultJSON
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("invalid recovery result: %v\n%s", err, out)
+	}
+	if report.Outcome != corelifecycle.OutcomeRecoveryRequired || !report.Committed || report.StateTransition.ToStatus != corelifecycle.InstallRecoveryRequired {
+		t.Fatalf("recovery result = %#v", report)
 	}
 	state, found, err := corelifecycle.LoadState(fixture.classicState.StateFile())
 	if err != nil || !found {

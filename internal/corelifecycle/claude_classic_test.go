@@ -174,8 +174,12 @@ func TestClassicPrototypeVerifiedV1MigrationPublishesV2OnlyAfterMCPVerification(
 	if err != nil || plan.StateTransition().FromSchemaVersion != LegacySchemaVersion {
 		t.Fatalf("migration preview=%+v err=%v", plan.StateTransition(), err)
 	}
-	if _, err := facade.Apply(context.Background(), plan); err != nil {
+	result, err := facade.Apply(context.Background(), plan)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallConfirmed {
+		t.Fatalf("migration publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	state, found, err := LoadState(config.State.StateFile())
 	if err != nil || !found || state.SchemaVersion != SchemaVersion || state.InstallStatus != InstallConfirmed {
@@ -200,6 +204,9 @@ func TestClassicPrototypeRecoveryRetryBuildsFreshPlanAndConverges(t *testing.T) 
 	result, err := facade.Apply(context.Background(), plan)
 	if err == nil || result.Outcome() != OutcomeRecoveryRequired || result.FailedEffect() != "classic:mcp:engram" {
 		t.Fatalf("first attempt=%+v err=%v", result, err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallRecoveryRequired {
+		t.Fatalf("recovery publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	recovery, _, err := LoadState(config.State.StateFile())
 	if err != nil || !recovery.RecoveryRequired() || recovery.LatestAttempt == nil {
@@ -245,6 +252,9 @@ func TestClassicExactLocalRollbackHasDistinctOutcomeAndAttempt(t *testing.T) {
 	if err == nil || result.Outcome() != OutcomeRolledBack || result.FailedEffect() != "classic:skill:ask-matt" {
 		t.Fatalf("rollback result=%+v err=%v", result, err)
 	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallConfirmed {
+		t.Fatalf("rollback publication = committed %t transition %+v", result.Committed(), result.StateTransition())
+	}
 	state, found, loadErr := LoadState(config.State.StateFile())
 	if loadErr != nil || !found || state.RecoveryRequired() || state.LatestAttempt == nil || state.LatestAttempt.Outcome != AttemptRolledBack {
 		t.Fatalf("rolled-back state=%+v found=%v err=%v", state, found, loadErr)
@@ -281,6 +291,9 @@ func TestClassicExactLocalRollbackKeepsV1Authoritative(t *testing.T) {
 	if err == nil || result.Outcome() != OutcomeRolledBack {
 		t.Fatalf("rollback result=%+v err=%v", result, err)
 	}
+	if result.Committed() || result.StateTransition().FromSchemaVersion != LegacySchemaVersion || result.StateTransition().ToSchemaVersion != LegacySchemaVersion {
+		t.Fatalf("legacy rollback publication = committed %t transition %+v", result.Committed(), result.StateTransition())
+	}
 	state, _, loadErr := LoadState(config.State.StateFile())
 	if loadErr != nil || !state.Legacy() {
 		t.Fatalf("legacy authority lost: %+v err=%v", state, loadErr)
@@ -314,6 +327,9 @@ func TestClassicPrototypeResidualSafeUninstallRetainsThenClearsAuthority(t *test
 	result, err := unavailable.Apply(context.Background(), uninstallPlan)
 	if err != nil || result.Outcome() != OutcomeUninstallIncomplete {
 		t.Fatalf("unavailable uninstall=%+v err=%v", result, err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallUninstallIncomplete {
+		t.Fatalf("residual publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	residual, found, err := LoadState(config.State.StateFile())
 	if err != nil || !found || !residual.UninstallIncomplete() {
@@ -394,8 +410,12 @@ func TestSchemaV2BlockedClaudeProjectionRetainsResidualOwnership(t *testing.T) {
 	if err != nil || plan.Outcome() != OutcomeBlocked {
 		t.Fatalf("plan outcome=%s blockers=%v err=%v", plan.Outcome(), plan.Blockers(), err)
 	}
-	if _, err := facade.Apply(context.Background(), plan); err != nil {
+	result, err := facade.Apply(context.Background(), plan)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Committed() || result.StateTransition().ToSchemaVersion != SchemaVersion || result.StateTransition().ToStatus != InstallConfirmed {
+		t.Fatalf("blocked publication = committed %t transition %+v", result.Committed(), result.StateTransition())
 	}
 	got, _, err := LoadState(config.State.StateFile())
 	if err != nil || len(got.ClaudeOwnership) != 1 || got.ClaudeOwnership[0].ID != "classic:skill:owned" {
