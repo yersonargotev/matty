@@ -57,21 +57,29 @@ func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *te
 func TestV3UpdateRoutesPreserveExistingSurfaceIntent(t *testing.T) {
 	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
 	production := Catalog{enforceUpdateRoutes: true}
-	for _, item := range []struct{ id, from, to string }{{workflowPackID, "1.0.0", "2.0.0"}, {workflowPackID, "2.0.0", "3.0.0"}, {"engram", "1.0.0", "2.0.0"}} {
+	for _, item := range []struct{ id, from, to string }{{workflowPackID, "2.0.0", "3.0.0"}, {"engram", "1.0.0", "2.0.0"}} {
 		for _, surface := range []Surface{SurfaceCodex, SurfaceOpenCode} {
-			if err := production.validateUpdateRoute(item.id, item.from, item.to, surface); err != nil {
+			if err := production.validateUpdateRoute(item.id, item.from, item.to, manifestSchemaV3, surface); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := production.validateUpdateRoute(item.id, item.from, item.to, SurfaceClaude); err == nil || !strings.Contains(err.Error(), "does not add claude intent") {
+		if err := production.validateUpdateRoute(item.id, item.from, item.to, manifestSchemaV3, SurfaceClaude); err == nil || !strings.Contains(err.Error(), "does not add claude intent") {
 			t.Fatalf("Claude route error = %v", err)
 		}
 	}
-	if err := production.validateUpdateRoute(workflowPackID, "1.0.0", "3.0.0", SurfaceCodex); err == nil || !strings.Contains(err.Error(), "no supported update route") {
+	if err := production.validateUpdateRoute(workflowPackID, "1.0.0", "3.0.0", manifestSchemaV3, SurfaceCodex); err == nil || !strings.Contains(err.Error(), "no supported update route") {
 		t.Fatalf("gap error = %v", err)
 	}
-	if err := (Catalog{}).validateUpdateRoute("app", "1.0.0", "9.0.0", SurfaceCodex); err != nil {
+	for _, versions := range [][2]string{{"2.0.1", "3.0.0"}, {"2.0.0", "3.0.1"}} {
+		if err := production.validateUpdateRoute(workflowPackID, versions[0], versions[1], manifestSchemaV3, SurfaceCodex); err == nil || !strings.Contains(err.Error(), "no supported update route") {
+			t.Fatalf("near-miss route %s -> %s error = %v", versions[0], versions[1], err)
+		}
+	}
+	if err := (Catalog{}).validateUpdateRoute("app", "1.0.0", "9.0.0", manifestSchemaV3, SurfaceCodex); err != nil {
 		t.Fatalf("synthetic catalog route rejected: %v", err)
+	}
+	if err := production.validateUpdateRoute(workflowPackID, "2.0.1", "3.0.0", manifestSchemaV2, SurfaceCodex); err != nil {
+		t.Fatalf("pre-v3 catalog route was newly constrained: %v", err)
 	}
 }
 

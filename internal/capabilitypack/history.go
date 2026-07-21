@@ -25,17 +25,16 @@ type supportedUpdateRoute struct{ ExistingSurfaces []Surface }
 var supportedUpdateRoutes = func() map[string]supportedUpdateRoute {
 	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
 	return map[string]supportedUpdateRoute{
-		workflowPackID + "@1->2": {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
-		workflowPackID + "@2->3": {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
-		"engram@1->2":            {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
+		workflowPackID + "@2.0.0->3.0.0": {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
+		"engram@1.0.0->2.0.0":            {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
 	}
 }()
 
-func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, surface Surface) error {
-	if !c.enforceUpdateRoutes || fromVersion == toVersion {
+func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, targetManifestVersion int, surface Surface) error {
+	if !c.enforceUpdateRoutes || targetManifestVersion < manifestSchemaV3 || fromVersion == toVersion {
 		return nil
 	}
-	key := id + "@" + versionMajor(fromVersion) + "->" + versionMajor(toVersion)
+	key := id + "@" + fromVersion + "->" + toVersion
 	route, ok := supportedUpdateRoutes[key]
 	if !ok {
 		return fmt.Errorf("capability pack %s has no supported update route from %s to %s", id, fromVersion, toVersion)
@@ -46,11 +45,6 @@ func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, surface 
 		}
 	}
 	return fmt.Errorf("capability pack %s update route from %s to %s does not add %s intent", id, fromVersion, toVersion, surface)
-}
-
-func versionMajor(version string) string {
-	major, _, _ := strings.Cut(version, ".")
-	return major
 }
 
 func init() {

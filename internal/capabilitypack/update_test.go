@@ -17,7 +17,7 @@ func updateFixture(packs []Pack, state ActivationState, observations ...SurfaceI
 
 func TestProductionCatalogRejectsUnsupportedVersionGapBeforePlanning(t *testing.T) {
 	workflowPackID := "mat" + "ty"
-	pack := Pack{ID: workflowPackID, Version: "3.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v3"}}}
+	pack := Pack{manifestVersion: manifestSchemaV3, ID: workflowPackID, Version: "3.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v3"}}}
 	state := ActivationState{Intent: ActivationIntent{PackID: workflowPackID, Surface: SurfaceCodex, Version: "1.0.0", Active: true}}
 	store := &fakeActivationStore{state: state}
 	adapter := &fakeSurfaceAdapter{}

@@ -540,7 +540,7 @@ func (f Facade) previewUpdate(ctx context.Context, request UpdateRequest) (Recon
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
-	if err := f.catalog.validateUpdateRoute(request.PackID, intent.Version, current.Version, request.Surface); err != nil {
+	if err := f.catalog.validateUpdateRoute(request.PackID, intent.Version, current.Version, current.manifestVersion, request.Surface); err != nil {
 		return ReconciliationPlan{}, err
 	}
 	return f.preview(ctx, activation, OperationUpdate, intent.Version)
