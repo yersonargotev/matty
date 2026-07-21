@@ -83,15 +83,15 @@ func TestPackageInstallSmokeLifecycleWithLocalReleaseBinary(t *testing.T) {
 	runSmokeCommand(t, binary, outsideCheckout, env, "install")
 	assertSmokePathExists(t, filepath.Join(home, ".packy", "config.json"), "install should write state")
 	assertSmokePathExists(t, filepath.Join(home, ".agents", "skills", "wayfinder"), "install should link bundled skills")
-	beforeRepeatInstall := snapshotSmokeTreeIgnoringInstallCheck(t, home)
+	beforeRepeatInstall := snapshotSmokeTreeIgnoringInstallObservations(t, home)
 	beforeInstallCheck := readSmokeInstallCheck(t, home)
 	runSmokeCommand(t, binary, outsideCheckout, env, "install")
 	afterInstallCheck := readSmokeInstallCheck(t, home)
 	if afterInstallCheck.Before(beforeInstallCheck) {
 		t.Fatalf("repeat install observation regressed from %s to %s", beforeInstallCheck, afterInstallCheck)
 	}
-	if after := snapshotSmokeTreeIgnoringInstallCheck(t, home); after != beforeRepeatInstall {
-		t.Fatalf("repeat install changed content other than last_install_check\nbefore:\n%s\nafter:\n%s", beforeRepeatInstall, after)
+	if after := snapshotSmokeTreeIgnoringInstallObservations(t, home); after != beforeRepeatInstall {
+		t.Fatalf("repeat install changed content other than install observations\nbefore:\n%s\nafter:\n%s", beforeRepeatInstall, after)
 	}
 	doctorJSON := runSmokeCommand(t, binary, outsideCheckout, env, "doctor", "--json")
 	var doctor struct {
@@ -309,14 +309,14 @@ func assertSmokePathMissing(t *testing.T, path, reason string) {
 }
 
 func snapshotSmokeTree(t *testing.T, root string) string {
-	return snapshotSmokeTreeWithInstallCheck(t, root, true)
+	return snapshotSmokeTreeWithInstallObservations(t, root, true)
 }
 
-func snapshotSmokeTreeIgnoringInstallCheck(t *testing.T, root string) string {
-	return snapshotSmokeTreeWithInstallCheck(t, root, false)
+func snapshotSmokeTreeIgnoringInstallObservations(t *testing.T, root string) string {
+	return snapshotSmokeTreeWithInstallObservations(t, root, false)
 }
 
-func snapshotSmokeTreeWithInstallCheck(t *testing.T, root string, includeInstallCheck bool) string {
+func snapshotSmokeTreeWithInstallObservations(t *testing.T, root string, includeInstallObservations bool) string {
 	t.Helper()
 	var entries []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -345,12 +345,13 @@ func snapshotSmokeTreeWithInstallCheck(t *testing.T, root string, includeInstall
 			if err != nil {
 				return err
 			}
-			if !includeInstallCheck && rel == filepath.Join(".packy", "config.json") {
+			if !includeInstallObservations && rel == filepath.Join(".packy", "config.json") {
 				var state map[string]json.RawMessage
 				if err := json.Unmarshal(data, &state); err != nil {
 					return err
 				}
 				delete(state, "last_install_check")
+				delete(state, "latest_attempt")
 				data, err = json.Marshal(state)
 				if err != nil {
 					return err

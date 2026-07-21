@@ -284,7 +284,7 @@ ownership and adds exact Claude projection and attempt evidence:
   "install_status": "confirmed|recovery-required|uninstall-incomplete",
   "latest_attempt": {
     "operation": "install|update|uninstall",
-    "outcome": "verified|blocked|partially-applied|recovery-required|uninstall-incomplete",
+    "outcome": "verified|blocked|partially-applied|rolled-back|recovery-required|uninstall-incomplete",
     "completed_effects": ["<stable effect id>"],
     "failed_effect": "<stable effect id or empty>",
     "not_started_effects": ["<stable effect id>"]
@@ -294,6 +294,10 @@ ownership and adds exact Claude projection and attempt evidence:
 
 `partially-applied` is used only when verified effects and an independent
 blocker coexist without a failed effect.
+
+`rolled-back` records a failed local Claude effect whose exact prior state was
+restored. It returns nonzero without setting recovery-required; a legacy v1
+state remains authoritative instead of being migrated by that failed attempt.
 
 Fields in a projection that do not apply to its kind are omitted. Arrays are
 non-null and sorted where they are sets. Raw environment values are forbidden.
@@ -365,7 +369,7 @@ performs no mutation and never reveals MCP environment values.
 | Outcome | Exit |
 | --- | --- |
 | `converged`, `applied`, `applied-with-pending-prerequisite` | zero |
-| `blocked`, `blocked-dry-run`, `partially-applied`, `recovery-required`, `uninstall-incomplete` | nonzero |
+| `blocked`, `blocked-dry-run`, `partially-applied`, `rolled-back`, `recovery-required`, `uninstall-incomplete` | nonzero |
 
 ## Setup health contract
 

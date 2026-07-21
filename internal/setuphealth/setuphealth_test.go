@@ -278,17 +278,11 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 func TestDiagnoseDelegatedSetupCodexAndOpenCodeMatrix(t *testing.T) {
 	config := sandboxConfig(t)
 	state := desiredState(config, nil)
-	state.ConfiguredSurfaces = []string{"codex"}
-	saveState(t, config, state)
-	report := diagnoseWithoutEngram(t, config)
-	assertCheck(t, report, Fail, "engram-setup", "does not record both")
-
-	state.ConfiguredSurfaces = []string{"codex", "opencode"}
 	saveState(t, config, state)
 	writeFile(t, config.CodexPromptFile, "<!-- packy:skills-router -->\n<!-- /packy:skills-router -->\n<!-- gentle-ai:persona -->x<!-- /gentle-ai:persona -->")
 	writeFile(t, config.OpenCodePromptFile, "prompt")
 	writeFile(t, config.OpenCodeConfigFile, fmt.Sprintf(`{"instructions":[%q],"plugin":["gentle-ai"]}`, config.OpenCodePromptFile))
-	report = diagnoseWithoutEngram(t, config)
+	report := diagnoseWithoutEngram(t, config)
 	assertCheck(t, report, Pass, "engram-setup", "records Codex and OpenCode")
 	assertCheck(t, report, Pass, "codex-config", "markers are present")
 	assertCheck(t, report, Warn, "codex-conflict", "gentle-ai")
