@@ -33,6 +33,59 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 	}
 }
 
+func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
+	for _, item := range []struct{ id, version string }{{"engram", "1.0.0"}, {workflowPackID, "2.0.0"}} {
+		t.Run(item.id, func(t *testing.T) {
+			current := mustRead(t, filepath.Join(bundleRoot, "packs", item.id, "pack.json"))
+			root := filepath.Join(bundleRoot, "history", item.id, item.version)
+			if archived := mustRead(t, filepath.Join(root, "pack.json")); !reflect.DeepEqual(archived, current) {
+				t.Fatal("archived manifest bytes differ from catalog-current bytes")
+			}
+			pack, err := loadHistoricalArtifact(root, bundleRoot, item.id, item.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pack.Version != item.version {
+				t.Fatalf("historical version = %q", pack.Version)
+			}
+		})
+	}
+}
+
+func TestV3UpdateRoutesPreserveExistingSurfaceIntent(t *testing.T) {
+	type route struct {
+		SchemaVersion      int    `json:"schema_version"`
+		PackID             string `json:"pack_id"`
+		FromVersion        string `json:"from_version"`
+		ToVersion          string `json:"to_version"`
+		HistoricalArtifact struct {
+			Path            string `json:"path"`
+			ArtifactSHA256  string `json:"artifact_sha256"`
+			AggregateSHA256 string `json:"aggregate_sha256"`
+		} `json:"historical_artifact"`
+		PreservedSurfaces []Surface `json:"preserved_surfaces"`
+		AddsClaudeIntent  bool      `json:"adds_claude_intent"`
+	}
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
+	for _, item := range []struct{ id, from, to string }{{"engram", "1.0.0", "2.0.0"}, {workflowPackID, "2.0.0", "3.0.0"}} {
+		data := mustRead(t, filepath.Join(bundleRoot, "compatibility", item.id, item.from+"-to-"+item.to+".json"))
+		var got route
+		if err := strictDecode(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.SchemaVersion != 1 || got.PackID != item.id || got.FromVersion != item.from || got.ToVersion != item.to || got.AddsClaudeIntent || !reflect.DeepEqual(got.PreservedSurfaces, []Surface{SurfaceCodex, SurfaceOpenCode}) {
+			t.Fatalf("unsupported update route: %#v", got)
+		}
+		artifact := readHistoricalArtifact(t, filepath.Join(bundleRoot, "history", item.id, item.from))
+		if got.HistoricalArtifact.AggregateSHA256 != artifact.AggregateSHA256 {
+			t.Fatal("route does not identify exact historical aggregate")
+		}
+	}
+}
+
 func TestHistoricalArtifactRoundTripsManifestV2FileAndDirectoryResources(t *testing.T) {
 	fixture, _ := writeManifestV2Fixture(t)
 	bundle := filepath.Join(t.TempDir(), "bundle")

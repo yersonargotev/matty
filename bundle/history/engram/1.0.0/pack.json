@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "engram",
+  "version": "1.0.0",
+  "provides": [
+    "memory:persistent"
+  ],
+  "requires": {
+    "capabilities": [],
+    "tools": [
+      "engram"
+    ]
+  },
+  "conflicts": [],
+  "resources": [
+    {
+      "kind": "instruction",
+      "id": "engram-memory",
+      "source": "instructions/engram-memory.md"
+    },
+    {
+      "kind": "mcp_server",
+      "id": "engram",
+      "command": "engram",
+      "args": [
+        "mcp",
+        "--tools=agent"
+      ]
+    },
+    {
+      "kind": "lifecycle",
+      "id": "engram-memory"
+    }
+  ]
+}

@@ -1359,6 +1359,7 @@ func TestPackUpdateExternalCancellationHasNoEffects(t *testing.T) {
 	seedTerminal := &fakeTerminal{interactive: true, approve: true}
 	opts, home, repoRoot, runner := engramActivationOptions(t, seedTerminal)
 	bundle := copyPackBundleForUpdate(t, repoRoot)
+	copyArchivedEngramFixture(t, bundle, repoRoot)
 	opts.Env.(MapEnv)["PACKY_SKILLS_SOURCE"] = filepath.Join(bundle, "skills")
 	if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "engram", "--surface", "codex"); err != nil {
 		t.Fatalf("seed: %v\n%s", err, out)

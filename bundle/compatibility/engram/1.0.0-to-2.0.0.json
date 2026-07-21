@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_id": "engram",
+  "from_version": "1.0.0",
+  "to_version": "2.0.0",
+  "historical_artifact": {
+    "path": "history/engram/1.0.0/artifact.json",
+    "artifact_sha256": "b42f7f9d111067c090c4bd5b897e21a22696939fa57062777049e5c799c5516f",
+    "aggregate_sha256": "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
+  },
+  "preserved_surfaces": [
+    "codex",
+    "opencode"
+  ],
+  "adds_claude_intent": false
+}

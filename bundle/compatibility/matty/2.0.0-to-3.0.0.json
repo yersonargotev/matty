@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_id": "matty",
+  "from_version": "2.0.0",
+  "to_version": "3.0.0",
+  "historical_artifact": {
+    "path": "history/matty/2.0.0/artifact.json",
+    "artifact_sha256": "84d2b3971424b5a3bf3890d79cf9791746aabd08380deb56bb992bf5baaf99c1",
+    "aggregate_sha256": "b04e745e59562a3f0f65585af775ee22d68c4b54b43a795b2030557eb5f406c2"
+  },
+  "preserved_surfaces": [
+    "codex",
+    "opencode"
+  ],
+  "adds_claude_intent": false
+}

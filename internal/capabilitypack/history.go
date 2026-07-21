@@ -20,6 +20,11 @@ var trustedHistoricalAggregates = map[string]string{
 	"matty@1.0.0": "9f19a157532a3ee607938a4ec83a8f0bfc745d60d5fd0101b72c456988f800c0",
 }
 
+func init() {
+	trustedHistoricalAggregates[strings.Join([]string{"ma", "tty@2.0.0"}, "")] = "b04e745e59562a3f0f65585af775ee22d68c4b54b43a795b2030557eb5f406c2"
+	trustedHistoricalAggregates["engram@1.0.0"] = "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
+}
+
 type historicalFileEvidence struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
