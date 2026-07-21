@@ -589,7 +589,7 @@ func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncwor
 
 func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, proposal packsyncworkflow.Proposal, beforePR packsyncworkflow.PRState, beforeRecord, targetRecord packsyncworkflow.PublicationRecord, body string) error {
 	return gateway.retry.Do(ctx, func() error {
-		state, err := gateway.observeMutationOnce(ctx, proposal)
+		state, err := gateway.observeMutationBeforeEdit(ctx, proposal, beforePR, beforeRecord)
 		if err != nil {
 			return packsyncworkflow.ClassifyNetworkFailure(err)
 		}
@@ -612,6 +612,18 @@ func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, proposal 
 		}
 		return packsyncworkflow.ClassifyNetworkFailure(editErr)
 	})
+}
+
+func (gateway *githubGateway) observeMutationBeforeEdit(ctx context.Context, proposal packsyncworkflow.Proposal, expected packsyncworkflow.PRState, record packsyncworkflow.PublicationRecord) (mutationObservation, error) {
+	var state mutationObservation
+	for observation := 0; observation < gateway.retry.MaxAttempts; observation++ {
+		var err error
+		state, err = gateway.observeMutationOnce(ctx, proposal)
+		if err != nil || !state.matchesPRHeadProjectionLag(proposal, expected, record) {
+			return state, err
+		}
+	}
+	return state, nil
 }
 
 type ghPR struct {
@@ -693,6 +705,16 @@ func (state mutationObservation) matchesPR(proposal packsyncworkflow.Proposal, e
 	owner := normalizedAutomationLogin(pr.Author.Login)
 	parsed, ok := packsyncworkflow.ParsePublicationRecord(pr.Body)
 	return ok && parsed == record && pr.Number == expected.Number && pr.State == "OPEN" && expected.Open && pr.BaseRefName == expected.BaseBranch && pr.HeadRefName == expected.HeadBranch && pr.HeadRefOID == proposal.HeadSHA && pr.IsDraft == expected.Draft && (pr.AutoMergeRequest != nil) == expected.AutoMerge && owner == packsyncworkflow.AutomationOwner && (state.LastEditor == "" || state.LastEditor == packsyncworkflow.AutomationOwner) && packsyncworkflow.ManagedMetadataHash(pr.Title, pr.Body) == record.MetadataHash
+}
+
+func (state mutationObservation) matchesPRHeadProjectionLag(proposal packsyncworkflow.Proposal, expected packsyncworkflow.PRState, record packsyncworkflow.PublicationRecord) bool {
+	if len(state.PRs) != 1 || record.HeadSHA == "" || record.HeadSHA == proposal.HeadSHA || state.PRs[0].HeadRefOID != record.HeadSHA {
+		return false
+	}
+	adjusted := state
+	adjusted.PRs = append([]ghPR(nil), state.PRs...)
+	adjusted.PRs[0].HeadRefOID = proposal.HeadSHA
+	return adjusted.matchesPR(proposal, expected, record)
 }
 
 func (state mutationObservation) matchesCreated(proposal packsyncworkflow.Proposal, record packsyncworkflow.PublicationRecord) (int, bool) {

@@ -438,6 +438,69 @@ func TestGitHubGatewayRestoredSameCandidateOnOldBaseUpdatesAfterFreshBase(t *tes
 	}
 }
 
+func TestGitHubGatewayRestoredSameCandidateWaitsForPRHeadProjection(t *testing.T) {
+	old := lifecycleProposal()
+	old.PlanID = "old-plan"
+	pr := managedFakePR(t, old, "old managed", "old evidence", false)
+	fake := &fakeGitHubCommands{baseHead: baseB, branchHead: headA, pr: pr, pushedPlanID: "new-base-plan", pushedBaseSHA: baseB, pushedHeadSHA: headB, stalePRHeadAfterPush: 1}
+	gateway := lifecycleGateway(t, fake)
+	proposal := lifecycleProposal()
+	proposal.BaseSHA = baseB
+	proposal.PlanID = "new-base-plan"
+	proposal.ResultTreeSHA = headB
+	proposal.HeadSHA = headB
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(prepared, state)
+	if err != nil || decision.Action != packsyncworkflow.PublicationUpdate || decision.PRNumber != 7 {
+		t.Fatalf("new-base update decision = %#v, %v", decision, err)
+	}
+	if _, err := gateway.Publish(context.Background(), prepared, decision); err != nil {
+		t.Fatal(err)
+	}
+	if fake.pushCalls != 1 || fake.editCalls != 1 || fake.createCalls != 0 || fake.pr.number != 7 {
+		t.Fatalf("new-base update writes = pushes:%d edits:%d creates:%d pr:%#v", fake.pushCalls, fake.editCalls, fake.createCalls, fake.pr)
+	}
+}
+
+func TestGitHubGatewayRestoredSameCandidateBlocksWhenPRHeadProjectionNeverSettles(t *testing.T) {
+	old := lifecycleProposal()
+	old.PlanID = "old-plan"
+	pr := managedFakePR(t, old, "old managed", "old evidence", false)
+	fake := &fakeGitHubCommands{baseHead: baseB, branchHead: headA, pr: pr, pushedPlanID: "new-base-plan", pushedBaseSHA: baseB, pushedHeadSHA: headB, stalePRHeadAfterPush: 3}
+	gateway := lifecycleGateway(t, fake)
+	proposal := lifecycleProposal()
+	proposal.BaseSHA = baseB
+	proposal.PlanID = "new-base-plan"
+	proposal.ResultTreeSHA = headB
+	proposal.HeadSHA = headB
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(prepared, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = gateway.Publish(context.Background(), prepared, decision)
+	var failure packsyncworkflow.Failure
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureOwnership || fake.pushCalls != 1 || fake.editCalls != 0 {
+		t.Fatalf("unsettled projection crossed bounded retry: pushes=%d edits=%d failure=%#v err=%v", fake.pushCalls, fake.editCalls, failure, err)
+	}
+}
+
 func TestGitHubGatewayClosedPRWithAbsentBranchRemainsZeroWriteBlock(t *testing.T) {
 	proposal := lifecycleProposal()
 	pr := managedFakePR(t, proposal, proposal.ManagedTitle, "existing evidence", false)
@@ -638,6 +701,8 @@ type fakeGitHubCommands struct {
 	pushedPlanID                 string
 	pushedBaseSHA                string
 	pushedHeadSHA                string
+	previousPRHead               string
+	stalePRHeadAfterPush         int
 	pushCalls                    int
 	createCalls                  int
 	editCalls                    int
@@ -682,6 +747,11 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 		if fake.pr == nil {
 			return "[]", nil
 		}
+		head := fake.pr.head
+		if fake.pushCalls > 0 && fake.stalePRHeadAfterPush > 0 {
+			head = fake.previousPRHead
+			fake.stalePRHeadAfterPush--
+		}
 		state := "CLOSED"
 		if fake.pr.open {
 			state = "OPEN"
@@ -690,7 +760,7 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 		if author == "" {
 			author = "app/github-actions"
 		}
-		data, _ := json.Marshal([]map[string]any{{"number": fake.pr.number, "state": state, "baseRefName": "main", "headRefName": fake.branch(), "headRefOid": fake.pr.head, "isDraft": fake.pr.draft, "autoMergeRequest": nil, "title": fake.pr.title, "body": fake.pr.body, "author": map[string]string{"login": author}}})
+		data, _ := json.Marshal([]map[string]any{{"number": fake.pr.number, "state": state, "baseRefName": "main", "headRefName": fake.branch(), "headRefOid": head, "isDraft": fake.pr.draft, "autoMergeRequest": nil, "title": fake.pr.title, "body": fake.pr.body, "author": map[string]string{"login": author}}})
 		return string(data), nil
 	case strings.Contains(joined, "/compare/"):
 		if fake.compareErr != nil {
@@ -741,6 +811,7 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 			fake.branchHead = strings.TrimSpace(string(output))
 		}
 		if fake.pr != nil {
+			fake.previousPRHead = fake.pr.head
 			fake.pr.head = fake.branchHead
 		}
 		if fake.mutateBranchAfterPush {
