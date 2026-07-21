@@ -229,7 +229,7 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 }
 
 func omitFromExactIdentityComparison(path string) bool {
-	return stagedValidation() && path == "bundle/sources.json"
+	return path == "bundle/sources.json"
 }
 
 func TestSemanticPackIdentitySurvivesFieldByField(t *testing.T) {
@@ -605,20 +605,25 @@ func formatStringMap(values map[string]string) string {
 	return strings.Join(lines, "\n")
 }
 
-func TestStagedExactIdentityComparisonOmitsOnlyCanonicalSources(t *testing.T) {
-	t.Setenv("PACKY_VALIDATION_STAGED", "1")
-	if !omitFromExactIdentityComparison("bundle/sources.json") {
-		t.Fatal("staged exact identity comparison retained canonical sources")
-	}
+func TestExactIdentityComparisonOmitsOnlyCanonicalSourcesInBothModes(t *testing.T) {
 	semanticSourceLock := "bundle/sources/" + strings.Join([]string{"ma", "tty"}, "") + ".lock.json"
-	for _, path := range []string{"bundle/packs.json", semanticSourceLock, "docs/sources.json"} {
-		if omitFromExactIdentityComparison(path) {
-			t.Fatalf("staged exact identity comparison omitted %s", path)
-		}
-	}
-
-	t.Setenv("PACKY_VALIDATION_STAGED", "")
-	if omitFromExactIdentityComparison("bundle/sources.json") {
-		t.Fatal("normal exact identity comparison omitted canonical sources")
+	for _, mode := range []struct {
+		name   string
+		staged string
+	}{
+		{name: "ordinary"},
+		{name: "staged", staged: "1"},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Setenv("PACKY_VALIDATION_STAGED", mode.staged)
+			if !omitFromExactIdentityComparison("bundle/sources.json") {
+				t.Fatal("exact identity comparison retained canonical sources")
+			}
+			for _, path := range []string{"bundle/packs.json", semanticSourceLock, "docs/sources.json"} {
+				if omitFromExactIdentityComparison(path) {
+					t.Fatalf("exact identity comparison omitted %s", path)
+				}
+			}
+		})
 	}
 }
