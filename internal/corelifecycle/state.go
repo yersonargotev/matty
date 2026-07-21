@@ -110,6 +110,7 @@ const (
 	AttemptVerified            AttemptOutcome = "verified"
 	AttemptBlocked             AttemptOutcome = "blocked"
 	AttemptPartiallyApplied    AttemptOutcome = "partially-applied"
+	AttemptRolledBack          AttemptOutcome = "rolled-back"
 	AttemptRecoveryRequired    AttemptOutcome = "recovery-required"
 	AttemptUninstallIncomplete AttemptOutcome = "uninstall-incomplete"
 )
@@ -341,6 +342,13 @@ func validateStateV2Collections(state State) error {
 	}
 	if state.LatestAttempt != nil && (state.LatestAttempt.CompletedEffects == nil || state.LatestAttempt.NotStartedEffects == nil) {
 		return fmt.Errorf("latest_attempt effect arrays must be non-null")
+	}
+	if state.LatestAttempt != nil {
+		switch state.LatestAttempt.Outcome {
+		case AttemptVerified, AttemptBlocked, AttemptPartiallyApplied, AttemptRolledBack, AttemptRecoveryRequired, AttemptUninstallIncomplete:
+		default:
+			return fmt.Errorf("latest_attempt has invalid outcome %q", state.LatestAttempt.Outcome)
+		}
 	}
 	return nil
 }

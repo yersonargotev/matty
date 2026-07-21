@@ -222,6 +222,71 @@ func TestClassicPrototypeRecoveryRetryBuildsFreshPlanAndConverges(t *testing.T) 
 	}
 }
 
+func TestClassicExactLocalRollbackHasDistinctOutcomeAndAttempt(t *testing.T) {
+	config := installTestConfig(t)
+	home := installTestHome(config)
+	config.Claude = claudecode.NewSurfaceAdapter("", claudecode.NewCanonicalLayout(home), config.State.PackyHome(), "claude", classicVersionRunner{result: claudecode.Result{Stdout: "2.1.203"}}, claudecode.StaticOwnershipSnapshot(claudecode.OwnershipSnapshot{}))
+	config.ClaudeDesired = claudecode.ClassicDesired{Instruction: &claudecode.ClassicInstruction{ID: "classic:instruction", Content: "instructions"}}
+	writeInstallTestExecutable(t, config.Engram.ExpectedPath())
+	facade := newTestFacade(config, &installTestCommands{}, time.Now)
+	plan, err := facade.Preview(Install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(skillsDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(skillsDir, 0700) })
+	result, err := facade.Apply(context.Background(), plan)
+	if err == nil || result.Outcome() != OutcomeRolledBack || result.FailedEffect() != "classic:skill:ask-matt" {
+		t.Fatalf("rollback result=%+v err=%v", result, err)
+	}
+	state, found, loadErr := LoadState(config.State.StateFile())
+	if loadErr != nil || !found || state.RecoveryRequired() || state.LatestAttempt == nil || state.LatestAttempt.Outcome != AttemptRolledBack {
+		t.Fatalf("rolled-back state=%+v found=%v err=%v", state, found, loadErr)
+	}
+}
+
+func TestClassicExactLocalRollbackKeepsV1Authoritative(t *testing.T) {
+	config := installTestConfig(t)
+	home := installTestHome(config)
+	if err := os.MkdirAll(config.State.PackyHome(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"schema_version":1,"packy_version":"old","managed_skills":[],"configured_surfaces":["codex","opencode"],"paths":{"state_file":"x","agent_skills_dir":"y"}}`
+	if err := os.WriteFile(config.State.StateFile(), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config.Claude = claudecode.NewSurfaceAdapter("", claudecode.NewCanonicalLayout(home), config.State.PackyHome(), "claude", classicVersionRunner{result: claudecode.Result{Stdout: "2.1.203"}}, claudecode.StaticOwnershipSnapshot(claudecode.OwnershipSnapshot{}))
+	config.ClaudeDesired = claudecode.ClassicDesired{Instruction: &claudecode.ClassicInstruction{ID: "classic:instruction", Content: "instructions"}}
+	writeInstallTestExecutable(t, config.Engram.ExpectedPath())
+	facade := newTestFacade(config, &installTestCommands{}, time.Now)
+	plan, err := facade.Preview(Install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(skillsDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(skillsDir, 0700) })
+	result, err := facade.Apply(context.Background(), plan)
+	if err == nil || result.Outcome() != OutcomeRolledBack {
+		t.Fatalf("rollback result=%+v err=%v", result, err)
+	}
+	state, _, loadErr := LoadState(config.State.StateFile())
+	if loadErr != nil || !state.Legacy() {
+		t.Fatalf("legacy authority lost: %+v err=%v", state, loadErr)
+	}
+}
+
 func TestClassicPrototypeResidualSafeUninstallRetainsThenClearsAuthority(t *testing.T) {
 	config := installTestConfig(t)
 	layout := claudecode.NewCanonicalLayout(installTestHome(config))

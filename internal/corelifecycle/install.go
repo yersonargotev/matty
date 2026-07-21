@@ -52,6 +52,7 @@ const (
 	OutcomeAppliedWithPendingPrerequisite Outcome = "applied-with-pending-prerequisite"
 	OutcomeBlocked                        Outcome = "blocked"
 	OutcomePartiallyApplied               Outcome = "partially-applied"
+	OutcomeRolledBack                     Outcome = "rolled-back"
 	OutcomeRecoveryRequired               Outcome = "recovery-required"
 	OutcomeUninstallIncomplete            Outcome = "uninstall-incomplete"
 )
@@ -461,18 +462,18 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 		if err != nil {
 			if claudeResult.RolledBack {
 				if legacyMigration {
-					return Result{outcome: OutcomePartiallyApplied, completedEffects: actionEffectIDs(plan.actions), failedEffect: claudeResult.Failed, notStartedEffects: claudeResult.NotStarted}, err
+					return Result{outcome: OutcomeRolledBack, completedEffects: actionEffectIDs(plan.actions), failedEffect: claudeResult.Failed, notStartedEffects: claudeResult.NotStarted}, err
 				}
 				rolledBack := plan.desired
 				rolledBack.ManagedSkills = append([]ManagedSkill(nil), recovery.ManagedSkills...)
 				rolledBack.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
 				rolledBack.ClaudeOwnership = append([]ClaudeOwnership(nil), previous.ClaudeOwnership...)
 				rolledBack.InstallStatus = InstallConfirmed
-				rolledBack.LatestAttempt = &LatestAttempt{Operation: plan.operation, Outcome: AttemptPartiallyApplied, CompletedEffects: actionEffectIDs(plan.actions), FailedEffect: claudeResult.Failed, NotStartedEffects: claudeResult.NotStarted}
+				rolledBack.LatestAttempt = &LatestAttempt{Operation: plan.operation, Outcome: AttemptRolledBack, CompletedEffects: actionEffectIDs(plan.actions), FailedEffect: claudeResult.Failed, NotStartedEffects: claudeResult.NotStarted}
 				if saveErr := saveState(facade.config.State.StateFile(), rolledBack); saveErr != nil {
 					return Result{}, fmt.Errorf("%w; publish exact-rollback attempt: %v", err, saveErr)
 				}
-				return Result{outcome: OutcomePartiallyApplied, completedEffects: actionEffectIDs(plan.actions), failedEffect: claudeResult.Failed, notStartedEffects: claudeResult.NotStarted}, err
+				return Result{outcome: OutcomeRolledBack, completedEffects: actionEffectIDs(plan.actions), failedEffect: claudeResult.Failed, notStartedEffects: claudeResult.NotStarted}, err
 			}
 			if !claudeResult.Attempted {
 				if legacyMigration {
