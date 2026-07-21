@@ -155,6 +155,21 @@ func TestManifestDeterministicAndContentBound(t *testing.T) {
 	}
 }
 
+func TestDirectoryAbsentOrEmptyFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	empty, err := directoryAbsentOrEmpty(filepath.Join(root, "missing"))
+	if err != nil || !empty {
+		t.Fatalf("missing: %v %v", empty, err)
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directoryAbsentOrEmpty(file); err == nil {
+		t.Fatal("non-directory was treated as empty")
+	}
+}
+
 func TestClassicSkillTopologyUsesRecursiveSkillLeaves(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "bundle", "skills")
@@ -204,7 +219,7 @@ func validEvidence() Evidence {
 	for i := range args {
 		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
 	}
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true}}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -352,7 +367,10 @@ func TestPrepareInstallableSourceAdaptsFullSHAWithoutMutatingCheckout(t *testing
 	runGit(source, "commit", "-m", "proved source")
 	sha := runGit(source, "rev-parse", "HEAD")
 	statusBefore := runGit(source, "status", "--porcelain=v1", "--untracked-files=all")
-	repository, ref, resolved, err := prepareInstallableSource(context.Background(), source, sha, filepath.Join(root, "installable"))
+	if err := os.Mkdir(filepath.Join(root, "work"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	repository, ref, resolved, err := prepareInstallableSource(context.Background(), root, acquisitionEnv(root, "/usr/bin/npm"), source, sha, filepath.Join(root, "installable"))
 	if err != nil {
 		t.Fatal(err)
 	}
