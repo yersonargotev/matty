@@ -310,7 +310,7 @@ func ownsExact(snapshot OwnershipSnapshot, id, kind, target, fingerprint string)
 func ownsSkillExact(snapshot OwnershipSnapshot, id, target, expectedSource string, o SkillObservation) bool {
 	matches := 0
 	for _, r := range snapshot.Records {
-		if r.StateOwner != "" && r.ContributorID != "" && slices.Contains(r.Contributors, r.ContributorID) && r.ID == id && r.Kind == string(ActionSkillLink) && filepath.Clean(r.Target) == filepath.Clean(target) && r.SymlinkType == "directory" && r.ResolvedTarget == o.ResolvedTarget && r.ExpectedSource == expectedSource && o.Kind == PathSymlink && o.ResolvedTarget == expectedSource && r.Fingerprint == o.TreeFingerprint {
+		if r.StateOwner != "" && r.ContributorID != "" && slices.Contains(r.Contributors, r.ContributorID) && r.ID == id && r.Kind == string(ActionSkillLink) && filepath.Clean(r.Target) == filepath.Clean(target) && r.MatchesSkill("claude", id, target, expectedSource, o) {
 			matches++
 		}
 	}
@@ -571,7 +571,7 @@ func (a *SurfaceAdapter) validateFreshOwnership(x capabilitypack.ProjectionActio
 		if record == nil {
 			return errors.New("foreign Claude skill collision")
 		}
-		if record.SymlinkType != "directory" || o.Kind != PathSymlink || record.ResolvedTarget == "" || record.ExpectedSource == "" || o.ResolvedTarget != record.ResolvedTarget || record.ExpectedSource != record.ResolvedTarget || record.Fingerprint != o.TreeFingerprint {
+		if !record.MatchesSkill("claude", x.ID, x.Target, record.Skill.ExpectedSource, o) {
 			return errors.New("owned Claude skill identity changed; preserving it")
 		}
 		if x.Mode == capabilitypack.ProjectionDeleteTarget {

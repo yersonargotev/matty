@@ -313,7 +313,7 @@ func TestExactCleanupMatrixForSkillInstructionHookAndMCP(t *testing.T) {
 		os.Symlink(src, target)
 		resolvedSrc, _ := filepath.EvalSymlinks(src)
 		fp, _, _ := localprojection.FingerprintPath(target)
-		record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:x", ID: "skill:x", Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, SymlinkType: "directory", ResolvedTarget: resolvedSrc, ExpectedSource: resolvedSrc, DeletionAuthorized: true, Contributors: []string{"pack:p:x"}}
+		record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:x", ID: "skill:x", Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, Skill: SkillIdentity{Surface: "claude", ProjectionID: "skill:x", Path: target, SymlinkType: "directory", ResolvedTarget: resolvedSrc, ExpectedSource: resolvedSrc, SourceTreeFingerprint: fp}, DeletionAuthorized: true, Contributors: []string{"pack:p:x"}}
 		a := NewSurfaceAdapter("", l, filepath.Join(home, "state"), "claude", &recordingRunner{}, StaticOwnershipSnapshot(NewOwnershipSnapshot(record)))
 		action := capabilitypack.ProjectionAction{ID: record.ID, Kind: ActionSkillLink, Target: target, Mode: capabilitypack.ProjectionDeleteTarget}
 		if err := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{action}); err != nil {
@@ -584,7 +584,7 @@ func TestSkillInstallUpdateDriftAndRemovalLifecycle(t *testing.T) {
 	}
 	fp, _, _ := localprojection.FingerprintPath(target)
 	resolvedSrc, _ := filepath.EvalSymlinks(src)
-	snapshot = NewOwnershipSnapshot(OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:s", ID: action.ID, Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, SymlinkType: "directory", ResolvedTarget: resolvedSrc, ExpectedSource: resolvedSrc, DeletionAuthorized: true, Contributors: []string{"pack:p:s"}})
+	snapshot = NewOwnershipSnapshot(OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:s", ID: action.ID, Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, Skill: SkillIdentity{Surface: "claude", ProjectionID: action.ID, Path: target, SymlinkType: "directory", ResolvedTarget: resolvedSrc, ExpectedSource: resolvedSrc, SourceTreeFingerprint: fp}, DeletionAuthorized: true, Contributors: []string{"pack:p:s"}})
 	if err := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{action}); err != nil {
 		t.Fatal("idempotent install", err)
 	}
@@ -678,7 +678,7 @@ func TestSkillSameBytesWrongPathTypesNeverTransferOwnership(t *testing.T) {
 		os.Symlink(foreign, target)
 		fp, _ := localprojection.FingerprintTree(expected)
 		resolvedExpected, _ := filepath.EvalSymlinks(expected)
-		record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:s", ID: "skill:skill", Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, SymlinkType: "directory", ResolvedTarget: resolvedExpected, ExpectedSource: resolvedExpected, Contributors: []string{"pack:p:s"}}
+		record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:s", ID: "skill:skill", Kind: string(ActionSkillLink), Target: target, Fingerprint: fp, Skill: SkillIdentity{Surface: "claude", ProjectionID: "skill:skill", Path: target, SymlinkType: "directory", ResolvedTarget: resolvedExpected, ExpectedSource: resolvedExpected, SourceTreeFingerprint: fp}, Contributors: []string{"pack:p:s"}}
 		a := NewSurfaceAdapter("", l, filepath.Join(home, "state"), "claude", &recordingRunner{}, StaticOwnershipSnapshot(NewOwnershipSnapshot(record)))
 		action := capabilitypack.ProjectionAction{ID: record.ID, Kind: ActionSkillLink, Source: expected, Target: target}
 		if err := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{action}); err == nil {

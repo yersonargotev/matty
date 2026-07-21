@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -16,6 +17,11 @@ func Fingerprint(data []byte) string {
 func canonicalFingerprint(v any) string { data, _ := json.Marshal(v); return Fingerprint(data) }
 
 type SkillIdentity struct{ Surface, ProjectionID, Path, SymlinkType, ResolvedTarget, ExpectedSource, SourceTreeFingerprint string }
+
+func (i SkillIdentity) Matches(surface, projectionID, path, expectedSource string, observation SkillObservation) bool {
+	return i.Surface == surface && i.ProjectionID == projectionID && filepath.Clean(i.Path) == filepath.Clean(path) && i.SymlinkType == "directory" && observation.Kind == PathSymlink && i.ResolvedTarget == observation.ResolvedTarget && i.ExpectedSource == expectedSource && observation.ResolvedTarget == expectedSource && i.SourceTreeFingerprint == observation.TreeFingerprint
+}
+
 type InstructionIdentity struct{ Document, StartMarker, EndMarker, ContributorID, ContributionFingerprint string }
 type AgentIdentity struct{ Surface, ProjectionID, Path, FileFingerprint string }
 type HookIdentity struct {
@@ -60,7 +66,11 @@ type OwnershipRecord struct {
 	Contributors                                             []string
 	DeletionAuthorized                                       bool
 	HookProvenance                                           string
-	SymlinkType, ResolvedTarget, ExpectedSource              string
+	Skill                                                    SkillIdentity
+}
+
+func (r OwnershipRecord) MatchesSkill(surface, projectionID, path, expectedSource string, observation SkillObservation) bool {
+	return r.Fingerprint == observation.TreeFingerprint && r.Skill.Matches(surface, projectionID, path, expectedSource, observation)
 }
 
 // OwnershipSnapshot is a read-only composite view of records retained by their authoritative owners.
