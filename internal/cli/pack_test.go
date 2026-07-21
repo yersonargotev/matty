@@ -74,7 +74,7 @@ func TestPackLifecycleJSONPreviewUsesCanonicalStructuredContract(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatalf("invalid lifecycle JSON: %v\n%s", err, out)
 	}
-	if report.Report != "pack-lifecycle-preview" || !report.DryRun || report.Operation != capabilitypack.OperationActivate || report.Contract.Bindings == nil || report.Contract.Exclusions == nil || report.Contract.OptionalModes == nil || report.Contract.PromptAuthorities == nil || report.Aliases == nil || report.Phases == nil || report.Blockers == nil || report.PendingHumanActions == nil {
+	if report.SchemaVersion != capabilitypack.LifecycleJSONSchemaVersion || report.Report != "pack-lifecycle-preview" || !report.DryRun || report.Operation != capabilitypack.OperationActivate || report.Contract.Bindings == nil || report.Contract.Exclusions == nil || report.Contract.OptionalModes == nil || report.Contract.PromptAuthorities == nil || report.Aliases == nil || report.Phases == nil || report.Blockers == nil || report.PendingHumanActions == nil || !report.ReadinessObserved.Configured || report.Evidence == nil || report.PendingEvidence == nil {
 		t.Fatalf("incomplete lifecycle contract: %#v", report)
 	}
 	if terminal.calls != 0 || snapshotTree(t, home) != before {
@@ -396,7 +396,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 				originalManifest := readFileString(t, manifestPath)
 				currentVersion, staleVersion, updateVersion := "1.0.0", "1.0.1", "2.0.0"
 				if packID == "matty" {
-					currentVersion, staleVersion, updateVersion = "2.0.0", "2.0.1", "3.0.0"
+					currentVersion, staleVersion = "3.0.0", "3.0.1"
 				}
 				terminal.onApprove = func() {
 					changed := strings.Replace(originalManifest, `"version": "`+currentVersion+`"`, `"version": "`+staleVersion+`"`, 1)
@@ -409,6 +409,11 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatal("stale activation wrote pack state")
 				}
 				terminal.onApprove = nil
+				if packID == "matty" {
+					if err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", packID, "--surface", surface); err != nil || !strings.Contains(out, "Verified plan") {
 					t.Fatalf("activate: %v\n%s", err, out)
 				}
@@ -416,12 +421,14 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatalf("pending readiness gate: err=%v\n%s", err, out)
 				}
 
-				manifest := strings.Replace(readFileString(t, manifestPath), `"version": "`+staleVersion+`"`, `"version": "`+updateVersion+`"`, 1)
-				if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", packID, "--surface", surface); err != nil || !strings.Contains(out, "catalog-current") {
-					t.Fatalf("update: %v\n%s", err, out)
+				if packID != "matty" {
+					manifest := strings.Replace(readFileString(t, manifestPath), `"version": "`+staleVersion+`"`, `"version": "`+updateVersion+`"`, 1)
+					if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", packID, "--surface", surface); err != nil || !strings.Contains(out, "catalog-current") {
+						t.Fatalf("update: %v\n%s", err, out)
+					}
 				}
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", packID, "--surface", surface); err != nil || (!strings.Contains(out, "Already converged") && !strings.Contains(out, "Verified plan")) {
 					t.Fatalf("targeted reconcile: %v\n%s", err, out)
@@ -797,7 +804,7 @@ func TestPackStatusJSONOverviewAndTargetedAbsenceAreStable(t *testing.T) {
 	if err := json.Unmarshal([]byte(overview), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, overview)
 	}
-	if report.SchemaVersion != 1 || report.Report != "pack-status-overview" || len(report.Entries) != 4 {
+	if report.SchemaVersion != capabilitypack.StatusSchemaVersion || report.Report != "pack-status-overview" || len(report.Entries) != 5 {
 		t.Fatalf("report=%#v", report)
 	}
 	for i, entry := range report.Entries {
@@ -1530,7 +1537,7 @@ func TestPackDeactivateDryRunApplyAndInactiveNoOpOnBothSurfaces(t *testing.T) {
 			if err != nil {
 				t.Fatalf("dry-run: %v\n%s", err, out)
 			}
-			for _, want := range []string{"Deactivation dry-run plan plan-", "Active version: 2.0.0", "Intent revision:", "Contributor removed:", "Phase: destructive-cleanup"} {
+			for _, want := range []string{"Deactivation dry-run plan plan-", "Active version: 3.0.0", "Intent revision:", "Contributor removed:", "Phase: destructive-cleanup"} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("missing %q:\n%s", want, out)
 				}

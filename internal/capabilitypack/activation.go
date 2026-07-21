@@ -229,6 +229,10 @@ type ProjectionOwnership struct {
 	Fingerprint  string   `json:"fingerprint"`
 }
 
+// DeletionAuthorized is lifecycle-owned policy: only the last contributor may
+// authorize destructive cleanup of a shared projection.
+func (o ProjectionOwnership) DeletionAuthorized() bool { return len(o.Contributors) == 1 }
+
 type ApplyingJournal struct {
 	PlanID        string         `json:"plan_id"`
 	PlanDigest    string         `json:"plan_digest,omitempty"`
@@ -361,6 +365,9 @@ type ReconciliationPlan struct {
 	portable               []PortableOutcome
 	resolutions            []ExecutableResolution
 	readiness              ReadinessStatus
+	readinessObserved      ReadinessObservationStatus
+	observedEvidence       []string
+	pendingEvidence        []string
 	pendingHumanActions    []string
 	noOp                   bool
 	activations            []PlannedActivation
@@ -485,7 +492,14 @@ func (p ReconciliationPlan) PendingHumanActions() []string {
 }
 
 func (p ReconciliationPlan) Readiness() ReadinessStatus { return p.readiness }
-func (p ReconciliationPlan) Recovery() bool             { return p.recovery }
+func (p ReconciliationPlan) ReadinessObserved() ReadinessObservationStatus {
+	return p.readinessObserved
+}
+func (p ReconciliationPlan) Evidence() []string { return append([]string(nil), p.observedEvidence...) }
+func (p ReconciliationPlan) PendingEvidence() []string {
+	return append([]string(nil), p.pendingEvidence...)
+}
+func (p ReconciliationPlan) Recovery() bool { return p.recovery }
 func (p ReconciliationPlan) HistoricalAttempt() *ApplyingJournal {
 	if p.historicalAttempt == nil {
 		return nil
@@ -726,20 +740,28 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	if current, ok := intentForPack(state, request.PackID, request.Surface); ok && digestJSON(current.Aliases) != digestJSON(aliases) {
 		noOp = false
 	}
-	// Readiness evidence is observed through the unified adapter, but preview
-	// preserves the established contract: authorization/usability are reported
-	// freshly by Status and Apply, not promoted into a plan.
-	readiness := ReadinessStatus{}
-	readiness.Configured = noOp
-	if !readiness.Configured {
-		readiness.Authorized = false
-		readiness.Usable = false
-	} else if !readiness.Authorized {
-		readiness.Usable = false
+	readiness := ReadinessStatus{Configured: operation != OperationDeactivate && len(composition.blockers) == 0}
+	readiness.Authorized = readiness.Configured && observation.Readiness.AuthorizationObserved && observation.Readiness.Authorized
+	readiness.Usable = readiness.Authorized && observation.Readiness.UsabilityObserved && observation.Readiness.Usable
+	readinessObserved := ReadinessObservationStatus{Configured: true, Authorization: observation.Readiness.AuthorizationObserved, Usability: observation.Readiness.UsabilityObserved}
+	observedEvidence := append([]string(nil), observation.Readiness.Evidence...)
+	sort.Strings(observedEvidence)
+	pendingEvidence := []string{}
+	for _, projection := range observation.Projections {
+		if projection.ObservedFingerprint != projection.DesiredFingerprint && !projection.ExternallyManaged {
+			pendingEvidence = append(pendingEvidence, projection.ID+": verification pending Apply")
+		}
 	}
+	if !observation.Readiness.AuthorizationObserved {
+		pendingEvidence = append(pendingEvidence, "authorization evidence pending a host observation")
+	}
+	if !observation.Readiness.UsabilityObserved {
+		pendingEvidence = append(pendingEvidence, "usability evidence pending a host observation")
+	}
+	sort.Strings(pendingEvidence)
 	pendingHumanActions := append([]string(nil), observation.PendingHumanActions...)
 	sort.Strings(pendingHumanActions)
-	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, aliases: cloneAliases(aliases), previousAliases: previousAliases, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), beforeCompositionFacts: beforeCompositionFacts}
+	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, aliases: cloneAliases(aliases), previousAliases: previousAliases, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, readinessObserved: readinessObserved, observedEvidence: observedEvidence, pendingEvidence: pendingEvidence, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), beforeCompositionFacts: beforeCompositionFacts}
 	recovery := recoveryAttempt(state, operation, request.PackID, request.Surface)
 	plan.attachRecovery(state, recovery)
 	for _, resource := range pack.Resources {
@@ -1253,7 +1275,7 @@ func (f Facade) activationInputsForOperation(ctx context.Context, request Activa
 	if f.activation == nil || f.activation.store == nil {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation is not configured")
 	}
-	if request.Surface != SurfaceCodex && request.Surface != SurfaceOpenCode {
+	if request.Surface != SurfaceCodex && request.Surface != SurfaceOpenCode && request.Surface != SurfaceClaude {
 		return Pack{}, nil, ActivationState{}, fmt.Errorf("activation does not support CLI surface %q", request.Surface)
 	}
 	pack, err := f.catalog.catalogMetadata(request.PackID)

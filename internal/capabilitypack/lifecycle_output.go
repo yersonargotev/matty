@@ -1,20 +1,35 @@
 package capabilitypack
 
-import "sort"
+import (
+	"errors"
+	"sort"
+)
+
+const LifecycleJSONSchemaVersion = 2
 
 // LifecycleContract is the canonical, host-neutral description rendered by
 // every lifecycle entry point. Renderers must not reconstruct these facts
 // from a manifest.
 type LifecycleContract struct {
-	Counts              ResourceCounts     `json:"logical_resource_counts"`
-	DependencyClosure   []string           `json:"dependency_closure"`
-	Bindings            []LifecycleBinding `json:"bindings"`
-	Exclusions          []Exclusion        `json:"exclusions"`
-	OptionalModes       []OptionalMode     `json:"optional_modes"`
-	PromptAuthorities   []string           `json:"prompt_authorities"`
-	Aliases             []SurfaceAlias     `json:"aliases"`
-	AuthorityDisclosure string             `json:"authority_disclosure"`
+	Compatibility         Compatibility      `json:"compatibility,omitempty"`
+	CompatibilityObserved bool               `json:"-"`
+	Counts                ResourceCounts     `json:"logical_resource_counts"`
+	DependencyClosure     []string           `json:"dependency_closure"`
+	Bindings              []LifecycleBinding `json:"bindings"`
+	Exclusions            []Exclusion        `json:"exclusions"`
+	OptionalModes         []OptionalMode     `json:"optional_modes"`
+	PromptAuthorities     []string           `json:"prompt_authorities"`
+	Aliases               []SurfaceAlias     `json:"aliases"`
+	AuthorityDisclosure   string             `json:"authority_disclosure"`
 }
+
+type Compatibility string
+
+const (
+	CompatibilityComplete Compatibility = "complete"
+	CompatibilityDegraded Compatibility = "degraded"
+	CompatibilityBlocked  Compatibility = "blocked"
+)
 
 type LifecycleBinding struct {
 	Kind        string `json:"kind"`
@@ -31,9 +46,13 @@ type LifecycleBinding struct {
 // surface. Every slice is allocated so JSON preserves [] rather than null.
 func LifecycleContractFor(pack Pack, surface Surface, aliases []SurfaceAlias) LifecycleContract {
 	contract := LifecycleContract{
+		Compatibility: compatibilityFor(pack, surface), CompatibilityObserved: pack.manifestVersion >= manifestSchemaV3,
 		Counts: pack.ResourceCounts(), DependencyClosure: []string{}, Bindings: []LifecycleBinding{},
 		Exclusions: []Exclusion{}, OptionalModes: []OptionalMode{}, PromptAuthorities: []string{}, Aliases: []SurfaceAlias{},
 		AuthorityDisclosure: "Activation grants only the sealed local projection actions; later workflow effects require host approval.",
+	}
+	if !contract.CompatibilityObserved {
+		contract.Compatibility = ""
 	}
 	contract.DependencyClosure = sortedUnique(pack.Requires.Capabilities)
 	authorities := []string{}
@@ -89,8 +108,48 @@ func LifecycleContractFor(pack Pack, surface Surface, aliases []SurfaceAlias) Li
 	return contract
 }
 
+func compatibilityFor(pack Pack, surface Surface) Compatibility {
+	if pack.manifestVersion < manifestSchemaV3 {
+		return CompatibilityComplete
+	}
+	result := CompatibilityComplete
+	for _, resource := range pack.Resources {
+		if resource.Kind == "asset" || resource.Kind == "notice" {
+			continue
+		}
+		outcome := false
+		for _, binding := range resource.Bindings {
+			if binding.Surface != surface {
+				continue
+			}
+			outcome = true
+			if binding.Mode != "native" || binding.Degradation != "" {
+				result = CompatibilityDegraded
+			}
+		}
+		for _, exclusion := range resource.SurfaceExclusions {
+			if exclusion.Surface != surface {
+				continue
+			}
+			outcome = true
+			if exclusion.Mode == "mandatory" {
+				return CompatibilityBlocked
+			}
+			result = CompatibilityDegraded
+		}
+		if !outcome {
+			return CompatibilityBlocked
+		}
+	}
+	return result
+}
+
 func (p ReconciliationPlan) LifecycleContract() LifecycleContract {
-	return LifecycleContractFor(p.pack, p.surface, p.aliases)
+	contract := LifecycleContractFor(p.pack, p.surface, p.aliases)
+	if contract.CompatibilityObserved && len(p.blockers) > 0 {
+		contract.Compatibility = CompatibilityBlocked
+	}
+	return contract
 }
 
 func sortedUnique(values []string) []string {
@@ -114,29 +173,33 @@ type JSONLifecyclePhase struct {
 }
 
 type JSONLifecyclePlan struct {
-	SchemaVersion       int                  `json:"schema_version"`
-	Report              string               `json:"report"`
-	PlanID              string               `json:"plan_id"`
-	Operation           Operation            `json:"operation"`
-	Disposition         PlanDisposition      `json:"disposition"`
-	Digest              string               `json:"digest"`
-	Pack                string               `json:"pack"`
-	PackVersion         string               `json:"pack_version"`
-	Surface             Surface              `json:"surface"`
-	IntentRevision      int                  `json:"intent_revision"`
-	Contract            LifecycleContract    `json:"contract"`
-	Aliases             []SurfaceAlias       `json:"aliases"`
-	Contributors        map[string][]string  `json:"contributors"`
-	Blockers            []PlanBlocker        `json:"blockers"`
-	Phases              []JSONLifecyclePhase `json:"phases"`
-	PendingHumanActions []string             `json:"pending_human_actions"`
-	Recovery            bool                 `json:"recovery"`
-	MandatoryActions    []ProjectionAction   `json:"mandatory_actions"`
-	ContractDiff        JSONContractDiff     `json:"contract_diff"`
-	Migrations          []string             `json:"migrations"`
-	RetainedProjections []RetainedProjection `json:"retained_projections"`
-	RemovedContributors map[string]string    `json:"removed_contributors"`
-	DryRun              bool                 `json:"dry_run"`
+	SchemaVersion       int                        `json:"schema_version"`
+	Report              string                     `json:"report"`
+	PlanID              string                     `json:"plan_id"`
+	Operation           Operation                  `json:"operation"`
+	Disposition         PlanDisposition            `json:"disposition"`
+	Digest              string                     `json:"digest"`
+	Pack                string                     `json:"pack"`
+	PackVersion         string                     `json:"pack_version"`
+	Surface             Surface                    `json:"surface"`
+	IntentRevision      int                        `json:"intent_revision"`
+	Contract            LifecycleContract          `json:"contract"`
+	Aliases             []SurfaceAlias             `json:"aliases"`
+	Contributors        map[string][]string        `json:"contributors"`
+	Blockers            []PlanBlocker              `json:"blockers"`
+	Phases              []JSONLifecyclePhase       `json:"phases"`
+	PendingHumanActions []string                   `json:"pending_human_actions"`
+	ExpectedReadiness   ReadinessStatus            `json:"expected_readiness"`
+	ReadinessObserved   ReadinessObservationStatus `json:"readiness_observed"`
+	Evidence            []string                   `json:"evidence"`
+	PendingEvidence     []string                   `json:"pending_evidence"`
+	Recovery            bool                       `json:"recovery"`
+	MandatoryActions    []ProjectionAction         `json:"mandatory_actions"`
+	ContractDiff        JSONContractDiff           `json:"contract_diff"`
+	Migrations          []string                   `json:"migrations"`
+	RetainedProjections []RetainedProjection       `json:"retained_projections"`
+	RemovedContributors map[string]string          `json:"removed_contributors"`
+	DryRun              bool                       `json:"dry_run"`
 }
 
 type JSONContractDiff struct {
@@ -171,8 +234,7 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 		}
 		return blockers[i].Detail < blockers[j].Detail
 	})
-	aliases := p.Aliases()
-	contract := LifecycleContractFor(p.pack, p.surface, aliases)
+	contract := p.LifecycleContract()
 	diff := lifecycleContractDiff(p.beforeCompositionFacts, p.compositionFacts)
 	removed := p.RemovedContributors()
 	if removed == nil {
@@ -182,10 +244,11 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 	if retained == nil {
 		retained = []RetainedProjection{}
 	}
-	return JSONLifecyclePlan{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-preview", PlanID: p.id,
+	return JSONLifecyclePlan{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-preview", PlanID: p.id,
 		Operation: p.operation, Disposition: p.Disposition(), Digest: p.digest, Pack: p.pack.ID, PackVersion: p.pack.Version,
 		Surface: p.surface, IntentRevision: p.intentRevision, Contract: contract, Aliases: contract.Aliases,
 		Contributors: contributors, Blockers: blockers, Phases: phases, PendingHumanActions: sortedCopy(p.pendingHumanActions),
+		ExpectedReadiness: p.readiness, ReadinessObserved: p.readinessObserved, Evidence: sortedCopy(p.observedEvidence), PendingEvidence: sortedCopy(p.pendingEvidence),
 		Recovery: p.recovery, MandatoryActions: mandatory, ContractDiff: diff, Migrations: lifecycleMigrations(p),
 		RetainedProjections: retained, RemovedContributors: removed, DryRun: dryRun}
 }
@@ -247,10 +310,13 @@ type JSONLifecycleFailure struct {
 }
 
 func JSONFailureFor(stage string, err error, plan *ReconciliationPlan, approvalRequested *bool, actionsExecuted *int) JSONLifecycleFailure {
-	result := JSONLifecycleFailure{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-failure", Stage: stage, Error: err.Error()}
+	result := JSONLifecycleFailure{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-failure", Stage: stage, Error: err.Error()}
 	result.ApprovalRequested, result.ActionsExecuted = approvalRequested, actionsExecuted
 	if plan != nil {
 		report := plan.JSONReport(false)
+		if errors.Is(err, ErrStalePlan) && report.Contract.CompatibilityObserved {
+			report.Contract.Compatibility = CompatibilityBlocked
+		}
 		result.Plan = &report
 	}
 	return result
@@ -267,7 +333,7 @@ type JSONApplyResult struct {
 }
 
 func JSONApplyResultFor(plan ReconciliationPlan, applied ApplyResult) JSONApplyResult {
-	return JSONApplyResult{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-apply", Plan: plan.JSONReport(false),
+	return JSONApplyResult{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-apply", Plan: plan.JSONReport(false),
 		Verified: applied.Verified, Projections: applied.Projections,
 		Readiness: JSONReadiness{
 			Configured: optionalBool(applied.ReadinessObserved.Configured, applied.Readiness.Configured),

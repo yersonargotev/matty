@@ -36,7 +36,7 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *testing.T) {
 	bundleRoot := filepath.Join("..", "..", "bundle")
 	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
-	for _, item := range []struct{ id, version string }{{"engram", "1.0.0"}, {workflowPackID, "2.0.0"}} {
+	for _, item := range []struct{ id, version string }{{"engram", "1.0.0"}} {
 		t.Run(item.id, func(t *testing.T) {
 			current := mustRead(t, filepath.Join(bundleRoot, "packs", item.id, "pack.json"))
 			root := filepath.Join(bundleRoot, "history", item.id, item.version)
@@ -51,6 +51,11 @@ func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *te
 				t.Fatalf("historical version = %q", pack.Version)
 			}
 		})
+	}
+	// Matty 2.0.0 remains an immutable v1 artifact after the v3 catalog cutover.
+	root := filepath.Join(bundleRoot, "history", workflowPackID, "2.0.0")
+	if pack, err := loadHistoricalArtifact(root, bundleRoot, workflowPackID, "2.0.0"); err != nil || pack.Version != "2.0.0" {
+		t.Fatalf("retained Matty v2 artifact: pack=%#v err=%v", pack, err)
 	}
 }
 
@@ -80,6 +85,38 @@ func TestV3UpdateRoutesPreserveExistingSurfaceIntent(t *testing.T) {
 	}
 	if err := production.validateUpdateRoute(workflowPackID, "2.0.1", "3.0.0", manifestSchemaV2, SurfaceCodex); err != nil {
 		t.Fatalf("pre-v3 catalog route was newly constrained: %v", err)
+	}
+}
+
+func TestCheckedInMattyTwoIntentStaysPinnedUntilExplicitThreeUpdate(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	catalog, err := DiscoverForDurableIntents(bundleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := ActivationIntent{PackID: "matty", Surface: SurfaceCodex, Version: "2.0.0", Active: true, Revision: 7}
+	store := &fakeActivationStore{state: ActivationState{Intent: intent, Intents: []ActivationIntent{intent}}}
+	adapter := &fakeSurfaceAdapter{inspect: func(SurfaceTransition) SurfaceInspection { return SurfaceInspection{Revision: "host"} }}
+	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter, SurfaceClaude: adapter}))
+	report, err := facade.Status(context.Background(), StatusRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Intent.Version != "2.0.0" || !report.Entries[0].UpdateAvailable || report.Entries[0].Pack.Version != "3.0.0" {
+		t.Fatalf("pinned status = %#v", report)
+	}
+	update, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "matty", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.OldVersion() != "2.0.0" || update.Pack().Version != "3.0.0" || update.Surface() != SurfaceCodex {
+		t.Fatalf("explicit update = %#v", update.JSONReport(true))
+	}
+	if _, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "matty", Surface: SurfaceClaude}); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("implicit Claude update error = %v", err)
+	}
+	if len(store.saves) != 0 || !reflect.DeepEqual(store.state.Intent, intent) {
+		t.Fatalf("preview changed pinned intent: %#v", store.state)
 	}
 }
 
@@ -188,11 +225,7 @@ func trustHistoricalFixture(t *testing.T, root, key string) {
 
 func TestCheckedInMattyTwoPreservesWorkflowConventionsInOneOwnedInstruction(t *testing.T) {
 	bundleRoot := filepath.Join("..", "..", "bundle")
-	catalog, err := Discover(bundleRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pack, err := catalog.Show("matty")
+	pack, err := loadHistoricalArtifact(filepath.Join(bundleRoot, "history", "matty", "2.0.0"), bundleRoot, "matty", "2.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +238,7 @@ func TestCheckedInMattyTwoPreservesWorkflowConventionsInOneOwnedInstruction(t *t
 			source = resource.Source
 		}
 	}
-	if source != "instructions/matty-workflow-conventions.md" {
+	if !strings.HasSuffix(source, "instructions/matty-workflow-conventions.md") {
 		t.Fatalf("workflow conventions source = %q", source)
 	}
 	content := string(mustRead(t, filepath.Join(bundleRoot, filepath.FromSlash(source))))
@@ -292,6 +325,7 @@ func TestHistoricalArtifactFailsClosed(t *testing.T) {
 
 func TestHistoricalOperationsUseOnlyHistoryWhileSelectionStaysCatalogCurrent(t *testing.T) {
 	catalog, root, bundle := clonedHistoricalCatalog(t)
+	catalog.enforceUpdateRoutes = false
 	intent := ActivationIntent{PackID: "matty", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 4}
 	state := ActivationState{Intent: intent, Intents: []ActivationIntent{intent}}
 	adapter := &fakeSurfaceAdapter{}

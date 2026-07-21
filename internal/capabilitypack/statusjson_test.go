@@ -9,6 +9,9 @@ func TestStatusJSONDistinguishesObservedFalseFromUnknownAndSorts(t *testing.T) {
 	knownFalse := StatusEntry{Pack: Pack{ID: "z", Version: "1"}, Surface: SurfaceCodex, IntentPresent: true, Intent: IntentStatus{Revision: 2}, ReadinessObserved: ReadinessObservationStatus{Configured: true, Authorization: true}, Blockers: []string{"z", "a"}, Evidence: nil, PendingHumanActions: []string{"reload", "login"}}
 	unknown := StatusEntry{Pack: Pack{ID: "a", Version: "1"}, Surface: SurfaceOpenCode, ReadinessObserved: ReadinessObservationStatus{Configured: true}}
 	report := (StatusReport{Entries: []StatusEntry{knownFalse, unknown}}).JSONReport(false)
+	if report.SchemaVersion != 2 {
+		t.Fatalf("status schema version = %d", report.SchemaVersion)
+	}
 	if report.Entries[0].Pack != "a" || report.Entries[1].Pack != "z" {
 		t.Fatalf("entries not sorted: %#v", report.Entries)
 	}

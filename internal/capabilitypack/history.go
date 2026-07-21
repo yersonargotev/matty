@@ -49,6 +49,7 @@ func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, targetMa
 
 func init() {
 	trustedHistoricalAggregates[strings.Join([]string{"ma", "tty@2.0.0"}, "")] = "b04e745e59562a3f0f65585af775ee22d68c4b54b43a795b2030557eb5f406c2"
+	trustedHistoricalAggregates[strings.Join([]string{"ma", "tty@3.0.0"}, "")] = "055f9d0d20715c72e792464723ef183e06b1f845fe31fed5468a87530e762258"
 	trustedHistoricalAggregates["engram@1.0.0"] = "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
 }
 

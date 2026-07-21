@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "pack_id": "matty",
+  "from_version": "2.0.0",
+  "to_version": "3.0.0",
+  "classification": {
+    "level": "major",
+    "decided_by": "human"
+  },
+  "rationale": "Manifest schema v3 adds explicit per-surface bindings and publishes native Claude projections while preserving the exact selected resources and their source bytes; existing activation intent remains pinned until an explicit update.",
+  "migration": {
+    "instruction_id": "matty-guidance",
+    "instruction_source": "instructions/matty-guidance.md",
+    "replacement_rules": [
+      {
+        "id": "explicit-bounded-delegation",
+        "semantics": "Use Matty skills and explicit, bounded delegation when they match the task."
+      }
+    ],
+    "divergent_files": []
+  },
+  "historical_artifact": {
+    "path": "history/matty/2.0.0/artifact.json",
+    "artifact_sha256": "84d2b3971424b5a3bf3890d79cf9791746aabd08380deb56bb992bf5baaf99c1",
+    "aggregate_sha256": "b04e745e59562a3f0f65585af775ee22d68c4b54b43a795b2030557eb5f406c2"
+  },
+  "selection": {
+    "unchanged": true,
+    "source_id": "mattpocock-skills",
+    "binding_count": 23,
+    "bindings": [
+      "matty/skill/ask-matt",
+      "matty/skill/code-review",
+      "matty/skill/codebase-design",
+      "matty/skill/diagnosing-bugs",
+      "matty/skill/domain-modeling",
+      "matty/skill/grill-me",
+      "matty/skill/grill-with-docs",
+      "matty/skill/grilling",
+      "matty/skill/handoff",
+      "matty/skill/implement",
+      "matty/skill/improve-codebase-architecture",
+      "matty/skill/loop-me",
+      "matty/skill/prototype",
+      "matty/skill/research",
+      "matty/skill/resolving-merge-conflicts",
+      "matty/skill/setup-matt-pocock-skills",
+      "matty/skill/tdd",
+      "matty/skill/teach",
+      "matty/skill/to-spec",
+      "matty/skill/to-tickets",
+      "matty/skill/triage",
+      "matty/skill/wayfinder",
+      "matty/skill/writing-great-skills"
+    ]
+  },
+  "claims_upstream_provenance": false,
+  "replaces_source_lock": false
+}

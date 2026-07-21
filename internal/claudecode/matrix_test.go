@@ -691,3 +691,52 @@ func TestSkillSameBytesWrongPathTypesNeverTransferOwnership(t *testing.T) {
 		}
 	})
 }
+
+func TestSurfaceAdapterAggregatesMultipleInstructionContributionsIntoOneSealedDocument(t *testing.T) {
+	home := t.TempDir()
+	bundle := filepath.Join(home, "bundle")
+	if err := os.MkdirAll(bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"one.md": "one", "two.md": "two"} {
+		if err := os.WriteFile(filepath.Join(bundle, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bindings := func(name string) []capabilitypack.Binding {
+		return []capabilitypack.Binding{{Surface: capabilitypack.SurfaceClaude, Projection: "instruction", Name: name}}
+	}
+	pack := capabilitypack.Pack{ID: "p", Resources: []capabilitypack.Resource{
+		{Kind: "instruction", ID: "one", Source: "one.md", Bindings: bindings("one")},
+		{Kind: "instruction", ID: "two", Source: "two.md", Bindings: bindings("two")},
+	}}
+	layout := NewCanonicalLayout(home)
+	a := NewSurfaceAdapter(bundle, layout, filepath.Join(home, "state"), "", &recordingRunner{}, StaticOwnershipSnapshot(OwnershipSnapshot{}))
+	inspection, err := a.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.Projections) != 2 || inspection.Projections[0].Action.Content != inspection.Projections[1].Action.Content {
+		t.Fatalf("instruction actions were not sealed to one shared document: %#v", inspection.Projections)
+	}
+	content := inspection.Projections[0].Action.Content
+	if !strings.Contains(content, "pack:p:one") || !strings.Contains(content, "pack:p:two") {
+		t.Fatalf("sealed document omitted a contribution:\n%s", content)
+	}
+	if actionErr := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{inspection.Projections[0].Action, inspection.Projections[1].Action}); actionErr != nil {
+		t.Fatal(actionErr)
+	}
+	if got, err := os.ReadFile(layout.InstructionsFile); err != nil || string(got) != content {
+		t.Fatalf("shared document write: err=%v\n%s", err, got)
+	}
+	removal, err := a.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Prior: pack, Desired: capabilitypack.Pack{ID: "empty"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removal.Projections) != 2 || removal.Projections[0].Action.Content != removal.Projections[1].Action.Content {
+		t.Fatalf("instruction removals were not sealed to one shared document: %#v", removal.Projections)
+	}
+	if removed := removal.Projections[0].Action.Content; strings.Contains(removed, "pack:p:one") || strings.Contains(removed, "pack:p:two") {
+		t.Fatalf("sealed removal retained a contribution:\n%s", removed)
+	}
+}

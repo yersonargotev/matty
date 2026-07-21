@@ -295,8 +295,8 @@ func TestAlreadyConvergedActivationIsNoOpWithoutApprovalOrApply(t *testing.T) {
 	if !plan.NoOp() {
 		t.Fatalf("plan is not no-op: %+v", plan)
 	}
-	if plan.Readiness() != (ReadinessStatus{Configured: true}) {
-		t.Fatalf("preview promoted fresh host readiness: %+v", plan.Readiness())
+	if plan.Readiness() != (ReadinessStatus{Configured: true, Authorized: true, Usable: true}) || plan.ReadinessObserved() != (ReadinessObservationStatus{Configured: true, Authorization: true, Usability: true}) {
+		t.Fatalf("preview expected readiness = %+v observed=%+v", plan.Readiness(), plan.ReadinessObserved())
 	}
 	if adapter.inspectCalls != 1 || len(adapter.actions) != 0 || len(store.saves) != 0 {
 		t.Fatalf("no-op caused apply/save")

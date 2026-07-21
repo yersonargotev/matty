@@ -61,6 +61,7 @@ type acceptedCompatibilityContract struct {
 
 var acceptedCompatibilityContracts = []acceptedCompatibilityContract{
 	{PackID: "matty", FromVersion: "1.0.0", ToVersion: "2.0.0", EvidenceSHA256: "fc15a7e2a3d14851356278d206b32cea5ea6b770cabc7a30267bd04e68b61bac"},
+	{PackID: "matty", FromVersion: "2.0.0", ToVersion: "3.0.0", EvidenceSHA256: "2f46f9aa84bc3c4dc52e60416b216dca4fba56591af06796c0b9979a08703bd5"},
 }
 
 func compatibilityBlockers(repositoryRoot, snapshotRoot string, source SourceConfig, bindings []Binding, manifests map[string]packManifest) []string {
@@ -75,8 +76,15 @@ func compatibilityBlockers(repositoryRoot, snapshotRoot string, source SourceCon
 			continue
 		}
 		current, ok := manifests[contract.PackID]
-		if !ok || current.Version != contract.ToVersion {
+		if !ok {
 			continue
+		}
+		if current.Version != contract.ToVersion {
+			archived, err := readCompatibilityManifest(filepath.Join(repositoryRoot, "bundle", "history", contract.PackID, contract.ToVersion, "pack.json"))
+			if err != nil || archived.ID != contract.PackID || archived.Version != contract.ToVersion {
+				continue
+			}
+			current = archived
 		}
 		historyRoot := filepath.Join(repositoryRoot, "bundle", "history", contract.PackID, contract.FromVersion)
 		historical, err := readCompatibilityManifest(filepath.Join(historyRoot, "pack.json"))
@@ -103,12 +111,24 @@ func compatibilityBlockers(repositoryRoot, snapshotRoot string, source SourceCon
 		if !targetPacks[historical.ID] || !ok || current.Version == historical.Version {
 			continue
 		}
-		if validated[compatibilityKey(historical.ID, historical.Version, current.Version)] {
+		if acceptedCompatibilityRoute(validated, historical.ID, historical.Version, current.Version) {
 			continue
 		}
 		blockers = append(blockers, validateCompatibilityEvidence(repositoryRoot, snapshotRoot, source, bindings, current, historical, filepath.Dir(historyPath), "")...)
 	}
 	return blockers
+}
+
+func acceptedCompatibilityRoute(validated map[string]bool, packID, fromVersion, toVersion string) bool {
+	if validated[compatibilityKey(packID, fromVersion, toVersion)] {
+		return true
+	}
+	for _, contract := range acceptedCompatibilityContracts {
+		if contract.PackID == packID && contract.FromVersion == fromVersion && validated[compatibilityKey(packID, contract.FromVersion, contract.ToVersion)] && acceptedCompatibilityRoute(validated, packID, contract.ToVersion, toVersion) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCompatibilityEvidence(repositoryRoot, snapshotRoot string, source SourceConfig, bindings []Binding, current, historical packManifest, historyRoot, trustedDigest string) []string {
@@ -258,8 +278,13 @@ func validateManifestMigration(current, historical packManifest, evidence compat
 		}
 		added++
 	}
-	if len(historicalResources) != 0 || added != 1 {
+	if len(historicalResources) != 0 || (added != 1 && added != 0) {
 		return []string{"pack resource selection changed or replacement instruction is not unique"}
+	}
+	if added == 0 {
+		if _, found := manifestResourceByKey(historical, "instruction", evidence.Migration.InstructionID); !found || len(evidence.Migration.DivergentFiles) != 0 {
+			return []string{"surface-only migration must retain its replacement instruction and have no divergent files"}
+		}
 	}
 	return nil
 }
@@ -318,7 +343,7 @@ func validateReplacementMapping(files []replacementFile, rules map[string]string
 	if !reflect.DeepEqual(actual, expected) {
 		return []string{"divergent-file mapping does not exactly cover historical-to-upstream byte drift"}
 	}
-	if len(usedRules) != len(rules) {
+	if len(expected) != 0 && len(usedRules) != len(rules) {
 		return []string{"divergent-file mapping does not use every replacement rule"}
 	}
 	return nil

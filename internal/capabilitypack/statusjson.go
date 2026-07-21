@@ -2,7 +2,7 @@ package capabilitypack
 
 import "sort"
 
-const StatusSchemaVersion = 1
+const StatusSchemaVersion = 2
 
 type JSONOptionalBool struct {
 	State string `json:"state"`

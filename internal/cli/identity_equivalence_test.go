@@ -147,9 +147,21 @@ func captureIdentityEquivalenceTranscript(t *testing.T) identityEquivalenceTrans
 	for _, surface := range []string{"codex", "opencode"} {
 		terminal := &fakeTerminal{interactive: true, approve: true}
 		packOpts, packHome, repoRoot := packActivationOptions(t, terminal)
+		legacyBundle := filepath.Join(t.TempDir(), "bundle")
+		if err := os.CopyFS(legacyBundle, os.DirFS(filepath.Join(repoRoot, "bundle"))); err != nil {
+			t.Fatal(err)
+		}
+		legacyManifest, err := os.ReadFile(filepath.Join(legacyBundle, "history", "matty", "2.0.0", "pack.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(legacyBundle, "packs", "matty", "pack.json"), legacyManifest, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		packOpts.Clock = opts.Clock
 		packEnv := packOpts.Env.(MapEnv)
-		packRoots := map[string]string{packHome: "$HOME", packEnv["XDG_CONFIG_HOME"]: "$XDG", repoRoot: "$REPOSITORY"}
+		packEnv["PACKY_SKILLS_SOURCE"] = filepath.Join(legacyBundle, "skills")
+		packRoots := map[string]string{packHome: "$HOME", packEnv["XDG_CONFIG_HOME"]: "$XDG", repoRoot: "$REPOSITORY", filepath.Dir(legacyBundle): "$REPOSITORY"}
 		seedIdentityEquivalenceOperatorContent(t, packHome, packEnv["XDG_CONFIG_HOME"])
 		packRunner := packOpts.Runner.(*fakeRunner)
 		packRecord := func(operation string, args ...string) {
@@ -259,7 +271,7 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// Slice F intentionally deepens capability-pack lifecycle disclosure and
 	// preserves unobserved readiness as unknown. These are post-cutover product
 	// changes, not identity-cutover regressions covered by this frozen baseline.
-	value = regexp.MustCompile(`(?m)^(Binding|Exclusion|Optional mode|Invocation-time prompt authority|Activation grants only|Projection:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(Binding|Exclusion|Optional mode|Invocation-time prompt authority|Activation grants only|Projection:|Expected readiness:|Observed evidence:|Pending evidence:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
 	value = strings.ReplaceAll(value, "authorized=unknown, usable=unknown", "authorized=no, usable=no")
 	value = strings.ReplaceAll(value, "authorized=yes, usable=unknown", "authorized=yes, usable=no")
 	value = strings.ReplaceAll(value, "authorized=no, usable=unknown", "authorized=no, usable=no")
@@ -279,8 +291,16 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 func removeSliceFJSONFields(value any) {
 	switch value := value.(type) {
 	case map[string]any:
+		if report, ok := value["report"].(string); ok && strings.HasPrefix(report, "pack-lifecycle-") {
+			delete(value, "evidence")
+		} else if ok && strings.HasPrefix(report, "pack-status") {
+			value["schema_version"] = float64(1)
+		}
 		delete(value, "contract")
 		delete(value, "projection_details")
+		delete(value, "expected_readiness")
+		delete(value, "readiness_observed")
+		delete(value, "pending_evidence")
 		for _, child := range value {
 			removeSliceFJSONFields(child)
 		}

@@ -66,6 +66,27 @@ func TestInstructionUpsertPreservesForeignAndOtherContributorBytes(t *testing.T)
 	}
 }
 
+func TestInstructionLastContributorCleanupRestoresForeignDocumentByteExact(t *testing.T) {
+	document := "operator-owned guidance\n"
+	merged, err := UpsertInstructionContribution(document, InstructionContribution{ContributorID: "pack:p:one", Content: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err = UpsertInstructionContribution(merged, InstructionContribution{ContributorID: "pack:p:two", Content: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contributor := range []string{"pack:p:one", "pack:p:two"} {
+		merged, err = RemoveInstructionContribution(merged, contributor)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if merged != document {
+		t.Fatalf("foreign document changed:\n got %q\nwant %q", merged, document)
+	}
+}
+
 func TestApplyRejectsUnsealedAndStaleActions(t *testing.T) {
 	home := t.TempDir()
 	layout := NewCanonicalLayout(home)

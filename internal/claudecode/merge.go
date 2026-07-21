@@ -56,7 +56,11 @@ func RemoveInstructionContribution(document, contributorID string) (string, erro
 	insideStart := strings.Index(result, instructionStart)
 	insideEnd := strings.Index(result, instructionEnd)
 	if insideStart >= 0 && insideEnd >= 0 && strings.TrimSpace(result[insideStart+len(instructionStart):insideEnd]) == "" {
-		result = result[:insideStart] + result[insideEnd+len(instructionEnd):]
+		after := result[insideEnd+len(instructionEnd):]
+		if insideStart == 0 && strings.HasPrefix(after, "\n") {
+			after = after[1:]
+		}
+		result = result[:insideStart] + after
 	}
 	return result, nil
 }
@@ -83,7 +87,7 @@ func MergeInstructions(document string, contributions []InstructionContribution)
 	if strings.TrimSpace(document) == "" {
 		return block + "\n", nil
 	}
-	return strings.TrimRight(document, "\n") + "\n\n" + block + "\n", nil
+	return block + "\n" + document, nil
 }
 
 func validateMarkerPair(document, start, end, label string) error {

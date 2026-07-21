@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -74,6 +75,16 @@ type OwnershipRecord struct {
 
 func (r OwnershipRecord) MatchesSkill(surface, projectionID, path, expectedSource string, observation SkillObservation) bool {
 	return r.Fingerprint == observation.TreeFingerprint && r.Skill.Matches(surface, projectionID, path, expectedSource, observation)
+}
+
+func ownsSkillExact(snapshot OwnershipSnapshot, id, target, expectedSource string, observation SkillObservation) bool {
+	matches := 0
+	for _, record := range snapshot.Records {
+		if record.StateOwner != "" && record.ContributorID != "" && slices.Contains(record.Contributors, record.ContributorID) && record.ID == id && record.Kind == string(ActionSkillLink) && filepath.Clean(record.Target) == filepath.Clean(target) && record.MatchesSkill("claude", id, target, expectedSource, observation) {
+			matches++
+		}
+	}
+	return matches == 1
 }
 
 // OwnershipSnapshot is a read-only composite view of records retained by their authoritative owners.
