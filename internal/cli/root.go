@@ -237,7 +237,7 @@ func newDoctorCommand(opts Options, workstationResolver *workstation.Resolver) *
 			if opts.SetupHealthDiagnose != nil {
 				report, err = opts.SetupHealthDiagnose()
 			} else {
-				report, err = diagnoseSetupHealth(opts, workstationResolver)
+				report, err = diagnoseSetupHealth(cmd.Context(), opts, workstationResolver)
 			}
 			if err != nil {
 				return err
@@ -256,7 +256,7 @@ func newDoctorCommand(opts Options, workstationResolver *workstation.Resolver) *
 	return cmd
 }
 
-func diagnoseSetupHealth(opts Options, resolver *workstation.Resolver) (setuphealth.Report, error) {
+func diagnoseSetupHealth(ctx context.Context, opts Options, resolver *workstation.Resolver) (setuphealth.Report, error) {
 	snapshot, err := resolver.Resolve(workstation.Options{})
 	if err != nil {
 		return setuphealth.Report{}, err
@@ -271,14 +271,24 @@ func diagnoseSetupHealth(opts Options, resolver *workstation.Resolver) (setuphea
 	codexLayout := codex.NewCanonicalLayout(snapshot.Home())
 	openCodeLayout := opencode.NewCanonicalLayout(snapshot.ConfigurationHome())
 	engramLayout := engrambin.NewSetupLayout(snapshot.Home(), snapshot.HomebrewPrefix())
+	lifecycleObservation := corelifecycle.ObserveSetup(state, skills, sources.skills)
+	claudeExecutable, err := opts.ClaudeLookPath("claude")
+	if err != nil {
+		claudeExecutable = ""
+	}
+	claudeObservation := claudecode.ObserveSetup(
+		ctx, claudecode.NewCanonicalLayout(snapshot.Home()), claudeExecutable, opts.ClaudeRunner,
+		lifecycleObservation.State().ClaudeOwnershipSnapshot(),
+	)
 
 	return setuphealth.Diagnose(
 		snapshot.Home(),
 		snapshot.ConfigurationHome(),
-		corelifecycle.ObserveSetup(state, skills, sources.skills),
+		lifecycleObservation,
 		engrambin.ObserveSetup(engramLayout, snapshot.ExecutableSearchPath(), opts.Runner.LookPath, opts.EngramFacts),
 		codex.ObserveSetup(codexLayout),
 		opencode.ObserveSetup(openCodeLayout),
+		claudeObservation,
 	), nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/corelifecycle"
 	"github.com/yersonargotev/packy/internal/engrambin"
@@ -41,15 +42,22 @@ func TestDiagnoseReturnsCompleteOrderedReadOnlyReportAfterPartialFailures(t *tes
 		{Severity: Warn, Name: "engram-setup", Detail: "state is missing, so delegated setup cannot be confirmed; run packy install"},
 		{Severity: Warn, Name: "codex-config", Detail: "missing Packy Codex prompt markers at " + config.CodexPromptFile + "; run packy install"},
 		{Severity: Warn, Name: "opencode-config", Detail: "missing OpenCode config; run packy install"},
+		{Severity: Pass, Name: "claude-binary", Detail: "Claude Code executable found at /sandbox/bin/claude"},
+		{Severity: Pass, Name: "claude-version", Detail: "Claude Code 2.1.203 is supported"},
+		{Severity: Pass, Name: "claude-skills", Detail: "0 recorded Claude skill projections match"},
+		{Severity: Pass, Name: "claude-instructions", Detail: "0 recorded Claude instruction projections match"},
+		{Severity: Pass, Name: "claude-hooks", Detail: "0 recorded Claude hook projections match"},
+		{Severity: Pass, Name: "claude-mcp", Detail: "0 recorded Claude user MCP projections match"},
+		{Severity: Warn, Name: "claude-readiness", Detail: "Claude runtime usability is unknown; start Claude Code explicitly to verify loading, connection, and hook firing"},
 	}
 	if !reflect.DeepEqual(report.Checks, want) {
 		t.Fatalf("checks changed:\ngot:  %#v\nwant: %#v", report.Checks, want)
 	}
 	wantContext := Context{HomeDir: config.HomeDir, ConfigHome: config.ConfigHome, StateFile: config.StateFile, StateStatus: "missing", AgentSkillsDir: config.AgentSkillsDir}
-	if report.SchemaVersion != 1 || report.Kind != "doctor" || report.Context != wantContext {
+	if report.SchemaVersion != 2 || report.Kind != "doctor" || report.Context != wantContext {
 		t.Fatalf("report metadata = %#v", report)
 	}
-	if report.Summary != (Summary{Status: "failures", Passes: 1, Warnings: 6, Failures: 1}) {
+	if report.Summary != (Summary{Status: "failures", Passes: 7, Warnings: 7, Failures: 1}) {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
 	if got := snapshot(t, config.HomeDir); got != before {
@@ -79,19 +87,153 @@ func TestDiagnoseHealthySetupReport(t *testing.T) {
 
 	report := diagnose(config, &lookupStub{path: canonical}, facts("1.19.0", nil, nil))
 
-	if report.Summary != (Summary{Status: "healthy", Passes: 8}) {
+	if report.Summary != (Summary{Status: "warnings", Passes: 14, Warnings: 1}) {
 		t.Fatalf("summary = %#v", report.Summary)
 	}
-	wantNames := []string{"packy-state", "skill-symlinks", "engram-binary", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"}
+	wantNames := []string{"packy-state", "skill-symlinks", "engram-binary", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config", "claude-binary", "claude-version", "claude-skills", "claude-instructions", "claude-hooks", "claude-mcp", "claude-readiness"}
 	gotNames := make([]string, 0, len(report.Checks))
 	for _, check := range report.Checks {
 		gotNames = append(gotNames, check.Name)
-		if check.Severity != Pass {
+		if check.Severity != Pass && check.Name != "claude-readiness" {
 			t.Fatalf("non-PASS healthy check: %#v", check)
 		}
 	}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("check order = %#v, want %#v", gotNames, wantNames)
+	}
+}
+
+func TestClaudeChecksOwnPublicObservationBoundaries(t *testing.T) {
+	config := sandboxConfig(t)
+	state := desiredState(config, nil)
+	state.ClaudeOwnership = []corelifecycle.ClaudeOwnership{
+		{ID: "skill:x", Kind: corelifecycle.ClaudeOwnershipSkill, Target: "/claude/skills/x", LinkTarget: "/source/x", Fingerprint: "skill-fp"},
+		{ID: "instruction:x", Kind: corelifecycle.ClaudeOwnershipInstruction, Target: "/claude/CLAUDE.md", Contributors: []string{"classic"}, Fingerprint: "instruction-fp"},
+		{ID: "hook:x", Kind: corelifecycle.ClaudeOwnershipHook, Target: "/claude/settings.json", Fingerprint: "hook-fp"},
+		{ID: "mcp:x", Kind: corelifecycle.ClaudeOwnershipMCP, Target: "engram", Fingerprint: "mcp-fp"},
+	}
+	saveState(t, config, state)
+	base := claudecode.SetupObservation{
+		Version:      claudecode.VersionObservation{Executable: "/bin/claude", Version: "2.1.203"},
+		Skills:       []claudecode.SkillObservation{{Path: "/claude/skills/x", Kind: claudecode.PathSymlink, ResolvedTarget: "/source/x", TreeFingerprint: "skill-fp"}},
+		Instructions: claudecode.InstructionObservation{Contributions: map[string]string{"classic": "instruction-fp"}},
+		Hooks:        claudecode.HookObservation{Parseable: true, MatchingEntries: []string{"hook-fp"}, EntryFingerprint: "hook-fp"},
+		MCP:          []claudecode.MCPObservation{{Name: "engram", Present: true, DefinitionFingerprint: "mcp-fp"}},
+	}
+	diagnoseClaude := func(observation claudecode.SetupObservation) Report {
+		return Diagnose(config.HomeDir, config.ConfigHome, corelifecycle.ObserveSetup(config.state, config.skills, config.source), missingEngramObservation(config), codex.SetupObservation{}, opencode.SetupObservation{}, observation)
+	}
+	report := diagnoseClaude(base)
+	assertCheck(t, report, Pass, "claude-binary", "/bin/claude")
+	assertCheck(t, report, Pass, "claude-version", "2.1.203")
+	for _, name := range []string{"claude-skills", "claude-instructions", "claude-hooks", "claude-mcp"} {
+		assertCheck(t, report, Pass, name, "1 recorded")
+	}
+	assertCheck(t, report, Warn, "claude-readiness", "usability is unknown")
+	authorized := base
+	authorized.Authorization = claudecode.AuthorizationObservation{PolicyObserved: true, ToolPermissionObserved: true}
+	authorized.RuntimeEvidence = []claudecode.RuntimeEvidence{{Kind: "loading", ID: "classic", Signal: "loaded", Revision: "current"}}
+	assertCheck(t, diagnoseClaude(authorized), Pass, "claude-readiness", "explicit current runtime evidence")
+	disabled := base
+	disabled.Authorization = claudecode.AuthorizationObservation{PolicyObserved: true, Disabled: true}
+	assertCheck(t, diagnoseClaude(disabled), Fail, "claude-readiness", "disables")
+	authorizationFailure := base
+	authorizationFailure.Authorization = claudecode.AuthorizationObservation{Err: errors.New("policy unavailable")}
+	assertCheck(t, diagnoseClaude(authorizationFailure), Warn, "claude-readiness", "observation failed")
+
+	for _, tt := range []struct {
+		name, check, detail string
+		change              func(*claudecode.SetupObservation)
+	}{
+		{name: "missing skill", check: "claude-skills", detail: "missing", change: func(o *claudecode.SetupObservation) { o.Skills = nil }},
+		{name: "drifted skill", check: "claude-skills", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Skills[0].TreeFingerprint = "changed" }},
+		{name: "drifted instruction", check: "claude-instructions", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Instructions.Contributions["classic"] = "changed" }},
+		{name: "invalid instruction document", check: "claude-instructions", detail: "invalid", change: func(o *claudecode.SetupObservation) { o.Instructions.Err = errors.New("invalid markers") }},
+		{name: "disabled hook", check: "claude-hooks", detail: "disables", change: func(o *claudecode.SetupObservation) { o.Hooks.Disabled = true }},
+		{name: "shadowed hook", check: "claude-hooks", detail: "shadows", change: func(o *claudecode.SetupObservation) { o.Hooks.Shadowed = true }},
+		{name: "drifted hook", check: "claude-hooks", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Hooks.MatchingEntries[0] = "changed" }},
+		{name: "missing mcp", check: "claude-mcp", detail: "missing", change: func(o *claudecode.SetupObservation) { o.MCP = nil }},
+		{name: "unreadable mcp", check: "claude-mcp", detail: "unreadable", change: func(o *claudecode.SetupObservation) { o.MCP[0].Err = errors.New("invalid JSON") }},
+		{name: "drifted mcp", check: "claude-mcp", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.MCP[0].DefinitionFingerprint = "changed" }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			o := base
+			o.Skills = append([]claudecode.SkillObservation(nil), base.Skills...)
+			o.MCP = append([]claudecode.MCPObservation(nil), base.MCP...)
+			o.Hooks.MatchingEntries = append([]string(nil), base.Hooks.MatchingEntries...)
+			o.Instructions.Contributions = map[string]string{"classic": "instruction-fp"}
+			tt.change(&o)
+			assertCheck(t, diagnoseClaude(o), Fail, tt.check, tt.detail)
+		})
+	}
+}
+
+func TestClaudeObservationFailuresWarnWithoutRecordedOwnership(t *testing.T) {
+	config := sandboxConfig(t)
+	diagnoseClaude := func(observation claudecode.SetupObservation) Report {
+		return Diagnose(config.HomeDir, config.ConfigHome, corelifecycle.ObserveSetup(config.state, config.skills, config.source), missingEngramObservation(config), codex.SetupObservation{}, opencode.SetupObservation{}, observation)
+	}
+	for _, tt := range []struct {
+		name, check, detail string
+		observation         claudecode.SetupObservation
+	}{
+		{name: "skills", check: "claude-skills", detail: "skills unavailable", observation: claudecode.SetupObservation{Skills: []claudecode.SkillObservation{{Err: errors.New("skills unavailable")}}}},
+		{name: "instructions", check: "claude-instructions", detail: "instructions unavailable", observation: claudecode.SetupObservation{Instructions: claudecode.InstructionObservation{Err: errors.New("instructions unavailable")}}},
+		{name: "hooks", check: "claude-hooks", detail: "hooks unavailable", observation: claudecode.SetupObservation{Hooks: claudecode.HookObservation{Err: errors.New("hooks unavailable")}}},
+		{name: "mcp", check: "claude-mcp", detail: "MCP unavailable", observation: claudecode.SetupObservation{MCP: []claudecode.MCPObservation{{Err: errors.New("MCP unavailable")}}}},
+		{name: "authorization", check: "claude-readiness", detail: "authorization unavailable", observation: claudecode.SetupObservation{Authorization: claudecode.AuthorizationObservation{Err: errors.New("authorization unavailable")}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.observation.Version = claudecode.VersionObservation{Executable: "/bin/claude", Version: claudecode.MinimumSupportedVersion}
+			assertCheck(t, diagnoseClaude(tt.observation), Warn, tt.check, tt.detail)
+		})
+	}
+}
+
+func TestLegacyStateIsMigrationWarningNotCorruption(t *testing.T) {
+	config := sandboxConfig(t)
+	legacy := `{"schema_version":1,"packy_version":"legacy","managed_skills":[],"configured_surfaces":["codex","opencode"],"paths":{"state_file":"` + config.StateFile + `","agent_skills_dir":"` + config.AgentSkillsDir + `"},"created_containers":[]}`
+	writeFile(t, config.StateFile, legacy)
+	report := diagnoseWithoutEngram(t, config)
+	assertCheck(t, report, Warn, "packy-state", "valid but awaits migration")
+	assertCheck(t, report, Warn, "claude-readiness", "schema v1 awaits migration")
+}
+
+func TestStateCheckReportsUninstallIncomplete(t *testing.T) {
+	config := sandboxConfig(t)
+	state := desiredState(config, nil)
+	state.InstallStatus = corelifecycle.InstallUninstallIncomplete
+	saveState(t, config, state)
+	report := diagnoseWithoutEngram(t, config)
+	assertCheck(t, report, Fail, "packy-state", "uninstall is incomplete")
+	assertCheck(t, report, Fail, "claude-readiness", "cleanup is incomplete")
+}
+
+func TestClaudeVersionWarningMatrixAndCheckOrder(t *testing.T) {
+	config := sandboxConfig(t)
+	observations := []struct {
+		name, detail string
+		version      claudecode.VersionObservation
+	}{
+		{name: "missing", detail: "executable is missing", version: claudecode.VersionObservation{Missing: true}},
+		{name: "below floor", detail: "below", version: claudecode.VersionObservation{Executable: "/bin/claude", Version: "2.1.202"}},
+		{name: "prerelease", detail: "prerelease", version: claudecode.VersionObservation{Executable: "/bin/claude", Version: "2.1.203-beta.1"}},
+		{name: "unreadable", detail: "parsed", version: claudecode.VersionObservation{Executable: "/bin/claude", Output: "unknown"}},
+		{name: "timeout", detail: "timed out", version: claudecode.VersionObservation{Executable: "/bin/claude", TimedOut: true}},
+		{name: "failure", detail: "boom", version: claudecode.VersionObservation{Executable: "/bin/claude", Err: errors.New("boom")}},
+	}
+	for _, tt := range observations {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Diagnose(config.HomeDir, config.ConfigHome, corelifecycle.ObserveSetup(config.state, config.skills, config.source), missingEngramObservation(config), codex.SetupObservation{}, opencode.SetupObservation{}, claudecode.SetupObservation{Version: tt.version})
+			assertCheck(t, report, Warn, "claude-version", tt.detail)
+			got := report.Checks[len(report.Checks)-7:]
+			want := []string{"claude-binary", "claude-version", "claude-skills", "claude-instructions", "claude-hooks", "claude-mcp", "claude-readiness"}
+			for i := range want {
+				if got[i].Name != want[i] {
+					t.Fatalf("Claude check order = %#v", got)
+				}
+			}
+		})
 	}
 }
 
@@ -121,6 +263,7 @@ func TestDiagnoseStateAndSkillSemanticMatrix(t *testing.T) {
 		saveState(t, config, state)
 		report := diagnoseWithoutEngram(t, config)
 		assertCheck(t, report, Fail, "packy-state", "installation was interrupted")
+		assertCheck(t, report, Fail, "claude-readiness", "recovery or cleanup is incomplete")
 		assertCheck(t, report, Pass, "skill-symlinks", "1 managed links")
 		if report.Context.StateStatus != "present" {
 			t.Fatalf("state status = %q", report.Context.StateStatus)
@@ -217,7 +360,7 @@ func TestDiagnoseEngramSemanticMatrix(t *testing.T) {
 		assertCheck(t, report, Warn, "engram-version", "version failed")
 		assertCheck(t, report, Warn, "engram-path-shadowing", local+" appears before Homebrew Engram at "+canonical)
 		assertNoCheck(t, report, "engram-version-mismatch")
-		assertCheckNames(t, report, []string{"packy-state", "skill-symlinks", "engram-binary", "engram-version", "engram-path-shadowing", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config"})
+		assertCheckNames(t, report, []string{"packy-state", "skill-symlinks", "engram-binary", "engram-version", "engram-path-shadowing", "engram-local-bin", "engram-runtime", "engram-setup", "codex-config", "opencode-config", "claude-binary", "claude-version", "claude-skills", "claude-instructions", "claude-hooks", "claude-mcp", "claude-readiness"})
 
 		f.Version = func(path string) (string, error) {
 			if path == local {
@@ -395,12 +538,17 @@ func diagnose(config setupFixture, lookup *lookupStub, facts engrambin.Facts) Re
 		engrambin.ObserveSetup(config.engram, config.PathEnv, lookup.LookPath, facts),
 		codex.ObserveSetup(config.codex),
 		opencode.ObserveSetup(config.openCode),
+		claudecode.SetupObservation{Version: claudecode.VersionObservation{Executable: "/sandbox/bin/claude", Version: claudecode.MinimumSupportedVersion}},
 	)
 }
 
 func diagnoseWithoutEngram(t *testing.T, config setupFixture) Report {
 	t.Helper()
 	return diagnose(config, &lookupStub{err: errors.New("not found")}, facts("", nil, nil))
+}
+
+func missingEngramObservation(config setupFixture) engrambin.SetupObservation {
+	return engrambin.ObserveSetup(config.engram, config.PathEnv, (&lookupStub{err: errors.New("not found")}).LookPath, facts("", nil, nil))
 }
 
 func facts(version string, processes []engrambin.Process, processErr error) engrambin.Facts {

@@ -79,6 +79,14 @@ type ClaudeOwnership struct {
 	DeletionAuthorized     bool     `json:"deletion_authorized"`
 }
 
+const (
+	ClaudeOwnershipSkill       = "skill"
+	ClaudeOwnershipInstruction = "instruction"
+	ClaudeOwnershipAgent       = "agent"
+	ClaudeOwnershipHook        = "hook"
+	ClaudeOwnershipMCP         = "mcp"
+)
+
 func (ownership ClaudeOwnership) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		ID                     string   `json:"id"`
@@ -399,6 +407,7 @@ const (
 // RecordedOwnership is the deletion authority recorded by classic state.
 type RecordedOwnership struct {
 	ManagedSkills     []ManagedSkill
+	ClaudeOwnership   []ClaudeOwnership
 	CreatedContainers []ownedcontainer.Record
 }
 
@@ -438,8 +447,15 @@ func (observation StateObservation) Found() bool {
 func (observation StateObservation) Err() error { return observation.err }
 
 func (observation StateObservation) Ownership() RecordedOwnership {
+	claudeOwnership := append([]ClaudeOwnership(nil), observation.state.ClaudeOwnership...)
+	for i := range claudeOwnership {
+		claudeOwnership[i].Contributors = append([]string(nil), claudeOwnership[i].Contributors...)
+		claudeOwnership[i].Args = append([]string(nil), claudeOwnership[i].Args...)
+		claudeOwnership[i].EnvironmentKeys = append([]string(nil), claudeOwnership[i].EnvironmentKeys...)
+	}
 	return RecordedOwnership{
 		ManagedSkills:     append([]ManagedSkill(nil), observation.state.ManagedSkills...),
+		ClaudeOwnership:   claudeOwnership,
 		CreatedContainers: append([]ownedcontainer.Record(nil), observation.state.CreatedContainers...),
 	}
 }
@@ -456,6 +472,15 @@ func (observation StateObservation) DesiredSurfaces() []string {
 }
 func (observation StateObservation) Legacy() bool { return observation.state.Legacy() }
 
+// ClaudeOwnershipSnapshot adapts the already-observed classic state into the
+// host module's detached ownership vocabulary without rereading state.
+func (observation StateObservation) ClaudeOwnershipSnapshot() claudecode.OwnershipSnapshot {
+	if !observation.Found() || observation.Legacy() {
+		return claudecode.NewOwnershipSnapshot()
+	}
+	return claudeOwnershipSnapshot(observation.state.ClaudeOwnership)
+}
+
 // ObserveClaudeOwnershipSnapshot adapts authoritative classic state into the
 // detached host ownership view used for fresh Claude preflight. Missing state
 // is an empty snapshot; invalid state remains an error so cleanup fails closed.
@@ -467,15 +492,23 @@ func ObserveClaudeOwnershipSnapshot(path string) (claudecode.OwnershipSnapshot, 
 	if !found || state.Legacy() {
 		return claudecode.NewOwnershipSnapshot(), nil
 	}
-	records := make([]claudecode.OwnershipRecord, 0, len(state.ClaudeOwnership))
-	for _, ownership := range state.ClaudeOwnership {
+	return claudeOwnershipSnapshot(state.ClaudeOwnership), nil
+}
+
+func claudeOwnershipSnapshot(ownershipRecords []ClaudeOwnership) claudecode.OwnershipSnapshot {
+	records := make([]claudecode.OwnershipRecord, 0, len(ownershipRecords))
+	for _, ownership := range ownershipRecords {
 		kind := ownership.Kind
 		switch kind {
-		case "skill":
+		case ClaudeOwnershipSkill:
 			kind = string(claudecode.ActionSkillLink)
-		case "instruction":
+		case ClaudeOwnershipInstruction:
 			kind = string(claudecode.ActionInstructionContribution)
-		case "mcp":
+		case ClaudeOwnershipAgent:
+			kind = string(claudecode.ActionAgentFile)
+		case ClaudeOwnershipHook:
+			kind = string(claudecode.ActionCommandHook)
+		case ClaudeOwnershipMCP:
 			kind = string(claudecode.ActionUserMCP)
 		}
 		records = append(records, claudecode.OwnershipRecord{
@@ -491,5 +524,5 @@ func ObserveClaudeOwnershipSnapshot(path string) (claudecode.OwnershipSnapshot, 
 			EnvironmentFingerprint: ownership.EnvironmentFingerprint,
 		})
 	}
-	return claudecode.NewOwnershipSnapshot(records...), nil
+	return claudecode.NewOwnershipSnapshot(records...)
 }

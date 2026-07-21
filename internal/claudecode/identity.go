@@ -34,6 +34,13 @@ type HookIdentity struct {
 	Authorities             []string
 	EntryFingerprint        string
 }
+
+// HookOwnershipFingerprint binds the parent event to the canonical hook entry.
+// Claude stores the event as the containing object key rather than in the entry.
+func HookOwnershipFingerprint(event, entryFingerprint string) string {
+	return canonicalFingerprint([]string{event, entryFingerprint})
+}
+
 type MCPIdentity struct {
 	Scope, Name, Command   string
 	Args, EnvironmentKeys  []string

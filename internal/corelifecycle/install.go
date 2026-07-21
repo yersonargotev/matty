@@ -565,13 +565,19 @@ func classicStateOwnership(records []claudecode.OwnershipRecord) []ClaudeOwnersh
 	for _, r := range records {
 		kind := strings.TrimPrefix(r.Kind, "claude-")
 		if kind == "skill-link" {
-			kind = "skill"
+			kind = ClaudeOwnershipSkill
 		}
 		if kind == "instruction-contribution" {
-			kind = "instruction"
+			kind = ClaudeOwnershipInstruction
+		}
+		if kind == "agent-file" {
+			kind = ClaudeOwnershipAgent
+		}
+		if kind == "command-hook" {
+			kind = ClaudeOwnershipHook
 		}
 		if kind == "user-mcp" {
-			kind = "mcp"
+			kind = ClaudeOwnershipMCP
 		}
 		out = append(out, ClaudeOwnership{ID: r.ID, Kind: kind, Target: r.Target, Fingerprint: r.Fingerprint, Contributors: append([]string(nil), r.Contributors...), SourcePath: r.Skill.ExpectedSource, LinkTarget: r.Skill.ResolvedTarget, Command: r.Command, Args: append([]string(nil), r.Args...), EnvironmentKeys: append([]string(nil), r.EnvironmentKeys...), EnvironmentFingerprint: r.EnvironmentFingerprint, DeletionAuthorized: r.DeletionAuthorized})
 	}

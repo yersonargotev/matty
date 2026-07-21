@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/localprojection"
@@ -57,13 +58,94 @@ type MCPObservation struct {
 	Err                   error
 }
 type SetupObservation struct {
-	Version      VersionObservation
-	Skills       []SkillObservation
-	Instructions InstructionObservation
-	Agents       []AgentObservation
-	Hooks        HookObservation
-	MCP          []MCPObservation
+	Version         VersionObservation
+	Skills          []SkillObservation
+	Instructions    InstructionObservation
+	Agents          []AgentObservation
+	Hooks           HookObservation
+	MCP             []MCPObservation
+	Authorization   AuthorizationObservation
+	RuntimeEvidence []RuntimeEvidence
 }
+
+// ObserveSetup composes the detached Claude facts used by setup diagnosis. It
+// performs only static reads plus the bounded version observation.
+func ObserveSetup(ctx context.Context, layout CanonicalLayout, executable string, runner Runner, ownership OwnershipSnapshot) SetupObservation {
+	settings := ObserveSettings(layout.SettingsFile, nil)
+	observation := SetupObservation{
+		Version:      ObserveVersion(ctx, executable, runner),
+		Instructions: ObserveInstructions(layout.InstructionsFile),
+		Authorization: AuthorizationObservation{
+			PolicyObserved: settings.Parseable, Disabled: settings.Disabled,
+			Shadowed: settings.Shadowed, Err: settings.Err,
+		},
+	}
+	var hookFingerprints []string
+	for _, record := range ownership.Records {
+		switch record.Kind {
+		case string(ActionSkillLink):
+			observation.Skills = append(observation.Skills, ObserveSkill(record.Target, record.Skill.ExpectedSource))
+		case string(ActionAgentFile):
+			observation.Agents = append(observation.Agents, ObserveAgent(record.Target))
+		case string(ActionCommandHook):
+			hookFingerprints = append(hookFingerprints, record.Fingerprint)
+		case string(ActionUserMCP):
+			observation.MCP = append(observation.MCP, ObserveUserMCP(layout.UserMCPFile, record.Target))
+		}
+	}
+	observation.Hooks = observeOwnedHooks(settings, hookFingerprints)
+	return observation
+}
+
+func observeOwnedHooks(settings SettingsObservation, fingerprints []string) HookObservation {
+	observation := hookObservation(settings)
+	if settings.Err != nil || len(fingerprints) == 0 {
+		return observation
+	}
+	wanted := make(map[string]bool, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		wanted[fingerprint] = true
+	}
+	for _, entry := range observedHookEntries(settings) {
+		fingerprint := HookOwnershipFingerprint(entry.event, entry.fingerprint)
+		if wanted[fingerprint] {
+			observation.MatchingEntries = append(observation.MatchingEntries, fingerprint)
+		}
+	}
+	sort.Strings(observation.MatchingEntries)
+	if len(observation.MatchingEntries) == 1 {
+		observation.EntryFingerprint = observation.MatchingEntries[0]
+	}
+	return observation
+}
+
+func hookObservation(settings SettingsObservation) HookObservation {
+	return HookObservation{
+		Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable,
+		Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err,
+	}
+}
+
+type observedHookEntry struct{ event, fingerprint string }
+
+func observedHookEntries(settings SettingsObservation) []observedHookEntry {
+	hooks, _ := settings.Root["hooks"].(map[string]any)
+	var observed []observedHookEntry
+	for event, rawEntries := range hooks {
+		entries, _ := rawEntries.([]any)
+		for _, entry := range entries {
+			observed = append(observed, observedHookEntry{event: event, fingerprint: canonicalFingerprint(entry)})
+		}
+	}
+	sort.Slice(observed, func(i, j int) bool {
+		if observed[i].event != observed[j].event {
+			return observed[i].event < observed[j].event
+		}
+		return observed[i].fingerprint < observed[j].fingerprint
+	})
+	return observed
+}
+
 type RuntimeEvidence struct{ Kind, ID, Signal, Revision string }
 type AuthorizationObservation struct {
 	PolicyObserved, ToolPermissionObserved bool
@@ -227,18 +309,18 @@ func ObserveHooks(path string, wanted CommandHookEntry, higherPrecedence []byte)
 	return EnrichHookObservation(ObserveSettings(path, higherPrecedence), wanted)
 }
 func EnrichHookObservation(settings SettingsObservation, wanted CommandHookEntry) HookObservation {
-	o := HookObservation{Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable, Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err}
+	o := hookObservation(settings)
 	if o.Err != nil {
 		return o
 	}
-	hooks, _ := settings.Root["hooks"].(map[string]any)
-	entries, _ := hooks[wanted.Event].([]any)
 	target := canonicalFingerprint(hookJSON(wanted))
-	for _, e := range entries {
-		if canonicalFingerprint(e) == target {
+	for _, entry := range observedHookEntries(settings) {
+		if entry.event == wanted.Event && entry.fingerprint == target {
 			o.MatchingEntries = append(o.MatchingEntries, target)
-			o.EntryFingerprint = target
 		}
+	}
+	if len(o.MatchingEntries) == 1 {
+		o.EntryFingerprint = target
 	}
 	return o
 }

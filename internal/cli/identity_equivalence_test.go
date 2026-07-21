@@ -280,6 +280,7 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// owner-layered Claude tests prove the new lifecycle contract directly.
 	value = regexp.MustCompile(`(?m)^(Outcome:|Desired surfaces:|State transition:|Pending prerequisite:|Preserved:|Blocker:)[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^- claude-[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(?:PASS|WARN|FAIL) claude-[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^(\$PRODUCT (?:install|update): synced[^\n]+) \(outcome: [^)]+\)$`).ReplaceAllString(value, "$1")
 	value = regexp.MustCompile(`(?m)^(\$PRODUCT uninstall): [^;\n]+; processed \$Product-managed artifacts for state`).ReplaceAllString(value, "$1: removed $$Product-managed artifacts and state")
 	value = identityPlanRE.ReplaceAllString(value, "plan-<ID>")
@@ -295,6 +296,35 @@ func removeSliceFJSONFields(value any) {
 			delete(value, "evidence")
 		} else if ok && strings.HasPrefix(report, "pack-status") {
 			value["schema_version"] = float64(1)
+		} else if ok && report == "doctor" {
+			value["schema_version"] = float64(1)
+			checks, _ := value["checks"].([]any)
+			filtered := make([]any, 0, len(checks))
+			passes, warnings, failures := 0, 0, 0
+			for _, item := range checks {
+				check, _ := item.(map[string]any)
+				name, _ := check["name"].(string)
+				if strings.HasPrefix(name, "claude-") {
+					continue
+				}
+				filtered = append(filtered, item)
+				switch check["severity"] {
+				case "PASS":
+					passes++
+				case "WARN":
+					warnings++
+				case "FAIL":
+					failures++
+				}
+			}
+			value["checks"] = filtered
+			status := "healthy"
+			if failures > 0 {
+				status = "failures"
+			} else if warnings > 0 {
+				status = "warnings"
+			}
+			value["summary"] = map[string]any{"status": status, "passes": float64(passes), "warnings": float64(warnings), "failures": float64(failures)}
 		}
 		delete(value, "contract")
 		delete(value, "projection_details")

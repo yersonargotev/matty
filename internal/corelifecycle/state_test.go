@@ -1,6 +1,8 @@
 package corelifecycle
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/ownedcontainer"
 	"github.com/yersonargotev/packy/internal/skillbundle"
 )
@@ -194,6 +197,84 @@ func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T
 		t.Fatalf("observation changed state file:\n%s", after)
 	}
 	assertNoStateTemps(t, path)
+}
+
+func TestObserveStateCopiesClaudeOwnershipDeeply(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	state := DesiredState(StateConfig{StateFile: path, AgentSkillsDir: "/skills"}, time.Unix(4, 0), nil)
+	state.ClaudeOwnership = []ClaudeOwnership{{
+		ID: "claude-mcp", Kind: ClaudeOwnershipMCP, Target: "engram", Contributors: []string{"classic"},
+		Args: []string{"serve"}, EnvironmentKeys: []string{"TOKEN"},
+	}}
+	if err := SaveState(path, state); err != nil {
+		t.Fatal(err)
+	}
+
+	observation := ObserveState(path)
+	ownership := observation.Ownership()
+	if len(ownership.ClaudeOwnership) != 1 || ownership.ClaudeOwnership[0].ID != "claude-mcp" {
+		t.Fatalf("Claude ownership = %#v", ownership.ClaudeOwnership)
+	}
+	ownership.ClaudeOwnership[0].Contributors[0] = "changed"
+	ownership.ClaudeOwnership[0].Args[0] = "changed"
+	ownership.ClaudeOwnership[0].EnvironmentKeys[0] = "changed"
+
+	again := observation.Ownership().ClaudeOwnership[0]
+	if again.Contributors[0] != "classic" || again.Args[0] != "serve" || again.EnvironmentKeys[0] != "TOKEN" {
+		t.Fatalf("observation exposed mutable Claude ownership: %#v", again)
+	}
+	snapshot := observation.ClaudeOwnershipSnapshot()
+	if len(snapshot.Records) != 1 || snapshot.Records[0].Kind != string(claudecode.ActionUserMCP) || snapshot.Records[0].Target != "engram" {
+		t.Fatalf("Claude ownership snapshot = %#v", snapshot)
+	}
+}
+
+func TestClassicStateOwnershipUsesCanonicalPersistedKinds(t *testing.T) {
+	records := classicStateOwnership([]claudecode.OwnershipRecord{
+		{Kind: string(claudecode.ActionAgentFile), ID: "agent"},
+		{Kind: string(claudecode.ActionCommandHook), ID: "hook", Args: []string{"session"}},
+	})
+	if len(records) != 2 || records[0].Kind != ClaudeOwnershipAgent || records[1].Kind != ClaudeOwnershipHook {
+		t.Fatalf("persisted kinds = %#v", records)
+	}
+	data, err := json.Marshal(records[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"kind":"hook"`) || !strings.Contains(string(data), `"args":["session"]`) {
+		t.Fatalf("hook wire contract = %s", data)
+	}
+}
+
+func TestPersistedHookOwnershipRoundTripsToSetupObservation(t *testing.T) {
+	home := t.TempDir()
+	layout := claudecode.NewCanonicalLayout(home)
+	if err := os.MkdirAll(layout.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hook := claudecode.CommandHookEntry{Type: "command", Event: "SessionStart", Command: "engram", Args: []string{"session"}, TimeoutSeconds: 5, Blocking: true, Failure: "block"}
+	settings, err := claudecode.MergeCommandHook(nil, hook, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.SettingsFile, settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(home, ".packy", "config.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := DesiredState(StateConfig{StateFile: statePath, AgentSkillsDir: filepath.Join(home, ".agents", "skills")}, time.Unix(4, 0), nil)
+	wantFingerprint := claudecode.HookOwnershipFingerprint(hook.Event, hook.Fingerprint())
+	state.ClaudeOwnership = []ClaudeOwnership{{ID: "hook", Kind: ClaudeOwnershipHook, Target: layout.SettingsFile, Fingerprint: wantFingerprint}}
+	if err := SaveState(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	setup := claudecode.ObserveSetup(context.Background(), layout, "", nil, ObserveState(statePath).ClaudeOwnershipSnapshot())
+	if len(setup.Hooks.MatchingEntries) != 1 || setup.Hooks.MatchingEntries[0] != wantFingerprint {
+		t.Fatalf("persisted hook setup observation = %#v", setup.Hooks)
+	}
 }
 
 func TestObserveManagedSkillLinksReportsReadOnlyFilesystemFacts(t *testing.T) {

@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,77 @@ func TestVersionCompatibilityMatrix(t *testing.T) {
 	}
 	if got := ClassifyVersion(VersionObservation{Executable: "claude", TimedOut: true}); got != CompatibilityTimedOut {
 		t.Fatal(got)
+	}
+}
+
+func TestObserveSetupAggregatesStaticOwnershipAndPolicyWithBoundedVersion(t *testing.T) {
+	home := t.TempDir()
+	layout := NewCanonicalLayout(home)
+	source := filepath.Join(home, "source", "skill")
+	target := filepath.Join(layout.SkillsDir, "skill")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(source, target); err != nil {
+		t.Fatal(err)
+	}
+	hook := CommandHookEntry{Type: "command", Event: "SessionStart", Command: "engram", Args: []string{"session"}, TimeoutSeconds: 5, Blocking: true, Failure: "block"}
+	settings, err := MergeCommandHook(nil, hook, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settingsRoot map[string]any
+	if err := json.Unmarshal(settings, &settingsRoot); err != nil {
+		t.Fatal(err)
+	}
+	settingsRoot["disableAllHooks"] = true
+	settings, err = json.Marshal(settingsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.SettingsFile, settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.UserMCPFile, []byte(`{"mcpServers":{"memory":{"command":"engram","args":["mcp"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{result: Result{Stdout: "2.1.203"}}
+	hookOwnershipFingerprint := HookOwnershipFingerprint(hook.Event, hook.Fingerprint())
+	ownership := NewOwnershipSnapshot(
+		OwnershipRecord{Kind: string(ActionSkillLink), Target: target, Skill: SkillIdentity{ExpectedSource: source}},
+		OwnershipRecord{Kind: string(ActionCommandHook), Target: layout.SettingsFile, Fingerprint: hookOwnershipFingerprint},
+		OwnershipRecord{Kind: string(ActionUserMCP), Target: "memory"},
+	)
+	observation := ObserveSetup(context.Background(), layout, "/bin/claude", runner, ownership)
+
+	if len(runner.calls) != 1 || runner.calls[0].Executable != "/bin/claude" || len(runner.calls[0].Args) != 1 || runner.calls[0].Args[0] != "--version" {
+		t.Fatalf("version calls = %#v", runner.calls)
+	}
+	if len(observation.Skills) != 1 || observation.Skills[0].Kind != PathSymlink || len(observation.MCP) != 1 || !observation.MCP[0].Present {
+		t.Fatalf("ownership observations = %#v", observation)
+	}
+	if !observation.Hooks.Parseable || !observation.Hooks.Disabled || len(observation.Hooks.MatchingEntries) != 1 || observation.Hooks.MatchingEntries[0] != hookOwnershipFingerprint || !observation.Authorization.PolicyObserved || !observation.Authorization.Disabled {
+		t.Fatalf("policy observations = %#v", observation)
+	}
+	hooks := settingsRoot["hooks"].(map[string]any)
+	hooks["Stop"] = hooks[hook.Event]
+	delete(hooks, hook.Event)
+	settings, err = json.Marshal(settingsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.SettingsFile, settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrongEvent := ObserveSetup(context.Background(), layout, "/bin/claude", runner, ownership)
+	if len(wrongEvent.Hooks.MatchingEntries) != 0 {
+		t.Fatalf("wrong-event hook matched ownership: %#v", wrongEvent.Hooks)
 	}
 }
 

@@ -506,7 +506,7 @@ func TestPresentOwnedHookApplyCleanupAndRepeatedFreshCleanup(t *testing.T) {
 	original := []byte(`{"foreign":true}`)
 	withHook, provenance, _ := MergeCommandHookWithProvenance(original, hook, false, HookMergeProvenance{})
 	os.WriteFile(l.SettingsFile, withHook, 0600)
-	record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:h", ID: "lifecycle:h", Kind: string(ActionCommandHook), Target: l.SettingsFile, Fingerprint: hook.Fingerprint(), Contributors: []string{"pack:p:h"}, HookProvenance: provenance.Seal()}
+	record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:h", ID: "lifecycle:h", Kind: string(ActionCommandHook), Target: l.SettingsFile, Fingerprint: HookOwnershipFingerprint(hook.Event, hook.Fingerprint()), Contributors: []string{"pack:p:h"}, HookProvenance: provenance.Seal()}
 	a := NewSurfaceAdapter("", l, filepath.Join(home, "state"), "claude", &recordingRunner{}, StaticOwnershipSnapshot(NewOwnershipSnapshot(record)))
 	removed, _, _ := MergeCommandHookWithProvenance(withHook, hook, true, provenance)
 	action := capabilitypack.ProjectionAction{ID: record.ID, Kind: ActionCommandHook, Target: l.SettingsFile, Content: string(removed), Source: provenance.Seal(), Command: Fingerprint(withHook), Mode: capabilitypack.ProjectionRemoveContent}
