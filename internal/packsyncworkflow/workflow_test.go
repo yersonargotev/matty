@@ -546,6 +546,32 @@ func TestPublishRunsApplyAndCompleteValidationBeforeGitHubAndRevalidatesBeforeWr
 	}
 }
 
+func TestPublisherPrefersAppliedValidationCapability(t *testing.T) {
+	events := []string{}
+	validator := &fakeAppliedValidator{events: &events}
+	github := &fakePublicationGateway{events: &events, states: []PublicationState{{BaseSHA: baseA, ProvenanceCurrent: true}, {BaseSHA: baseA, ProvenanceCurrent: true}, publishedState(true, strings.Repeat("6", 64)), publishedState(false, strings.Repeat("7", 64))}}
+	_, err := (Publisher{Applier: fakeApplier{events: &events}, Validator: validator, Builder: fakeProposalBuilder{events: &events}, Diff: fakeDiff{}, Provenance: fakeProvenance{events: &events}, GitHub: github}).Run(context.Background(), PublishRequest{RepositoryRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validator.appliedCalls != 1 || validator.ordinaryCalls != 0 {
+		t.Fatalf("validation calls = applied:%d ordinary:%d", validator.appliedCalls, validator.ordinaryCalls)
+	}
+}
+
+func TestPublisherFallsBackToOrdinaryValidation(t *testing.T) {
+	events := []string{}
+	validator := fakeValidator{events: &events}
+	github := &fakePublicationGateway{events: &events, states: []PublicationState{{BaseSHA: baseA, ProvenanceCurrent: true}, {BaseSHA: baseA, ProvenanceCurrent: true}, publishedState(true, strings.Repeat("6", 64)), publishedState(false, strings.Repeat("7", 64))}}
+	_, err := (Publisher{Applier: fakeApplier{events: &events}, Validator: validator, Builder: fakeProposalBuilder{events: &events}, Diff: fakeDiff{}, Provenance: fakeProvenance{events: &events}, GitHub: github}).Run(context.Background(), PublishRequest{RepositoryRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(strings.Join(events, ","), "validate"); got != 1 {
+		t.Fatalf("ordinary validation calls = %d, events %v", got, events)
+	}
+}
+
 func TestMovedProvenanceAfterDraftNeverFinalizesReadiness(t *testing.T) {
 	events := []string{}
 	github := &fakePublicationGateway{events: &events, states: []PublicationState{{BaseSHA: baseA}, {BaseSHA: baseA}, publishedState(true, strings.Repeat("6", 64))}}
@@ -629,6 +655,23 @@ func (fake fakeApplier) RecoverPending(context.Context, string) (packsync.ApplyR
 type fakeValidator struct {
 	events *[]string
 	err    error
+}
+
+type fakeAppliedValidator struct {
+	events        *[]string
+	appliedCalls  int
+	ordinaryCalls int
+}
+
+func (fake *fakeAppliedValidator) Validate(context.Context, string) error {
+	fake.ordinaryCalls++
+	return nil
+}
+
+func (fake *fakeAppliedValidator) ValidateApplied(context.Context, string) error {
+	fake.appliedCalls++
+	*fake.events = append(*fake.events, "validate-applied")
+	return nil
 }
 
 type fakeProposalBuilder struct{ events *[]string }

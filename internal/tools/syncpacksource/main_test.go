@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -112,6 +113,45 @@ printf validated > "${XDG_CONFIG_HOME}/proof"
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("staged validation wrote operator configuration path %s: %v", path, err)
 		}
+	}
+}
+
+func TestCommandValidatorScopesAppliedValidationMarker(t *testing.T) {
+	t.Setenv("PACKY_VALIDATION_STAGED", "hostile-inherited-value")
+	markerCount := func(cmd *exec.Cmd) int {
+		count := 0
+		for _, variable := range cmd.Env {
+			if variable == stagedValidationEnvironment {
+				count++
+			} else if strings.HasPrefix(variable, "PACKY_VALIDATION_STAGED=") {
+				t.Fatalf("hostile staged marker survived: %q", variable)
+			}
+		}
+		return count
+	}
+
+	ordinaryMarkers := -1
+	validator := commandValidator{run: func(cmd *exec.Cmd) ([]byte, error) {
+		ordinaryMarkers = markerCount(cmd)
+		return nil, nil
+	}}
+	if err := validator.Validate(context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryMarkers != 0 {
+		t.Fatalf("ordinary validation marker count = %d", ordinaryMarkers)
+	}
+
+	appliedMarkers := -1
+	validator.run = func(cmd *exec.Cmd) ([]byte, error) {
+		appliedMarkers = markerCount(cmd)
+		return nil, nil
+	}
+	if err := validator.ValidateApplied(context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if appliedMarkers != 1 {
+		t.Fatalf("applied validation marker count = %d", appliedMarkers)
 	}
 }
 

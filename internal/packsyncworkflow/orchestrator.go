@@ -22,6 +22,12 @@ type Validator interface {
 	Validate(context.Context, string) error
 }
 
+// AppliedValidator optionally distinguishes validation of a repository whose
+// sealed plan has already been applied from ordinary repository validation.
+type AppliedValidator interface {
+	ValidateApplied(context.Context, string) error
+}
+
 type ProposalBuilder interface {
 	Build(context.Context, string, packsync.ApplyResult) (Proposal, error)
 }
@@ -94,8 +100,14 @@ func (publisher Publisher) Run(ctx context.Context, request PublishRequest) (Pub
 	if err != nil {
 		return PublishResult{}, Failure{Kind: FailureIntegrity, Err: err}
 	}
-	if err := publisher.Validator.Validate(ctx, request.RepositoryRoot); err != nil {
-		return PublishResult{}, Failure{Kind: FailureValidation, Err: err}
+	var validationErr error
+	if validator, ok := publisher.Validator.(AppliedValidator); ok {
+		validationErr = validator.ValidateApplied(ctx, request.RepositoryRoot)
+	} else {
+		validationErr = publisher.Validator.Validate(ctx, request.RepositoryRoot)
+	}
+	if validationErr != nil {
+		return PublishResult{}, Failure{Kind: FailureValidation, Err: validationErr}
 	}
 	if err := publisher.Diff.VerifyWorkspace(ctx, request.RepositoryRoot, diffSeal); err != nil {
 		return PublishResult{}, Failure{Kind: FailureValidation, Err: errors.New("validation changed the sealed Apply diff")}

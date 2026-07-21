@@ -147,8 +147,14 @@ func validateSandbox(ctx context.Context, option options, output io.Writer) erro
 	if _, err := engine.Apply(ctx, apply); err != nil {
 		return err
 	}
-	if err := validator.Validate(ctx, option.repositoryRoot); err != nil {
-		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: err}
+	var validationErr error
+	if applied, ok := validator.(packsyncworkflow.AppliedValidator); ok {
+		validationErr = applied.ValidateApplied(ctx, option.repositoryRoot)
+	} else {
+		validationErr = validator.Validate(ctx, option.repositoryRoot)
+	}
+	if validationErr != nil {
+		return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureValidation, Err: validationErr}
 	}
 	if err := stageAll(ctx, option.repositoryRoot); err != nil {
 		return err
@@ -267,6 +273,10 @@ func (validator commandValidator) ValidateBundle(ctx context.Context, repository
 
 func (validator commandValidator) Validate(ctx context.Context, repositoryRoot string) error {
 	return validator.validate(ctx, repositoryRoot, false)
+}
+
+func (validator commandValidator) ValidateApplied(ctx context.Context, repositoryRoot string) error {
+	return validator.validate(ctx, repositoryRoot, true)
 }
 
 func (validator commandValidator) validate(ctx context.Context, repositoryRoot string, staged bool) error {
