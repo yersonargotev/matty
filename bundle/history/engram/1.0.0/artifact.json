@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "pack_id": "engram",
+  "pack_version": "1.0.0",
+  "manifest": {
+    "path": "pack.json",
+    "size": 572,
+    "mode": 420,
+    "sha256": "c1457d2c0a25420aa1a23457681a4abb4ae5acb6a30c1c2df8817d10fae34f1c"
+  },
+  "resources": [
+    {
+      "kind": "instruction",
+      "id": "engram-memory",
+      "source": "instructions/engram-memory.md",
+      "files": [
+        {
+          "path": "instructions/engram-memory.md",
+          "size": 114,
+          "mode": 420,
+          "sha256": "b001d3c19f4b58284c4058c9ed6bc39ab907ce080bbb31e1b9553765c0bd4e04"
+        }
+      ],
+      "sha256": "94df1d0c8e84bb570bf8f07674c3d69276a037d6664038a6c78b870624357c53"
+    }
+  ],
+  "aggregate_sha256": "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
+}

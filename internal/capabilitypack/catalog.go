@@ -19,6 +19,7 @@ import (
 const (
 	manifestSchemaV1 = 1
 	manifestSchemaV2 = 2
+	manifestSchemaV3 = 3
 	// schemaVersion remains the current state/history manifest version used by
 	// the original capability-pack lifecycle documents.
 	schemaVersion = manifestSchemaV1
@@ -34,6 +35,7 @@ type Surface string
 const (
 	SurfaceCodex    Surface = "codex"
 	SurfaceOpenCode Surface = "opencode"
+	SurfaceClaude   Surface = "claude"
 )
 
 type Requirements struct {
@@ -42,30 +44,62 @@ type Requirements struct {
 }
 
 type Resource struct {
-	Kind        string
-	ID          string
-	Source      string
-	Command     string
-	Args        []string
-	Description string
-	Mode        string
-	Tools       []string
-	Permissions []string
-	Requires    []string
-	Bindings    []Binding
-	Arguments   CommandArguments
-	License     string
-	Attribution string
+	Kind              string
+	ID                string
+	Source            string
+	Command           string
+	Args              []string
+	Description       string
+	Mode              string
+	Tools             []string
+	Permissions       []string
+	Requires          []string
+	Bindings          []Binding
+	SurfaceExclusions []SurfaceExclusion
+	Arguments         CommandArguments
+	License           string
+	Attribution       string
 }
 
 type Binding struct {
-	Surface     Surface `json:"surface"`
-	Projection  string  `json:"projection"`
-	Name        string  `json:"name"`
-	Invocation  string  `json:"invocation"`
-	Mode        string  `json:"mode"`
-	Degradation string  `json:"degradation,omitempty"`
-	Sharing     string  `json:"sharing"`
+	Surface        Surface         `json:"surface"`
+	Projection     string          `json:"projection"`
+	Name           string          `json:"name"`
+	Invocation     string          `json:"invocation"`
+	Mode           string          `json:"mode"`
+	Degradation    string          `json:"degradation,omitempty"`
+	Sharing        string          `json:"sharing"`
+	AgentAuthority *AgentAuthority `json:"agent_authority,omitempty"`
+	Hook           *CommandHook    `json:"hook,omitempty"`
+}
+
+type AuthorityTranslation struct {
+	Portable string `json:"portable"`
+	Claude   string `json:"claude"`
+}
+
+type AgentAuthority struct {
+	Tools       []AuthorityTranslation `json:"tools"`
+	Permissions []AuthorityTranslation `json:"permissions"`
+}
+
+type CommandHook struct {
+	Type           string   `json:"type"`
+	Event          string   `json:"event"`
+	Matcher        string   `json:"matcher"`
+	Command        string   `json:"command"`
+	Args           []string `json:"args"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	Blocking       bool     `json:"blocking"`
+	Failure        string   `json:"failure"`
+	Authorities    []string `json:"authorities"`
+}
+
+type SurfaceExclusion struct {
+	Surface Surface `json:"surface"`
+	Mode    string  `json:"mode"`
+	Code    string  `json:"code"`
+	Reason  string  `json:"reason"`
 }
 
 type CommandArguments struct {
@@ -91,15 +125,16 @@ type OptionalMode struct {
 }
 
 type Pack struct {
-	ID          string
-	Version     string
-	Description string
-	Surfaces    []Surface
-	Provides    []string
-	Requires    Requirements
-	Conflicts   []string
-	Resources   []Resource
-	Contract    Contract
+	manifestVersion int
+	ID              string
+	Version         string
+	Description     string
+	Surfaces        []Surface
+	Provides        []string
+	Requires        Requirements
+	Conflicts       []string
+	Resources       []Resource
+	Contract        Contract
 }
 
 type ResourceCounts struct {
@@ -145,6 +180,7 @@ type Catalog struct {
 	allowSyntheticHistory bool
 	deferSourceValidation bool
 	transactionHeld       bool
+	enforceUpdateRoutes   bool
 }
 
 type catalogEntry struct {
@@ -160,14 +196,20 @@ var initialCatalog = []catalogEntry{
 
 // Discover loads the strict initial catalog from a Packy-owned bundle root.
 func Discover(bundleRoot string) (Catalog, error) {
-	return discoverCatalog(bundleRoot, initialCatalog)
+	return discoverProductionCatalog(bundleRoot, true)
 }
 
 // DiscoverForDurableIntents loads catalog metadata while deferring current
 // source validation until a catalog-current pack is selected. This lets an
 // existing pinned intent be reproduced solely from its historical artifact.
 func DiscoverForDurableIntents(bundleRoot string) (Catalog, error) {
-	return discoverCatalogWithSourceValidation(bundleRoot, initialCatalog, false)
+	return discoverProductionCatalog(bundleRoot, false)
+}
+
+func discoverProductionCatalog(bundleRoot string, validateSources bool) (Catalog, error) {
+	catalog, err := discoverCatalogWithSourceValidation(bundleRoot, initialCatalog, validateSources)
+	catalog.enforceUpdateRoutes = true
+	return catalog, err
 }
 
 func discoverCatalog(bundleRoot string, entries []catalogEntry) (Catalog, error) {
@@ -196,11 +238,14 @@ func discoverCatalogUnlocked(bundleRoot string, entries []catalogEntry, validate
 			return Catalog{}, fmt.Errorf("catalog entry %q: manifest id is %q", entry.ID, pack.ID)
 		}
 		pack.Description = entry.Description
-		pack.Surfaces = append([]Surface(nil), entry.Surfaces...)
+		manifestOwnedSurfaces := len(pack.Surfaces) > 0
+		if !manifestOwnedSurfaces {
+			pack.Surfaces = append([]Surface(nil), entry.Surfaces...)
+		}
 		if err := validateSurfaces(pack.Surfaces); err != nil {
 			return Catalog{}, fmt.Errorf("pack %q: %w", pack.ID, err)
 		}
-		if pack.Contract.Exclusions != nil {
+		if pack.Contract.Exclusions != nil && !manifestOwnedSurfaces {
 			if err := validateBindingsForSurfaces(pack); err != nil {
 				return Catalog{}, fmt.Errorf("pack %q: %w", pack.ID, err)
 			}
@@ -220,6 +265,7 @@ func (c Catalog) refreshed() (Catalog, error) {
 		var err error
 		refreshed, err = discoverCatalogUnlocked(c.bundleRoot, c.entries, !c.deferSourceValidation)
 		refreshed.allowSyntheticHistory = c.allowSyntheticHistory
+		refreshed.enforceUpdateRoutes = c.enforceUpdateRoutes
 		refreshed.transactionHeld = locked.transactionHeld
 		return err
 	})
@@ -318,6 +364,22 @@ func clonePack(pack Pack) Pack {
 		pack.Resources[i].Permissions = append([]string(nil), pack.Resources[i].Permissions...)
 		pack.Resources[i].Requires = append([]string(nil), pack.Resources[i].Requires...)
 		pack.Resources[i].Bindings = append([]Binding(nil), pack.Resources[i].Bindings...)
+		pack.Resources[i].SurfaceExclusions = append([]SurfaceExclusion(nil), pack.Resources[i].SurfaceExclusions...)
+		for j := range pack.Resources[i].Bindings {
+			binding := &pack.Resources[i].Bindings[j]
+			if binding.AgentAuthority != nil {
+				copy := *binding.AgentAuthority
+				copy.Tools = append([]AuthorityTranslation(nil), copy.Tools...)
+				copy.Permissions = append([]AuthorityTranslation(nil), copy.Permissions...)
+				binding.AgentAuthority = &copy
+			}
+			if binding.Hook != nil {
+				copy := *binding.Hook
+				copy.Args = append([]string(nil), copy.Args...)
+				copy.Authorities = append([]string(nil), copy.Authorities...)
+				binding.Hook = &copy
+			}
+		}
 	}
 	pack.Contract.Exclusions = append([]Exclusion(nil), pack.Contract.Exclusions...)
 	for i := range pack.Contract.Exclusions {
@@ -339,6 +401,7 @@ type manifest struct {
 	Conflicts     []string          `json:"conflicts"`
 	Resources     []json.RawMessage `json:"resources"`
 	Contract      *Contract         `json:"contract,omitempty"`
+	Surfaces      *[]Surface        `json:"surfaces,omitempty"`
 }
 
 func decodeManifest(path, bundleRoot string) (Pack, error) {
@@ -361,7 +424,16 @@ func decodeManifestWithSourceValidation(path, bundleRoot string, validateSources
 	if err := strictDecode(data, &raw); err != nil {
 		return Pack{}, fmt.Errorf("decode pack manifest %s: %w", path, err)
 	}
-	pack := Pack{ID: raw.ID, Version: raw.Version, Provides: raw.Provides, Requires: raw.Requires, Conflicts: raw.Conflicts}
+	if raw.SchemaVersion == manifestSchemaV3 && raw.Surfaces == nil {
+		return Pack{}, fmt.Errorf("invalid pack manifest %s: surfaces is a required non-null array for schema_version 3", path)
+	}
+	if raw.SchemaVersion != manifestSchemaV3 && raw.Surfaces != nil {
+		return Pack{}, fmt.Errorf("invalid pack manifest %s: surfaces is forbidden before schema_version 3", path)
+	}
+	pack := Pack{manifestVersion: raw.SchemaVersion, ID: raw.ID, Version: raw.Version, Provides: raw.Provides, Requires: raw.Requires, Conflicts: raw.Conflicts}
+	if raw.Surfaces != nil {
+		pack.Surfaces = append([]Surface(nil), (*raw.Surfaces)...)
+	}
 	for i, encoded := range raw.Resources {
 		resource, err := decodeResource(encoded, raw.SchemaVersion)
 		if err != nil {
@@ -409,6 +481,9 @@ func decodeResource(data []byte, version int) (Resource, error) {
 	if version == manifestSchemaV2 {
 		return decodeResourceV2(data, discriminator.Kind)
 	}
+	if version == manifestSchemaV3 {
+		return decodeResourceV3(data, discriminator.Kind)
+	}
 	if version != manifestSchemaV1 {
 		return Resource{}, fmt.Errorf("schema_version must be %d or %d", manifestSchemaV1, manifestSchemaV2)
 	}
@@ -437,6 +512,122 @@ func decodeResource(data []byte, version int) (Resource, error) {
 	default:
 		return Resource{}, fmt.Errorf("unsupported resource kind %q", discriminator.Kind)
 	}
+}
+
+func decodeResourceV3(data []byte, kind string) (Resource, error) {
+	type outcomes struct {
+		Kind              string             `json:"kind"`
+		ID                string             `json:"id"`
+		Requires          []string           `json:"requires"`
+		Bindings          []Binding          `json:"bindings"`
+		SurfaceExclusions []SurfaceExclusion `json:"surface_exclusions"`
+	}
+	type sourced struct {
+		outcomes
+		Source string `json:"source"`
+	}
+	toResource := func(raw outcomes) Resource {
+		return Resource{Kind: raw.Kind, ID: raw.ID, Requires: raw.Requires, Bindings: raw.Bindings, SurfaceExclusions: raw.SurfaceExclusions}
+	}
+	switch kind {
+	case "skill", "instruction", "asset":
+		var raw sourced
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		resource := toResource(raw.outcomes)
+		resource.Source = raw.Source
+		return resource, nil
+	case "mcp_server":
+		var raw struct {
+			outcomes
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		resource := toResource(raw.outcomes)
+		resource.Command, resource.Args = raw.Command, raw.Args
+		return resource, nil
+	case "lifecycle":
+		var raw outcomes
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		if err := validateTypedBindingWirePresence(data); err != nil {
+			return Resource{}, err
+		}
+		return toResource(raw), nil
+	case "agent":
+		var raw struct {
+			sourced
+			Description string   `json:"description"`
+			Mode        string   `json:"mode"`
+			Tools       []string `json:"tools"`
+			Permissions []string `json:"permissions"`
+		}
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		if err := validateTypedBindingWirePresence(data); err != nil {
+			return Resource{}, err
+		}
+		resource := toResource(raw.outcomes)
+		resource.Source, resource.Description, resource.Mode = raw.Source, raw.Description, raw.Mode
+		resource.Tools, resource.Permissions = raw.Tools, raw.Permissions
+		return resource, nil
+	case "command":
+		var raw struct {
+			sourced
+			Arguments CommandArguments `json:"arguments"`
+		}
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		resource := toResource(raw.outcomes)
+		resource.Source, resource.Arguments = raw.Source, raw.Arguments
+		return resource, nil
+	case "notice":
+		var raw struct {
+			sourced
+			License     string `json:"license"`
+			Attribution string `json:"attribution"`
+		}
+		if err := strictDecode(data, &raw); err != nil {
+			return Resource{}, err
+		}
+		resource := toResource(raw.outcomes)
+		resource.Source, resource.License, resource.Attribution = raw.Source, raw.License, raw.Attribution
+		return resource, nil
+	default:
+		return Resource{}, fmt.Errorf("unsupported resource kind %q", kind)
+	}
+}
+
+func validateTypedBindingWirePresence(data []byte) error {
+	var resource struct {
+		Bindings []map[string]json.RawMessage `json:"bindings"`
+	}
+	if err := json.Unmarshal(data, &resource); err != nil {
+		return err
+	}
+	for _, binding := range resource.Bindings {
+		hookData, ok := binding["hook"]
+		if !ok {
+			continue
+		}
+		var hook map[string]json.RawMessage
+		if err := json.Unmarshal(hookData, &hook); err != nil {
+			return err
+		}
+		for _, field := range []string{"matcher", "blocking"} {
+			if _, ok := hook[field]; !ok {
+				return fmt.Errorf("hook %s is required", field)
+			}
+		}
+	}
+	return nil
 }
 
 func decodeResourceV2(data []byte, kind string) (Resource, error) {
@@ -526,6 +717,12 @@ func validateBindingWirePresence(data []byte) error {
 		if err := json.Unmarshal(data, &binding); err != nil {
 			return err
 		}
+		if _, present := binding["agent_authority"]; present {
+			return fmt.Errorf("agent_authority is forbidden before schema_version 3")
+		}
+		if _, present := binding["hook"]; present {
+			return fmt.Errorf("hook is forbidden before schema_version 3")
+		}
 		var mode string
 		if err := json.Unmarshal(binding["mode"], &mode); err != nil {
 			return err
@@ -551,14 +748,19 @@ func validatePackMetadata(pack Pack, version int) error {
 }
 
 func validatePackMetadataWithContract(pack Pack, version int, contractPresent bool) error {
-	if version != manifestSchemaV1 && version != manifestSchemaV2 {
-		return fmt.Errorf("schema_version must be %d or %d", manifestSchemaV1, manifestSchemaV2)
+	if version != manifestSchemaV1 && version != manifestSchemaV2 && version != manifestSchemaV3 {
+		return fmt.Errorf("schema_version must be %d, %d, or %d", manifestSchemaV1, manifestSchemaV2, manifestSchemaV3)
 	}
-	if version == manifestSchemaV2 && !contractPresent {
-		return fmt.Errorf("contract is required for schema_version 2")
+	if (version == manifestSchemaV2 || version == manifestSchemaV3) && !contractPresent {
+		return fmt.Errorf("contract is required for schema_version %d", version)
 	}
 	if version == manifestSchemaV1 && contractPresent {
 		return fmt.Errorf("contract is forbidden for schema_version 1")
+	}
+	if version == manifestSchemaV3 {
+		if err := validateV3Surfaces(pack.Surfaces); err != nil {
+			return err
+		}
 	}
 	if !idPattern.MatchString(pack.ID) {
 		return fmt.Errorf("id %q must be lowercase kebab-case", pack.ID)
@@ -609,7 +811,13 @@ func validatePackMetadataWithContract(pack Pack, version int, contractPresent bo
 		if _, duplicate := seenCapabilities[identity]; duplicate {
 			return fmt.Errorf("resource capability %q must not be declared at top level", identity)
 		}
-		if version == manifestSchemaV2 {
+		if version == manifestSchemaV2 || version == manifestSchemaV3 {
+			if version == manifestSchemaV3 {
+				if err := validateResourceV3(resource, pack.Surfaces); err != nil {
+					return fmt.Errorf("resource %q: %w", identity, err)
+				}
+				continue
+			}
 			if err := validateResourceV2(resource); err != nil {
 				return fmt.Errorf("resource %q: %w", identity, err)
 			}
@@ -632,7 +840,7 @@ func validatePackMetadataWithContract(pack Pack, version int, contractPresent bo
 			return fmt.Errorf("unsupported resource kind %q", resource.Kind)
 		}
 	}
-	if version == manifestSchemaV2 {
+	if version == manifestSchemaV2 || version == manifestSchemaV3 {
 		if !sortedPortableSet(pack.Provides, validCapabilityIdentity) || !sortedPortableSet(pack.Requires.Capabilities, validCapabilityIdentity) || !sortedPortableSet(pack.Requires.Tools, idPattern.MatchString) || !sortedPortableSet(pack.Conflicts, validCapabilityIdentity) {
 			return fmt.Errorf("provides, requires, and conflicts arrays must be sorted sets")
 		}
@@ -645,6 +853,188 @@ func validatePackMetadataWithContract(pack Pack, version int, contractPresent bo
 		if err := validateContract(pack.Contract, pack.Resources); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateV3Surfaces(surfaces []Surface) error {
+	if len(surfaces) == 0 {
+		return fmt.Errorf("surfaces must contain at least one surface")
+	}
+	for i, surface := range surfaces {
+		if surface != SurfaceClaude && surface != SurfaceCodex && surface != SurfaceOpenCode {
+			return fmt.Errorf("unsupported CLI surface %q", surface)
+		}
+		if i > 0 && surfaces[i-1] >= surface {
+			return fmt.Errorf("surfaces must be a sorted set")
+		}
+	}
+	return nil
+}
+
+func validateResourceV3(resource Resource, surfaces []Surface) error {
+	if resource.Requires == nil || resource.Bindings == nil || resource.SurfaceExclusions == nil {
+		return fmt.Errorf("requires, bindings, and surface_exclusions are required non-null arrays")
+	}
+	if !sort.StringsAreSorted(resource.Requires) || hasDuplicateStrings(resource.Requires) {
+		return fmt.Errorf("requires must be a sorted set of canonical identities")
+	}
+	for _, dependency := range resource.Requires {
+		if !validResourceIdentity(dependency) {
+			return fmt.Errorf("requires identity %q must be <kind>:<id>", dependency)
+		}
+	}
+	switch resource.Kind {
+	case "skill", "instruction", "agent", "command", "asset", "notice":
+		if err := validateSourcePath(resource.Source); err != nil {
+			return fmt.Errorf("source: %w", err)
+		}
+	case "mcp_server":
+		if strings.TrimSpace(resource.Command) == "" || resource.Args == nil {
+			return fmt.Errorf("command and args are required")
+		}
+	case "lifecycle":
+	default:
+		return fmt.Errorf("unsupported resource kind %q", resource.Kind)
+	}
+	if resource.Kind == "agent" {
+		if strings.TrimSpace(resource.Description) == "" || (resource.Mode != "primary" && resource.Mode != "subagent") || resource.Tools == nil || resource.Permissions == nil {
+			return fmt.Errorf("agent description, mode, tools, and permissions are required")
+		}
+		if !sortedPortableSet(resource.Tools, idPattern.MatchString) || !sortedPortableSet(resource.Permissions, func(v string) bool { return portableAuthorities[v] }) {
+			return fmt.Errorf("agent tools and permissions must be sorted supported sets")
+		}
+	}
+	if resource.Kind == "command" && resource.Arguments.Mode != "none" && (resource.Arguments.Mode != "freeform" || resource.Arguments.Placeholder != "$ARGUMENTS") {
+		return fmt.Errorf("arguments must be none or freeform with $ARGUMENTS")
+	}
+	if resource.Kind == "notice" {
+		if resource.License == "" || strings.TrimSpace(resource.Attribution) == "" || len(resource.Requires) != 0 || len(resource.Bindings) != 0 || len(resource.SurfaceExclusions) != 0 {
+			return fmt.Errorf("notice requires license and attribution and empty requires, bindings, and surface_exclusions")
+		}
+		return nil
+	}
+	if resource.Kind == "asset" {
+		if len(resource.Bindings) != 0 || len(resource.SurfaceExclusions) != 0 {
+			return fmt.Errorf("asset bindings and surface_exclusions must be empty")
+		}
+		return nil
+	}
+	seen := map[Surface]bool{}
+	for _, binding := range resource.Bindings {
+		if seen[binding.Surface] {
+			return fmt.Errorf("duplicate or contradictory surface outcome %q", binding.Surface)
+		}
+		seen[binding.Surface] = true
+		if err := validateBindingV3(resource, binding); err != nil {
+			return err
+		}
+	}
+	for i, exclusion := range resource.SurfaceExclusions {
+		if i > 0 && resource.SurfaceExclusions[i-1].Surface >= exclusion.Surface {
+			return fmt.Errorf("surface_exclusions must be sorted by surface without duplicates")
+		}
+		if seen[exclusion.Surface] {
+			return fmt.Errorf("duplicate or contradictory surface outcome %q", exclusion.Surface)
+		}
+		seen[exclusion.Surface] = true
+		if exclusion.Mode != "optional" && exclusion.Mode != "mandatory" {
+			return fmt.Errorf("surface exclusion mode must be optional or mandatory")
+		}
+		if !idPattern.MatchString(exclusion.Code) || strings.TrimSpace(exclusion.Reason) == "" {
+			return fmt.Errorf("surface exclusion code and reason are required")
+		}
+	}
+	for i, b := range resource.Bindings {
+		if i > 0 && resource.Bindings[i-1].Surface >= b.Surface {
+			return fmt.Errorf("bindings must be sorted by surface without duplicates")
+		}
+	}
+	for _, surface := range surfaces {
+		if !seen[surface] {
+			return fmt.Errorf("missing binding-or-exclusion outcome for surface %q", surface)
+		}
+	}
+	if len(seen) != len(surfaces) {
+		return fmt.Errorf("surface outcome targets an undeclared surface")
+	}
+	return nil
+}
+
+func validateBindingV3(resource Resource, binding Binding) error {
+	kind := resource.Kind
+	if binding.Surface != SurfaceClaude && binding.Surface != SurfaceCodex && binding.Surface != SurfaceOpenCode {
+		return fmt.Errorf("binding surface %q is unsupported", binding.Surface)
+	}
+	if !idPattern.MatchString(binding.Name) || strings.TrimSpace(binding.Invocation) == "" || (binding.Mode != "native" && binding.Mode != "degraded") || (binding.Sharing != "exclusive" && binding.Sharing != "shared") {
+		return fmt.Errorf("binding name, invocation, mode, and sharing are invalid")
+	}
+	if binding.Mode == "degraded" && strings.TrimSpace(binding.Degradation) == "" {
+		return fmt.Errorf("degradation is required when mode is degraded")
+	}
+	if binding.Mode == "native" && binding.Degradation != "" {
+		return fmt.Errorf("degradation is forbidden when mode is native")
+	}
+	if binding.Surface != SurfaceClaude {
+		if binding.AgentAuthority != nil || binding.Hook != nil {
+			return fmt.Errorf("Claude typed binding fields are forbidden on %s", binding.Surface)
+		}
+		return validateBinding(kind, binding)
+	}
+	want := map[string]string{"skill": "skill", "instruction": "instruction", "mcp_server": "mcp_server", "agent": "agent", "command": "skill", "lifecycle": "command_hook"}[kind]
+	if binding.Projection != want {
+		return fmt.Errorf("%s binding on claude must project as %s", kind, want)
+	}
+	if (binding.AgentAuthority != nil) != (kind == "agent") || (binding.Hook != nil) != (kind == "lifecycle") {
+		return fmt.Errorf("typed Claude binding field does not match %s projection", kind)
+	}
+	if binding.AgentAuthority != nil {
+		return validateAgentAuthority(*binding.AgentAuthority, resource.Tools, resource.Permissions)
+	}
+	if binding.Hook != nil {
+		return validateCommandHook(*binding.Hook)
+	}
+	return nil
+}
+
+func validateAgentAuthority(authority AgentAuthority, tools, permissions []string) error {
+	if authority.Tools == nil || authority.Permissions == nil {
+		return fmt.Errorf("agent_authority tools and permissions are required arrays")
+	}
+	for name, values := range map[string][]AuthorityTranslation{"tools": authority.Tools, "permissions": authority.Permissions} {
+		for i, v := range values {
+			if !idPattern.MatchString(v.Portable) || strings.TrimSpace(v.Claude) == "" || i > 0 && values[i-1].Portable >= v.Portable {
+				return fmt.Errorf("agent_authority %s must be sorted translations with portable and claude ids", name)
+			}
+		}
+	}
+	for name, pair := range map[string]struct {
+		translations []AuthorityTranslation
+		declared     []string
+	}{"tools": {authority.Tools, tools}, "permissions": {authority.Permissions, permissions}} {
+		if len(pair.translations) != len(pair.declared) {
+			return fmt.Errorf("agent_authority %s must translate every declared portable id", name)
+		}
+		for i := range pair.declared {
+			if pair.translations[i].Portable != pair.declared[i] {
+				return fmt.Errorf("agent_authority %s has a missing or dangling translation", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateCommandHook(hook CommandHook) error {
+	events := map[string]bool{"PreToolUse": true, "PostToolUse": true, "PostToolUseFailure": true, "Notification": true, "UserPromptSubmit": true, "SessionStart": true, "SessionEnd": true, "Stop": true, "SubagentStart": true, "SubagentStop": true, "PreCompact": true, "PermissionRequest": true, "Setup": true}
+	if hook.Type != "command" || !events[hook.Event] || strings.TrimSpace(hook.Command) == "" || hook.Args == nil || hook.TimeoutSeconds <= 0 || (hook.Failure != "block" && hook.Failure != "warn") || hook.Authorities == nil {
+		return fmt.Errorf("hook type, event, command, args, positive timeout_seconds, failure, and authorities are invalid")
+	}
+	if !sortedPortableSet(hook.Authorities, func(v string) bool { return portableAuthorities[v] }) {
+		return fmt.Errorf("hook authorities must be a sorted supported set")
+	}
+	matcherRequired := map[string]bool{"PreToolUse": true, "PostToolUse": true, "PostToolUseFailure": true, "PermissionRequest": true}
+	if matcherRequired[hook.Event] && strings.TrimSpace(hook.Matcher) == "" {
+		return fmt.Errorf("hook matcher is required for event %s", hook.Event)
 	}
 	return nil
 }
@@ -1010,7 +1400,7 @@ func validateSurfaces(surfaces []Surface) error {
 	}
 	seen := map[Surface]bool{}
 	for _, surface := range surfaces {
-		if surface != SurfaceCodex && surface != SurfaceOpenCode {
+		if surface != SurfaceCodex && surface != SurfaceOpenCode && surface != SurfaceClaude {
 			return fmt.Errorf("unsupported CLI surface %q", surface)
 		}
 		if seen[surface] {

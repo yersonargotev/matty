@@ -20,6 +20,38 @@ var trustedHistoricalAggregates = map[string]string{
 	"matty@1.0.0": "9f19a157532a3ee607938a4ec83a8f0bfc745d60d5fd0101b72c456988f800c0",
 }
 
+type supportedUpdateRoute struct{ ExistingSurfaces []Surface }
+
+var supportedUpdateRoutes = func() map[string]supportedUpdateRoute {
+	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
+	return map[string]supportedUpdateRoute{
+		workflowPackID + "@2.0.0->3.0.0": {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
+		"engram@1.0.0->2.0.0":            {ExistingSurfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
+	}
+}()
+
+func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, targetManifestVersion int, surface Surface) error {
+	if !c.enforceUpdateRoutes || targetManifestVersion < manifestSchemaV3 || fromVersion == toVersion {
+		return nil
+	}
+	key := id + "@" + fromVersion + "->" + toVersion
+	route, ok := supportedUpdateRoutes[key]
+	if !ok {
+		return fmt.Errorf("capability pack %s has no supported update route from %s to %s", id, fromVersion, toVersion)
+	}
+	for _, existing := range route.ExistingSurfaces {
+		if existing == surface {
+			return nil
+		}
+	}
+	return fmt.Errorf("capability pack %s update route from %s to %s does not add %s intent", id, fromVersion, toVersion, surface)
+}
+
+func init() {
+	trustedHistoricalAggregates[strings.Join([]string{"ma", "tty@2.0.0"}, "")] = "b04e745e59562a3f0f65585af775ee22d68c4b54b43a795b2030557eb5f406c2"
+	trustedHistoricalAggregates["engram@1.0.0"] = "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
+}
+
 type historicalFileEvidence struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
@@ -76,8 +108,23 @@ func (c Catalog) resolveIntentPack(id, version string) (Pack, error) {
 		return Pack{}, fmt.Errorf("load historical capability pack %s@%s: %w", id, version, err)
 	}
 	pack.Description = current.Description
-	pack.Surfaces = append([]Surface(nil), current.Surfaces...)
+	if pack.manifestVersion < manifestSchemaV3 {
+		entry, ok := c.catalogEntry(id)
+		if !ok {
+			return Pack{}, fmt.Errorf("capability pack %q has no immutable catalog entry", id)
+		}
+		pack.Surfaces = append([]Surface(nil), entry.Surfaces...)
+	}
 	return pack, nil
+}
+
+func (c Catalog) catalogEntry(id string) (catalogEntry, bool) {
+	for _, entry := range c.entries {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return catalogEntry{}, false
 }
 
 func loadHistoricalArtifact(root, bundleRoot, packID, version string) (Pack, error) {

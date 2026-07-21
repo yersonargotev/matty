@@ -536,6 +536,13 @@ func (f Facade) previewUpdate(ctx context.Context, request UpdateRequest) (Recon
 	if !ok || !intent.Active {
 		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is not active on %s", request.PackID, request.Surface)
 	}
+	current, err := f.catalog.catalogMetadata(request.PackID)
+	if err != nil {
+		return ReconciliationPlan{}, err
+	}
+	if err := f.catalog.validateUpdateRoute(request.PackID, intent.Version, current.Version, current.manifestVersion, request.Surface); err != nil {
+		return ReconciliationPlan{}, err
+	}
 	return f.preview(ctx, activation, OperationUpdate, intent.Version)
 }
 

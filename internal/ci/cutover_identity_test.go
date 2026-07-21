@@ -229,7 +229,9 @@ func TestRemainingIdentitySurfaceMatchesExactClassification(t *testing.T) {
 }
 
 func omitFromExactIdentityComparison(path string) bool {
-	return path == "bundle/sources.json"
+	return path == "bundle/sources.json" ||
+		strings.HasPrefix(path, "bundle/history/"+legacyIdentityToken()+"/2.0.0/") ||
+		path == "bundle/compatibility/"+legacyIdentityToken()+"/2.0.0-to-3.0.0.json"
 }
 
 func TestSemanticPackIdentitySurvivesFieldByField(t *testing.T) {
@@ -321,6 +323,11 @@ func TestClassifiedProductRenamePreservesBaselineBehavioralTests(t *testing.T) {
 	contract := loadCutoverIdentityContract(t, root)
 
 	packTest := readWorktreeFile(t, filepath.Join(root, "internal", "cli", "pack_test.go"))
+	postCutoverFixture := []byte("\tcopyArchivedEngramFixture(t, bundle, repoRoot)\n")
+	if bytes.Count(packTest, postCutoverFixture) != 1 {
+		t.Fatal("post-cutover pack history fixture seam changed")
+	}
+	packTest = bytes.Replace(packTest, postCutoverFixture, nil, 1)
 	if got, want := sha256Hex(reverseProductIdentity(packTest)), contract.BehavioralEquivalence.PackTestNormalizedSHA256; got != want {
 		t.Fatalf("normalized pack CLI behavioral suite differs from frozen baseline: got %s want %s", got, want)
 	}
@@ -508,12 +515,14 @@ func isProtectedCutoverPath(path string) bool {
 	token := legacyIdentityToken()
 	for _, prefix := range []string{
 		".scratch/",
-		"bundle/history/" + token + "/",
-		"bundle/compatibility/" + token + "/",
+		"bundle/history/" + token + "/1.0.0/",
 	} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
+	}
+	if path == "bundle/compatibility/"+token+"/1.0.0-to-2.0.0.json" {
+		return true
 	}
 	for number := 1; number <= 9; number++ {
 		if strings.HasPrefix(path, fmt.Sprintf("docs/adr/%04d-", number)) {

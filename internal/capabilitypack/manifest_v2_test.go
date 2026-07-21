@@ -66,6 +66,14 @@ func TestDiscoverRejectsInvalidManifestV2Contracts(t *testing.T) {
 		{"notice projection", func(m map[string]any) {
 			resource(m, "notice", "license")["bindings"] = nativeBindings("skill", "license", "$license")
 		}, "unknown field"},
+		{"v3 agent authority", func(m map[string]any) {
+			binding := resource(m, "agent", "idea-coach")["bindings"].([]any)[0].(map[string]any)
+			binding["agent_authority"] = map[string]any{"tools": []any{}, "permissions": []any{}}
+		}, "agent_authority is forbidden"},
+		{"v3 hook", func(m map[string]any) {
+			binding := resource(m, "command", "refine-idea")["bindings"].([]any)[0].(map[string]any)
+			binding["hook"] = map[string]any{}
+		}, "hook is forbidden"},
 		{"missing surface binding", func(m map[string]any) {
 			bindings := resource(m, "skill", "idea-refine")["bindings"].([]any)
 			resource(m, "skill", "idea-refine")["bindings"] = bindings[:1]

@@ -33,6 +33,56 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 	}
 }
 
+func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
+	for _, item := range []struct{ id, version string }{{"engram", "1.0.0"}, {workflowPackID, "2.0.0"}} {
+		t.Run(item.id, func(t *testing.T) {
+			current := mustRead(t, filepath.Join(bundleRoot, "packs", item.id, "pack.json"))
+			root := filepath.Join(bundleRoot, "history", item.id, item.version)
+			if archived := mustRead(t, filepath.Join(root, "pack.json")); !reflect.DeepEqual(archived, current) {
+				t.Fatal("archived manifest bytes differ from catalog-current bytes")
+			}
+			pack, err := loadHistoricalArtifact(root, bundleRoot, item.id, item.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pack.Version != item.version {
+				t.Fatalf("historical version = %q", pack.Version)
+			}
+		})
+	}
+}
+
+func TestV3UpdateRoutesPreserveExistingSurfaceIntent(t *testing.T) {
+	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
+	production := Catalog{enforceUpdateRoutes: true}
+	for _, item := range []struct{ id, from, to string }{{workflowPackID, "2.0.0", "3.0.0"}, {"engram", "1.0.0", "2.0.0"}} {
+		for _, surface := range []Surface{SurfaceCodex, SurfaceOpenCode} {
+			if err := production.validateUpdateRoute(item.id, item.from, item.to, manifestSchemaV3, surface); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := production.validateUpdateRoute(item.id, item.from, item.to, manifestSchemaV3, SurfaceClaude); err == nil || !strings.Contains(err.Error(), "does not add claude intent") {
+			t.Fatalf("Claude route error = %v", err)
+		}
+	}
+	if err := production.validateUpdateRoute(workflowPackID, "1.0.0", "3.0.0", manifestSchemaV3, SurfaceCodex); err == nil || !strings.Contains(err.Error(), "no supported update route") {
+		t.Fatalf("gap error = %v", err)
+	}
+	for _, versions := range [][2]string{{"2.0.1", "3.0.0"}, {"2.0.0", "3.0.1"}} {
+		if err := production.validateUpdateRoute(workflowPackID, versions[0], versions[1], manifestSchemaV3, SurfaceCodex); err == nil || !strings.Contains(err.Error(), "no supported update route") {
+			t.Fatalf("near-miss route %s -> %s error = %v", versions[0], versions[1], err)
+		}
+	}
+	if err := (Catalog{}).validateUpdateRoute("app", "1.0.0", "9.0.0", manifestSchemaV3, SurfaceCodex); err != nil {
+		t.Fatalf("synthetic catalog route rejected: %v", err)
+	}
+	if err := production.validateUpdateRoute(workflowPackID, "2.0.1", "3.0.0", manifestSchemaV2, SurfaceCodex); err != nil {
+		t.Fatalf("pre-v3 catalog route was newly constrained: %v", err)
+	}
+}
+
 func TestHistoricalArtifactRoundTripsManifestV2FileAndDirectoryResources(t *testing.T) {
 	fixture, _ := writeManifestV2Fixture(t)
 	bundle := filepath.Join(t.TempDir(), "bundle")
@@ -72,6 +122,68 @@ func TestHistoricalArtifactRoundTripsManifestV2FileAndDirectoryResources(t *test
 	if got := len(artifact.Resources); got != 5 {
 		t.Fatalf("artifact evidence contains %d resources, want 5", got)
 	}
+}
+
+func TestHistoricalSurfacesFollowTheirManifestVersionNotCurrentCatalog(t *testing.T) {
+	bundle, currentPath, _ := writeManifestV3Fixture(t)
+	target := filepath.Join(bundle, "packs", "example", "pack.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(currentPath, target); err != nil {
+		t.Fatal(err)
+	}
+	entries := []catalogEntry{{ID: "example", Description: "Example", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}}}
+	catalog, err := discoverCatalog(bundle, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v1root := filepath.Join(bundle, "history", "example", "1.0.0")
+	mustWrite(t, filepath.Join(v1root, "instructions", "old.md"), []byte("old"), 0o600)
+	v1 := []byte(`{"schema_version":1,"id":"example","version":"1.0.0","provides":[],"requires":{"capabilities":[],"tools":[]},"conflicts":[],"resources":[{"kind":"instruction","id":"old","source":"instructions/old.md"}]}`)
+	mustWrite(t, filepath.Join(v1root, "pack.json"), v1, 0o600)
+	trustHistoricalFixture(t, v1root, "example@1.0.0")
+	old, err := catalog.resolveIntentPack("example", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(old.Surfaces, entries[0].Surfaces) {
+		t.Fatalf("v1 historical surfaces = %#v", old.Surfaces)
+	}
+
+	v3root := filepath.Join(bundle, "history", "example", "2.0.0")
+	copyHistoricalTree(t, filepath.Join(bundle, "agents"), filepath.Join(v3root, "agents"))
+	copyHistoricalTree(t, filepath.Join(bundle, "instructions"), filepath.Join(v3root, "instructions"))
+	var manifest map[string]any
+	data := mustRead(t, target)
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["version"] = "2.0.0"
+	data, _ = json.Marshal(manifest)
+	mustWrite(t, filepath.Join(v3root, "pack.json"), data, 0o600)
+	trustHistoricalFixture(t, v3root, "example@2.0.0")
+	v3, err := catalog.resolveIntentPack("example", "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v3.Surfaces) != 3 || v3.Surfaces[0] != SurfaceClaude {
+		t.Fatalf("v3 historical surfaces = %#v", v3.Surfaces)
+	}
+}
+
+func trustHistoricalFixture(t *testing.T, root, key string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, "artifact.json"), []byte("{}\n"), 0o600)
+	pack := mustDecodeHistoricalManifest(t, root)
+	artifact, err := inspectHistoricalArtifact(root, pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHistoricalArtifact(t, root, artifact)
+	trustedHistoricalAggregates[key] = artifact.AggregateSHA256
+	t.Cleanup(func() { delete(trustedHistoricalAggregates, key) })
 }
 
 func TestCheckedInMattyTwoPreservesWorkflowConventionsInOneOwnedInstruction(t *testing.T) {

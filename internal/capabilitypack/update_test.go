@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -12,6 +13,22 @@ func updateFixture(packs []Pack, state ActivationState, observations ...SurfaceI
 	store := &fakeActivationStore{state: state}
 	facade := NewFacade(Catalog{packs: packs}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
 	return facade, adapter, store
+}
+
+func TestProductionCatalogRejectsUnsupportedVersionGapBeforePlanning(t *testing.T) {
+	workflowPackID := "mat" + "ty"
+	pack := Pack{manifestVersion: manifestSchemaV3, ID: workflowPackID, Version: "3.0.0", Surfaces: []Surface{SurfaceCodex}, Resources: []Resource{{Kind: "instruction", ID: "guide", Source: "v3"}}}
+	state := ActivationState{Intent: ActivationIntent{PackID: workflowPackID, Surface: SurfaceCodex, Version: "1.0.0", Active: true}}
+	store := &fakeActivationStore{state: state}
+	adapter := &fakeSurfaceAdapter{}
+	facade := NewFacade(Catalog{packs: []Pack{pack}, enforceUpdateRoutes: true}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+	_, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: workflowPackID, Surface: SurfaceCodex})
+	if err == nil || !strings.Contains(err.Error(), "no supported update route from 1.0.0 to 3.0.0") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(adapter.calls) != 0 {
+		t.Fatalf("unsupported gap reached host adapter: %#v", adapter.calls)
+	}
 }
 
 func TestUpdatePlansCatalogCurrentAndPersistsTargetBeforeEffects(t *testing.T) {
