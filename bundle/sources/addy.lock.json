@@ -1,0 +1,810 @@
+{
+  "schema_version": 1,
+  "generator": "packy-packsync",
+  "generator_version": "1",
+  "provider": "github",
+  "provider_api_version": "2022-11-28",
+  "source_id": "addy",
+  "repository": "addyosmani/agent-skills",
+  "repository_id": 1158722119,
+  "owner": "addyosmani",
+  "owner_id": 110953,
+  "selector": {
+    "mode": "stable-release"
+  },
+  "candidate": {
+    "repository": "addyosmani/agent-skills",
+    "repository_id": 1158722119,
+    "repository_node_id": "R_kgDORRCyRw",
+    "repository_html_url": "https://github.com/addyosmani/agent-skills",
+    "repository_clone_url": "https://github.com/addyosmani/agent-skills.git",
+    "repository_api_url": "https://api.github.com/repos/addyosmani/agent-skills",
+    "visibility": "public",
+    "owner": "addyosmani",
+    "owner_id": 110953,
+    "owner_node_id": "MDQ6VXNlcjExMDk1Mw==",
+    "public": true,
+    "archived": false,
+    "disabled": false,
+    "release": {
+      "id": 352811383,
+      "node_id": "RE_kwDORRCyR84VB3l3",
+      "tag": "0.6.4",
+      "name": "0.6.4",
+      "target_commitish": "main",
+      "immutable": false,
+      "created_at": "2026-07-12T18:03:53Z",
+      "published_at": "2026-07-12T18:03:56Z",
+      "draft": false,
+      "prerelease": false,
+      "author": {
+        "login": "addyosmani",
+        "id": 110953,
+        "node_id": "MDQ6VXNlcjExMDk1Mw=="
+      }
+    },
+    "tag_ref_name": "refs/tags/0.6.4",
+    "tag_ref_type": "tag",
+    "tag_ref_sha": "fbe226d2f1d07dff153a368790b6b97960b2da7f",
+    "tag_objects": [
+      {
+        "sha": "fbe226d2f1d07dff153a368790b6b97960b2da7f",
+        "name": "0.6.4",
+        "target_sha": "98967c45a42b88d6b8fb3a88b7ff6273920763d6",
+        "target_type": "commit",
+        "verification": {
+          "verified": false,
+          "reason": "unsigned",
+          "verified_at": null,
+          "signature_sha256": null,
+          "payload_sha256": null
+        }
+      }
+    ],
+    "commit": "98967c45a42b88d6b8fb3a88b7ff6273920763d6",
+    "commit_node_id": "C_kwDORRCyR9oAKDk4OTY3YzQ1YTQyYjg4ZDZiOGZiM2E4OGI3ZmY2MjczOTIwNzYzZDY",
+    "tree": "3808d3bac44683c5af8979a169b31cb99af47de8",
+    "parents": [
+      "3517e072285a7b27f7a1454b8cb54cfb4fb30ac9",
+      "27dcc32b83460aa4b186db3a31305387352a83c7"
+    ],
+    "commit_verification": {
+      "verified": true,
+      "reason": "valid",
+      "verified_at": "2026-07-12T17:58:05Z",
+      "signature_sha256": "b150965793d5ad6bd977cef9304e974b3f11f3a9eeedeff031643452abc2a588",
+      "payload_sha256": "8da5f90716e3a7340aa3fb5d1cb4c412d915561a0c2233f858dbfb1994bc900d"
+    }
+  },
+  "snapshot_sha256": "806552c4ef77f79d698f3c9957b67aa78e6731f7d3487032aaac07d66f6ae132",
+  "resources": [
+    {
+      "pack_id": "addy",
+      "kind": "agent",
+      "resource_id": "code-reviewer",
+      "upstream_path": "agents/code-reviewer.md",
+      "vendored_path": "bundle/agents/code-reviewer.md",
+      "sha256": "3d4c68d3880a3e696d874c717594bb4f4ee39826ee533cf68b7e8de25b2e4e05",
+      "files": [
+        {
+          "path": ".",
+          "size": 3801,
+          "mode": 420,
+          "sha256": "74667b052cb6a75079791cee8f6e465a248e28fd82178505aaaec8db95c40ccf"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "agent",
+      "resource_id": "security-auditor",
+      "upstream_path": "agents/security-auditor.md",
+      "vendored_path": "bundle/agents/security-auditor.md",
+      "sha256": "d5fc6a318411bdeaf2ac96e925dba70b4ed8b8b672f4f3edcd6fac6cebce10e4",
+      "files": [
+        {
+          "path": ".",
+          "size": 4992,
+          "mode": 420,
+          "sha256": "66a3f68f1c691b600ddb44e88afb138e239d0572df37be84e1f9a427c887dd0a"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "agent",
+      "resource_id": "test-engineer",
+      "upstream_path": "agents/test-engineer.md",
+      "vendored_path": "bundle/agents/test-engineer.md",
+      "sha256": "d464722ba4a1b1ea2a861134bb12678c96b1d5830f745d8838962b22894ffab2",
+      "files": [
+        {
+          "path": ".",
+          "size": 3275,
+          "mode": 420,
+          "sha256": "c4acde91d6307d88515387344a129a2d0679134e587596c3517d73faffcd5aa6"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "agent",
+      "resource_id": "web-performance-auditor",
+      "upstream_path": "agents/web-performance-auditor.md",
+      "vendored_path": "bundle/agents/web-performance-auditor.md",
+      "sha256": "dd1abffd80e62e52707e29164fd057fe9fb08ec230e55cb838b4ef6c9d89c577",
+      "files": [
+        {
+          "path": ".",
+          "size": 12278,
+          "mode": 420,
+          "sha256": "0928b1cf8103262a364bce0c1fc689a918852e2275441f1b2e687adfa1e607e9"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "accessibility-checklist",
+      "upstream_path": "references/accessibility-checklist.md",
+      "vendored_path": "bundle/references/accessibility-checklist.md",
+      "sha256": "a83b401ff32d00bb229be1f757fcee8cdc75319ec0dce44a1ac2145cf186662f",
+      "files": [
+        {
+          "path": ".",
+          "size": 5206,
+          "mode": 420,
+          "sha256": "61c759d94d52296231f5f310b92b401f56c44e4430dc3cc95ebac5d7b1d5ffac"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "definition-of-done",
+      "upstream_path": "references/definition-of-done.md",
+      "vendored_path": "bundle/references/definition-of-done.md",
+      "sha256": "7b5785a1116a677feb889a266109e5da601893f484d654a9e448825d84936cff",
+      "files": [
+        {
+          "path": ".",
+          "size": 3798,
+          "mode": 420,
+          "sha256": "d1c75d2ae65d2c7a9cd01f93fa8de63e00e75f2fe5d08be224d576157054dcee"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "observability-checklist",
+      "upstream_path": "references/observability-checklist.md",
+      "vendored_path": "bundle/references/observability-checklist.md",
+      "sha256": "df8da2267be530f1745d0807955eeb317ab9081d02e50ab436d323aa5be85f28",
+      "files": [
+        {
+          "path": ".",
+          "size": 4931,
+          "mode": 420,
+          "sha256": "28659e0a4b9625a434285fa9ede632802afa909f768d0f8d839dca227e53d8fe"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "orchestration-patterns",
+      "upstream_path": "references/orchestration-patterns.md",
+      "vendored_path": "bundle/references/orchestration-patterns.md",
+      "sha256": "444dd17bb897b77307f7b30684da424e773cfc7e2099e470ef86b190320f0f7e",
+      "files": [
+        {
+          "path": ".",
+          "size": 18201,
+          "mode": 420,
+          "sha256": "61e543d86f19f86b83074f8c1c769455c7085a2c72dd47b1da21a8c63785be4a"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "performance-checklist",
+      "upstream_path": "references/performance-checklist.md",
+      "vendored_path": "bundle/references/performance-checklist.md",
+      "sha256": "f7035845ecaf2c4407c4a2e3626bcd03249981b30fbc642e89eeb2ea2510f3de",
+      "files": [
+        {
+          "path": ".",
+          "size": 7408,
+          "mode": 420,
+          "sha256": "628539583b7f515f84d0b8e4f4210ccdc0449afd31901149a078209f0769e654"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "security-checklist",
+      "upstream_path": "references/security-checklist.md",
+      "vendored_path": "bundle/references/security-checklist.md",
+      "sha256": "d8048406ab6ca691160e61bb996deb12c63d257fc77c1254526a1c904f24c64f",
+      "files": [
+        {
+          "path": ".",
+          "size": 11828,
+          "mode": 420,
+          "sha256": "3ab8aed0bfc37f60e2293d0139522ad470b4beea1938f456617eb6fa8b3b7fc8"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "asset",
+      "resource_id": "testing-patterns",
+      "upstream_path": "references/testing-patterns.md",
+      "vendored_path": "bundle/references/testing-patterns.md",
+      "sha256": "59db4f1bb8a8558a79b3457b8ebdc6fcb8e5a9d76de00f3e43dfa9c2319286a2",
+      "files": [
+        {
+          "path": ".",
+          "size": 7094,
+          "mode": 420,
+          "sha256": "6e000cca2c8f7dc6b5916de3016c09f493384da3b08217160afc19b5a841166d"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "build",
+      "upstream_path": "commands/build.toml",
+      "vendored_path": "bundle/commands/build.toml",
+      "sha256": "0b5a0dc8f26ccdf4c27a1e948aa31451b12a5923e9997a1c66679a8a5605c7f1",
+      "files": [
+        {
+          "path": ".",
+          "size": 3840,
+          "mode": 420,
+          "sha256": "e25857cf424905bceea7f1250903eb801a8e79ed62ec67c2fd4d785969e47e62"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "code-simplify",
+      "upstream_path": "commands/code-simplify.toml",
+      "vendored_path": "bundle/commands/code-simplify.toml",
+      "sha256": "3fb4d9ead9c1e9635867caf83c571b94a9fe6524ac219b1bb32ec547e5ececde",
+      "files": [
+        {
+          "path": ".",
+          "size": 1066,
+          "mode": 420,
+          "sha256": "640cdd34c26a04cabe6d3ea64ba5aad91bb68b16c8f7619a9e5fae6fe0a37ec8"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "plan",
+      "upstream_path": "commands/planning.toml",
+      "vendored_path": "bundle/commands/planning.toml",
+      "sha256": "e1ec7282dc658c6e01164273c85edede6aebeb10bce74c5775e0d515a65018df",
+      "files": [
+        {
+          "path": ".",
+          "size": 635,
+          "mode": 420,
+          "sha256": "0be6342ddff35204095b23c64a389323185624418c365390955c3c716eba4d85"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "review",
+      "upstream_path": "commands/review.toml",
+      "vendored_path": "bundle/commands/review.toml",
+      "sha256": "a8cf49656eb06a2824b897d45501ac5d12340200f2dde4a9368f62ccbbe4899d",
+      "files": [
+        {
+          "path": ".",
+          "size": 844,
+          "mode": 420,
+          "sha256": "a7ae7259a9e080731e0dd91368da728b89919d31488192e067b751cf472d5a8d"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "ship",
+      "upstream_path": "commands/ship.toml",
+      "vendored_path": "bundle/commands/ship.toml",
+      "sha256": "4ebda2df25495378f9c01dc5030a081543da8fe7ac283ee11b3a914333997f07",
+      "files": [
+        {
+          "path": ".",
+          "size": 4712,
+          "mode": 420,
+          "sha256": "a067c5c4ea484609ceb530b908c7fb707f184abae839826012ddca653517c1c5"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "spec",
+      "upstream_path": "commands/spec.toml",
+      "vendored_path": "bundle/commands/spec.toml",
+      "sha256": "2c6d169092e84f81a1d9b056c9a02376bc17bb27a670ff55a7f9891b93d914c5",
+      "files": [
+        {
+          "path": ".",
+          "size": 675,
+          "mode": 420,
+          "sha256": "e964ec1155154d9f2f83dbd4c7a6e030ec19aec1fdc5060176c7c255d4695577"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "test",
+      "upstream_path": "commands/test.toml",
+      "vendored_path": "bundle/commands/test.toml",
+      "sha256": "6b6a3a06117907375ec67b491a1fe31177453e418ca026cbaf49370bd0a7b31f",
+      "files": [
+        {
+          "path": ".",
+          "size": 650,
+          "mode": 420,
+          "sha256": "c54f004d67f9fd4f8a5c9ab753ef99d3dd3d12cdc304473ea61db8c8680fe84d"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "command",
+      "resource_id": "webperf",
+      "upstream_path": "commands/webperf.toml",
+      "vendored_path": "bundle/commands/webperf.toml",
+      "sha256": "a89affcbb3dd378843b96ecd7893a572fe014cd2fe78309ddf4ba7b10afde007",
+      "files": [
+        {
+          "path": ".",
+          "size": 2031,
+          "mode": 420,
+          "sha256": "a7ff4a4ab3c3e20e22edb7582542264813f2c6c11c9687878f3ff9f6e5b529be"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "notice",
+      "resource_id": "mit",
+      "upstream_path": "LICENSE",
+      "vendored_path": "bundle/LICENSE",
+      "sha256": "2fecdbd891e7323a56619c090d545ab9e0cd45afd54f852bc2b832c677b2203e",
+      "files": [
+        {
+          "path": ".",
+          "size": 1068,
+          "mode": 420,
+          "sha256": "6f202f8bd568cd730dbb2b0d1f8e243bc74c2fa1f64dbce9b2c7ea08bd5c9fd7"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "api-and-interface-design",
+      "upstream_path": "skills/api-and-interface-design",
+      "vendored_path": "bundle/skills/api-and-interface-design",
+      "sha256": "01ce5b4bbe139c96ba394190cfd80313c6ff673e3ad2a243ae79139d75f56032",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 10307,
+          "mode": 420,
+          "sha256": "293db2903b41316a5109a1e0ce3e1740eeafae31735bc1f9143dafbfd1187363"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "browser-testing-with-devtools",
+      "upstream_path": "skills/browser-testing-with-devtools",
+      "vendored_path": "bundle/skills/browser-testing-with-devtools",
+      "sha256": "a5f4c56d74e61b876f2894367177bbaf23d6fb62ebc44cc887e999f76f756dc1",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 14539,
+          "mode": 420,
+          "sha256": "4e3aacd6a380cd25bc6c2d67fdd1c926a9b22535b8a62109ecd33cefd909e3d9"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "ci-cd-and-automation",
+      "upstream_path": "skills/ci-cd-and-automation",
+      "vendored_path": "bundle/skills/ci-cd-and-automation",
+      "sha256": "d74f47070c574fd5151ebde18799a827de07f7fa08fdd01ffd162d31ea2ac2c0",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 11332,
+          "mode": 420,
+          "sha256": "a6ed8ed56456b01ff8314c44eefc69897d9905ae4e06bb2b7036286efb79b5f0"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "code-review-and-quality",
+      "upstream_path": "skills/code-review-and-quality",
+      "vendored_path": "bundle/skills/code-review-and-quality",
+      "sha256": "f98ac6930ace6fae67261b47c8d6f1dd01f5b55b02f7f0377f2a002fea04d9c2",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 20543,
+          "mode": 420,
+          "sha256": "bec431b759ff389e47b8d2c9d74e1981ff93cf5f3c36b4a3b6a71a75c250be2c"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "code-simplification",
+      "upstream_path": "skills/code-simplification",
+      "vendored_path": "bundle/skills/code-simplification",
+      "sha256": "679e537a24fcfebab70f425b34f13b786ad7308fdb1777c3f5a153be15e63a77",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 13545,
+          "mode": 420,
+          "sha256": "f0c5ed754057eb0c1e027e2587f59de816651feb5e837242296c43ea21cf621d"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "context-engineering",
+      "upstream_path": "skills/context-engineering",
+      "vendored_path": "bundle/skills/context-engineering",
+      "sha256": "bbd75f73f1ddd77de565d3416d6a0b54f0bb6c6812570d1835ae75a0d0e44aef",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 11070,
+          "mode": 420,
+          "sha256": "ff9d4e5706bdd2eb7de1bfed569f1f42d28e478979ce6fcc32e617e7861b491d"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "debugging-and-error-recovery",
+      "upstream_path": "skills/debugging-and-error-recovery",
+      "vendored_path": "bundle/skills/debugging-and-error-recovery",
+      "sha256": "1e1268f8dd76a40ab83d185ce71ceee1afc9413add20eb13e7ff2f308dfce697",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 10603,
+          "mode": 420,
+          "sha256": "927ad6917fa2891827351cfa3470cd715423faaa5c5f27fe74534d9324c35eea"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "deprecation-and-migration",
+      "upstream_path": "skills/deprecation-and-migration",
+      "vendored_path": "bundle/skills/deprecation-and-migration",
+      "sha256": "061e21952343d097ddabae2da5ab1ca430f1f89c14cfabebdc36410548837454",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 12516,
+          "mode": 420,
+          "sha256": "92d9846321fab624eded7ac55d19a7738cfd2321c2be2e35eb153dcacf7359de"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "documentation-and-adrs",
+      "upstream_path": "skills/documentation-and-adrs",
+      "vendored_path": "bundle/skills/documentation-and-adrs",
+      "sha256": "a0346e71a6e805bfcaecf9bbee4c73621eec61063bc0f45735f5c829b4c7ff24",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 8734,
+          "mode": 420,
+          "sha256": "7fed35f9c5b95d8e3623ad24d78d209c3267ab62d7157fc03954c76a7e58adf4"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "doubt-driven-development",
+      "upstream_path": "skills/doubt-driven-development",
+      "vendored_path": "bundle/skills/doubt-driven-development",
+      "sha256": "3d76313a4cd1ce62a8ed174f9b3307f10c12b372a74ba1476af9bfed79718c72",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 16487,
+          "mode": 420,
+          "sha256": "59aef769adeae40aad67a1d54474aaf914ea7ecdfc2a4752a54840a8d29f80de"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "frontend-ui-engineering",
+      "upstream_path": "skills/frontend-ui-engineering",
+      "vendored_path": "bundle/skills/frontend-ui-engineering",
+      "sha256": "5b64130c3f7208e6d5c7081afd0c795a08315ca04b8f5449d1c2da8ec298b41a",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 10705,
+          "mode": 420,
+          "sha256": "9c284b1f06d617b289c0d250004af5cbaedd5135071e1b17c0211a0aa03a73a4"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "git-workflow-and-versioning",
+      "upstream_path": "skills/git-workflow-and-versioning",
+      "vendored_path": "bundle/skills/git-workflow-and-versioning",
+      "sha256": "939d2a79dd6fe1520f68ad6b6dee86c202af8390a89f174494544c362e0ca461",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 14000,
+          "mode": 420,
+          "sha256": "51677cf03845dd29d08ea4d3125665057b720aea3dccc572f25d8b172409ece6"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "idea-refine",
+      "upstream_path": "skills/idea-refine",
+      "vendored_path": "bundle/skills/idea-refine",
+      "sha256": "71f7a1409a2483ed8c35ab9ead13f2fe7923b9b72244f2b3515916dc4b53a85e",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 8111,
+          "mode": 420,
+          "sha256": "79e773058963adc7646b0115b4f8a4afc974c5ff95843e4ef1cafff3cb51899e"
+        },
+        {
+          "path": "examples.md",
+          "size": 20284,
+          "mode": 420,
+          "sha256": "563204bfbf2f80a444151695205af4cb759e722b3d1e5460e08f278a69c89ba1"
+        },
+        {
+          "path": "frameworks.md",
+          "size": 5404,
+          "mode": 420,
+          "sha256": "161ebc18fdf2d996bc62a87a2d747cf1bf53548354f8925de25c732c27f00309"
+        },
+        {
+          "path": "refinement-criteria.md",
+          "size": 5738,
+          "mode": 420,
+          "sha256": "1ca2973a4d01b5cb37ab7ddb2eff77fa4e792634a33d0ce44961c068fc88d51a"
+        },
+        {
+          "path": "scripts/idea-refine.sh",
+          "size": 342,
+          "mode": 493,
+          "sha256": "f02a52408a4218047c032d221483abfbb48d11f090bb4915965c7419bf2e0e47"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "incremental-implementation",
+      "upstream_path": "skills/incremental-implementation",
+      "vendored_path": "bundle/skills/incremental-implementation",
+      "sha256": "6cd882c41a3f60c855aa51dca9fb3ff3221f575d7460e81db2c2da5461e95026",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 9249,
+          "mode": 420,
+          "sha256": "960f2ed08ccdd51527c347d29d2d00c80edb9992e95d67030d8a289ba04eed4e"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "interview-me",
+      "upstream_path": "skills/interview-me",
+      "vendored_path": "bundle/skills/interview-me",
+      "sha256": "0ddd2ed109879098b7e79211186b4b3e089d008dfdd6950029d7b833c21ab7c9",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 14359,
+          "mode": 420,
+          "sha256": "1d94741d10d2c826cd0c191aea3981ee94c8abb27ef2a166f6a372117d06448f"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "observability-and-instrumentation",
+      "upstream_path": "skills/observability-and-instrumentation",
+      "vendored_path": "bundle/skills/observability-and-instrumentation",
+      "sha256": "d00a450ad85340893497105443ffd2d8e8d7ce4ffb53cce56ff7f3a7b572b64b",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 11047,
+          "mode": 420,
+          "sha256": "40c59a0c3ba28f5697600add521e38f81f880f986317628cdc0df9bdb8acf126"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "performance-optimization",
+      "upstream_path": "skills/performance-optimization",
+      "vendored_path": "bundle/skills/performance-optimization",
+      "sha256": "11bf4eece406d4a2a0c7b9477e31a59113f60f84d45b08613ef96cbac66be4f9",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 11658,
+          "mode": 420,
+          "sha256": "c56f6059fed0b77c50c946e38275f04c8b297657f3742d5782ee564514ecc4dc"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "planning-and-task-breakdown",
+      "upstream_path": "skills/planning-and-task-breakdown",
+      "vendored_path": "bundle/skills/planning-and-task-breakdown",
+      "sha256": "77d08e4a539c160495158b63945a75f82a7c939d64e4e99c6b0a80e8ca59e893",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 7632,
+          "mode": 420,
+          "sha256": "d87ff6bb23aa791f78a504d784e903bb13602975923f884af5d13d5b66b1651a"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "security-and-hardening",
+      "upstream_path": "skills/security-and-hardening",
+      "vendored_path": "bundle/skills/security-and-hardening",
+      "sha256": "35e3bf4a81d4decb022eb6b31fca24570c3cb63e3066ca55b69435ff35882e4c",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 20511,
+          "mode": 420,
+          "sha256": "266c60e073bc81651ad070a1427a93af4d062dc44470580eae31806b38561833"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "shipping-and-launch",
+      "upstream_path": "skills/shipping-and-launch",
+      "vendored_path": "bundle/skills/shipping-and-launch",
+      "sha256": "3104793771d7cb5a3a099004b5121b4fd7b90040739a147e2c328a6d6f9f5fef",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 10045,
+          "mode": 420,
+          "sha256": "efc70a45ad6435d93f2b3cef16c125ff6d75a2383e49f30056fcba04b27d6e4a"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "source-driven-development",
+      "upstream_path": "skills/source-driven-development",
+      "vendored_path": "bundle/skills/source-driven-development",
+      "sha256": "057c0e6e89269b052102ecf90abd1897498546d962fe2aa3d91059ec5aef8b4d",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 8204,
+          "mode": 420,
+          "sha256": "b979e7531ea601ed14a090f32a5b135db517c48ab9821c5e8b09efd80f4ff4d8"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "spec-driven-development",
+      "upstream_path": "skills/spec-driven-development",
+      "vendored_path": "bundle/skills/spec-driven-development",
+      "sha256": "cb5cd42b95d14430264a2ebc22a00a50248c7ab05fa692eb00da1fea68b780b4",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 8527,
+          "mode": 420,
+          "sha256": "af5b873414a8b45b96b0d30d5297400f55eb3a56425161a088e470c14260a1e5"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "test-driven-development",
+      "upstream_path": "skills/test-driven-development",
+      "vendored_path": "bundle/skills/test-driven-development",
+      "sha256": "acff452d9fd1ea51050597eed266a08e115311f5ecdf44cb92e935a25afce01c",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 14976,
+          "mode": 420,
+          "sha256": "6c60e193d77a6c52eb3d9a7ca774f1801b9f798ec34f075720e0425a8094f50e"
+        }
+      ]
+    },
+    {
+      "pack_id": "addy",
+      "kind": "skill",
+      "resource_id": "using-agent-skills",
+      "upstream_path": "skills/using-agent-skills",
+      "vendored_path": "bundle/skills/using-agent-skills",
+      "sha256": "0fd9c06f0ad8febd85fdec4a6edc888c0fec35c1c5651489ba72f2f469e135e3",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "size": 10337,
+          "mode": 420,
+          "sha256": "a5bf05293cfb67af9c5e21e14023d723d2ac8ca42912cef4cee29fbb07e67d64"
+        }
+      ]
+    }
+  ]
+}

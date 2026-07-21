@@ -2,6 +2,280 @@
   "schema_version": 1,
   "sources": [
     {
+      "id": "addy",
+      "provider": "github",
+      "repository": "addyosmani/agent-skills",
+      "selector": {
+        "mode": "stable-release"
+      },
+      "resources": [
+        {
+          "pack_id": "addy",
+          "kind": "agent",
+          "resource_id": "code-reviewer",
+          "upstream_path": "agents/code-reviewer.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "agent",
+          "resource_id": "security-auditor",
+          "upstream_path": "agents/security-auditor.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "agent",
+          "resource_id": "test-engineer",
+          "upstream_path": "agents/test-engineer.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "agent",
+          "resource_id": "web-performance-auditor",
+          "upstream_path": "agents/web-performance-auditor.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "accessibility-checklist",
+          "upstream_path": "references/accessibility-checklist.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "definition-of-done",
+          "upstream_path": "references/definition-of-done.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "observability-checklist",
+          "upstream_path": "references/observability-checklist.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "orchestration-patterns",
+          "upstream_path": "references/orchestration-patterns.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "performance-checklist",
+          "upstream_path": "references/performance-checklist.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "security-checklist",
+          "upstream_path": "references/security-checklist.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "asset",
+          "resource_id": "testing-patterns",
+          "upstream_path": "references/testing-patterns.md"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "build",
+          "upstream_path": "commands/build.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "code-simplify",
+          "upstream_path": "commands/code-simplify.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "plan",
+          "upstream_path": "commands/planning.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "review",
+          "upstream_path": "commands/review.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "ship",
+          "upstream_path": "commands/ship.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "spec",
+          "upstream_path": "commands/spec.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "test",
+          "upstream_path": "commands/test.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "command",
+          "resource_id": "webperf",
+          "upstream_path": "commands/webperf.toml"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "notice",
+          "resource_id": "mit",
+          "upstream_path": "LICENSE"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "api-and-interface-design",
+          "upstream_path": "skills/api-and-interface-design"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "browser-testing-with-devtools",
+          "upstream_path": "skills/browser-testing-with-devtools"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "ci-cd-and-automation",
+          "upstream_path": "skills/ci-cd-and-automation"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "code-review-and-quality",
+          "upstream_path": "skills/code-review-and-quality"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "code-simplification",
+          "upstream_path": "skills/code-simplification"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "context-engineering",
+          "upstream_path": "skills/context-engineering"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "debugging-and-error-recovery",
+          "upstream_path": "skills/debugging-and-error-recovery"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "deprecation-and-migration",
+          "upstream_path": "skills/deprecation-and-migration"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "documentation-and-adrs",
+          "upstream_path": "skills/documentation-and-adrs"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "doubt-driven-development",
+          "upstream_path": "skills/doubt-driven-development"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "frontend-ui-engineering",
+          "upstream_path": "skills/frontend-ui-engineering"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "git-workflow-and-versioning",
+          "upstream_path": "skills/git-workflow-and-versioning"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "idea-refine",
+          "upstream_path": "skills/idea-refine"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "incremental-implementation",
+          "upstream_path": "skills/incremental-implementation"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "interview-me",
+          "upstream_path": "skills/interview-me"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "observability-and-instrumentation",
+          "upstream_path": "skills/observability-and-instrumentation"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "performance-optimization",
+          "upstream_path": "skills/performance-optimization"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "planning-and-task-breakdown",
+          "upstream_path": "skills/planning-and-task-breakdown"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "security-and-hardening",
+          "upstream_path": "skills/security-and-hardening"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "shipping-and-launch",
+          "upstream_path": "skills/shipping-and-launch"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "source-driven-development",
+          "upstream_path": "skills/source-driven-development"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "spec-driven-development",
+          "upstream_path": "skills/spec-driven-development"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "test-driven-development",
+          "upstream_path": "skills/test-driven-development"
+        },
+        {
+          "pack_id": "addy",
+          "kind": "skill",
+          "resource_id": "using-agent-skills",
+          "upstream_path": "skills/using-agent-skills"
+        }
+      ]
+    },
+    {
       "id": "mattpocock-skills",
       "provider": "github",
       "repository": "mattpocock/skills",
@@ -9,29 +283,144 @@
         "mode": "stable-release"
       },
       "resources": [
-        { "pack_id": "matty", "kind": "skill", "resource_id": "ask-matt", "upstream_path": "skills/engineering/ask-matt" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "code-review", "upstream_path": "skills/engineering/code-review" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "codebase-design", "upstream_path": "skills/engineering/codebase-design" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "diagnosing-bugs", "upstream_path": "skills/engineering/diagnosing-bugs" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "domain-modeling", "upstream_path": "skills/engineering/domain-modeling" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "grill-with-docs", "upstream_path": "skills/engineering/grill-with-docs" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "implement", "upstream_path": "skills/engineering/implement" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "improve-codebase-architecture", "upstream_path": "skills/engineering/improve-codebase-architecture" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "prototype", "upstream_path": "skills/engineering/prototype" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "research", "upstream_path": "skills/engineering/research" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "resolving-merge-conflicts", "upstream_path": "skills/engineering/resolving-merge-conflicts" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "setup-matt-pocock-skills", "upstream_path": "skills/engineering/setup-matt-pocock-skills" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "tdd", "upstream_path": "skills/engineering/tdd" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "to-spec", "upstream_path": "skills/engineering/to-spec" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "to-tickets", "upstream_path": "skills/engineering/to-tickets" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "triage", "upstream_path": "skills/engineering/triage" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "wayfinder", "upstream_path": "skills/engineering/wayfinder" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "loop-me", "upstream_path": "skills/in-progress/loop-me" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "grill-me", "upstream_path": "skills/productivity/grill-me" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "grilling", "upstream_path": "skills/productivity/grilling" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "handoff", "upstream_path": "skills/productivity/handoff" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "teach", "upstream_path": "skills/productivity/teach" },
-        { "pack_id": "matty", "kind": "skill", "resource_id": "writing-great-skills", "upstream_path": "skills/productivity/writing-great-skills" }
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "ask-matt",
+          "upstream_path": "skills/engineering/ask-matt"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "code-review",
+          "upstream_path": "skills/engineering/code-review"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "codebase-design",
+          "upstream_path": "skills/engineering/codebase-design"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "diagnosing-bugs",
+          "upstream_path": "skills/engineering/diagnosing-bugs"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "domain-modeling",
+          "upstream_path": "skills/engineering/domain-modeling"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grill-me",
+          "upstream_path": "skills/productivity/grill-me"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grill-with-docs",
+          "upstream_path": "skills/engineering/grill-with-docs"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "grilling",
+          "upstream_path": "skills/productivity/grilling"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "handoff",
+          "upstream_path": "skills/productivity/handoff"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "implement",
+          "upstream_path": "skills/engineering/implement"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "improve-codebase-architecture",
+          "upstream_path": "skills/engineering/improve-codebase-architecture"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "loop-me",
+          "upstream_path": "skills/in-progress/loop-me"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "prototype",
+          "upstream_path": "skills/engineering/prototype"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "research",
+          "upstream_path": "skills/engineering/research"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "resolving-merge-conflicts",
+          "upstream_path": "skills/engineering/resolving-merge-conflicts"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "setup-matt-pocock-skills",
+          "upstream_path": "skills/engineering/setup-matt-pocock-skills"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "tdd",
+          "upstream_path": "skills/engineering/tdd"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "teach",
+          "upstream_path": "skills/productivity/teach"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "to-spec",
+          "upstream_path": "skills/engineering/to-spec"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "to-tickets",
+          "upstream_path": "skills/engineering/to-tickets"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "triage",
+          "upstream_path": "skills/engineering/triage"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "wayfinder",
+          "upstream_path": "skills/engineering/wayfinder"
+        },
+        {
+          "pack_id": "matty",
+          "kind": "skill",
+          "resource_id": "writing-great-skills",
+          "upstream_path": "skills/productivity/writing-great-skills"
+        }
       ]
     }
   ]
