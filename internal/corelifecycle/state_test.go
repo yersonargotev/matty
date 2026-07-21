@@ -1,6 +1,7 @@
 package corelifecycle
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -224,6 +225,23 @@ func TestObserveStateCopiesClaudeOwnershipDeeply(t *testing.T) {
 	snapshot := observation.ClaudeOwnershipSnapshot()
 	if len(snapshot.Records) != 1 || snapshot.Records[0].Kind != string(claudecode.ActionUserMCP) || snapshot.Records[0].Target != "engram" {
 		t.Fatalf("Claude ownership snapshot = %#v", snapshot)
+	}
+}
+
+func TestClassicStateOwnershipUsesCanonicalPersistedKinds(t *testing.T) {
+	records := classicStateOwnership([]claudecode.OwnershipRecord{
+		{Kind: string(claudecode.ActionAgentFile), ID: "agent"},
+		{Kind: string(claudecode.ActionCommandHook), ID: "hook", Args: []string{"session"}},
+	})
+	if len(records) != 2 || records[0].Kind != ClaudeOwnershipAgent || records[1].Kind != ClaudeOwnershipHook {
+		t.Fatalf("persisted kinds = %#v", records)
+	}
+	data, err := json.Marshal(records[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"kind":"hook"`) || !strings.Contains(string(data), `"args":["session"]`) {
+		t.Fatalf("hook wire contract = %s", data)
 	}
 }
 

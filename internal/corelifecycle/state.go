@@ -82,8 +82,8 @@ type ClaudeOwnership struct {
 const (
 	ClaudeOwnershipSkill       = "skill"
 	ClaudeOwnershipInstruction = "instruction"
-	ClaudeOwnershipAgent       = "agent-file"
-	ClaudeOwnershipHook        = "command-hook"
+	ClaudeOwnershipAgent       = "agent"
+	ClaudeOwnershipHook        = "hook"
 	ClaudeOwnershipMCP         = "mcp"
 )
 

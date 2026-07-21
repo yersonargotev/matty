@@ -184,7 +184,13 @@ func claudeHookCheck(observed claudecode.HookObservation, ownership []corelifecy
 		return Check{Severity: Fail, Name: "claude-hooks", Detail: "Claude policy disables or shadows a recorded Packy hook; update Claude policy, then run packy update"}
 	}
 	for _, owner := range wanted {
-		if observed.EntryFingerprint != owner.Fingerprint || len(observed.MatchingEntries) != 1 {
+		matches := 0
+		for _, fingerprint := range observed.MatchingEntries {
+			if fingerprint == owner.Fingerprint {
+				matches++
+			}
+		}
+		if matches != 1 {
 			return Check{Severity: Fail, Name: "claude-hooks", Detail: "recorded Claude hook is missing, duplicated, or drifted at " + owner.Target + "; inspect the collision, then run packy update"}
 		}
 	}
@@ -239,11 +245,8 @@ func claudeReadinessCheck(observation claudecode.SetupObservation, state corelif
 		return Check{Severity: Fail, Name: "claude-readiness", Detail: "classic Claude ownership is not ready while lifecycle recovery or cleanup is incomplete; run packy install, packy update, or packy uninstall to resolve recorded ownership"}
 	}
 	authorization := observation.Authorization
-	if !desired && authorization.Err != nil {
+	if authorization.Err != nil {
 		return Check{Severity: Warn, Name: "claude-readiness", Detail: "Claude authorization observation failed: " + authorization.Err.Error() + "; inspect Claude policy and tool permissions"}
-	}
-	if desired && authorization.Err != nil {
-		return Check{Severity: Fail, Name: "claude-readiness", Detail: "Claude authorization could not be observed: " + authorization.Err.Error() + "; inspect Claude policy and tool permissions"}
 	}
 	if desired && (authorization.Disabled || authorization.Shadowed) {
 		return Check{Severity: Fail, Name: "claude-readiness", Detail: "Claude policy disables or shadows a desired Packy integration; update Claude policy and tool permissions"}

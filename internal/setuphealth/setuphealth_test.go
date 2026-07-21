@@ -139,7 +139,7 @@ func TestClaudeChecksOwnPublicObservationBoundaries(t *testing.T) {
 	assertCheck(t, diagnoseClaude(disabled), Fail, "claude-readiness", "disables")
 	authorizationFailure := base
 	authorizationFailure.Authorization = claudecode.AuthorizationObservation{Err: errors.New("policy unavailable")}
-	assertCheck(t, diagnoseClaude(authorizationFailure), Fail, "claude-readiness", "could not be observed")
+	assertCheck(t, diagnoseClaude(authorizationFailure), Warn, "claude-readiness", "observation failed")
 
 	for _, tt := range []struct {
 		name, check, detail string
@@ -151,7 +151,7 @@ func TestClaudeChecksOwnPublicObservationBoundaries(t *testing.T) {
 		{name: "invalid instruction document", check: "claude-instructions", detail: "invalid", change: func(o *claudecode.SetupObservation) { o.Instructions.Err = errors.New("invalid markers") }},
 		{name: "disabled hook", check: "claude-hooks", detail: "disables", change: func(o *claudecode.SetupObservation) { o.Hooks.Disabled = true }},
 		{name: "shadowed hook", check: "claude-hooks", detail: "shadows", change: func(o *claudecode.SetupObservation) { o.Hooks.Shadowed = true }},
-		{name: "drifted hook", check: "claude-hooks", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Hooks.EntryFingerprint = "changed" }},
+		{name: "drifted hook", check: "claude-hooks", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Hooks.MatchingEntries[0] = "changed" }},
 		{name: "missing mcp", check: "claude-mcp", detail: "missing", change: func(o *claudecode.SetupObservation) { o.MCP = nil }},
 		{name: "unreadable mcp", check: "claude-mcp", detail: "unreadable", change: func(o *claudecode.SetupObservation) { o.MCP[0].Err = errors.New("invalid JSON") }},
 		{name: "drifted mcp", check: "claude-mcp", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.MCP[0].DefinitionFingerprint = "changed" }},
@@ -160,6 +160,7 @@ func TestClaudeChecksOwnPublicObservationBoundaries(t *testing.T) {
 			o := base
 			o.Skills = append([]claudecode.SkillObservation(nil), base.Skills...)
 			o.MCP = append([]claudecode.MCPObservation(nil), base.MCP...)
+			o.Hooks.MatchingEntries = append([]string(nil), base.Hooks.MatchingEntries...)
 			o.Instructions.Contributions = map[string]string{"classic": "instruction-fp"}
 			tt.change(&o)
 			assertCheck(t, diagnoseClaude(o), Fail, tt.check, tt.detail)

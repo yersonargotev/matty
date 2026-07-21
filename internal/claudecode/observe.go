@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/localprojection"
@@ -74,24 +75,53 @@ func ObserveSetup(ctx context.Context, layout CanonicalLayout, executable string
 	observation := SetupObservation{
 		Version:      ObserveVersion(ctx, executable, runner),
 		Instructions: ObserveInstructions(layout.InstructionsFile),
-		Hooks: HookObservation{
-			Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable,
-			Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err,
-		},
 		Authorization: AuthorizationObservation{
 			PolicyObserved: settings.Parseable, Disabled: settings.Disabled,
 			Shadowed: settings.Shadowed, Err: settings.Err,
 		},
 	}
+	var hookFingerprints []string
 	for _, record := range ownership.Records {
 		switch record.Kind {
 		case string(ActionSkillLink):
 			observation.Skills = append(observation.Skills, ObserveSkill(record.Target, record.Skill.ExpectedSource))
 		case string(ActionAgentFile):
 			observation.Agents = append(observation.Agents, ObserveAgent(record.Target))
+		case string(ActionCommandHook):
+			hookFingerprints = append(hookFingerprints, record.Fingerprint)
 		case string(ActionUserMCP):
 			observation.MCP = append(observation.MCP, ObserveUserMCP(layout.UserMCPFile, record.Target))
 		}
+	}
+	observation.Hooks = observeOwnedHooks(settings, hookFingerprints)
+	return observation
+}
+
+func observeOwnedHooks(settings SettingsObservation, fingerprints []string) HookObservation {
+	observation := HookObservation{
+		Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable,
+		Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err,
+	}
+	if settings.Err != nil || len(fingerprints) == 0 {
+		return observation
+	}
+	wanted := make(map[string]bool, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		wanted[fingerprint] = true
+	}
+	hooks, _ := settings.Root["hooks"].(map[string]any)
+	for _, rawEntries := range hooks {
+		entries, _ := rawEntries.([]any)
+		for _, entry := range entries {
+			fingerprint := canonicalFingerprint(entry)
+			if wanted[fingerprint] {
+				observation.MatchingEntries = append(observation.MatchingEntries, fingerprint)
+			}
+		}
+	}
+	sort.Strings(observation.MatchingEntries)
+	if len(observation.MatchingEntries) == 1 {
+		observation.EntryFingerprint = observation.MatchingEntries[0]
 	}
 	return observation
 }

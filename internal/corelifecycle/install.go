@@ -570,6 +570,12 @@ func classicStateOwnership(records []claudecode.OwnershipRecord) []ClaudeOwnersh
 		if kind == "instruction-contribution" {
 			kind = ClaudeOwnershipInstruction
 		}
+		if kind == "agent-file" {
+			kind = ClaudeOwnershipAgent
+		}
+		if kind == "command-hook" {
+			kind = ClaudeOwnershipHook
+		}
 		if kind == "user-mcp" {
 			kind = ClaudeOwnershipMCP
 		}
