@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,10 +12,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/yersonargotev/packy/internal/bootstrap"
 	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/corelifecycle"
 	"github.com/yersonargotev/packy/internal/engrambin"
 	"github.com/yersonargotev/packy/internal/opencode"
+	"github.com/yersonargotev/packy/internal/prompt"
 	"github.com/yersonargotev/packy/internal/setuphealth"
 	"github.com/yersonargotev/packy/internal/skillbundle"
 	packyversion "github.com/yersonargotev/packy/internal/version"
@@ -31,6 +35,8 @@ type Options struct {
 	SurfaceAdapters     map[capabilitypack.Surface]capabilitypack.SurfaceAdapter
 	EngramFacts         engrambin.Facts
 	SetupHealthDiagnose func() (setuphealth.Report, error)
+	ClaudeRunner        claudecode.Runner
+	ClaudeLookPath      claudecode.LookPath
 }
 
 func (o Options) withDefaults() Options {
@@ -39,6 +45,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Runner == nil {
 		o.Runner = execRunner{}
+	}
+	if o.ClaudeRunner == nil {
+		o.ClaudeRunner = execClaudeRunner{}
+	}
+	if o.ClaudeLookPath == nil {
+		o.ClaudeLookPath = claudecode.LookPath(o.Runner.LookPath)
 	}
 	if o.Getwd == nil {
 		o.Getwd = os.Getwd
@@ -190,7 +202,10 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy install", plan)
+				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy install", plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
@@ -199,8 +214,10 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy install: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
-			return err
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "packy install: synced %d managed skills and wrote state %s (outcome: %s)\n", result.ManagedSkillCount(), result.StateFile(), result.Outcome()); err != nil {
+				return err
+			}
+			return classicLifecycleOutcomeError(result.Outcome())
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed changes without writing files")
@@ -286,7 +303,10 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy update", plan)
+				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy update", plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
@@ -295,8 +315,10 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy update: synced %d managed skills and wrote state %s\n", result.ManagedSkillCount(), result.StateFile())
-			return err
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "packy update: synced %d managed skills and wrote state %s (outcome: %s)\n", result.ManagedSkillCount(), result.StateFile(), result.Outcome()); err != nil {
+				return err
+			}
+			return classicLifecycleOutcomeError(result.Outcome())
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed update changes without writing files or running commands")
@@ -332,8 +354,27 @@ func printSkillSourceReport(out io.Writer, source skillbundle.Source, installedS
 }
 
 func printLifecycleDryRunPlan(out io.Writer, command string, plan corelifecycle.Plan) error {
-	if _, err := fmt.Fprintf(out, "%s dry-run: planned actions\n", command); err != nil {
+	if _, err := fmt.Fprintf(out, "%s dry-run: planned actions\nOutcome: %s\nDesired surfaces: %s\n", command, plan.Outcome(), strings.Join(plan.DesiredSurfaces(), ", ")); err != nil {
 		return err
+	}
+	transition := plan.StateTransition()
+	if _, err := fmt.Fprintf(out, "State transition: schema %d -> %d; status %s -> %s\n", transition.FromSchemaVersion, transition.ToSchemaVersion, transition.FromStatus, transition.ToStatus); err != nil {
+		return err
+	}
+	for _, value := range plan.PendingPrerequisites() {
+		if _, err := fmt.Fprintf(out, "Pending prerequisite: %s\n", value); err != nil {
+			return err
+		}
+	}
+	for _, value := range plan.Preserved() {
+		if _, err := fmt.Fprintf(out, "Preserved: %s\n", value); err != nil {
+			return err
+		}
+	}
+	for _, value := range plan.Blockers() {
+		if _, err := fmt.Fprintf(out, "Blocker: %s\n", value); err != nil {
+			return err
+		}
 	}
 	for _, action := range plan.Actions() {
 		if _, err := fmt.Fprintf(out, "- %s: %s", action.Kind, action.Description); err != nil {
@@ -383,7 +424,10 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 				return err
 			}
 			if dryRun {
-				return printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy uninstall", plan)
+				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy uninstall", plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			result, err := lifecycle.Apply(cmd.Context(), plan)
 			if err != nil {
@@ -393,12 +437,25 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "packy uninstall: no Packy-managed artifacts found")
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "packy uninstall: removed Packy-managed artifacts and state %s\n", result.StateFile())
-			return err
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "packy uninstall: %s; processed Packy-managed artifacts for state %s\n", result.Outcome(), result.StateFile()); err != nil {
+				return err
+			}
+			return classicLifecycleOutcomeError(result.Outcome())
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed removals without deleting files")
 	return cmd
+}
+
+var ErrClassicLifecycleIncomplete = errors.New("classic lifecycle did not converge")
+
+func classicLifecycleOutcomeError(outcome corelifecycle.Outcome) error {
+	switch outcome {
+	case corelifecycle.OutcomeConverged, corelifecycle.OutcomeApplied, corelifecycle.OutcomeAppliedWithPendingPrerequisite:
+		return nil
+	default:
+		return fmt.Errorf("%w: %s", ErrClassicLifecycleIncomplete, outcome)
+	}
 }
 
 type classicLifecycleComposition struct {
@@ -441,6 +498,18 @@ func resolveClassicLifecycle(opts Options, resolver *workstation.Resolver) (clas
 	if err != nil {
 		return classicLifecycleComposition{}, err
 	}
+	claudeExecutable, err := opts.ClaudeLookPath("claude")
+	if err != nil {
+		claudeExecutable = ""
+	}
+	stateLayout := corelifecycle.NewLayout(snapshot.PackyHome())
+	claudeAdapter := claudecode.NewSurfaceAdapter(
+		"", claudecode.NewCanonicalLayout(snapshot.Home()), snapshot.PackyHome(),
+		claudeExecutable, opts.ClaudeRunner,
+		claudecode.OwnershipSnapshotFunc(func(_ context.Context) (claudecode.OwnershipSnapshot, error) {
+			return corelifecycle.ObserveClaudeOwnershipSnapshot(stateLayout.StateFile())
+		}),
+	)
 	return classicLifecycleComposition{
 		config: corelifecycle.FacadeConfig{
 			PackyHome:       snapshot.PackyHome(),
@@ -451,6 +520,11 @@ func resolveClassicLifecycle(opts Options, resolver *workstation.Resolver) (clas
 			Engram:          engrambin.NewTopology(snapshot.HomebrewPrefix()),
 			InstalledSource: sources.installed,
 			RunningVersion:  packyversion.Value,
+			Claude:          claudeAdapter,
+			ClaudeDesired: claudecode.ClassicDesired{
+				Instruction: &claudecode.ClassicInstruction{ID: "classic:instruction", Content: prompt.CodexContent() + "\n" + prompt.RulesContent()},
+				MCP:         &claudecode.ClassicMCP{ID: "classic:mcp:engram", Name: "engram", Command: "engram", Args: []string{"mcp", "--tools=agent"}},
+			},
 		},
 		skillSource:     sources.skills,
 		installedSource: sources.installed,

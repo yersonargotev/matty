@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yersonargotev/packy/internal/bootstrap"
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/engrambin"
 	"github.com/yersonargotev/packy/internal/opencode"
@@ -41,6 +42,27 @@ const (
 	ActionCleanup              ActionKind = "cleanup"
 )
 
+// Outcome classifies the complete lifecycle plan/result independently from
+// command-line exit policy.
+type Outcome string
+
+const (
+	OutcomeConverged                      Outcome = "converged"
+	OutcomeApplied                        Outcome = "applied"
+	OutcomeAppliedWithPendingPrerequisite Outcome = "applied-with-pending-prerequisite"
+	OutcomeBlocked                        Outcome = "blocked"
+	OutcomePartiallyApplied               Outcome = "partially-applied"
+	OutcomeRecoveryRequired               Outcome = "recovery-required"
+	OutcomeUninstallIncomplete            Outcome = "uninstall-incomplete"
+)
+
+type StateTransitionView struct {
+	FromSchemaVersion int
+	ToSchemaVersion   int
+	FromStatus        InstallStatus
+	ToStatus          InstallStatus
+}
+
 // ActionView is a detached, read-only view of one ordered lifecycle action.
 // Mutating a returned view cannot change the opaque plan consumed by Apply.
 type ActionView struct {
@@ -67,6 +89,8 @@ type facadeConfig struct {
 	Engram          engrambin.Topology
 	InstalledSource bootstrap.InstalledSource
 	RunningVersion  string
+	Claude          *claudecode.SurfaceAdapter
+	ClaudeDesired   claudecode.ClassicDesired
 }
 
 // FacadeConfig is the narrow composition contract for classic lifecycle.
@@ -80,6 +104,8 @@ type FacadeConfig struct {
 	Engram          engrambin.Topology
 	InstalledSource bootstrap.InstalledSource
 	RunningVersion  string
+	Claude          *claudecode.SurfaceAdapter
+	ClaudeDesired   claudecode.ClassicDesired
 }
 
 type Commands interface {
@@ -107,6 +133,8 @@ func NewFacade(owners FacadeConfig, commands Commands, now func() time.Time) *Fa
 		RunningVersion:  owners.RunningVersion,
 		InstalledSource: owners.InstalledSource,
 		Engram:          owners.Engram,
+		Claude:          owners.Claude,
+		ClaudeDesired:   owners.ClaudeDesired,
 	}
 	return &Facade{config: config, commands: commands, now: now}
 }
@@ -119,28 +147,50 @@ type plannedAction struct {
 // Plan deliberately exposes behavior only through detached views. Its state,
 // action ordering, and owning facade remain unavailable to callers.
 type Plan struct {
-	owner         *Facade
-	operation     Operation
-	actions       []plannedAction
-	desired       State
-	cleanup       ownedcontainer.Plan
-	preconditions ownedcontainer.Plan
-	hasWork       bool
+	owner           *Facade
+	operation       Operation
+	actions         []plannedAction
+	desired         State
+	cleanup         ownedcontainer.Plan
+	preconditions   ownedcontainer.Plan
+	hasWork         bool
+	outcome         Outcome
+	blockers        []string
+	pending         []string
+	preserved       []string
+	recovery        []string
+	transition      StateTransitionView
+	legacyMigration bool
+	claudePlan      claudecode.ClassicPlan
+	hasClaudePlan   bool
 }
 
 var ErrForeignPlan = errors.New("core lifecycle plan was not previewed by this facade")
+var ErrBlockedPlan = errors.New("core lifecycle plan is blocked")
 
 type Result struct {
 	warnings          []string
 	managedSkillCount int
 	stateFile         string
 	hasWork           bool
+	outcome           Outcome
+	completedEffects  []string
+	failedEffect      string
+	notStartedEffects []string
 }
 
 func (result Result) Warnings() []string     { return append([]string(nil), result.warnings...) }
 func (result Result) ManagedSkillCount() int { return result.managedSkillCount }
 func (result Result) StateFile() string      { return result.stateFile }
 func (result Result) HasWork() bool          { return result.hasWork }
+func (result Result) Outcome() Outcome       { return result.outcome }
+func (result Result) CompletedEffects() []string {
+	return append([]string(nil), result.completedEffects...)
+}
+func (result Result) FailedEffect() string { return result.failedEffect }
+func (result Result) NotStartedEffects() []string {
+	return append([]string(nil), result.notStartedEffects...)
+}
 
 func (plan Plan) Actions() []ActionView {
 	actions := make([]ActionView, len(plan.actions))
@@ -151,7 +201,16 @@ func (plan Plan) Actions() []ActionView {
 	return actions
 }
 
-func (plan Plan) ManagedSkillCount() int { return len(plan.desired.ManagedSkills) }
+func (plan Plan) ManagedSkillCount() int               { return len(plan.desired.ManagedSkills) }
+func (plan Plan) Outcome() Outcome                     { return plan.outcome }
+func (plan Plan) Blockers() []string                   { return append([]string(nil), plan.blockers...) }
+func (plan Plan) PendingPrerequisites() []string       { return append([]string(nil), plan.pending...) }
+func (plan Plan) Preserved() []string                  { return append([]string(nil), plan.preserved...) }
+func (plan Plan) RecoveryEvidence() []string           { return append([]string(nil), plan.recovery...) }
+func (plan Plan) StateTransition() StateTransitionView { return plan.transition }
+func (plan Plan) DesiredSurfaces() []string {
+	return append([]string(nil), plan.desired.DesiredSurfaces...)
+}
 
 func (facade *Facade) Preview(operation Operation) (Plan, error) {
 	if operation == Uninstall {
@@ -165,7 +224,8 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 			return Plan{}, err
 		}
 	}
-	if _, _, err := LoadState(facade.config.State.StateFile()); err != nil {
+	prior, priorFound, err := LoadState(facade.config.State.StateFile())
+	if err != nil {
 		return Plan{}, err
 	}
 	discovered, err := skillbundle.Discover(facade.config.SkillSource.Root, facade.config.Skills.Root(), facade.config.SkillSource.MissingHint)
@@ -203,15 +263,85 @@ func (facade *Facade) Preview(operation Operation) (Plan, error) {
 		plannedAction{ActionView: ActionView{Kind: ActionWriteCodexPrompt, Path: facade.config.Codex.PromptFile(), Description: "write Codex Packy prompt markers"}},
 		plannedAction{ActionView: ActionView{Kind: ActionWriteOpenCodePrompt, Path: facade.config.OpenCode.ConfigFile(), Target: facade.config.OpenCode.PromptFile(), Description: "write OpenCode Packy prompt reference"}},
 	)
+	claudeDesired := cloneClassicDesired(facade.config.ClaudeDesired)
+	if len(claudeDesired.Skills) == 0 {
+		claudeDesired.Skills = make([]claudecode.ClassicSkill, 0, len(discovered))
+		for _, skill := range discovered {
+			claudeDesired.Skills = append(claudeDesired.Skills, claudecode.ClassicSkill{
+				ID: "classic:skill:" + skill.Name, Name: skill.Name, SourcePath: skill.SourcePath,
+			})
+		}
+	}
+	var claudePlan claudecode.ClassicPlan
+	hasClaudePlan := facade.config.Claude != nil
+	if hasClaudePlan {
+		claudePlan, err = facade.config.Claude.InspectClassic(context.Background(), claudecode.ClassicRequest{Goal: claudecode.ClassicPresent, Desired: claudeDesired})
+		if err != nil {
+			return Plan{}, err
+		}
+		for _, action := range claudePlan.Actions() {
+			actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionKind("claude-" + string(action.Kind)), Path: action.Target, Description: action.Description}})
+		}
+	}
+	desired := DesiredState(StateConfig{
+		StateFile:      facade.config.State.StateFile(),
+		AgentSkillsDir: facade.config.Skills.Root(),
+	}, facade.now(), managed)
+	fromSchema := 0
+	fromStatus := InstallStatus("")
+	if priorFound {
+		fromSchema, fromStatus = prior.SchemaVersion, prior.InstallStatus
+	}
+	outcome := OutcomeApplied
+	if len(actions) == 1 {
+		outcome = OutcomeConverged
+	}
+	var blockers, preserved []string
+	var pending []string
+	if hasClaudePlan {
+		blockers = append(blockers, claudePlan.Blockers()...)
+		preserved = append(preserved, claudePlan.Preserved()...)
+		pending = append(pending, claudePlan.PendingPrerequisites()...)
+		if len(claudePlan.Blockers()) > 0 {
+			outcome = OutcomeBlocked
+		}
+		if len(pending) > 0 && outcome != OutcomeBlocked {
+			outcome = OutcomeAppliedWithPendingPrerequisite
+		}
+	}
 	return Plan{
-		owner:     facade,
-		operation: operation,
-		actions:   actions,
-		desired: DesiredState(StateConfig{
-			StateFile:      facade.config.State.StateFile(),
-			AgentSkillsDir: facade.config.Skills.Root(),
-		}, facade.now(), managed),
+		owner:           facade,
+		operation:       operation,
+		actions:         actions,
+		desired:         desired,
+		outcome:         outcome,
+		blockers:        blockers,
+		preserved:       preserved,
+		pending:         pending,
+		transition:      StateTransitionView{FromSchemaVersion: fromSchema, ToSchemaVersion: SchemaVersion, FromStatus: fromStatus, ToStatus: InstallConfirmed},
+		legacyMigration: priorFound && prior.Legacy(),
+		claudePlan:      claudePlan,
+		hasClaudePlan:   hasClaudePlan,
 	}, nil
+}
+
+func cloneClassicDesired(in claudecode.ClassicDesired) claudecode.ClassicDesired {
+	out := in
+	out.Skills = append([]claudecode.ClassicSkill(nil), in.Skills...)
+	if in.Instruction != nil {
+		instruction := *in.Instruction
+		out.Instruction = &instruction
+	}
+	if in.MCP != nil {
+		mcp := *in.MCP
+		mcp.Args = append([]string(nil), in.MCP.Args...)
+		mcp.Environment = make(map[string]string, len(in.MCP.Environment))
+		for key, value := range in.MCP.Environment {
+			mcp.Environment[key] = value
+		}
+		out.MCP = &mcp
+	}
+	return out
 }
 
 // saveInstallState is a private persistence-failure seam. Filesystem behavior
@@ -228,6 +358,9 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	if plan.owner != facade || (plan.operation != Install && plan.operation != Update) {
 		return Result{}, ErrForeignPlan
 	}
+	if plan.legacyMigration && len(plan.blockers) > 0 {
+		return Result{outcome: OutcomeBlocked, notStartedEffects: actionEffectIDs(plan.actions)}, fmt.Errorf("%w: legacy state remains authoritative", ErrBlockedPlan)
+	}
 	saveState := saveInstallState
 	if plan.operation == Update {
 		saveState = saveUpdateState
@@ -241,19 +374,27 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 		return Result{}, err
 	}
 	recovery := facade.recoveryState(plan.desired, previous, previousFound, anchor)
-	if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
-		if cleanupErr := cleanupInstallContainers(anchor); cleanupErr != nil {
-			return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
+	if previousFound && !previous.Legacy() {
+		recovery.ClaudeOwnership = append([]ClaudeOwnership(nil), previous.ClaudeOwnership...)
+	}
+	legacyMigration := previousFound && previous.Legacy()
+	if !legacyMigration {
+		if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
+			if cleanupErr := cleanupInstallContainers(anchor); cleanupErr != nil {
+				return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
+			}
+			return Result{}, err
 		}
-		return Result{}, err
 	}
 	created, provisionErr := ownedcontainer.Provision(facade.effectContainerRecords())
 	recovery.CreatedContainers = ownedcontainer.Merge(recovery.CreatedContainers, created)
-	if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
-		if cleanupErr := cleanupInstallContainers(created); cleanupErr != nil {
-			return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
+	if !legacyMigration {
+		if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
+			if cleanupErr := cleanupInstallContainers(created); cleanupErr != nil {
+				return Result{}, fmt.Errorf("%w; clean up unrecorded Packy containers: %v", err, cleanupErr)
+			}
+			return Result{}, err
 		}
-		return Result{}, err
 	}
 	if provisionErr != nil {
 		return Result{}, provisionErr
@@ -266,17 +407,22 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 	}
 	var warnings []string
 	for _, action := range plan.actions {
+		if strings.HasPrefix(string(action.Kind), "claude-") {
+			continue
+		}
 		switch action.Kind {
 		case ActionSymlink:
 			if err := os.Symlink(action.Target, action.Path); err != nil {
 				return Result{}, fmt.Errorf("create skill symlink %s -> %s: %w", action.Path, action.Target, err)
 			}
 			recovery.ManagedSkills = append(recovery.ManagedSkills, managedSkillForInstallAction(plan.desired.ManagedSkills, action))
-			if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
-				if removeErr := os.Remove(action.Path); removeErr != nil {
-					return Result{}, fmt.Errorf("%w; roll back unrecorded skill symlink %s: %v", err, action.Path, removeErr)
+			if !legacyMigration {
+				if err := saveState(facade.config.State.StateFile(), recovery); err != nil {
+					if removeErr := os.Remove(action.Path); removeErr != nil {
+						return Result{}, fmt.Errorf("%w; roll back unrecorded skill symlink %s: %v", err, action.Path, removeErr)
+					}
+					return Result{}, err
 				}
-				return Result{}, err
 			}
 		case ActionWriteCodexPrompt:
 			result, err := prompt.WriteCodex(action.Path)
@@ -305,19 +451,119 @@ func (facade *Facade) Apply(ctx context.Context, plan Plan) (Result, error) {
 			}
 		}
 	}
+	var claudeResult claudecode.ClassicApplyResult
+	if plan.hasClaudePlan {
+		claudeResult, err = facade.config.Claude.ApplyClassic(ctx, plan.claudePlan)
+		if err != nil {
+			if !claudeResult.Attempted {
+				if legacyMigration {
+					return Result{outcome: OutcomePartiallyApplied, completedEffects: actionEffectIDs(plan.actions), notStartedEffects: claudeResult.NotStarted}, err
+				}
+				blocked := plan.desired
+				blocked.ManagedSkills = append([]ManagedSkill(nil), recovery.ManagedSkills...)
+				blocked.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
+				blocked.ClaudeOwnership = append([]ClaudeOwnership(nil), previous.ClaudeOwnership...)
+				blocked.InstallStatus = InstallConfirmed
+				blocked.LatestAttempt = &LatestAttempt{Operation: plan.operation, Outcome: AttemptPartiallyApplied, CompletedEffects: actionEffectIDs(plan.actions), NotStartedEffects: claudeResult.NotStarted}
+				if saveErr := saveState(facade.config.State.StateFile(), blocked); saveErr != nil {
+					return Result{}, fmt.Errorf("%w; publish blocked Claude attempt: %v", err, saveErr)
+				}
+				return Result{outcome: OutcomePartiallyApplied, completedEffects: actionEffectIDs(plan.actions), notStartedEffects: claudeResult.NotStarted}, err
+			}
+			recovery.ClaudeOwnership = mergeClaudeOwnership(recovery.ClaudeOwnership, classicStateOwnership(claudeResult.VerifiedOwnership))
+			recovery.InstallStatus = InstallRecoveryRequired
+			recovery.LatestAttempt = &LatestAttempt{Operation: plan.operation, Outcome: AttemptRecoveryRequired, CompletedEffects: append(actionEffectIDs(plan.actions), claudeResult.Completed...), FailedEffect: claudeResult.Failed, NotStartedEffects: claudeResult.NotStarted}
+			if saveErr := saveState(facade.config.State.StateFile(), recovery); saveErr != nil {
+				return Result{}, fmt.Errorf("%w; publish Claude recovery state: %v", err, saveErr)
+			}
+			return Result{outcome: OutcomeRecoveryRequired, completedEffects: claudeResult.Completed, failedEffect: claudeResult.Failed, notStartedEffects: claudeResult.NotStarted}, err
+		}
+		ownership := plan.claudePlan.DesiredOwnership()
+		if len(plan.pending) > 0 {
+			ownership = withoutPendingMCPOwnership(ownership)
+		}
+		plan.desired.ClaudeOwnership = classicStateOwnership(ownership)
+	}
 	confirmed := plan.desired
 	if previous.RecoveryRequired() {
 		confirmed.ManagedSkills = append([]ManagedSkill(nil), recovery.ManagedSkills...)
 	}
 	confirmed.CreatedContainers = append([]ownedcontainer.Record(nil), recovery.CreatedContainers...)
 	confirmed.InstallStatus = InstallConfirmed
+	attemptOutcome := AttemptVerified
+	if len(plan.blockers) > 0 {
+		attemptOutcome = AttemptBlocked
+		if len(actionEffectIDs(plan.actions))+len(claudeResult.Completed) > 0 {
+			attemptOutcome = AttemptPartiallyApplied
+		}
+	}
+	confirmed.LatestAttempt = &LatestAttempt{Operation: plan.operation, Outcome: attemptOutcome, CompletedEffects: append(actionEffectIDs(plan.actions), claudeResult.Completed...), NotStartedEffects: []string{}}
 	if err := saveState(facade.config.State.StateFile(), confirmed); err != nil {
 		return Result{}, err
 	}
 	if warning, ok := unmanagedInstallSymlinkWarning(plan); ok {
 		warnings = append(warnings, warning)
 	}
-	return Result{warnings: warnings, managedSkillCount: len(plan.desired.ManagedSkills), stateFile: facade.config.State.StateFile(), hasWork: true}, nil
+	completed := append(actionEffectIDs(plan.actions), claudeResult.Completed...)
+	return Result{warnings: warnings, managedSkillCount: len(plan.desired.ManagedSkills), stateFile: facade.config.State.StateFile(), hasWork: true, outcome: plan.outcome, completedEffects: completed}, nil
+}
+
+func mergeClaudeOwnership(prior, verified []ClaudeOwnership) []ClaudeOwnership {
+	byID := make(map[string]ClaudeOwnership, len(prior)+len(verified))
+	for _, ownership := range prior {
+		byID[ownership.ID] = ownership
+	}
+	for _, ownership := range verified {
+		byID[ownership.ID] = ownership
+	}
+	out := make([]ClaudeOwnership, 0, len(byID))
+	for _, ownership := range byID {
+		out = append(out, ownership)
+	}
+	return out
+}
+
+func withoutPendingMCPOwnership(records []claudecode.OwnershipRecord) []claudecode.OwnershipRecord {
+	out := records[:0]
+	for _, r := range records {
+		if strings.TrimPrefix(r.Kind, "claude-") != "user-mcp" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func classicStateOwnership(records []claudecode.OwnershipRecord) []ClaudeOwnership {
+	out := make([]ClaudeOwnership, 0, len(records))
+	for _, r := range records {
+		kind := strings.TrimPrefix(r.Kind, "claude-")
+		if kind == "skill-link" {
+			kind = "skill"
+		}
+		if kind == "instruction-contribution" {
+			kind = "instruction"
+		}
+		if kind == "user-mcp" {
+			kind = "mcp"
+		}
+		out = append(out, ClaudeOwnership{ID: r.ID, Kind: kind, Target: r.Target, Fingerprint: r.Fingerprint, Contributors: append([]string(nil), r.Contributors...), SourcePath: r.Skill.ExpectedSource, LinkTarget: r.Skill.ResolvedTarget, Command: r.Command, Args: append([]string(nil), r.Args...), EnvironmentKeys: append([]string(nil), r.EnvironmentKeys...), EnvironmentFingerprint: r.EnvironmentFingerprint, DeletionAuthorized: r.DeletionAuthorized})
+	}
+	return out
+}
+
+func actionEffectIDs(actions []plannedAction) []string {
+	ids := make([]string, 0, len(actions))
+	for i, action := range actions {
+		if action.Kind == ActionSkip || strings.HasPrefix(string(action.Kind), "claude-") {
+			continue
+		}
+		id := fmt.Sprintf("%s:%d", action.Kind, i)
+		if action.Path != "" {
+			id = string(action.Kind) + ":" + action.Path
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (facade *Facade) homebrewEngramInstalled() bool {

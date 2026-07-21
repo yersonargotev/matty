@@ -1,10 +1,13 @@
 package corelifecycle
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/yersonargotev/packy/internal/claudecode"
 	"github.com/yersonargotev/packy/internal/opencode"
 	"github.com/yersonargotev/packy/internal/ownedcontainer"
 	"github.com/yersonargotev/packy/internal/prompt"
@@ -54,7 +57,30 @@ func (facade *Facade) previewUninstall() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{owner: facade, operation: Uninstall, actions: actions, desired: state, cleanup: cleanup, preconditions: preconditions, hasWork: len(actions) > 0}, nil
+	var claudePlan claudecode.ClassicPlan
+	hasClaudePlan := facade.config.Claude != nil && found && !state.Legacy()
+	var blockers, preserved, pending []string
+	if hasClaudePlan {
+		claudePlan, err = facade.config.Claude.InspectClassic(context.Background(), claudecode.ClassicRequest{Goal: claudecode.ClassicAbsent, Desired: facade.config.ClaudeDesired})
+		if err != nil {
+			return Plan{}, err
+		}
+		blockers, preserved, pending = claudePlan.Blockers(), claudePlan.Preserved(), claudePlan.PendingPrerequisites()
+		for _, action := range claudePlan.Actions() {
+			actions = append(actions, plannedAction{ActionView: ActionView{Kind: ActionKind("claude-" + string(action.Kind)), Path: action.Target, Description: action.Description}})
+		}
+	}
+	outcome := OutcomeApplied
+	if len(actions) == 0 {
+		outcome = OutcomeConverged
+	}
+	if len(blockers) > 0 {
+		outcome = OutcomeBlocked
+	}
+	if len(pending) > 0 {
+		outcome = OutcomeUninstallIncomplete
+	}
+	return Plan{owner: facade, operation: Uninstall, actions: actions, desired: state, cleanup: cleanup, preconditions: preconditions, hasWork: len(actions) > 0, outcome: outcome, blockers: blockers, preserved: preserved, pending: pending, transition: StateTransitionView{FromSchemaVersion: state.SchemaVersion, FromStatus: state.InstallStatus}, claudePlan: claudePlan, hasClaudePlan: hasClaudePlan}, nil
 }
 
 func previewManagedSkillRemoval(skill ManagedSkill) (plannedAction, bool, error) {
@@ -103,9 +129,35 @@ func (facade *Facade) applyUninstall(plan Plan) (Result, error) {
 		return Result{}, err
 	}
 	if !plan.hasWork {
-		return Result{stateFile: facade.config.State.StateFile()}, nil
+		return Result{stateFile: facade.config.State.StateFile(), outcome: OutcomeConverged}, nil
+	}
+	if plan.hasClaudePlan {
+		result, err := facade.config.Claude.ApplyClassic(context.Background(), plan.claudePlan)
+		if err != nil {
+			state := plan.desired
+			state.InstallStatus = InstallRecoveryRequired
+			state.LatestAttempt = &LatestAttempt{Operation: Uninstall, Outcome: AttemptRecoveryRequired, CompletedEffects: result.Completed, FailedEffect: result.Failed, NotStartedEffects: result.NotStarted}
+			_ = SaveState(facade.config.State.StateFile(), state)
+			return Result{outcome: OutcomeRecoveryRequired, completedEffects: result.Completed, failedEffect: result.Failed, notStartedEffects: result.NotStarted}, err
+		}
+		if len(plan.pending) > 0 || len(plan.blockers) > 0 {
+			state := plan.desired
+			state.InstallStatus = InstallUninstallIncomplete
+			state.LatestAttempt = &LatestAttempt{Operation: Uninstall, Outcome: AttemptUninstallIncomplete, CompletedEffects: result.Completed, NotStartedEffects: result.NotStarted}
+			if err := SaveState(facade.config.State.StateFile(), state); err != nil {
+				return Result{}, err
+			}
+		}
 	}
 	for _, action := range plan.actions {
+		if len(plan.pending) > 0 || len(plan.blockers) > 0 {
+			if action.Kind == ActionRemove && action.Path == facade.config.State.StateFile() {
+				continue
+			}
+		}
+		if strings.HasPrefix(string(action.Kind), "claude-") {
+			continue
+		}
 		switch action.Kind {
 		case ActionRemove:
 			if action.Path == facade.config.State.StateFile() {
@@ -137,7 +189,10 @@ func (facade *Facade) applyUninstall(plan Plan) (Result, error) {
 	if _, err := plan.cleanup.Cleanup(); err != nil {
 		return Result{}, err
 	}
-	return Result{stateFile: facade.config.State.StateFile(), hasWork: true}, nil
+	if len(plan.pending) > 0 || len(plan.blockers) > 0 {
+		return Result{stateFile: facade.config.State.StateFile(), hasWork: true, outcome: OutcomeUninstallIncomplete, completedEffects: actionEffectIDs(plan.actions)}, nil
+	}
+	return Result{stateFile: facade.config.State.StateFile(), hasWork: true, outcome: OutcomeApplied, completedEffects: actionEffectIDs(plan.actions)}, nil
 }
 
 func (facade *Facade) authorizedContainers(records []ownedcontainer.Record) []ownedcontainer.Record {

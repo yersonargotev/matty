@@ -67,6 +67,9 @@ type OwnershipRecord struct {
 	DeletionAuthorized                                       bool
 	HookProvenance                                           string
 	Skill                                                    SkillIdentity
+	Command                                                  string
+	Args, EnvironmentKeys                                    []string
+	EnvironmentFingerprint                                   string
 }
 
 func (r OwnershipRecord) MatchesSkill(surface, projectionID, path, expectedSource string, observation SkillObservation) bool {
@@ -95,6 +98,8 @@ func NewOwnershipSnapshot(records ...OwnershipRecord) OwnershipSnapshot {
 	copyRecords := append([]OwnershipRecord(nil), records...)
 	for i := range copyRecords {
 		copyRecords[i].Contributors = append([]string(nil), copyRecords[i].Contributors...)
+		copyRecords[i].Args = append([]string(nil), copyRecords[i].Args...)
+		copyRecords[i].EnvironmentKeys = append([]string(nil), copyRecords[i].EnvironmentKeys...)
 	}
 	return OwnershipSnapshot{Records: copyRecords, Revision: canonicalFingerprint(copyRecords)}
 }
