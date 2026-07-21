@@ -15,86 +15,17 @@ permissions:
   contents: write
 
 jobs:
-  claude-smoke:
-    name: Claude ${{ matrix.claude }} smoke (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-intel
-            arch: amd64
-            claude: 2.1.203
-          - runner: macos-15-intel
-            arch: amd64
-            claude: stable
-          - runner: macos-15
-            arch: arm64
-            claude: 2.1.203
-          - runner: macos-15
-            arch: arm64
-            claude: stable
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Resolve release tag
-        id: release
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
-          if [[ ! "$tag" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must be a v0.x.y tag such as v0.1.0; got '$tag'" >&2
-            exit 1
-          fi
-          git fetch --tags --force
-          git checkout --detach "$tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Build corresponding release artifacts
-        run: scripts/build-release-artifacts.sh --version "${{ steps.release.outputs.tag }}" --out-dir "$RUNNER_TEMP/dist"
-
-      - name: Run release package smoke
-        run: |
-          ./scripts/run-claude-smoke.sh \
-            --claude-version "${{ matrix.claude }}" \
-            --packy-ref "${{ steps.release.outputs.tag }}" \
-            --packy-binary "$RUNNER_TEMP/dist/packy_${{ steps.release.outputs.tag }}_darwin_${{ matrix.arch }}" \
-            --evidence-dir "$RUNNER_TEMP/claude-release-evidence"
-
-      - name: Retain release smoke evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: claude-release-${{ matrix.claude }}-darwin-${{ matrix.arch }}
-          path: ${{ runner.temp }}/claude-release-evidence
-          if-no-files-found: error
-
-  release:
-    name: Build and publish release artifacts
-    needs: claude-smoke
+  build:
+    name: Validate and build release candidate
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
       - name: Resolve release tag
         id: release
         env:
@@ -120,8 +51,112 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Validate exact tag commit
+        run: ./scripts/validate-packy.sh
+
       - name: Build release artifacts and checksums.txt
         run: scripts/build-release-artifacts.sh --version "${{ steps.release.outputs.tag }}" --out-dir dist
+
+      - name: Retain proved release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: packy-release-${{ steps.release.outputs.tag }}
+          path: dist
+          if-no-files-found: error
+
+  claude-smoke:
+    name: Claude ${{ matrix.claude }} smoke (${{ matrix.arch }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: amd64
+            claude: 2.1.203
+          - runner: macos-15-intel
+            arch: amd64
+            claude: stable
+          - runner: macos-15
+            arch: arm64
+            claude: 2.1.203
+          - runner: macos-15
+            arch: arm64
+            claude: stable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.build.outputs.tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download proved release candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: packy-release-${{ needs.build.outputs.tag }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Restore executable mode
+        run: chmod +x "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}"
+
+      - name: Run release package smoke
+        run: |
+          ./scripts/run-claude-smoke.sh \
+            --claude-version "${{ matrix.claude }}" \
+            --packy-ref "${{ needs.build.outputs.tag }}" \
+            --packy-binary "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}" \
+            --evidence-dir "$RUNNER_TEMP/claude-release-evidence"
+
+      - name: Retain release smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-release-${{ matrix.claude }}-darwin-${{ matrix.arch }}
+          path: ${{ runner.temp }}/claude-release-evidence
+          if-no-files-found: error
+
+  release:
+    name: Build and publish release artifacts
+    needs: [build, claude-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Resolve release tag
+        id: release
+        run: |
+          set -euo pipefail
+          tag="${{ needs.build.outputs.tag }}"
+          git fetch --tags --force
+          git checkout --detach "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download proved release artifacts and checksums.txt
+        uses: actions/download-artifact@v4
+        with:
+          name: packy-release-${{ steps.release.outputs.tag }}
+          path: dist
 
       - name: Require Homebrew tap token
         env:

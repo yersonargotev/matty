@@ -1,6 +1,7 @@
 package claudesmoke
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -54,6 +55,24 @@ func TestRestrictedEnvIsAllowlistAndScrubsCredentials(t *testing.T) {
 			t.Fatalf("missing %s", key)
 		}
 	}
+	for _, key := range []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "DISABLE_AUTOUPDATER=1"} {
+		if !strings.Contains(joined, key) {
+			t.Fatalf("missing %s", key)
+		}
+	}
+}
+
+func TestAcquisitionEnvUsesOnlyDisposableNPMState(t *testing.T) {
+	t.Setenv("NPM_TOKEN", "operator-secret")
+	env := strings.Join(acquisitionEnv("/sandbox", "/runtime/bin/npm"), "\n")
+	for _, want := range []string{"HOME=/sandbox/acquisition/home", "XDG_CONFIG_HOME=/sandbox/acquisition/config", "NPM_CONFIG_CACHE=/sandbox/acquisition/cache", "NPM_CONFIG_USERCONFIG=/sandbox/acquisition/npmrc"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	if strings.Contains(env, "operator-secret") || strings.Contains(env, "NPM_TOKEN") {
+		t.Fatal("acquisition inherited npm credential")
+	}
 }
 
 func TestManifestDeterministicAndContentBound(t *testing.T) {
@@ -77,8 +96,56 @@ func TestManifestDeterministicAndContentBound(t *testing.T) {
 	}
 }
 
+func TestClassicSkillTopologyUsesRecursiveSkillLeaves(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "bundle", "skills")
+	home := filepath.Join(root, "home")
+	for _, rel := range []string{"engineering/review", "productivity/plan", "in-progress/loop-me"} {
+		dir := filepath.Join(source, rel)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := filepath.Join(home, ".agents", "skills")
+	if err := os.MkdirAll(links, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"review": filepath.Join(source, "engineering", "review"), "plan": filepath.Join(source, "productivity", "plan"), "loop-me": filepath.Join(source, "in-progress", "loop-me")} {
+		if err := os.Symlink(target, filepath.Join(links, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !classicSkillTopologyExact(home, source) {
+		t.Fatal("recursive leaf topology rejected")
+	}
+}
+
+func TestValidationFailureStillWritesDiagnosticEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	evidence := validEvidence()
+	evidence.Assertions.DryRunsUnchanged = false
+	if err := validateAndWriteEvidence(path, evidence); err == nil {
+		t.Fatal("invalid evidence accepted")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"dry_runs_unchanged": false`)) {
+		t.Fatalf("failed diagnostic evidence missing assertion: %s", b)
+	}
+}
+
 func validEvidence() Evidence {
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: []CommandEvidence{{Name: "packy", ExitCode: 0}}, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, NoOutsideSandboxWrites: true, NoInteractiveClaude: true}}
+	args := [][]string{{"--version"}, {"version"}, {"init", "--home", "h", "--source-root", "s", "--repository-url", "r", "--repository-ref", "ref"}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
+	commands := make([]CommandEvidence, len(args))
+	for i := range args {
+		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
+	}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -95,7 +162,7 @@ func TestValidateEvidenceRejectsTampering(t *testing.T) {
 		t.Fatal("accepted checkout mutation")
 	}
 	e = validEvidence()
-	e.Safety.NoOutsideSandboxWrites = false
+	e.Safety.ConfiguredWritableRootsConfined = false
 	if err := ValidateEvidence(e); err == nil {
 		t.Fatal("accepted unproved sandbox confinement")
 	}
@@ -103,6 +170,21 @@ func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e.Commands[0].Stdout = "ANTHROPIC_API_KEY"
 	if err := ValidateEvidence(e); err == nil {
 		t.Fatal("accepted credential marker")
+	}
+	e = validEvidence()
+	e.Commands[4].Args = []string{"install", "--dry-run"}
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted tampered lifecycle sequence")
+	}
+	e = validEvidence()
+	e.Commands = append(e.Commands, CommandEvidence{Name: "claude", Args: []string{"login"}, ExitCode: 0})
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unsafe normalized Claude command")
+	}
+	e = validEvidence()
+	e.Assertions.InstallCreatedManagedProjections = false
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted no-op lifecycle assertions")
 	}
 }
 

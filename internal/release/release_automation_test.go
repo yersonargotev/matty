@@ -83,8 +83,8 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		"uses: actions/setup-go@v6",
 		"go-version-file: go.mod",
 	})
-	buildIndex := releaseWorkflowStepIndex(t, workflow, "Build release artifacts and checksums.txt", []string{
-		"scripts/build-release-artifacts.sh", "--out-dir dist",
+	provedArtifactIndex := releaseWorkflowStepIndex(t, workflow, "Download proved release artifacts and checksums.txt", []string{
+		"uses: actions/download-artifact@v4", "path: dist",
 	})
 	requireTapTokenIndex := releaseWorkflowStepIndex(t, workflow, "Require Homebrew tap token", []string{
 		"HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
@@ -153,8 +153,8 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 	}
 
 	assertReleaseWorkflowStepBefore(t, resolveTagIndex, setupGoIndex, "Go must be set up from the checked-out release tag, not the workflow dispatch ref")
-	assertReleaseWorkflowStepBefore(t, setupGoIndex, buildIndex, "release artifacts should build after the release tag checkout and Go setup")
-	assertReleaseWorkflowStepBefore(t, buildIndex, formulaIndex, "formula generation must consume freshly built artifacts and dist/checksums.txt")
+	assertReleaseWorkflowStepBefore(t, setupGoIndex, provedArtifactIndex, "proved artifacts should be downloaded after the release tag checkout and Go setup")
+	assertReleaseWorkflowStepBefore(t, provedArtifactIndex, formulaIndex, "formula generation must consume the exact proved artifacts and dist/checksums.txt")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, tapCheckoutIndex, "the workflow must reject a missing HOMEBREW_TAP_TOKEN before falling back to anonymous tap checkout")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, createReleaseIndex, "a missing HOMEBREW_TAP_TOKEN must fail before creating a GitHub Release")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, uploadIndex, "a missing HOMEBREW_TAP_TOKEN must fail before re-uploading release assets")

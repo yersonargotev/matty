@@ -68,7 +68,11 @@ func TestStableCanaryIsIndependentFromPullRequestsAndOpensCompatibilityWork(t *t
 func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *testing.T) {
 	text := readWorkflowFile(t, "release.yml")
 	for _, want := range []string{
-		"needs: claude-smoke",
+		"Validate exact tag commit",
+		"./scripts/validate-packy.sh",
+		"name: packy-release-${{ steps.release.outputs.tag }}",
+		"needs: build",
+		"needs: [build, claude-smoke]",
 		"runner: macos-15-intel",
 		"arch: amd64",
 		"runner: macos-15",
@@ -76,8 +80,9 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		"claude: 2.1.203",
 		"claude: stable",
 		"scripts/build-release-artifacts.sh",
-		"packy_${{ steps.release.outputs.tag }}_darwin_${{ matrix.arch }}",
-		"--packy-ref \"${{ steps.release.outputs.tag }}\"",
+		"actions/download-artifact@v4",
+		"packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}",
+		"--packy-ref \"${{ needs.build.outputs.tag }}\"",
 		"actions/upload-artifact@v4",
 	} {
 		if !strings.Contains(text, want) {
@@ -86,6 +91,10 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 	}
 	if strings.Index(text, "claude-smoke:") > strings.Index(text, "release:") {
 		t.Fatal("release smoke must be declared before publication")
+	}
+	publication := text[strings.LastIndex(text, "  release:"):]
+	if strings.Contains(publication, "scripts/build-release-artifacts.sh") {
+		t.Fatal("publication must consume the proved candidate instead of rebuilding artifacts")
 	}
 }
 
