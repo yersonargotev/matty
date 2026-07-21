@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "pack_id": "engram",
+  "from_version": "1.0.0",
+  "to_version": "2.0.0",
+  "classification": {
+    "level": "major",
+    "decided_by": "human"
+  },
+  "rationale": "Manifest schema v3 adds explicit per-surface outcomes and a native Claude instruction and exact user MCP projection while retaining the existing Engram resources and instruction bytes; existing activation intent remains pinned until an explicit update.",
+  "migration": {
+    "instruction_id": "engram-memory",
+    "instruction_source": "instructions/engram-memory.md",
+    "replacement_rules": [
+      {
+        "id": "persistent-memory-guidance",
+        "semantics": "Use Engram to recall prior project work and preserve durable decisions and discoveries."
+      }
+    ],
+    "divergent_files": []
+  },
+  "historical_artifact": {
+    "path": "history/engram/1.0.0/artifact.json",
+    "artifact_sha256": "b42f7f9d111067c090c4bd5b897e21a22696939fa57062777049e5c799c5516f",
+    "aggregate_sha256": "78a02bd523d1c0383921d58507b595b4e0391023c12e666f1fd5d26dfb7c083f"
+  },
+  "selection": {
+    "unchanged": true,
+    "source_id": "",
+    "binding_count": 0,
+    "bindings": []
+  },
+  "claims_upstream_provenance": false,
+  "replaces_source_lock": false
+}

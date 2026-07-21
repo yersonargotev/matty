@@ -35,6 +35,26 @@ func TestCompositionAcceptsIdenticalExplicitSharedContributions(t *testing.T) {
 	}
 }
 
+func TestClaudeCommandAndSkillShareNamespaceAndRequireAlias(t *testing.T) {
+	pack := Pack{ID: "app", Version: "1", manifestVersion: manifestSchemaV3, Surfaces: []Surface{SurfaceClaude}, Resources: []Resource{
+		{Kind: "command", ID: "review-command", Bindings: []Binding{{Surface: SurfaceClaude, Projection: "skill", Name: "review", Invocation: "/review", Mode: "native", Sharing: "exclusive"}}},
+		{Kind: "skill", ID: "review-skill", Bindings: []Binding{{Surface: SurfaceClaude, Projection: "skill", Name: "review", Invocation: "/review", Mode: "native", Sharing: "exclusive"}}},
+	}}
+	result, err := NewFacade(Catalog{packs: []Pack{pack}}).compose(pack, ActivationState{}, SurfaceClaude, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.blockers) != 1 || result.blockers[0].Kind != BlockerAlias || result.blockers[0].Subject != "personal-skill:review" {
+		t.Fatalf("blockers = %#v", result.blockers)
+	}
+
+	intent := ActivationIntent{PackID: "app", Surface: SurfaceClaude, Version: "1", Active: true, Aliases: []SurfaceAlias{{Kind: "command", ID: "review-command", Name: "review-command"}}}
+	resolved, err := NewFacade(Catalog{packs: []Pack{pack}}).compose(pack, ActivationState{Intent: intent, Intents: []ActivationIntent{intent}}, SurfaceClaude, true)
+	if err != nil || len(resolved.blockers) != 0 {
+		t.Fatalf("aliased composition = %#v err=%v", resolved, err)
+	}
+}
+
 func TestCompositionAppliesOnlyExplicitSurfaceAliasToHostBinding(t *testing.T) {
 	resource := Resource{Kind: "command", ID: "review", Bindings: []Binding{
 		{Surface: SurfaceCodex, Projection: "skill", Name: "review", Invocation: "$review", Mode: "degraded", Degradation: "codex-command-as-workflow-skill", Sharing: "exclusive"},

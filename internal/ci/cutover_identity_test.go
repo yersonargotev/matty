@@ -367,7 +367,19 @@ func TestClassifiedProductRenamePreservesBaselineBehavioralTests(t *testing.T) {
 }
 
 func normalizeV3PackTestCutover(data []byte) []byte {
+	legacyProduct := "mat" + "ty"
+	restoreManifest := fmt.Sprintf("\t\t\t\tif packID == %q {\n\t\t\t\t\tif err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {\n\t\t\t\t\t\tt.Fatal(err)\n\t\t\t\t\t}\n\t\t\t\t}\n", legacyProduct)
+	restoreUpdate := fmt.Sprintf("\t\t\t\tif packID != %q {\n\t\t\t\t\tmanifest := strings.Replace(readFileString(t, manifestPath), `\"version\": \"`+staleVersion+`\"`, `\"version\": \"`+updateVersion+`\"`, 1)\n\t\t\t\t\tif err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {\n\t\t\t\t\t\tt.Fatal(err)\n\t\t\t\t\t}\n\t\t\t\t\tif out, err := executeCommand(t, NewRootCommand(opts), \"pack\", \"update\", packID, \"--surface\", surface); err != nil || !strings.Contains(out, \"catalog-current\") {\n\t\t\t\t\t\tt.Fatalf(\"update: %%v\\n%%s\", err, out)\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif out, err := executeCommand(t, NewRootCommand(opts), \"pack\", \"reconcile\", packID, \"--surface\", surface);", legacyProduct)
+	claudeOverview := fmt.Sprintf(`"engram  claude", "engram  codex", "engram  opencode", "%s   claude", "%s   codex", "%s   opencode", "inactive"`, legacyProduct, legacyProduct, legacyProduct)
+	baselineOverview := fmt.Sprintf(`"engram  codex", "engram  opencode", "%s   codex", "%s   opencode", "inactive"`, legacyProduct, legacyProduct)
 	replacements := [][2]string{
+		{`currentVersion, staleVersion := "2.0.0", "2.0.1"`, `currentVersion, staleVersion, updateVersion := "1.0.0", "1.0.1", "2.0.0"`},
+		{"\t\t\t\tif err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {\n\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}\n", restoreManifest},
+		{"\t\t\t\tif out, err := executeCommand(t, NewRootCommand(opts), \"pack\", \"reconcile\", packID, \"--surface\", surface);", restoreUpdate},
+		{claudeOverview, baselineOverview},
+		{`"engram 2.0.0 on codex"`, `"engram 1.0.0 on codex"`},
+		{`len(report.Entries) != 6`, `len(report.Entries) != 5`},
+		{`"Pack: engram 2.0.0"`, `"Pack: engram 1.0.0"`},
 		{`currentVersion, staleVersion = "3.0.0", "3.0.1"`, `currentVersion, staleVersion, updateVersion = "2.0.0", "2.0.1", "3.0.0"`},
 		{"\t\t\t\tif packID == \"matty\" {\n\t\t\t\t\tif err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {\n\t\t\t\t\t\tt.Fatal(err)\n\t\t\t\t\t}\n\t\t\t\t}\n", ""},
 		{"\t\t\t\tif packID != \"matty\" {\n\t\t\t\t\tmanifest := strings.Replace(readFileString(t, manifestPath), `\"version\": \"`+staleVersion+`\"`, `\"version\": \"`+updateVersion+`\"`, 1)\n\t\t\t\t\tif err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {\n\t\t\t\t\t\tt.Fatal(err)\n\t\t\t\t\t}\n\t\t\t\t\tif out, err := executeCommand(t, NewRootCommand(opts), \"pack\", \"update\", packID, \"--surface\", surface); err != nil || !strings.Contains(out, \"catalog-current\") {\n\t\t\t\t\t\tt.Fatalf(\"update: %v\\n%s\", err, out)\n\t\t\t\t\t}\n\t\t\t\t}\n", "\t\t\t\tmanifest := strings.Replace(readFileString(t, manifestPath), `\"version\": \"`+staleVersion+`\"`, `\"version\": \"`+updateVersion+`\"`, 1)\n\t\t\t\tif err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {\n\t\t\t\t\tt.Fatal(err)\n\t\t\t\t}\n\t\t\t\tif out, err := executeCommand(t, NewRootCommand(opts), \"pack\", \"update\", packID, \"--surface\", surface); err != nil || !strings.Contains(out, \"catalog-current\") {\n\t\t\t\t\tt.Fatalf(\"update: %v\\n%s\", err, out)\n\t\t\t\t}\n"},

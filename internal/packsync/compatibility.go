@@ -60,6 +60,7 @@ type acceptedCompatibilityContract struct {
 }
 
 var acceptedCompatibilityContracts = []acceptedCompatibilityContract{
+	{PackID: "engram", FromVersion: "1.0.0", ToVersion: "2.0.0", EvidenceSHA256: "3964e953a05ba9ae7ffbc2e7c98a1a80fea6d5ffae1c550dc9d1aadfddd13cb5"},
 	{PackID: "matty", FromVersion: "1.0.0", ToVersion: "2.0.0", EvidenceSHA256: "fc15a7e2a3d14851356278d206b32cea5ea6b770cabc7a30267bd04e68b61bac"},
 	{PackID: "matty", FromVersion: "2.0.0", ToVersion: "3.0.0", EvidenceSHA256: "2f46f9aa84bc3c4dc52e60416b216dca4fba56591af06796c0b9979a08703bd5"},
 }

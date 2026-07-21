@@ -11,16 +11,29 @@ const LifecycleJSONSchemaVersion = 2
 // every lifecycle entry point. Renderers must not reconstruct these facts
 // from a manifest.
 type LifecycleContract struct {
-	Compatibility         Compatibility      `json:"compatibility,omitempty"`
-	CompatibilityObserved bool               `json:"-"`
-	Counts                ResourceCounts     `json:"logical_resource_counts"`
-	DependencyClosure     []string           `json:"dependency_closure"`
-	Bindings              []LifecycleBinding `json:"bindings"`
-	Exclusions            []Exclusion        `json:"exclusions"`
-	OptionalModes         []OptionalMode     `json:"optional_modes"`
-	PromptAuthorities     []string           `json:"prompt_authorities"`
-	Aliases               []SurfaceAlias     `json:"aliases"`
-	AuthorityDisclosure   string             `json:"authority_disclosure"`
+	Compatibility         Compatibility        `json:"compatibility,omitempty"`
+	CompatibilityObserved bool                 `json:"-"`
+	Counts                ResourceCounts       `json:"logical_resource_counts"`
+	DependencyClosure     []string             `json:"dependency_closure"`
+	Bindings              []LifecycleBinding   `json:"bindings"`
+	Exclusions            []LifecycleExclusion `json:"exclusions"`
+	OptionalModes         []OptionalMode       `json:"optional_modes"`
+	PromptAuthorities     []string             `json:"prompt_authorities"`
+	Aliases               []SurfaceAlias       `json:"aliases"`
+	AuthorityDisclosure   string               `json:"authority_disclosure"`
+}
+
+// LifecycleExclusion is the rendered union of portable source exclusions and
+// v3 surface outcomes. Surface exclusions retain the resource and stable code
+// that explain compatibility without being mistaken for runtime projections.
+type LifecycleExclusion struct {
+	ID           string   `json:"id"`
+	ResourceKind string   `json:"resource_kind,omitempty"`
+	Surface      Surface  `json:"surface,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
+	Code         string   `json:"code,omitempty"`
+	SourcePaths  []string `json:"source_paths"`
+	Reason       string   `json:"reason"`
 }
 
 type Compatibility string
@@ -48,7 +61,7 @@ func LifecycleContractFor(pack Pack, surface Surface, aliases []SurfaceAlias) Li
 	contract := LifecycleContract{
 		Compatibility: compatibilityFor(pack, surface), CompatibilityObserved: pack.manifestVersion >= manifestSchemaV3,
 		Counts: pack.ResourceCounts(), DependencyClosure: []string{}, Bindings: []LifecycleBinding{},
-		Exclusions: []Exclusion{}, OptionalModes: []OptionalMode{}, PromptAuthorities: []string{}, Aliases: []SurfaceAlias{},
+		Exclusions: []LifecycleExclusion{}, OptionalModes: []OptionalMode{}, PromptAuthorities: []string{}, Aliases: []SurfaceAlias{},
 		AuthorityDisclosure: "Activation grants only the sealed local projection actions; later workflow effects require host approval.",
 	}
 	if !contract.CompatibilityObserved {
@@ -83,11 +96,25 @@ func LifecycleContractFor(pack Pack, surface Surface, aliases []SurfaceAlias) Li
 		return a.Name < b.Name
 	})
 	contract.PromptAuthorities = sortedUnique(authorities)
-	contract.Exclusions = append(contract.Exclusions, pack.Contract.Exclusions...)
+	for _, exclusion := range pack.Contract.Exclusions {
+		contract.Exclusions = append(contract.Exclusions, LifecycleExclusion{ID: exclusion.ID, SourcePaths: sortedUnique(exclusion.SourcePaths), Reason: exclusion.Reason})
+	}
+	for _, resource := range pack.Resources {
+		for _, exclusion := range resource.SurfaceExclusions {
+			if exclusion.Surface == surface {
+				contract.Exclusions = append(contract.Exclusions, LifecycleExclusion{ID: resource.Kind + ":" + resource.ID, ResourceKind: resource.Kind, Surface: surface, Mode: exclusion.Mode, Code: exclusion.Code, SourcePaths: []string{}, Reason: exclusion.Reason})
+			}
+		}
+	}
 	for i := range contract.Exclusions {
 		contract.Exclusions[i].SourcePaths = sortedUnique(contract.Exclusions[i].SourcePaths)
 	}
-	sort.Slice(contract.Exclusions, func(i, j int) bool { return contract.Exclusions[i].ID < contract.Exclusions[j].ID })
+	sort.Slice(contract.Exclusions, func(i, j int) bool {
+		if contract.Exclusions[i].ID != contract.Exclusions[j].ID {
+			return contract.Exclusions[i].ID < contract.Exclusions[j].ID
+		}
+		return contract.Exclusions[i].Code < contract.Exclusions[j].Code
+	})
 	contract.OptionalModes = append(contract.OptionalModes, pack.Contract.OptionalModes...)
 	for i := range contract.OptionalModes {
 		contract.OptionalModes[i].Authorities = sortedUnique(contract.OptionalModes[i].Authorities)
@@ -113,7 +140,10 @@ func compatibilityFor(pack Pack, surface Surface) Compatibility {
 		return CompatibilityComplete
 	}
 	result := CompatibilityComplete
+	resources := make(map[string]Resource, len(pack.Resources))
+	included := make(map[string]bool, len(pack.Resources))
 	for _, resource := range pack.Resources {
+		resources[resource.Kind+":"+resource.ID] = resource
 		if resource.Kind == "asset" || resource.Kind == "notice" {
 			continue
 		}
@@ -123,6 +153,7 @@ func compatibilityFor(pack Pack, surface Surface) Compatibility {
 				continue
 			}
 			outcome = true
+			included[resource.Kind+":"+resource.ID] = true
 			if binding.Mode != "native" || binding.Degradation != "" {
 				result = CompatibilityDegraded
 			}
@@ -138,6 +169,35 @@ func compatibilityFor(pack Pack, surface Surface) Compatibility {
 			result = CompatibilityDegraded
 		}
 		if !outcome {
+			return CompatibilityBlocked
+		}
+	}
+	// Assets have no standalone surface outcome. They participate only when a
+	// compatible runtime consumer reaches them through its declared closure.
+	visiting := map[string]bool{}
+	var closureCompatible func(string) bool
+	closureCompatible = func(identity string) bool {
+		if visiting[identity] {
+			return true
+		}
+		resource, ok := resources[identity]
+		if !ok || resource.Kind == "notice" {
+			return false
+		}
+		if resource.Kind != "asset" && !included[identity] {
+			return false
+		}
+		visiting[identity] = true
+		defer delete(visiting, identity)
+		for _, dependency := range resource.Requires {
+			if !closureCompatible(dependency) {
+				return false
+			}
+		}
+		return true
+	}
+	for identity := range included {
+		if !closureCompatible(identity) {
 			return CompatibilityBlocked
 		}
 	}
@@ -211,6 +271,9 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 	mandatory := []ProjectionAction{}
 	for _, phase := range p.Phases() {
 		actions := append([]ProjectionAction{}, phase.Actions...)
+		for i := range actions {
+			actions[i] = actionForReport(actions[i])
+		}
 		sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
 		phases = append(phases, JSONLifecyclePhase{Kind: phase.Kind, Digest: phase.Digest, ApprovalRequired: phase.ApprovalRequired, Actions: actions})
 		mandatory = append(mandatory, actions...)
@@ -251,6 +314,16 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 		ExpectedReadiness: p.readiness, ReadinessObserved: p.readinessObserved, Evidence: sortedCopy(p.observedEvidence), PendingEvidence: sortedCopy(p.pendingEvidence),
 		Recovery: p.recovery, MandatoryActions: mandatory, ContractDiff: diff, Migrations: lifecycleMigrations(p),
 		RetainedProjections: retained, RemovedContributors: removed, DryRun: dryRun}
+}
+
+func actionForReport(action ProjectionAction) ProjectionAction {
+	// Typed host effects can carry a complete merged host document so the
+	// adapter can apply the sealed plan. Reports disclose the exact action but
+	// never render that mixed-store content.
+	if action.Consent == ConsentExecutableExternal {
+		action.Content = ""
+	}
+	return action
 }
 
 func lifecycleContractDiff(before, after []Pack) JSONContractDiff {

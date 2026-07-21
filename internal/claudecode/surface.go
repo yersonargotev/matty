@@ -16,11 +16,16 @@ import (
 
 const (
 	ActionSkillLink               capabilitypack.ProjectionActionKind = "claude-skill-link"
+	ActionSkillFile               capabilitypack.ProjectionActionKind = "claude-skill-file"
 	ActionInstructionContribution capabilitypack.ProjectionActionKind = "claude-instruction-contribution"
 	ActionAgentFile               capabilitypack.ProjectionActionKind = "claude-agent-file"
 	ActionCommandHook             capabilitypack.ProjectionActionKind = "claude-command-hook"
 	ActionUserMCP                 capabilitypack.ProjectionActionKind = "claude-user-mcp"
 )
+
+type RuntimeEvidenceObserver interface {
+	ObserveRuntimeEvidence(context.Context) []RuntimeEvidence
+}
 
 type SurfaceAdapter struct {
 	layout                            CanonicalLayout
@@ -28,6 +33,12 @@ type SurfaceAdapter struct {
 	runner                            Runner
 	ownership                         OwnershipSnapshotProvider
 	authorization                     AuthorizationObserver
+	runtimeEvidence                   RuntimeEvidenceObserver
+}
+
+func (a *SurfaceAdapter) WithRuntimeEvidence(observer RuntimeEvidenceObserver) *SurfaceAdapter {
+	a.runtimeEvidence = observer
+	return a
 }
 
 func NewSurfaceAdapterWithAuthorization(bundleRoot string, layout CanonicalLayout, stateRoot, executable string, runner Runner, ownership OwnershipSnapshotProvider, authorization AuthorizationObserver) *SurfaceAdapter {
@@ -50,9 +61,6 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 		}
 	}
 	pack := transition.Desired
-	if pack.ID == "" {
-		pack = transition.Prior
-	}
 	var result capabilitypack.SurfaceInspection
 	revision := []string{}
 	var instructionDocument, instructionOriginal []byte
@@ -61,6 +69,8 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if settingsObservation.Err != nil {
 		return result, settingsObservation.Err
 	}
+	settingsOriginal := append([]byte(nil), settingsObservation.Raw...)
+	settingsDocument := append([]byte(nil), settingsOriginal...)
 	for _, r := range pack.Resources {
 		b, ok := claudeBinding(r)
 		if !ok {
@@ -69,7 +79,34 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 		id := r.Kind + ":" + b.Name
 		switch b.Projection {
 		case "skill":
+			if r.Kind == "command" {
+				content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(r.Source)))
+				if err != nil {
+					return result, err
+				}
+				target := filepath.Join(a.layout.SkillsDir, b.Name, "SKILL.md")
+				rendered := claudeCommandSkill(r, b.Name, content)
+				observed, exists, err := localprojection.FingerprintPath(target)
+				if err != nil {
+					return result, err
+				}
+				desired := localprojection.FingerprintBytes([]byte(rendered))
+				result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillFile, Target: target, Content: rendered, Description: "write Claude Code personal command skill " + b.Name}})
+				revision = append(revision, id+observed)
+				assets, err := a.consumerAssets(pack, r, id, filepath.Dir(target))
+				if err != nil {
+					return result, err
+				}
+				for _, asset := range assets {
+					result.Projections = append(result.Projections, asset)
+					revision = append(revision, asset.ID+asset.ObservedFingerprint)
+				}
+				continue
+			}
 			source := filepath.Join(a.bundleRoot, filepath.Clean(r.Source))
+			if err := a.validateSkillAssetClosure(pack, r, source); err != nil {
+				return result, err
+			}
 			expectedSource, err := canonicalPath(source)
 			if err != nil {
 				return result, err
@@ -130,10 +167,22 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 			if err != nil {
 				return result, err
 			}
+			content, err = a.embedConsumerAssets(pack, r, content)
+			if err != nil {
+				return result, err
+			}
 			target := filepath.Join(a.layout.AgentsDir, b.Name+".md")
 			observed, exists, err := localprojection.FingerprintPath(target)
 			if err != nil {
 				return result, err
+			}
+			if b.AgentAuthority == nil && (len(r.Tools) > 0 || len(r.Permissions) > 0) {
+				return result, fmt.Errorf("Claude agent %s is missing explicit authority translations", r.ID)
+			}
+			authority := capabilitypack.AgentAuthority{}
+			if b.AgentAuthority != nil {
+				authority = *b.AgentAuthority
+				content = []byte(claudeAgentDocument(r, b.Name, authority, content))
 			}
 			desired := localprojection.FingerprintBytes(content)
 			current, err := readOptional(target)
@@ -147,11 +196,12 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 				return result, errors.New("Claude command hook is missing typed definition")
 			}
 			hook := fromBindingHook(b)
-			settings := settingsObservation.Raw
+			settings := settingsDocument
 			merged, provenance, err := MergeCommandHookWithProvenance(settings, hook, false, HookMergeProvenance{})
 			if err != nil {
 				return result, err
 			}
+			settingsDocument = append([]byte(nil), merged...)
 			ho := EnrichHookObservation(settingsObservation, hook)
 			if ho.Err != nil {
 				return result, ho.Err
@@ -161,8 +211,9 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 				observed = ho.EntryFingerprint
 			}
 			desired := canonicalFingerprint(hookJSON(hook))
-			result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: len(ho.MatchingEntries) > 0, ObservedFingerprint: observed, DesiredFingerprint: desired, ExternallyManaged: ho.Disabled || ho.Shadowed, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionCommandHook, Target: a.layout.SettingsFile, Content: string(merged), Source: provenance.Seal(), Command: Fingerprint(settings), Description: "merge Claude Code command hook " + b.Name}})
-			revision = append(revision, "settings="+Fingerprint(settings))
+			description := fmt.Sprintf("configure Claude Code command hook %s: event=%s matcher=%q command=%s %s timeout=%ds blocking=%t failure=%s authorities=%s", b.Name, b.Hook.Event, b.Hook.Matcher, b.Hook.Command, strings.Join(b.Hook.Args, " "), b.Hook.TimeoutSeconds, b.Hook.Blocking, b.Hook.Failure, strings.Join(b.Hook.Authorities, ","))
+			result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: len(ho.MatchingEntries) > 0, ObservedFingerprint: observed, DesiredFingerprint: desired, ExternallyManaged: ho.Disabled || ho.Shadowed, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionCommandHook, Target: a.layout.SettingsFile, Content: string(merged), Source: provenance.Seal(), Command: Fingerprint(settingsOriginal), Consent: capabilitypack.ConsentExecutableExternal, Description: description}})
+			revision = append(revision, "settings="+Fingerprint(settingsOriginal))
 		case "mcp_server":
 			o := ObserveUserMCP(a.layout.UserMCPFile, b.Name)
 			if o.Err != nil {
@@ -171,7 +222,8 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 			identity := NewMCPIdentity(b.Name, r.Command, r.Args, map[string]string{})
 			args := []string{"mcp", "add", b.Name, "--scope", "user", "--", r.Command}
 			args = append(args, r.Args...)
-			result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: o.Present, ObservedFingerprint: o.DefinitionFingerprint, DesiredFingerprint: canonicalFingerprint(identity), Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionUserMCP, Target: b.Name, Command: a.executable, Args: args, Content: canonicalFingerprint(identity), Description: "configure redacted Claude Code user MCP " + b.Name}})
+			description := "configure redacted Claude Code user MCP through official command: claude " + strings.Join(args, " ") + " (environment values redacted)"
+			result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: o.Present, ObservedFingerprint: o.DefinitionFingerprint, DesiredFingerprint: canonicalFingerprint(identity), Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionUserMCP, Target: b.Name, Command: a.executable, Args: args, Content: canonicalFingerprint(identity), Consent: capabilitypack.ConsentExecutableExternal, Description: description}})
 			revision = append(revision, id+o.DefinitionFingerprint)
 		}
 	}
@@ -202,6 +254,21 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 			}
 			result.Projections = append(result.Projections, projection)
 			revision = append(revision, part)
+			if r.Kind == "command" && b.Projection == "skill" {
+				assets, err := a.consumerAssets(transition.Prior, r, projection.ID, filepath.Join(a.layout.SkillsDir, b.Name))
+				if err != nil {
+					return result, err
+				}
+				for _, asset := range assets {
+					asset.Goal = capabilitypack.ProjectionAbsent
+					asset.DesiredFingerprint = ""
+					asset.Action.Content = ""
+					asset.Action.Mode = capabilitypack.ProjectionDeleteTarget
+					asset.Action.Description = "remove Claude command dependency asset " + asset.ID
+					result.Projections = append(result.Projections, asset)
+					revision = append(revision, asset.ID+asset.ObservedFingerprint)
+				}
+			}
 		}
 	}
 	if instructionLoaded {
@@ -210,6 +277,12 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 				result.Projections[i].Action.Content = string(instructionDocument)
 				result.Projections[i].Action.Command = Fingerprint(instructionOriginal)
 			}
+		}
+	}
+	for i := range result.Projections {
+		if result.Projections[i].Action.Kind == ActionCommandHook && result.Projections[i].Goal != capabilitypack.ProjectionAbsent {
+			result.Projections[i].Action.Content = string(settingsDocument)
+			result.Projections[i].Action.Command = Fingerprint(settingsOriginal)
 		}
 	}
 	for i := range result.Projections {
@@ -245,7 +318,11 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if !configured {
 		pending = append(pending, "converge every exact desired Claude Code projection")
 	}
-	result.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: authorizationObserved, Authorized: authorized, PendingHumanActions: pending, Evidence: []string{"filesystem and static user MCP definitions inspected; runtime use was not invoked"}}
+	usable, usabilityObserved, runtimeFacts := a.runtimeReadiness(ctx, pack, result.Projections, version, auth)
+	if !usabilityObserved {
+		pending = append(pending, "supply explicit current Claude Code runtime evidence for every included resource")
+	}
+	result.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: authorizationObserved, Authorized: authorized, UsabilityObserved: usabilityObserved, Usable: authorized && usable, PendingHumanActions: pending, Evidence: append([]string{"filesystem and static user MCP definitions inspected; runtime use was not invoked"}, runtimeFacts...)}
 	return result, nil
 }
 
@@ -262,6 +339,11 @@ func (a *SurfaceAdapter) inspectRemoval(pack capabilitypack.Pack, r capabilitypa
 	id := r.Kind + ":" + b.Name
 	switch b.Projection {
 	case "skill":
+		if r.Kind == "command" {
+			target := filepath.Join(a.layout.SkillsDir, b.Name, "SKILL.md")
+			fp, exists, err := localprojection.FingerprintPath(target)
+			return capabilitypack.ObservedProjection{ID: id, Goal: capabilitypack.ProjectionAbsent, Exists: exists, ObservedFingerprint: fp, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillFile, Target: target, Mode: capabilitypack.ProjectionDeleteTarget, Description: "remove Claude Code personal command skill " + b.Name}}, id + fp, err
+		}
 		target := filepath.Join(a.layout.SkillsDir, b.Name)
 		fp, exists, err := localprojection.FingerprintPath(target)
 		return capabilitypack.ObservedProjection{ID: id, Goal: capabilitypack.ProjectionAbsent, Exists: exists, ObservedFingerprint: fp, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillLink, Target: target, Mode: capabilitypack.ProjectionDeleteTarget, Description: "remove Claude Code skill " + b.Name}}, id + fp, err
@@ -387,6 +469,14 @@ func (a *SurfaceAdapter) validateActions(actions []capabilitypack.ProjectionActi
 				return errors.New("overlapping exclusive Claude skill target")
 			}
 			targets[x.Target] = x
+		case ActionSkillFile:
+			if filepath.Dir(filepath.Dir(filepath.Clean(x.Target))) != filepath.Clean(a.layout.SkillsDir) {
+				return errors.New("Claude command skill file must be beneath one canonical personal skill directory")
+			}
+			if _, ok := targets[x.Target]; ok {
+				return errors.New("overlapping exclusive Claude skill target")
+			}
+			targets[x.Target] = x
 		case ActionAgentFile:
 			if !directChild(x.Target, a.layout.AgentsDir) || filepath.Ext(x.Target) != ".md" {
 				return errors.New("Claude agent target must be one Markdown file in the canonical agents directory")
@@ -434,10 +524,13 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 			return nil
 		}
 	}
-	if x.Kind == ActionInstructionContribution || x.Kind == ActionAgentFile || x.Kind == ActionCommandHook {
+	if x.Kind == ActionInstructionContribution || x.Kind == ActionAgentFile || x.Kind == ActionSkillFile || x.Kind == ActionCommandHook {
 		current, err := os.ReadFile(x.Target)
 		if err != nil && !os.IsNotExist(err) {
 			return err
+		}
+		if x.Mode != capabilitypack.ProjectionDeleteTarget && string(current) == x.Content {
+			return nil
 		}
 		if x.Command != "" && Fingerprint(current) != x.Command {
 			return errors.New("stale Claude shared document revision")
@@ -467,7 +560,7 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 			return nil
 		}
 		return replaceSymlink(x.Source, x.Target)
-	case ActionAgentFile, ActionInstructionContribution, ActionCommandHook:
+	case ActionAgentFile, ActionSkillFile, ActionInstructionContribution, ActionCommandHook:
 		if x.Mode == capabilitypack.ProjectionDeleteTarget {
 			return removeExact(x.Target)
 		}
@@ -645,12 +738,12 @@ func (a *SurfaceAdapter) preflight(actions []capabilitypack.ProjectionAction, sn
 				continue
 			}
 		}
-		if x.Kind == ActionInstructionContribution || x.Kind == ActionAgentFile || x.Kind == ActionCommandHook {
+		if x.Kind == ActionInstructionContribution || x.Kind == ActionAgentFile || x.Kind == ActionSkillFile || x.Kind == ActionCommandHook {
 			current, err := readOptional(x.Target)
 			if err != nil {
 				return x.ID, err
 			}
-			if x.Command != "" && Fingerprint(current) != x.Command {
+			if x.Command != "" && Fingerprint(current) != x.Command && string(current) != x.Content {
 				return x.ID, errors.New("stale Claude shared document revision")
 			}
 		}
@@ -676,6 +769,166 @@ func (a *SurfaceAdapter) preflight(actions []capabilitypack.ProjectionAction, sn
 	}
 	return "", nil
 }
+
+func (a *SurfaceAdapter) runtimeReadiness(ctx context.Context, pack capabilitypack.Pack, projections []capabilitypack.ObservedProjection, version VersionObservation, auth AuthorizationObservation) (bool, bool, []string) {
+	if a.runtimeEvidence == nil {
+		return false, false, nil
+	}
+	evidence := a.runtimeEvidence.ObserveRuntimeEvidence(ctx)
+	policy := canonicalFingerprint(struct{ Disabled, Shadowed, Policy, Tools bool }{auth.Disabled, auth.Shadowed, auth.PolicyObserved, auth.ToolPermissionObserved})
+	byID := make(map[string]RuntimeEvidence, len(evidence))
+	for _, item := range evidence {
+		byID[item.ID] = item
+	}
+	facts := []string{}
+	participants := 0
+	for _, projection := range projections {
+		if projection.Goal != capabilitypack.ProjectionPresent || strings.HasPrefix(projection.ID, "asset:") {
+			continue
+		}
+		participants++
+		signal := "loading"
+		switch projection.Action.Kind {
+		case ActionUserMCP:
+			signal = "connection"
+		case ActionCommandHook:
+			signal = "firing"
+		}
+		item, ok := byID[projection.ID]
+		wantRevision := runtimeEvidenceRevision(pack, projection, version.Version, policy)
+		if !ok || item.Kind != string(projection.Action.Kind) || item.Signal != signal || item.Revision != wantRevision {
+			return false, false, facts
+		}
+		facts = append(facts, projection.ID+": current Claude Code runtime "+signal+" evidence")
+	}
+	if participants == 0 {
+		return false, false, nil
+	}
+	sort.Strings(facts)
+	return true, true, facts
+}
+
+func runtimeEvidenceRevision(pack capabilitypack.Pack, projection capabilitypack.ObservedProjection, hostVersion, policy string) string {
+	return canonicalFingerprint(struct{ PackID, PackVersion, ProjectionID, Projection, Definition, HostVersion, Policy string }{pack.ID, pack.Version, projection.ID, projection.ObservedFingerprint, projection.DesiredFingerprint, hostVersion, policy})
+}
+
+func NewRuntimeEvidence(pack capabilitypack.Pack, projection capabilitypack.ObservedProjection, hostVersion string, auth AuthorizationObservation, signal string) RuntimeEvidence {
+	return RuntimeEvidence{Kind: string(projection.Action.Kind), ID: projection.ID, Signal: signal, Revision: runtimeEvidenceRevision(pack, projection, hostVersion, RuntimeEvidencePolicyFingerprint(auth))}
+}
+
+func RuntimeEvidencePolicyFingerprint(auth AuthorizationObservation) string {
+	return canonicalFingerprint(struct{ Disabled, Shadowed, Policy, Tools bool }{auth.Disabled, auth.Shadowed, auth.PolicyObserved, auth.ToolPermissionObserved})
+}
+
+func claudeCommandSkill(resource capabilitypack.Resource, name string, prompt []byte) string {
+	description := resource.Description
+	if description == "" {
+		description = "Run the " + name + " command."
+	}
+	return fmt.Sprintf("---\nname: %s\ndescription: %q\n---\n\n%s\n", name, description, strings.TrimSpace(string(prompt)))
+}
+
+func claudeAgentDocument(resource capabilitypack.Resource, name string, authority capabilitypack.AgentAuthority, prompt []byte) string {
+	translations := func(items []capabilitypack.AuthorityTranslation) string {
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, item.Portable+"="+item.Claude)
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, ", ")
+	}
+	claudeTools := make([]string, 0, len(authority.Tools))
+	for _, item := range authority.Tools {
+		claudeTools = append(claudeTools, item.Claude)
+	}
+	sort.Strings(claudeTools)
+	tools := strings.Join(claudeTools, ", ")
+	if tools == "" {
+		tools = "[]"
+	}
+	return fmt.Sprintf("---\nname: %s\ndescription: %q\ntools: %s\n---\n\n## Packy authority translation\n\n- Tools: %s\n- Permissions: %s\n\n%s\n", name, resource.Description, tools, translations(authority.Tools), translations(authority.Permissions), strings.TrimSpace(string(prompt)))
+}
+
+func (a *SurfaceAdapter) consumerAssets(pack capabilitypack.Pack, consumer capabilitypack.Resource, consumerID, targetDir string) ([]capabilitypack.ObservedProjection, error) {
+	resources := map[string]capabilitypack.Resource{}
+	for _, resource := range pack.Resources {
+		resources[resource.Kind+":"+resource.ID] = resource
+	}
+	seen := map[string]bool{}
+	assets := []capabilitypack.Resource{}
+	var visit func(string)
+	visit = func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		r, ok := resources[id]
+		if !ok {
+			return
+		}
+		if r.Kind == "asset" {
+			assets = append(assets, r)
+		}
+		for _, dependency := range r.Requires {
+			visit(dependency)
+		}
+	}
+	for _, dependency := range consumer.Requires {
+		visit(dependency)
+	}
+	sort.Slice(assets, func(i, j int) bool { return assets[i].ID < assets[j].ID })
+	result := make([]capabilitypack.ObservedProjection, 0, len(assets))
+	for _, asset := range assets {
+		content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(asset.Source)))
+		if err != nil {
+			return nil, err
+		}
+		target := filepath.Join(targetDir, filepath.Base(asset.Source))
+		observed, exists, err := localprojection.FingerprintPath(target)
+		if err != nil {
+			return nil, err
+		}
+		desired := localprojection.FingerprintBytes(content)
+		id := "asset:" + consumerID + ":" + asset.ID
+		result = append(result, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: desired, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillFile, Target: target, Content: string(content), Description: "materialize Claude command dependency asset " + asset.ID}})
+	}
+	return result, nil
+}
+
+func (a *SurfaceAdapter) validateSkillAssetClosure(pack capabilitypack.Pack, consumer capabilitypack.Resource, source string) error {
+	root, err := canonicalPath(source)
+	if err != nil {
+		return err
+	}
+	for _, asset := range dependencyAssets(pack, consumer) {
+		path, err := canonicalPath(filepath.Join(a.bundleRoot, filepath.Clean(asset.Source)))
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("Claude skill %s dependency asset %s is outside its complete source tree", consumer.ID, asset.ID)
+		}
+	}
+	return nil
+}
+
+func (a *SurfaceAdapter) embedConsumerAssets(pack capabilitypack.Pack, consumer capabilitypack.Resource, prompt []byte) ([]byte, error) {
+	assets := dependencyAssets(pack, consumer)
+	if len(assets) == 0 {
+		return prompt, nil
+	}
+	result := strings.TrimSpace(string(prompt))
+	for _, asset := range assets {
+		content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(asset.Source)))
+		if err != nil {
+			return nil, err
+		}
+		result += fmt.Sprintf("\n\n## Packy dependency asset: %s\n\n%s", asset.ID, strings.TrimSpace(string(content)))
+	}
+	return []byte(result + "\n"), nil
+}
+
 func fingerprintsEqual(a, b string) bool { return a == b || "sha256:"+a == b || a == "sha256:"+b }
 func directChild(path, root string) bool {
 	return filepath.Dir(filepath.Clean(path)) == filepath.Clean(root) && filepath.Base(path) != "." && filepath.Base(path) != ".."

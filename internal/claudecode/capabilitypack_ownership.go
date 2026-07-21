@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/yersonargotev/packy/internal/capabilitypack"
+	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
 // CapabilityPackOwnershipProvider translates lifecycle-owned activation facts
@@ -39,15 +40,21 @@ func (o CapabilityPackOwnershipProvider) ObserveOwnership(ctx context.Context) (
 	}
 	records := make([]OwnershipRecord, 0, len(pack.Resources))
 	for _, resource := range pack.Resources {
-		if resource.Kind != "skill" && resource.Kind != "instruction" {
+		if resource.Kind != "skill" && resource.Kind != "command" && resource.Kind != "instruction" && resource.Kind != "agent" && resource.Kind != "lifecycle" && resource.Kind != "mcp_server" {
 			continue
 		}
 		name := resource.ID
-		for _, binding := range resource.Bindings {
-			if binding.Surface == capabilitypack.SurfaceClaude {
-				name = binding.Name
+		var binding *capabilitypack.Binding
+		for _, candidate := range resource.Bindings {
+			if candidate.Surface == capabilitypack.SurfaceClaude {
+				name = candidate.Name
+				copy := candidate
+				binding = &copy
 				break
 			}
+		}
+		if binding == nil {
+			continue
 		}
 		id := resource.Kind + ":" + name
 		owner, retained := owners[id]
@@ -65,6 +72,41 @@ func (o CapabilityPackOwnershipProvider) ObserveOwnership(ctx context.Context) (
 			record.ContributorID = "pack:" + state.Intent.PackID + ":" + resource.ID
 			record.Contributors = []string{record.ContributorID}
 			record.Fingerprint = observation.Contributions[record.ContributorID]
+		} else if resource.Kind == "agent" {
+			record.Kind, record.Target = string(ActionAgentFile), filepath.Join(o.layout.AgentsDir, name+".md")
+			observed, _, err := localprojection.FingerprintPath(record.Target)
+			if err != nil {
+				return OwnershipSnapshot{}, err
+			}
+			record.Fingerprint = observed
+		} else if resource.Kind == "command" {
+			record.Kind, record.Target = string(ActionSkillFile), filepath.Join(o.layout.SkillsDir, name, "SKILL.md")
+			observed, _, err := localprojection.FingerprintPath(record.Target)
+			if err != nil {
+				return OwnershipSnapshot{}, err
+			}
+			record.Fingerprint = observed
+		} else if resource.Kind == "lifecycle" {
+			if binding.Hook == nil {
+				continue
+			}
+			record.Kind, record.Target = string(ActionCommandHook), o.layout.SettingsFile
+			hook := fromBindingHook(*binding)
+			observation := EnrichHookObservation(ObserveSettings(record.Target, nil), hook)
+			if observation.Err != nil {
+				return OwnershipSnapshot{}, observation.Err
+			}
+			record.Fingerprint = observation.EntryFingerprint
+			record.HookProvenance = HookMergeProvenance{}.Seal()
+		} else if resource.Kind == "mcp_server" {
+			record.Kind, record.Target = string(ActionUserMCP), name
+			observation := ObserveUserMCP(o.layout.UserMCPFile, name)
+			if observation.Err != nil {
+				return OwnershipSnapshot{}, observation.Err
+			}
+			record.Fingerprint = observation.DefinitionFingerprint
+			identity := NewMCPIdentity(name, resource.Command, resource.Args, map[string]string{})
+			record.Command, record.Args, record.EnvironmentKeys, record.EnvironmentFingerprint = identity.Command, identity.Args, identity.EnvironmentKeys, identity.EnvironmentFingerprint
 		} else {
 			record.Kind, record.Target = string(ActionSkillLink), filepath.Join(o.layout.SkillsDir, name)
 			source := filepath.Join(o.bundleRoot, filepath.FromSlash(resource.Source))
@@ -78,6 +120,55 @@ func (o CapabilityPackOwnershipProvider) ObserveOwnership(ctx context.Context) (
 			record.Skill = SkillIdentity{Surface: "claude", ProjectionID: id, Path: record.Target, SymlinkType: "directory", ResolvedTarget: observed.ResolvedTarget, ExpectedSource: expectedSource, SourceTreeFingerprint: observed.TreeFingerprint}
 		}
 		records = append(records, record)
+		if resource.Kind == "command" {
+			for _, asset := range dependencyAssets(pack, resource) {
+				assetID := "asset:" + id + ":" + asset.ID
+				assetOwner, retained := owners[assetID]
+				if !retained && state.Journal == nil {
+					continue
+				}
+				target := filepath.Join(o.layout.SkillsDir, name, filepath.Base(asset.Source))
+				fingerprint, _, err := localprojection.FingerprintPath(target)
+				if err != nil {
+					return OwnershipSnapshot{}, err
+				}
+				contributors := append([]string(nil), assetOwner.Contributors...)
+				if len(contributors) == 0 {
+					contributors = []string{state.Intent.PackID}
+				}
+				records = append(records, OwnershipRecord{StateOwner: "capabilitypack", ContributorID: state.Intent.PackID, ID: assetID, Kind: string(ActionSkillFile), Target: target, Fingerprint: fingerprint, Contributors: contributors, DeletionAuthorized: assetOwner.DeletionAuthorized()})
+			}
+		}
 	}
 	return NewOwnershipSnapshot(records...), nil
+}
+
+func dependencyAssets(pack capabilitypack.Pack, consumer capabilitypack.Resource) []capabilitypack.Resource {
+	resources := map[string]capabilitypack.Resource{}
+	for _, resource := range pack.Resources {
+		resources[resource.Kind+":"+resource.ID] = resource
+	}
+	seen := map[string]bool{}
+	result := []capabilitypack.Resource{}
+	var visit func(string)
+	visit = func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		resource, ok := resources[id]
+		if !ok {
+			return
+		}
+		if resource.Kind == "asset" {
+			result = append(result, resource)
+		}
+		for _, child := range resource.Requires {
+			visit(child)
+		}
+	}
+	for _, id := range consumer.Requires {
+		visit(id)
+	}
+	return result
 }

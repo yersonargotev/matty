@@ -41,6 +41,33 @@ func TestPlanDispositionDefinesLifecycleSemantics(t *testing.T) {
 	}
 }
 
+func TestAdapterExecutableProjectionUsesPlanBoundExternalConsent(t *testing.T) {
+	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceClaude}}
+	pending := SurfaceInspection{Revision: "one", Projections: []ObservedProjection{{ID: "mcp_server:memory", ObservedFingerprint: "missing", DesiredFingerprint: "exact", Action: ProjectionAction{ID: "mcp_server:memory", Kind: "claude-user-mcp", Consent: ConsentExecutableExternal}}}}
+	verified := pending
+	verified.Revision = "two"
+	verified.Projections = append([]ObservedProjection(nil), pending.Projections...)
+	verified.Projections[0].Exists = true
+	verified.Projections[0].ObservedFingerprint = "exact"
+	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, pending, verified}}
+	store := &fakeActivationStore{}
+	facade := NewFacade(Catalog{packs: []Pack{pack}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceClaude: adapter}))
+	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "app", Surface: SurfaceClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phases := plan.Phases(); len(phases) != 1 || phases[0].Kind != ConsentExecutableExternal || len(phases[0].Actions) != 1 {
+		t.Fatalf("phases = %#v", phases)
+	}
+	if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true}); !errors.Is(err, ErrApprovalMismatch) {
+		t.Fatalf("local consent authorized executable adapter action: %v", err)
+	}
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentExecutableExternal)}, Interactive: true})
+	if err != nil || !result.Verified || len(adapter.applied) != 1 || adapter.applied[0][0].ID != "mcp_server:memory" {
+		t.Fatalf("result=%#v err=%v applied=%#v", result, err, adapter.applied)
+	}
+}
+
 func (f *fakeSurfaceAdapter) InspectSurface(_ context.Context, transition SurfaceTransition) (SurfaceInspection, error) {
 	f.inspectCalls++
 	kind := "desired"

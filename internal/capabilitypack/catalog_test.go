@@ -12,6 +12,32 @@ import (
 	"github.com/yersonargotev/packy/internal/bundletransaction"
 )
 
+func TestCheckedInEngramTwoPublishesExactThreeSurfaceContract(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	catalog, err := Discover(bundleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := catalog.Show("engram")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Version != "2.0.0" || len(pack.Surfaces) != 3 || pack.Surfaces[0] != SurfaceClaude {
+		t.Fatalf("Engram catalog contract = %#v", pack)
+	}
+	contract := LifecycleContractFor(pack, SurfaceClaude, nil)
+	if contract.Compatibility != CompatibilityDegraded || len(contract.Exclusions) != 1 || contract.Exclusions[0].Code != "generic-lifecycle-unsupported" {
+		t.Fatalf("Engram Claude lifecycle contract = %#v", contract)
+	}
+	if got := pack.Resources[1].SurfaceExclusions; len(got) != 1 || got[0].Surface != SurfaceClaude || got[0].Mode != "optional" || got[0].Code != "generic-lifecycle-unsupported" {
+		t.Fatalf("Engram Claude lifecycle outcome = %#v", got)
+	}
+	mcp := pack.Resources[2]
+	if mcp.Command != "engram" || strings.Join(mcp.Args, "\x00") != "mcp\x00--tools=agent" || len(mcp.Bindings) != 3 {
+		t.Fatalf("Engram MCP contract = %#v", mcp)
+	}
+}
+
 func TestDiscoverWaitsForCompleteBundleTransaction(t *testing.T) {
 	bundle := writeCatalogFixture(t)
 	repository := filepath.Dir(bundle)

@@ -33,16 +33,12 @@ func TestCheckedInMattyHistoryIsExactSelfContainedAndDeterministic(t *testing.T)
 	}
 }
 
-func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *testing.T) {
+func TestPreV3BuiltInManifestsRemainImmutableAfterCatalogCutover(t *testing.T) {
 	bundleRoot := filepath.Join("..", "..", "bundle")
 	workflowPackID := strings.Join([]string{"ma", "tty"}, "")
 	for _, item := range []struct{ id, version string }{{"engram", "1.0.0"}} {
 		t.Run(item.id, func(t *testing.T) {
-			current := mustRead(t, filepath.Join(bundleRoot, "packs", item.id, "pack.json"))
 			root := filepath.Join(bundleRoot, "history", item.id, item.version)
-			if archived := mustRead(t, filepath.Join(root, "pack.json")); !reflect.DeepEqual(archived, current) {
-				t.Fatal("archived manifest bytes differ from catalog-current bytes")
-			}
 			pack, err := loadHistoricalArtifact(root, bundleRoot, item.id, item.version)
 			if err != nil {
 				t.Fatal(err)
@@ -56,6 +52,27 @@ func TestCurrentBuiltInManifestsAreArchivedByteExactBeforeV3CatalogCutover(t *te
 	root := filepath.Join(bundleRoot, "history", workflowPackID, "2.0.0")
 	if pack, err := loadHistoricalArtifact(root, bundleRoot, workflowPackID, "2.0.0"); err != nil || pack.Version != "2.0.0" {
 		t.Fatalf("retained Matty v2 artifact: pack=%#v err=%v", pack, err)
+	}
+}
+
+func TestCheckedInEngramTwoHistoryIsExactSelfContainedAndDeterministic(t *testing.T) {
+	bundleRoot := filepath.Join("..", "..", "bundle")
+	root := filepath.Join(bundleRoot, "history", "engram", "2.0.0")
+	pack, err := loadHistoricalArtifact(root, bundleRoot, "engram", "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range pack.Resources {
+		if resource.Source != "" && !strings.HasPrefix(resource.Source, "history/engram/2.0.0/") {
+			t.Fatalf("historical resource %s:%s escaped its artifact root: %q", resource.Kind, resource.ID, resource.Source)
+		}
+	}
+	expected, err := inspectHistoricalArtifact(root, mustDecodeHistoricalManifest(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkedIn := readHistoricalArtifact(t, root); !reflect.DeepEqual(expected, checkedIn) {
+		t.Fatal("checked-in Engram 2.0.0 artifact evidence is not deterministic")
 	}
 }
 

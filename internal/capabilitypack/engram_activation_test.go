@@ -133,6 +133,22 @@ func TestEngramMissingExecutableUsesSupportedAcquisitionAction(t *testing.T) {
 	}
 }
 
+func TestClaudeNativeMCPBindingDoesNotImportGenericEngramSetup(t *testing.T) {
+	pack := Pack{ID: "engram", Version: "2.0.0", Resources: []Resource{{Kind: "mcp_server", ID: "engram", Command: "engram", Bindings: []Binding{{Surface: SurfaceClaude, Projection: "mcp_server"}}}}}
+	facade := Facade{}
+	resolution := missingEngramResolution()
+	resolution.Tool = "engram"
+	actions, blockers := facade.externalPlan(pack, SurfaceClaude, ActivationState{}, []ExecutableResolution{resolution})
+	if len(blockers) != 0 || len(actions) != 1 || actions[0].ID != "external:engram:acquire" {
+		t.Fatalf("actions=%#v blockers=%#v", actions, blockers)
+	}
+	for _, action := range actions {
+		if strings.Contains(strings.Join(action.Args, " "), "setup claude") {
+			t.Fatalf("generic Claude setup was planned: %#v", action)
+		}
+	}
+}
+
 func TestEngramLocalApprovalCannotAuthorizeExternalEffects(t *testing.T) {
 	resolver := &fakeExecutableResolver{resolutions: []ExecutableResolution{availableEngramResolution("/opt/homebrew/bin/engram")}}
 	executor := &fakeExternalExecutor{}

@@ -90,6 +90,25 @@ func TestLifecycleCompatibilityIsIndependentFromReadinessAndIntent(t *testing.T)
 	}
 }
 
+func TestLifecycleCompatibilityBlocksExcludedDependencyAndRendersSurfaceExclusion(t *testing.T) {
+	pack := Pack{manifestVersion: manifestSchemaV3, Resources: []Resource{
+		{Kind: "instruction", ID: "guide", Requires: []string{"lifecycle:memory"}, Bindings: []Binding{{Surface: SurfaceClaude, Mode: "native"}}},
+		{Kind: "lifecycle", ID: "memory", SurfaceExclusions: []SurfaceExclusion{{Surface: SurfaceClaude, Mode: "optional", Code: "generic-lifecycle-unsupported", Reason: "requires an explicit typed hook"}}},
+	}}
+	contract := LifecycleContractFor(pack, SurfaceClaude, nil)
+	if contract.Compatibility != CompatibilityBlocked {
+		t.Fatalf("compatibility = %s", contract.Compatibility)
+	}
+	if len(contract.Exclusions) != 1 || contract.Exclusions[0].ID != "lifecycle:memory" || contract.Exclusions[0].Code != "generic-lifecycle-unsupported" || contract.Exclusions[0].Mode != "optional" {
+		t.Fatalf("exclusions = %#v", contract.Exclusions)
+	}
+
+	pack.Resources[0].Requires = []string{}
+	if got := LifecycleContractFor(pack, SurfaceClaude, nil).Compatibility; got != CompatibilityDegraded {
+		t.Fatalf("independent optional exclusion = %s", got)
+	}
+}
+
 func TestReconciliationPlanJSONReportIsDeterministicAndComplete(t *testing.T) {
 	plan := ReconciliationPlan{id: "p", digest: "d", pack: Pack{ID: "addy", Version: "1.0.0", manifestVersion: manifestSchemaV3}, operation: OperationActivate,
 		surface: SurfaceCodex, intentRevision: 3, aliases: []SurfaceAlias{{Kind: "skill", ID: "z", Name: "z"}}, recovery: true,
@@ -125,5 +144,16 @@ func TestReconciliationPlanJSONReportIsDeterministicAndComplete(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Contributors["projection"], []string{"a", "z"}) || got.MandatoryActions[0].ID != "a" {
 		t.Fatalf("canonical facts = %#v", got)
+	}
+}
+
+func TestLifecycleReportRedactsSealedExternalHostContent(t *testing.T) {
+	plan := ReconciliationPlan{pack: Pack{ID: "p", Version: "1"}, phases: []PlanPhase{{Kind: ConsentExecutableExternal, Actions: []ProjectionAction{{ID: "hook:x", Consent: ConsentExecutableExternal, Content: "foreign-secret", Description: "event=SessionStart command=engram"}}}}}
+	encoded, err := json.Marshal(plan.JSONReport(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "foreign-secret") || !strings.Contains(string(encoded), "event=SessionStart command=engram") {
+		t.Fatalf("report = %s", encoded)
 	}
 }

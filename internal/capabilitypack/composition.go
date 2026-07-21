@@ -20,6 +20,7 @@ const (
 	BlockerActiveDependent          BlockerKind    = "active-dependent"
 	BlockerAlias                    BlockerKind    = "alias"
 	BlockerSharing                  BlockerKind    = "sharing"
+	BlockerCompatibility            BlockerKind    = "compatibility"
 )
 
 type PlannedActivation struct {
@@ -200,6 +201,7 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 		}
 	}
 	resources := map[string]Resource{}
+	projectedNames := map[string]string{}
 	for _, pack := range result.packs {
 		intent := intentByPackID(active, pack.ID)
 		for _, alias := range intent.Aliases {
@@ -208,6 +210,7 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 			}
 		}
 		for _, resource := range pack.Resources {
+			resolved := resourceWithSurfaceAlias(resource, intent.Aliases, surface)
 			key := resource.Kind + ":" + resource.ID
 			if previous, ok := resources[key]; ok {
 				if digestJSON(previous) != digestJSON(resource) {
@@ -221,6 +224,17 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 			}
 			resources[key] = resource
 			result.contributors[key] = append(result.contributors[key], pack.ID)
+			if namespace, name, ok := projectedNamespace(resolved, surface); ok {
+				projection := namespace + ":" + name
+				if prior, exists := projectedNames[projection]; exists && prior != key {
+					result.blockers = append(result.blockers, PlanBlocker{BlockerAlias, projection, fmt.Sprintf("portable resources %s and %s collide in the %s namespace; declare an explicit alias", prior, key, surface)})
+				} else {
+					projectedNames[projection] = key
+				}
+			}
+		}
+		if compatibilityFor(pack, surface) == CompatibilityBlocked {
+			result.blockers = append(result.blockers, PlanBlocker{BlockerCompatibility, pack.ID, "declared surface outcomes do not form a compatible runtime dependency closure"})
 		}
 	}
 	for key := range result.contributors {
@@ -228,6 +242,28 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 	}
 	sortBlockers(result.blockers)
 	return result, nil
+}
+
+func projectedNamespace(resource Resource, surface Surface) (string, string, bool) {
+	for _, binding := range resource.Bindings {
+		if binding.Surface != surface {
+			continue
+		}
+		switch binding.Projection {
+		case "skill":
+			return "personal-skill", binding.Name, true
+		case "agent":
+			return "agent", binding.Name, true
+		case "mcp_server":
+			return "mcp", binding.Name, true
+		case "command_hook":
+			if binding.Hook == nil {
+				return "hook", binding.Name, true
+			}
+			return "hook", binding.Hook.Event + ":" + binding.Hook.Matcher + ":" + binding.Name, true
+		}
+	}
+	return "", "", false
 }
 
 func resourceWithSurfaceAlias(resource Resource, aliases []SurfaceAlias, surface Surface) Resource {

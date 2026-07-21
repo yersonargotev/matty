@@ -190,7 +190,7 @@ type catalogEntry struct {
 }
 
 var initialCatalog = []catalogEntry{
-	{ID: "engram", Description: "Persistent memory for agent work", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
+	{ID: "engram", Description: "Persistent memory for agent work", Surfaces: []Surface{SurfaceClaude, SurfaceCodex, SurfaceOpenCode}},
 	{ID: "matty", Description: "Matty workflow", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}},
 }
 

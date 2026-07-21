@@ -394,7 +394,7 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 
 				manifestPath := filepath.Join(source, "packs", packID, "pack.json")
 				originalManifest := readFileString(t, manifestPath)
-				currentVersion, staleVersion, updateVersion := "1.0.0", "1.0.1", "2.0.0"
+				currentVersion, staleVersion := "2.0.0", "2.0.1"
 				if packID == "matty" {
 					currentVersion, staleVersion = "3.0.0", "3.0.1"
 				}
@@ -409,10 +409,8 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatal("stale activation wrote pack state")
 				}
 				terminal.onApprove = nil
-				if packID == "matty" {
-					if err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {
-						t.Fatal(err)
-					}
+				if err := os.WriteFile(manifestPath, []byte(originalManifest), 0o600); err != nil {
+					t.Fatal(err)
 				}
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", packID, "--surface", surface); err != nil || !strings.Contains(out, "Verified plan") {
 					t.Fatalf("activate: %v\n%s", err, out)
@@ -421,15 +419,6 @@ func TestCapabilityPackRolloutMatrixStaysInsideSandbox(t *testing.T) {
 					t.Fatalf("pending readiness gate: err=%v\n%s", err, out)
 				}
 
-				if packID != "matty" {
-					manifest := strings.Replace(readFileString(t, manifestPath), `"version": "`+staleVersion+`"`, `"version": "`+updateVersion+`"`, 1)
-					if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
-						t.Fatal(err)
-					}
-					if out, err := executeCommand(t, NewRootCommand(opts), "pack", "update", packID, "--surface", surface); err != nil || !strings.Contains(out, "catalog-current") {
-						t.Fatalf("update: %v\n%s", err, out)
-					}
-				}
 				if out, err := executeCommand(t, NewRootCommand(opts), "pack", "reconcile", packID, "--surface", surface); err != nil || (!strings.Contains(out, "Already converged") && !strings.Contains(out, "Verified plan")) {
 					t.Fatalf("targeted reconcile: %v\n%s", err, out)
 				}
@@ -758,7 +747,7 @@ func TestPackStatusRendersBaselineWithoutSideEffects(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PACK", "SURFACE", "INTENT", "ATTEMPT", "CONFIGURED", "AUTHORIZED", "USABLE", "ACTION",
-		"engram  codex", "engram  opencode", "matty   codex", "matty   opencode", "inactive",
+		"engram  claude", "engram  codex", "engram  opencode", "matty   claude", "matty   codex", "matty   opencode", "inactive",
 	} {
 		if !strings.Contains(overview, want) {
 			t.Fatalf("overview missing %q:\n%s", want, overview)
@@ -770,7 +759,7 @@ func TestPackStatusRendersBaselineWithoutSideEffects(t *testing.T) {
 		t.Fatalf("targeted status failed: %v\n%s", err, detail)
 	}
 	for _, want := range []string{
-		"engram 1.0.0 on codex", "Intent: inactive", "Latest attempt: none",
+		"engram 2.0.0 on codex", "Intent: inactive", "Latest attempt: none",
 		"Readiness: configured=no, authorized=no, usable=unknown",
 		"Projections: 0 verified; 0 drifted; 0 ambiguous", "Pending human actions: none",
 	} {
@@ -804,7 +793,7 @@ func TestPackStatusJSONOverviewAndTargetedAbsenceAreStable(t *testing.T) {
 	if err := json.Unmarshal([]byte(overview), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, overview)
 	}
-	if report.SchemaVersion != capabilitypack.StatusSchemaVersion || report.Report != "pack-status-overview" || len(report.Entries) != 5 {
+	if report.SchemaVersion != capabilitypack.StatusSchemaVersion || report.Report != "pack-status-overview" || len(report.Entries) != 6 {
 		t.Fatalf("report=%#v", report)
 	}
 	for i, entry := range report.Entries {
@@ -1064,7 +1053,7 @@ func TestPackActivateEngramDryRunShowsGlobalResolutionAndNoEffects(t *testing.T)
 	if err != nil {
 		t.Fatalf("dry-run failed: %v\n%s", err, out)
 	}
-	for _, want := range []string{"Pack: engram 1.0.0", "Phase: executable-external", "engram setup codex", "Phase: host-follow-up", "/hooks"} {
+	for _, want := range []string{"Pack: engram 2.0.0", "Phase: executable-external", "engram setup codex", "Phase: host-follow-up", "/hooks"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}

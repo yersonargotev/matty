@@ -139,6 +139,7 @@ type ProjectionAction struct {
 	ID          string               `json:"id"`
 	Description string               `json:"description"`
 	Kind        ProjectionActionKind `json:"kind,omitempty"`
+	Consent     ConsentKind          `json:"consent,omitempty"`
 	Source      string               `json:"source,omitempty"`
 	Target      string               `json:"target,omitempty"`
 	Content     string               `json:"content,omitempty"`
@@ -705,6 +706,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	}
 
 	actions := make([]ProjectionAction, 0, len(observation.Projections))
+	executableAdapterActions := make([]ProjectionAction, 0)
 	destructiveActions := make([]ProjectionAction, 0)
 	for _, projection := range observation.Projections {
 		if projection.ObservedFingerprint != projection.DesiredFingerprint {
@@ -726,14 +728,18 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 			}
 			if operation == OperationReconcile && (projection.Action.Mode == ProjectionDeleteTarget || projection.Action.Mode == ProjectionRemoveContent) {
 				destructiveActions = append(destructiveActions, projection.Action)
+			} else if projection.Action.Consent == ConsentExecutableExternal {
+				executableAdapterActions = append(executableAdapterActions, projection.Action)
 			} else {
 				actions = append(actions, projection.Action)
 			}
 		}
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
+	sort.Slice(executableAdapterActions, func(i, j int) bool { return executableAdapterActions[i].ID < executableAdapterActions[j].ID })
 	sort.Slice(destructiveActions, func(i, j int) bool { return destructiveActions[i].ID < destructiveActions[j].ID })
 	externalActions, externalBlockers := f.externalPlan(pack, request.Surface, state, resolutions)
+	externalActions = append(executableAdapterActions, externalActions...)
 	composition.blockers = append(composition.blockers, externalBlockers...)
 	sortBlockers(composition.blockers)
 	noOp := compositionActive(state, composition.packs, request.Surface) && ownershipMatchesContributors(state.Ownership, observation.Projections, composition) && len(actions) == 0 && len(externalActions) == 0
@@ -858,7 +864,7 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 	}
 	pack, adapter, state := preflight.pack, preflight.adapter, preflight.state
 	currentComposition, combined, resolutions := preflight.composition, preflight.combined, preflight.resolutions
-	if hasPhaseActions(request.Plan.phases, ConsentExecutableExternal) && f.activation.executor == nil {
+	if hasExternalCommand(request.Plan.phases) && f.activation.executor == nil {
 		return ApplyResult{}, fmt.Errorf("external effects are not configured")
 	}
 
@@ -921,6 +927,13 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		return ApplyResult{}, err
 	}
 	localActions := phaseActions(request.Plan.phases, ConsentReversibleLocal)
+	externalActions := phaseActions(request.Plan.phases, ConsentExecutableExternal)
+	adapterExternalActions := make([]ProjectionAction, 0, len(externalActions))
+	for _, action := range externalActions {
+		if action.Kind != ActionExternalCommand {
+			adapterExternalActions = append(adapterExternalActions, action)
+		}
+	}
 	if len(localActions) > 0 {
 		if err := adapter.ApplyProjections(ctx, localActions); err != nil {
 			state.Journal.recordFailure(requiredFailedActionID(err, "reversible-local"), err)
@@ -941,10 +954,11 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		return ApplyResult{}, err
 	}
 	verificationDesired := withoutExternallyManagedExpectations(request.Plan.desired)
+	verificationDesired = withoutActionExpectations(verificationDesired, adapterExternalActions)
 	if len(destructiveActions) > 0 {
 		verificationDesired = withoutActionExpectations(verificationDesired, destructiveActions)
 	}
-	verifiedMatches := verificationMatches(verificationDesired, verified.Projections)
+	verifiedMatches := len(verificationDesired) == 0 || verificationMatches(verificationDesired, verified.Projections)
 	if len(verificationDesired) != len(request.Plan.desired) {
 		verifiedMatches = verificationMatchesSubset(verificationDesired, verified.Projections)
 	}
@@ -969,7 +983,6 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		}
 		return ApplyResult{}, fmt.Errorf("%w: %s", ErrVerificationFailed, verificationMismatch(request.Plan.desired, verified.Projections))
 	}
-	externalActions := phaseActions(request.Plan.phases, ConsentExecutableExternal)
 	for _, action := range localActions {
 		state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
 	}
@@ -978,44 +991,37 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 			return ApplyResult{}, fmt.Errorf("persist verified local recovery facts: %w", err)
 		}
 	}
-	if len(externalActions) == 0 && len(destructiveActions) > 0 {
-		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
-			state.Journal.recordFailure(requiredFailedActionID(err, "destructive-cleanup"), err)
-			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
-			return ApplyResult{}, err
-		}
-		for _, action := range destructiveActions {
-			state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
-		}
-		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
-			return ApplyResult{}, fmt.Errorf("destructive actions completed but recovery facts could not be persisted: %w", err)
-		}
-	}
 	for _, action := range externalActions {
-		if err := f.activation.executor.Execute(ctx, action); err != nil {
-			state.Journal.recordFailure(action.ID, err)
+		var actionErr error
+		if action.Kind == ActionExternalCommand {
+			actionErr = f.activation.executor.Execute(ctx, action)
+		} else if err := adapter.ApplyProjections(ctx, []ProjectionAction{action}); err != nil {
+			actionErr = err
+		}
+		if actionErr != nil {
+			state.Journal.recordFailure(action.ID, actionErr)
 			if saveErr := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); saveErr != nil {
-				return ApplyResult{}, fmt.Errorf("external action %s failed: %v; could not persist recovery facts: %w", action.ID, err, saveErr)
+				return ApplyResult{}, fmt.Errorf("external action %s failed: %v; could not persist recovery facts: %w", action.ID, actionErr, saveErr)
 			}
-			return ApplyResult{}, fmt.Errorf("external action %s failed; later actions stopped and recovery is required: %w", action.ID, err)
+			return ApplyResult{}, fmt.Errorf("external action %s failed; later actions stopped and recovery is required: %w", action.ID, actionErr)
 		}
 		state.Journal.Completed = append(state.Journal.Completed, action.ID)
-		state.External = recordExternalEffect(state.External, action)
+		if action.Kind == ActionExternalCommand {
+			state.External = recordExternalEffect(state.External, action)
+		}
 		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
 			return ApplyResult{}, fmt.Errorf("external action %s completed but recovery facts could not be persisted: %w", action.ID, err)
 		}
 	}
-	if len(externalActions) > 0 && len(destructiveActions) > 0 {
-		if err := adapter.ApplyProjections(ctx, destructiveActions); err != nil {
+	for _, action := range destructiveActions {
+		if err := adapter.ApplyProjections(ctx, []ProjectionAction{action}); err != nil {
 			state.Journal.recordFailure(requiredFailedActionID(err, "destructive-cleanup"), err)
 			_ = f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state)
 			return ApplyResult{}, err
 		}
-		for _, action := range destructiveActions {
-			state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
-		}
+		state.Journal.Completed = appendCompleted(state.Journal.Completed, action.ID)
 		if err := f.activation.store.Save(ctx, request.Plan.surface, state.Intent.Revision, state); err != nil {
-			return ApplyResult{}, fmt.Errorf("destructive actions completed but recovery facts could not be persisted: %w", err)
+			return ApplyResult{}, fmt.Errorf("destructive action %s completed but recovery facts could not be persisted: %w", action.ID, err)
 		}
 	}
 	if len(externalActions) > 0 || len(destructiveActions) > 0 {
@@ -1423,6 +1429,15 @@ func appendPhaseAction(phases []PlanPhase, kind ConsentKind, action ProjectionAc
 	return append(phases, PlanPhase{Kind: kind, ApprovalRequired: true, Actions: []ProjectionAction{action}})
 }
 
+func hasExternalCommand(phases []PlanPhase) bool {
+	for _, action := range phaseActions(phases, ConsentExecutableExternal) {
+		if action.Kind == ActionExternalCommand {
+			return true
+		}
+	}
+	return false
+}
+
 func cloneOwnership(values []ProjectionOwnership) []ProjectionOwnership {
 	result := append([]ProjectionOwnership(nil), values...)
 	for i := range result {
@@ -1766,6 +1781,11 @@ func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, 
 			blockers = append(blockers, PlanBlocker{BlockerGlobalRequirement, resolution.Tool, "resolved tool has no executable path"})
 			continue
 		}
+		if surface == SurfaceClaude && hasNativeMCPBinding(pack, surface, resolution.Tool) {
+			// Claude's official user-scoped MCP projection is the setup effect.
+			// Running a tool-owned generic setup would import a second lifecycle.
+			continue
+		}
 		setup := ProjectionAction{ID: "external:" + resolution.Tool + ":setup:" + string(surface), Kind: ActionExternalCommand, Command: resolution.Path, Args: []string{"setup", string(surface)}, Description: fmt.Sprintf("run %s setup %s", resolution.Path, surface)}
 		if !externalEffectCompleted(state.External, setup) || externalVerificationNeedsRetry(state, setup, surface) {
 			actions = append(actions, setup)
@@ -1773,6 +1793,20 @@ func (f Facade) externalPlan(pack Pack, surface Surface, state ActivationState, 
 	}
 	sortBlockers(blockers)
 	return actions, blockers
+}
+
+func hasNativeMCPBinding(pack Pack, surface Surface, tool string) bool {
+	for _, resource := range pack.Resources {
+		if resource.Kind != "mcp_server" || resource.Command != tool {
+			continue
+		}
+		for _, binding := range resource.Bindings {
+			if binding.Surface == surface && binding.Projection == "mcp_server" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func externalVerificationNeedsRetry(state ActivationState, setup ProjectionAction, surface Surface) bool {
@@ -1800,6 +1834,9 @@ func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition Surf
 		}
 		if _, duplicate := seen[projection.ID]; duplicate {
 			return SurfaceInspection{}, fmt.Errorf("surface adapter returned duplicate projection %q", projection.ID)
+		}
+		if projection.Action.Consent != "" && projection.Action.Consent != ConsentExecutableExternal {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned unsupported consent %q for projection %q", projection.Action.Consent, projection.ID)
 		}
 		seen[projection.ID] = struct{}{}
 		switch projection.Goal {
