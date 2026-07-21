@@ -98,10 +98,7 @@ func ObserveSetup(ctx context.Context, layout CanonicalLayout, executable string
 }
 
 func observeOwnedHooks(settings SettingsObservation, fingerprints []string) HookObservation {
-	observation := HookObservation{
-		Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable,
-		Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err,
-	}
+	observation := hookObservation(settings)
 	if settings.Err != nil || len(fingerprints) == 0 {
 		return observation
 	}
@@ -109,14 +106,10 @@ func observeOwnedHooks(settings SettingsObservation, fingerprints []string) Hook
 	for _, fingerprint := range fingerprints {
 		wanted[fingerprint] = true
 	}
-	hooks, _ := settings.Root["hooks"].(map[string]any)
-	for _, rawEntries := range hooks {
-		entries, _ := rawEntries.([]any)
-		for _, entry := range entries {
-			fingerprint := canonicalFingerprint(entry)
-			if wanted[fingerprint] {
-				observation.MatchingEntries = append(observation.MatchingEntries, fingerprint)
-			}
+	for _, entry := range observedHookEntries(settings) {
+		fingerprint := HookOwnershipFingerprint(entry.event, entry.fingerprint)
+		if wanted[fingerprint] {
+			observation.MatchingEntries = append(observation.MatchingEntries, fingerprint)
 		}
 	}
 	sort.Strings(observation.MatchingEntries)
@@ -124,6 +117,33 @@ func observeOwnedHooks(settings SettingsObservation, fingerprints []string) Hook
 		observation.EntryFingerprint = observation.MatchingEntries[0]
 	}
 	return observation
+}
+
+func hookObservation(settings SettingsObservation) HookObservation {
+	return HookObservation{
+		Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable,
+		Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err,
+	}
+}
+
+type observedHookEntry struct{ event, fingerprint string }
+
+func observedHookEntries(settings SettingsObservation) []observedHookEntry {
+	hooks, _ := settings.Root["hooks"].(map[string]any)
+	var observed []observedHookEntry
+	for event, rawEntries := range hooks {
+		entries, _ := rawEntries.([]any)
+		for _, entry := range entries {
+			observed = append(observed, observedHookEntry{event: event, fingerprint: canonicalFingerprint(entry)})
+		}
+	}
+	sort.Slice(observed, func(i, j int) bool {
+		if observed[i].event != observed[j].event {
+			return observed[i].event < observed[j].event
+		}
+		return observed[i].fingerprint < observed[j].fingerprint
+	})
+	return observed
 }
 
 type RuntimeEvidence struct{ Kind, ID, Signal, Revision string }
@@ -289,18 +309,18 @@ func ObserveHooks(path string, wanted CommandHookEntry, higherPrecedence []byte)
 	return EnrichHookObservation(ObserveSettings(path, higherPrecedence), wanted)
 }
 func EnrichHookObservation(settings SettingsObservation, wanted CommandHookEntry) HookObservation {
-	o := HookObservation{Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable, Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err}
+	o := hookObservation(settings)
 	if o.Err != nil {
 		return o
 	}
-	hooks, _ := settings.Root["hooks"].(map[string]any)
-	entries, _ := hooks[wanted.Event].([]any)
 	target := canonicalFingerprint(hookJSON(wanted))
-	for _, e := range entries {
-		if canonicalFingerprint(e) == target {
+	for _, entry := range observedHookEntries(settings) {
+		if entry.event == wanted.Event && entry.fingerprint == target {
 			o.MatchingEntries = append(o.MatchingEntries, target)
-			o.EntryFingerprint = target
 		}
+	}
+	if len(o.MatchingEntries) == 1 {
+		o.EntryFingerprint = target
 	}
 	return o
 }
