@@ -29,6 +29,7 @@ import (
 
 const ExactFloor = "2.1.203"
 const sensitiveFixtureValue = "PACKY_SMOKE_SECRET_7f6e5d4c3b2a"
+const syntheticSourceRef = "packy-smoke-proved-source"
 
 type Config struct {
 	Packy, SourceRepo, SourceRef, ClaudeSelector, EvidencePath, NPM string
@@ -638,7 +639,8 @@ func ValidateEvidence(e Evidence) error {
 		}
 		// init has confined path arguments; its operation is the stable part.
 		if i == 2 {
-			if len(got.Args) != 9 || got.Args[0] != "init" || got.Args[1] != "--home" || got.Args[2] == "" || got.Args[3] != "--source-root" || got.Args[4] == "" || got.Args[5] != "--repository-url" || got.Args[6] == "" || got.Args[7] != "--repository-ref" || got.Args[8] == "" {
+			wantInit := []string{"init", "--home", filepath.Join(e.Sandbox, "home"), "--source-root", filepath.Join(e.Sandbox, "installed-source"), "--repository-url", filepath.Join(e.Sandbox, "source-repository"), "--repository-ref", syntheticSourceRef}
+			if e.Sandbox == "" || !filepath.IsAbs(e.Sandbox) || filepath.Clean(e.Sandbox) != e.Sandbox || !reflect.DeepEqual(got.Args, wantInit) {
 				return errors.New("evidence command sequence is malformed")
 			}
 			continue
@@ -958,11 +960,10 @@ func prepareInstallableSource(ctx context.Context, sandbox string, env []string,
 	if _, err := sandboxOutput(ctx, sandbox, filepath.Join(sandbox, "work"), env, "git", "clone", "--no-checkout", "--no-hardlinks", sourceRepo, destination); err != nil {
 		return "", "", "", fmt.Errorf("create disposable source repository: %w", err)
 	}
-	const syntheticRef = "packy-smoke-proved-source"
-	if _, err := sandboxOutput(ctx, sandbox, destination, env, "git", "branch", "--force", syntheticRef, resolved); err != nil {
+	if _, err := sandboxOutput(ctx, sandbox, destination, env, "git", "branch", "--force", syntheticSourceRef, resolved); err != nil {
 		return "", "", "", fmt.Errorf("create installable source ref: %w", err)
 	}
-	return destination, syntheticRef, resolved, nil
+	return destination, syntheticSourceRef, resolved, nil
 }
 
 func parsePackyVersion(s string) string {

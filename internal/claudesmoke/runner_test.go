@@ -214,7 +214,8 @@ func TestValidationFailureStillWritesDiagnosticEvidence(t *testing.T) {
 }
 
 func validEvidence() Evidence {
-	args := [][]string{{"--version"}, {"version"}, {"init", "--home", "h", "--source-root", "s", "--repository-url", "r", "--repository-ref", "ref"}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
+	sandbox := filepath.Join(string(filepath.Separator), "sandbox")
+	args := [][]string{{"--version"}, {"version"}, {"init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", filepath.Join(sandbox, "source-repository"), "--repository-ref", syntheticSourceRef}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
 	commands := make([]CommandEvidence, len(args))
 	for i := range args {
 		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
@@ -225,7 +226,7 @@ func validEvidence() Evidence {
 	}
 	sha := strings.Repeat("a", 40)
 	manifest := []FileEvidence{{Path: "fixture", SHA256: strings.Repeat("c", 64), Mode: 0o600, Size: 1}}
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: sha, InstalledSourceSHA: sha, RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Before: manifest, After: manifest, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: sha, InstalledSourceSHA: sha, RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Sandbox: sandbox, Commands: commands, Before: manifest, After: manifest, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -265,6 +266,21 @@ func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e.Commands[2].Args[3] = "--unexpected"
 	if err := ValidateEvidence(e); err == nil {
 		t.Fatal("accepted tampered init flag")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[2] = filepath.Join(string(filepath.Separator), "outside")
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted init home outside recorded sandbox")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[6] = filepath.Join(e.Sandbox, "unrelated-repository")
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unrelated init repository")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[8] = e.PackyRef
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unproved init repository ref")
 	}
 	e = validEvidence()
 	e.Commands = e.Commands[:11]
