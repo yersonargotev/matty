@@ -130,9 +130,67 @@ jobs:
           path: ${{ runner.temp }}/claude-release-evidence
           if-no-files-found: error
 
+  validate-release-evidence:
+    name: Validate complete release evidence
+    needs: [build, claude-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out proved commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.build.outputs.commit }}
+
+      - name: Set up Go for evidence validation
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download proved release candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: packy-release-${{ needs.build.outputs.tag }}
+          path: dist
+
+      - name: Download complete Claude smoke matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: claude-release-*
+          path: claude-evidence
+
+      - name: Generate candidate Homebrew formula
+        run: |
+          mkdir -p release-metadata
+          scripts/generate-homebrew-formula.sh \
+            --version "${{ needs.build.outputs.tag }}" \
+            --checksums dist/checksums.txt \
+            --out release-metadata/packy.rb \
+            --repo yersonargotev/packy \
+            --homepage https://github.com/yersonargotev/packy \
+            --desc "AI coding workflow installer"
+
+      - name: Verify candidate parity and render release notes
+        run: |
+          scripts/verify-release-evidence.sh \
+            --tag "${{ needs.build.outputs.tag }}" \
+            --commit "${{ needs.build.outputs.commit }}" \
+            --dist dist \
+            --evidence-root claude-evidence \
+            --formula release-metadata/packy.rb \
+            --notes-template docs/release-notes/next.md \
+            --notes-output release-metadata/release-notes.md
+
+      - name: Retain proved publication metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: packy-release-metadata-${{ needs.build.outputs.tag }}
+          path: release-metadata
+          if-no-files-found: error
+
   release:
     name: Build and publish release artifacts
-    needs: [build, claude-smoke]
+    needs: [build, validate-release-evidence]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -167,6 +225,12 @@ jobs:
           name: packy-release-${{ steps.release.outputs.tag }}
           path: dist
 
+      - name: Download proved formula and release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: packy-release-metadata-${{ steps.release.outputs.tag }}
+          path: release-metadata
+
       - name: Require Homebrew tap token
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -184,15 +248,10 @@ jobs:
           path: homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: Generate Homebrew formula from release checksums
+      - name: Install proved Homebrew formula candidate
         run: |
-          scripts/generate-homebrew-formula.sh \
-            --version "${{ steps.release.outputs.tag }}" \
-            --checksums dist/checksums.txt \
-            --out homebrew-tap/Formula/packy.rb \
-            --repo yersonargotev/packy \
-            --homepage https://github.com/yersonargotev/packy \
-            --desc "AI coding workflow installer"
+          mkdir -p homebrew-tap/Formula
+          cp release-metadata/packy.rb homebrew-tap/Formula/packy.rb
 
       - name: Prepare Homebrew tap formula update
         id: prepare_tap
@@ -237,11 +296,12 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists"
+            gh release view "$RELEASE_TAG" --json body --jq .body > "$RUNNER_TEMP/existing-release-notes.md"
+            cmp release-metadata/release-notes.md "$RUNNER_TEMP/existing-release-notes.md"
           else
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
-              --generate-notes
+              --notes-file release-metadata/release-notes.md
           fi
 
       - name: Upload release assets

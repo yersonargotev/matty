@@ -5,6 +5,7 @@ package claudesmoke
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 
 const ExactFloor = "2.1.203"
 const sensitiveFixtureValue = "PACKY_SMOKE_SECRET_7f6e5d4c3b2a"
+const syntheticSourceRef = "packy-smoke-proved-source"
 
 type Config struct {
 	Packy, SourceRepo, SourceRef, ClaudeSelector, EvidencePath, NPM string
@@ -132,6 +134,7 @@ type Evidence struct {
 	PackyVersion           string            `json:"packy_version"`
 	PackyRef               string            `json:"packy_ref"`
 	PackySHA               string            `json:"packy_sha"`
+	InstalledSourceSHA     string            `json:"installed_source_sha"`
 	OS                     string            `json:"os"`
 	Arch                   string            `json:"arch"`
 	RequestedClaudeVersion string            `json:"requested_claude_version"`
@@ -384,6 +387,12 @@ func executeLifecycle(ctx context.Context, e Evidence, lc lifecycleContext) (Evi
 			e.Assertions.DryRunsUnchanged = (phase.Kind == phaseInstallPreview || e.Assertions.DryRunsUnchanged) && reflect.DeepEqual(dryBefore, dryAfter)
 		}
 		switch phase.Kind {
+		case phaseInit:
+			installedSHA, readErr := sandboxOutput(ctx, sandbox, filepath.Join(sandbox, "work"), env, "git", "-C", filepath.Join(sandbox, "installed-source"), "rev-parse", "HEAD")
+			if readErr != nil {
+				return e, readErr
+			}
+			e.InstalledSourceSHA = strings.TrimSpace(installedSHA)
 		case phaseInstall:
 			_, stateErr := os.Stat(filepath.Join(sandbox, "home", ".packy", "config.json"))
 			e.Assertions.InstallCreatedManagedState = stateErr == nil
@@ -590,8 +599,15 @@ func pathWithin(root, path string) bool {
 }
 
 func ValidateEvidence(e Evidence) error {
-	if e.SchemaVersion != 1 || e.PackyVersion == "" || e.PackyRef == "" || len(e.PackySHA) != 40 || e.ResolvedClaudeVersion == "" || e.ClaudeIntegrity == "" || len(e.ClaudeDigest) != 64 {
+	if e.SchemaVersion != 1 || e.PackyVersion == "" || e.PackyRef == "" || len(e.PackySHA) != 40 || e.InstalledSourceSHA != e.PackySHA || e.ResolvedClaudeVersion == "" || e.ClaudeIntegrity == "" || len(e.ClaudeDigest) != 64 {
 		return errors.New("missing or malformed canonical evidence")
+	}
+	packySHA, shaErr := hex.DecodeString(e.PackySHA)
+	if shaErr != nil || len(packySHA) != sha1.Size {
+		return errors.New("missing or malformed canonical evidence")
+	}
+	if !validManifestEvidence(e.Before) || !validManifestEvidence(e.After) {
+		return errors.New("missing or malformed sandbox manifests")
 	}
 	s := e.Safety
 	if !s.DisposableSandbox || !s.AllowlistEnvironment || !s.CredentialsScrubbed || !s.CommandAllowlist || !s.CheckoutUnchanged || !s.ConfiguredWritableRootsConfined || !s.EvidencePathOutsideSandbox || !s.NoInteractiveClaude || !s.WriteBoundaryEnforced {
@@ -600,25 +616,46 @@ func ValidateEvidence(e Evidence) error {
 	if len(e.Commands) == 0 {
 		return errors.New("evidence has no commands")
 	}
-	want := [][]string{{"--version"}, {"version"}, {"init"}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
+	want := []CommandEvidence{
+		{Name: "claude", Args: []string{"--version"}},
+		{Name: "packy", Args: []string{"version"}},
+		{Name: "packy", Args: []string{"init"}},
+		{Name: "packy", Args: []string{"install", "--dry-run"}},
+		{Name: "packy", Args: []string{"install"}},
+		{Name: "packy", Args: []string{"doctor"}},
+		{Name: "packy", Args: []string{"update", "--dry-run"}},
+		{Name: "packy", Args: []string{"update"}},
+		{Name: "packy", Args: []string{"uninstall", "--dry-run"}},
+		{Name: "packy", Args: []string{"uninstall"}},
+		{Name: "packy", Args: []string{"doctor"}},
+	}
 	if len(e.Commands) < len(want) {
 		return errors.New("evidence command sequence is incomplete")
 	}
-	for i, args := range want {
-		got := e.Commands[i].Args
+	for i, command := range want {
+		got := e.Commands[i]
+		if got.Name != command.Name {
+			return errors.New("evidence command sequence is malformed")
+		}
 		// init has confined path arguments; its operation is the stable part.
 		if i == 2 {
-			if len(got) != 9 || got[0] != "init" {
+			wantInit := []string{"init", "--home", filepath.Join(e.Sandbox, "home"), "--source-root", filepath.Join(e.Sandbox, "installed-source"), "--repository-url", filepath.Join(e.Sandbox, "source-repository"), "--repository-ref", syntheticSourceRef}
+			if e.Sandbox == "" || !filepath.IsAbs(e.Sandbox) || filepath.Clean(e.Sandbox) != e.Sandbox || !reflect.DeepEqual(got.Args, wantInit) {
 				return errors.New("evidence command sequence is malformed")
 			}
 			continue
 		}
-		if !reflect.DeepEqual(got, args) {
+		if !reflect.DeepEqual(got.Args, command.Args) {
 			return errors.New("evidence command sequence is malformed")
 		}
 	}
-	for _, c := range e.Commands[len(want):] {
-		if c.Name != "claude" || len(c.Args) != 1 || !map[string]bool{"version": true, "mcp-list": true, "mcp-get": true, "mcp-add": true, "mcp-remove": true}[c.Args[0]] {
+	wantClaude := []string{"version", "version", "version", "mcp-add", "version", "version", "version", "version", "version", "mcp-remove", "version"}
+	if len(e.Commands) != len(want)+len(wantClaude) {
+		return errors.New("evidence command sequence is incomplete")
+	}
+	for i, operation := range wantClaude {
+		c := e.Commands[len(want)+i]
+		if c.Name != "claude" || !reflect.DeepEqual(c.Args, []string{operation}) {
 			return errors.New("unsafe normalized Claude operation")
 		}
 	}
@@ -648,6 +685,36 @@ func ValidateEvidence(e Evidence) error {
 		}
 	}
 	return nil
+}
+
+func validManifestEvidence(items []FileEvidence) bool {
+	if len(items) == 0 {
+		return false
+	}
+	previous := ""
+	for _, item := range items {
+		if item.Path == "" || filepath.IsAbs(item.Path) || filepath.Clean(item.Path) != item.Path || item.Path == "." || item.Path == ".." || strings.HasPrefix(item.Path, ".."+string(filepath.Separator)) || item.Path <= previous {
+			return false
+		}
+		mode := os.FileMode(item.Mode)
+		if item.Size < 0 || mode&^(os.ModePerm|os.ModeDir|os.ModeSymlink) != 0 || (mode.Type() != 0 && mode.Type() != os.ModeDir && mode.Type() != os.ModeSymlink) {
+			return false
+		}
+		if mode.IsRegular() && item.SHA256 == "" {
+			return false
+		}
+		if !mode.IsRegular() && item.SHA256 != "" {
+			return false
+		}
+		if item.SHA256 != "" {
+			decoded, err := hex.DecodeString(item.SHA256)
+			if err != nil || len(decoded) != sha256.Size {
+				return false
+			}
+		}
+		previous = item.Path
+	}
+	return true
 }
 func directoryAbsentOrEmpty(path string) (bool, error) {
 	entries, err := os.ReadDir(path)
@@ -869,13 +936,13 @@ func sandboxOutput(ctx context.Context, writableRoot, dir string, env []string, 
 	}
 	cmd.Dir = dir
 	cmd.Env = env
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%s: %w: %s", name, err, out.String())
+		return "", fmt.Errorf("%s: %w: %s%s", name, err, stdout.String(), stderr.String())
 	}
-	return out.String(), nil
+	return stdout.String(), nil
 }
 
 // prepareInstallableSource leaves the proved checkout untouched while adapting
@@ -893,11 +960,10 @@ func prepareInstallableSource(ctx context.Context, sandbox string, env []string,
 	if _, err := sandboxOutput(ctx, sandbox, filepath.Join(sandbox, "work"), env, "git", "clone", "--no-checkout", "--no-hardlinks", sourceRepo, destination); err != nil {
 		return "", "", "", fmt.Errorf("create disposable source repository: %w", err)
 	}
-	const syntheticRef = "packy-smoke-proved-source"
-	if _, err := sandboxOutput(ctx, sandbox, destination, env, "git", "branch", "--force", syntheticRef, resolved); err != nil {
+	if _, err := sandboxOutput(ctx, sandbox, destination, env, "git", "branch", "--force", syntheticSourceRef, resolved); err != nil {
 		return "", "", "", fmt.Errorf("create installable source ref: %w", err)
 	}
-	return destination, syntheticRef, resolved, nil
+	return destination, syntheticSourceRef, resolved, nil
 }
 
 func parsePackyVersion(s string) string {

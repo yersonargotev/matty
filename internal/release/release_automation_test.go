@@ -43,7 +43,7 @@ func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
 		"yersonargotev/homebrew-tap",
 		"scripts/generate-homebrew-formula.sh",
 		"--checksums dist/checksums.txt",
-		"--out homebrew-tap/Formula/packy.rb",
+		"--out release-metadata/packy.rb",
 		"--repo yersonargotev/packy",
 		"gh release upload",
 		"dist/* --clobber",
@@ -54,7 +54,7 @@ func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowCreatesReleaseWithGeneratedNotes(t *testing.T) {
+func TestReleaseWorkflowCreatesOrVerifiesReleaseWithProvedNotes(t *testing.T) {
 	root := repoRoot(t)
 	step := releaseWorkflowStep(t, parseReleaseWorkflow(t, readReleaseWorkflow(t, root)), "Create GitHub Release if needed")
 
@@ -64,11 +64,109 @@ func TestReleaseWorkflowCreatesReleaseWithGeneratedNotes(t *testing.T) {
 	if !strings.Contains(step.Text, "gh release create") {
 		t.Fatalf("release creation step should create the GitHub Release; step:\n%s", step.Text)
 	}
-	if !strings.Contains(step.Text, "--generate-notes") {
-		t.Fatalf("release creation should ask GitHub to generate per-tag notes; step:\n%s", step.Text)
+	if !strings.Contains(step.Text, "--notes-file release-metadata/release-notes.md") {
+		t.Fatalf("release creation should use the validated notes candidate; step:\n%s", step.Text)
 	}
-	if strings.Contains(step.Text, "--notes") {
-		t.Fatalf("release creation should not pass static release notes; step:\n%s", step.Text)
+	if !strings.Contains(step.Text, "cmp") || !strings.Contains(step.Text, "--json body") {
+		t.Fatalf("an existing immutable release should fail closed when its notes differ; step:\n%s", step.Text)
+	}
+	if strings.Contains(step.Text, "--generate-notes") {
+		t.Fatalf("release creation must not bypass validated release notes; step:\n%s", step.Text)
+	}
+}
+
+func TestReleaseWorkflowValidatesCompleteEvidenceBeforePublication(t *testing.T) {
+	text := readReleaseWorkflow(t, repoRoot(t))
+	for _, want := range []string{
+		"validate-release-evidence:",
+		"needs: [build, claude-smoke]",
+		"pattern: claude-release-*",
+		"scripts/verify-release-evidence.sh",
+		"docs/release-notes/next.md",
+		"scripts/generate-homebrew-formula.sh",
+		"name: packy-release-metadata-${{ needs.build.outputs.tag }}",
+		"needs: [build, validate-release-evidence]",
+		"name: packy-release-metadata-${{ steps.release.outputs.tag }}",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release workflow missing fail-closed evidence gate %q", want)
+		}
+	}
+	publication := text[strings.LastIndex(text, "  release:"):]
+	if strings.Contains(publication, "scripts/generate-homebrew-formula.sh") {
+		t.Fatal("publication must consume the proved formula instead of regenerating it")
+	}
+}
+
+func TestReleaseEvidenceVerifierRequiresExactCandidateParity(t *testing.T) {
+	root := repoRoot(t)
+	tag := "v0.99.0"
+	commit := strings.Repeat("a", 40)
+	dist := filepath.Join(t.TempDir(), "dist")
+	if err := os.MkdirAll(dist, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var checksumLines []string
+	for _, asset := range releaseAssets(tag) {
+		path := filepath.Join(dist, asset)
+		if err := os.WriteFile(path, []byte("candidate "+asset), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		checksumLines = append(checksumLines, sha256File(t, path)+"  "+asset)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "checksums.txt"), []byte(strings.Join(checksumLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(t.TempDir(), "metadata")
+	formula := filepath.Join(metadata, "packy.rb")
+	generate := exec.Command("bash", filepath.Join(root, "scripts", "generate-homebrew-formula.sh"), "--version", tag, "--checksums", filepath.Join(dist, "checksums.txt"), "--out", formula)
+	generate.Dir = root
+	generate.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
+	if output, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generate formula: %v\n%s", err, output)
+	}
+
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence")
+	if err := os.MkdirAll(evidenceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := t.TempDir()
+	canonicalLog := filepath.Join(t.TempDir(), "canonical-validator.log")
+	fakeGo := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CANONICAL_LOG\"\n[ \"${FAIL_CANONICAL:-0}\" != 1 ]\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notes := filepath.Join(metadata, "release-notes.md")
+	run := func(failCanonical bool) ([]byte, error) {
+		cmd := exec.Command("bash", filepath.Join(root, "scripts", "verify-release-evidence.sh"),
+			"--tag", tag, "--commit", commit, "--dist", dist, "--evidence-root", evidenceRoot,
+			"--formula", formula, "--notes-template", filepath.Join(root, "docs", "release-notes", "next.md"), "--notes-output", notes)
+		cmd.Dir = root
+		fail := "0"
+		if failCanonical {
+			fail = "1"
+		}
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"), "CANONICAL_LOG="+canonicalLog, "FAIL_CANONICAL="+fail)
+		return cmd.CombinedOutput()
+	}
+	if output, err := run(false); err != nil {
+		t.Fatalf("verify complete candidate: %v\n%s", err, output)
+	}
+	if rendered, err := os.ReadFile(notes); err != nil || !strings.Contains(string(rendered), "# "+tag) || strings.Contains(string(rendered), "{{TAG}}") {
+		t.Fatalf("rendered notes are not tag-bound: %v\n%s", err, rendered)
+	}
+	invocation, err := os.ReadFile(canonicalLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit} {
+		if !strings.Contains(string(invocation), want) {
+			t.Fatalf("release verifier did not delegate %q to the canonical owner:\n%s", want, invocation)
+		}
+	}
+	if output, err := run(true); err == nil {
+		t.Fatalf("release verifier ignored canonical evidence rejection:\n%s", output)
 	}
 }
 
@@ -100,10 +198,8 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		"path: homebrew-tap",
 		"token: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
 	})
-	formulaIndex := releaseWorkflowStepIndex(t, workflow, "Generate Homebrew formula from release checksums", []string{
-		"scripts/generate-homebrew-formula.sh",
-		"--checksums dist/checksums.txt",
-		"--out homebrew-tap/Formula/packy.rb",
+	formulaIndex := releaseWorkflowStepIndex(t, workflow, "Install proved Homebrew formula candidate", []string{
+		"cp release-metadata/packy.rb homebrew-tap/Formula/packy.rb",
 	})
 	prepareTapIndex := releaseWorkflowStepIndex(t, workflow, "Prepare Homebrew tap formula update", []string{
 		"id: prepare_tap",
@@ -128,7 +224,7 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 	createReleaseIndex := releaseWorkflowStepIndex(t, workflow, "Create GitHub Release if needed", []string{
 		"GH_TOKEN: ${{ github.token }}",
 		"gh release create",
-		"--generate-notes",
+		"--notes-file release-metadata/release-notes.md",
 	})
 	uploadIndex := releaseWorkflowStepIndex(t, workflow, "Upload release assets", []string{
 		"GH_TOKEN: ${{ github.token }}",
@@ -161,12 +257,12 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 
 	assertReleaseWorkflowStepBefore(t, resolveTagIndex, setupGoIndex, "Go must be set up from the checked-out release tag, not the workflow dispatch ref")
 	assertReleaseWorkflowStepBefore(t, setupGoIndex, provedArtifactIndex, "proved artifacts should be downloaded after the release tag checkout and Go setup")
-	assertReleaseWorkflowStepBefore(t, provedArtifactIndex, formulaIndex, "formula generation must consume the exact proved artifacts and dist/checksums.txt")
+	assertReleaseWorkflowStepBefore(t, provedArtifactIndex, formulaIndex, "the proved formula must be installed alongside the exact proved artifacts")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, tapCheckoutIndex, "the workflow must reject a missing HOMEBREW_TAP_TOKEN before falling back to anonymous tap checkout")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, createReleaseIndex, "a missing HOMEBREW_TAP_TOKEN must fail before creating a GitHub Release")
 	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, uploadIndex, "a missing HOMEBREW_TAP_TOKEN must fail before re-uploading release assets")
 	assertReleaseWorkflowStepBefore(t, tapCheckoutIndex, formulaIndex, "the tap checkout must exist before writing Formula/packy.rb into it")
-	assertReleaseWorkflowStepBefore(t, formulaIndex, prepareTapIndex, "the generated formula must be staged before preparing a local tap commit")
+	assertReleaseWorkflowStepBefore(t, formulaIndex, prepareTapIndex, "the proved formula must be staged before preparing a local tap commit")
 	assertReleaseWorkflowStepBefore(t, prepareTapIndex, tapPushAccessProofIndex, "the workflow must dry-run push the already-prepared local tap state, not the untouched checkout")
 	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, createReleaseIndex, "token-backed tap push permission must be proven before creating a GitHub Release")
 	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, reverifyTagIndex, "the candidate tag should be reverified only after every publication precondition passes")

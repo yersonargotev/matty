@@ -1,8 +1,9 @@
 # Packy v0 product scope
 
 Packy v0 is a macOS-first installer/configurator for a lightweight AI coding workflow.
-It wires global Matt Pocock-style skills, Engram memory, and small Codex/OpenCode
-prompt layers without becoming an always-on runtime orchestrator.
+It wires global Matt Pocock-style skills, Engram memory, and small Codex,
+OpenCode, and Claude Code projections without becoming an always-on runtime
+orchestrator.
 
 ## Quick path
 
@@ -33,7 +34,7 @@ updateable, and reversible while keeping startup instructions small.
 | --- | --- |
 | Role | Installer/configurator, not a runtime orchestrator. |
 | Platform | macOS-first. Linux may be considered later but is not promised for v0. |
-| CLI surfaces | Codex and OpenCode only. |
+| CLI surfaces | Codex, OpenCode, and user-global Claude Code 2.1.203+. |
 | Skills | Curated global bundle exposed as symlinks under `~/.agents/skills`. |
 | Sources | One resolved Skill Source selected from an explicit override, repository checkout, or package Installed Source. |
 | Memory | Engram installed/updated through official mechanisms and configured through `engram setup`. |
@@ -44,7 +45,7 @@ updateable, and reversible while keeping startup instructions small.
 
 ## User outcomes
 
-- A previewable first-run sequence configures the preferred Codex/OpenCode workflow.
+- A previewable first-run sequence configures the preferred Codex/OpenCode/Claude Code workflow.
 - Repos are not polluted with copied skills or local prompt files by default.
 - Repeated install/update runs are idempotent.
 - `doctor` is safe and read-only.
@@ -68,6 +69,7 @@ updateable, and reversible while keeping startup instructions small.
 | Capability packs | Discovery, status, activation, update, reconciliation, deactivation, recovery, and readiness gates for `matty` and `engram`. |
 | Automation | Versioned JSON output for doctor and pack status, with stable health and readiness exit behavior. |
 | Internal ownership | Deep core-lifecycle and setup-health modules plus domain-owned workstation layouts and host observations. |
+| Claude Code | User-global skills, marked instructions, explicit agents and typed hooks, and official user-scoped MCP operations, with inert health and independent readiness. |
 
 ## Out of scope for v0
 
@@ -75,7 +77,8 @@ updateable, and reversible while keeping startup instructions small.
 - Runtime profile manager.
 - SDD workflow installation or SDD orchestrators.
 - Repo-local docs/config by default.
-- Claude Code, Antigravity, GitHub Copilot CLI, Gemini, Cursor, or other adapters.
+- Antigravity, GitHub Copilot CLI, Gemini, Cursor, or other adapters.
+- Claude plugins, repository-local Claude configuration, authentication, or model invocation.
 - Automatic Gentle AI cleanup or migration.
 - Vendoring the Engram binary.
 - Installing only a tiny skill subset; v0 controls tokens through lazy routing.

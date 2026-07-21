@@ -134,6 +134,24 @@ func TestSandboxBoundaryAllowsOnlyConfiguredRootWrites(t *testing.T) {
 	}
 }
 
+func TestSandboxOutputKeepsSuccessDiagnosticsOutOfStructuredStdout(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	command := filepath.Join(root, "command")
+	if err := writeStub(command, "#!/bin/sh\nprintf '%s' '{\"version\":\"2.1.203\"}'\nprintf '%s' 'npm notice update available' >&2\n"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := sandboxOutput(context.Background(), root, root, RestrictedEnv(root, filepath.Join(root, "bin")), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `{"version":"2.1.203"}` {
+		t.Fatalf("structured stdout was contaminated: %q", out)
+	}
+}
+
 func TestManifestDeterministicAndContentBound(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "b"), []byte("b"), 0600); err != nil {
@@ -214,12 +232,19 @@ func TestValidationFailureStillWritesDiagnosticEvidence(t *testing.T) {
 }
 
 func validEvidence() Evidence {
-	args := [][]string{{"--version"}, {"version"}, {"init", "--home", "h", "--source-root", "s", "--repository-url", "r", "--repository-ref", "ref"}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
+	sandbox := filepath.Join(string(filepath.Separator), "sandbox")
+	args := [][]string{{"--version"}, {"version"}, {"init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", filepath.Join(sandbox, "source-repository"), "--repository-ref", syntheticSourceRef}, {"install", "--dry-run"}, {"install"}, {"doctor"}, {"update", "--dry-run"}, {"update"}, {"uninstall", "--dry-run"}, {"uninstall"}, {"doctor"}}
 	commands := make([]CommandEvidence, len(args))
 	for i := range args {
 		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
 	}
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
+	commands[0].Name = "claude"
+	for _, operation := range []string{"version", "version", "version", "mcp-add", "version", "version", "version", "version", "version", "mcp-remove", "version"} {
+		commands = append(commands, CommandEvidence{Name: "claude", Args: []string{operation}, ExitCode: 0})
+	}
+	sha := strings.Repeat("a", 40)
+	manifest := []FileEvidence{{Path: "fixture", SHA256: strings.Repeat("c", 64), Mode: 0o600, Size: 1}}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: sha, InstalledSourceSHA: sha, RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Sandbox: sandbox, Commands: commands, Before: manifest, After: manifest, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -251,14 +276,81 @@ func TestValidateEvidenceRejectsTampering(t *testing.T) {
 		t.Fatal("accepted tampered lifecycle sequence")
 	}
 	e = validEvidence()
-	e.Commands = append(e.Commands, CommandEvidence{Name: "claude", Args: []string{"login"}, ExitCode: 0})
+	e.Commands[0].Name = "packy"
 	if err := ValidateEvidence(e); err == nil {
-		t.Fatal("accepted unsafe normalized Claude command")
+		t.Fatal("accepted tampered executable identity")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[3] = "--unexpected"
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted tampered init flag")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[2] = filepath.Join(string(filepath.Separator), "outside")
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted init home outside recorded sandbox")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[6] = filepath.Join(e.Sandbox, "unrelated-repository")
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unrelated init repository")
+	}
+	e = validEvidence()
+	e.Commands[2].Args[8] = e.PackyRef
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unproved init repository ref")
+	}
+	e = validEvidence()
+	e.Commands = e.Commands[:11]
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted missing normalized Claude operations")
+	}
+	e = validEvidence()
+	e.Commands[14].Args[0] = "mcp-list"
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted tampered normalized Claude sequence")
 	}
 	e = validEvidence()
 	e.Assertions.InstallCreatedManagedProjections = false
 	if err := ValidateEvidence(e); err == nil {
 		t.Fatal("accepted no-op lifecycle assertions")
+	}
+	e = validEvidence()
+	e.Before = nil
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted missing before manifest")
+	}
+	e = validEvidence()
+	e.After[0].Path = "../outside"
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unsafe after manifest path")
+	}
+	e = validEvidence()
+	e.After[0].SHA256 = ""
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted regular file without content digest")
+	}
+	e = validEvidence()
+	e.After[0].Size = -1
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted negative manifest size")
+	}
+	e = validEvidence()
+	e.After[0].Mode = uint32(os.ModeDevice | 0o600)
+	e.After[0].SHA256 = ""
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unsupported manifest type")
+	}
+	e = validEvidence()
+	e.PackySHA = strings.Repeat("z", 40)
+	e.InstalledSourceSHA = e.PackySHA
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted malformed Packy SHA")
+	}
+	e = validEvidence()
+	e.InstalledSourceSHA = strings.Repeat("c", 40)
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted Installed Source from a different commit")
 	}
 }
 

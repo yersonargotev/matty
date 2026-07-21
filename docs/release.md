@@ -39,25 +39,28 @@ Installed Source is missing or stale, run `packy init` first.
 
 1. Confirm the release candidate passes validation:
    ```bash
-   go test ./...
+   ./scripts/validate-packy.sh
    ```
-2. Confirm the repository has a `HOMEBREW_TAP_TOKEN` secret with write access to
+2. Review `docs/release-notes/next.md` for this exact candidate. It must contain
+   exactly one `{{TAG}}` placeholder; replace the previous release's content
+   before creating another tag.
+3. Confirm the repository has a `HOMEBREW_TAP_TOKEN` secret with write access to
    `yersonargotev/homebrew-tap`.
-3. Create and push an exact v0 tag:
+4. Create and push an exact v0 tag:
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
-4. Watch the `Release` workflow for that tag.
-5. Open the GitHub Release and verify these assets exist:
+5. Watch the `Release` workflow for that tag.
+6. Open the GitHub Release and verify these assets exist:
    - `packy_v0.1.0_darwin_amd64`
    - `packy_v0.1.0_darwin_arm64`
    - `packy_v0.1.0_linux_amd64`
    - `packy_v0.1.0_linux_arm64`
    - `checksums.txt`
-6. Verify `yersonargotev/homebrew-tap` has a `Formula/packy.rb` commit for the
+7. Verify `yersonargotev/homebrew-tap` has a `Formula/packy.rb` commit for the
    same tag and checksums.
-7. Run a sandboxed package-install smoke test before announcing the release.
+8. Run a sandboxed package-install smoke test before announcing the release.
 
 ## Manual dispatch
 
@@ -68,11 +71,14 @@ update need to be rebuilt.
 2. Enter an existing exact tag such as `v0.1.0`.
 3. Run the workflow.
 
-The workflow checks out that tag, builds artifacts and `checksums.txt`, requires
-`HOMEBREW_TAP_TOKEN`, checks out the tap, regenerates and locally commits
-`Formula/packy.rb` when changed, proves the tap push with `git push --dry-run`,
-creates the GitHub Release if needed, uploads `dist/* --clobber`, and only then
-pushes the prepared tap commit.
+The workflow checks out that tag and completes validation before entering the
+publication job. It builds artifacts and `checksums.txt`, runs the complete
+Claude smoke matrix, verifies the tag, Installed Source, binaries, checksums,
+formula, and reviewed release notes agree, and retains the proved formula and
+notes as publication metadata. Only then does it require `HOMEBREW_TAP_TOKEN`,
+check out the tap, prepare its commit, prove the push with `git push --dry-run`,
+create or verify the GitHub Release, upload the unchanged assets, and push the
+prepared tap commit.
 
 ## `HOMEBREW_TAP_TOKEN` setup
 
@@ -167,6 +173,34 @@ explicit assertions for disposable roots, allowlisted environment, credential
 scrubbing, command confinement, unchanged source checkout, and no interactive
 Claude invocation. Missing, malformed, failed, or unsafe evidence fails closed.
 
+## Fail-closed publication gate
+
+Build and validation are separate from publication. The
+`validate-release-evidence` job downloads all four retained Claude smoke
+documents and the single release candidate, generates the candidate formula,
+and runs `scripts/verify-release-evidence.sh`. Publication cannot start unless:
+
+- `./scripts/validate-packy.sh` passed on the exact tag commit;
+- the four expected binaries are the only binaries in `checksums.txt`, and every
+  checksum matches;
+- exact-floor and recorded-current-stable smoke evidence is complete for Darwin
+  `amd64` and `arm64`;
+- every smoke binds the release tag version, exact commit, same-commit Installed
+  Source, Claude selector/version/digest, successful lifecycle, and complete
+  sandbox safety assertions;
+- the generated formula retains the same artifact names and checksums and tests
+  only `packy --version`; and
+- the reviewed first-support notes in
+  `docs/release-notes/next.md` render for the exact tag and retain
+  the compatibility floor, migration, Pack versions, degraded exclusion, and
+  limitations.
+
+Missing, failed, stale, duplicated, or ambiguous evidence has no waiver or
+partial-release path. The publication job consumes the proved binaries,
+checksums, formula, and notes without rebuilding or regenerating them. If a
+GitHub Release already exists for the immutable tag, its notes must match the
+proved notes byte for byte before asset recovery continues.
+
 The automated local-release smoke test is:
 
 ```bash
@@ -193,7 +227,7 @@ packy doctor
 
 ## First v0.x checklist
 
-- [ ] The release candidate passed `go test ./...`.
+- [ ] The release candidate passed `./scripts/validate-packy.sh`.
 - [ ] The tag is an exact `v0.x.y` tag, such as `v0.1.0`.
 - [ ] `HOMEBREW_TAP_TOKEN` is configured with write access to
       `yersonargotev/homebrew-tap`.

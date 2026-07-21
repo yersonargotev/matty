@@ -1,6 +1,7 @@
 # Packy roadmap
 
-Packy v0 is an installable installer/configurator for Codex and OpenCode. It
+Packy v0 is an installable installer/configurator for Codex, OpenCode, and
+user-global Claude Code 2.1.203+. It
 ships through GitHub Releases and Homebrew, supports package-installed use
 through `packy init`, and manages opt-in `matty` and `engram` capability packs.
 
@@ -16,7 +17,7 @@ The completed work includes:
 
 - GitHub Release and Homebrew distribution with a version-aligned Installed
   Source;
-- the opt-in capability-pack lifecycle for Codex and OpenCode;
+- the opt-in capability-pack lifecycle for Codex, OpenCode, and Claude Code;
 - structured doctor and pack-status output;
 - deep internal ownership for core lifecycle, setup health, host surfaces, and
   workstation layout.
@@ -28,14 +29,13 @@ The completed work includes:
 | Token budget | What measurement proves Packy is materially lighter than Gentle AI at session start? |
 | Review workflow | Is Matt Pocock `review`/`code-review` sufficient, or does Packy need a distinct review layer later? |
 | Engram ambiguity | What user-facing guidance is needed when Engram project detection is ambiguous? |
-| Next adapter | What evidence should be required before adding another host beyond Codex and OpenCode? |
+| Next adapter | What evidence should be required before adding another host beyond Codex, OpenCode, and Claude Code? |
 
 ## Future adapters
 
 These remain outside v0. Adding one requires an explicit product decision and
 evidence for its host-specific paths, projections, trust model, and readiness:
 
-- Claude Code.
 - Antigravity.
 - GitHub Copilot CLI.
 - Gemini, Cursor, or other host CLIs.

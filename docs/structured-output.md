@@ -30,7 +30,8 @@ and `dry_run: true`. Result adds `committed`, ordered `completed_effects` and
 `not_started_effects`, the optional `failed_effect`, sorted `warnings`, and the
 managed skill count.
 
-`desired_surfaces` is the sorted set `claude`, `codex`, `opencode`. A dry-run or
+`desired_surfaces` is the canonical ordered set `codex`, `opencode`, `claude`.
+A dry-run or
 result is written before the existing outcome-to-exit mapping is applied:
 `converged`, `applied`, and `applied-with-pending-prerequisite` exit zero; all
 other completed outcomes exit nonzero.
@@ -56,8 +57,11 @@ raw shared documents are not part of doctor JSON.
 ## Capability packs
 
 `pack-show` publishes declared surfaces and, per surface, compatibility,
-bindings, exclusions, optional modes, prompt authorities, and aliases. It does
-not claim observed readiness.
+bindings, exclusions, optional modes, prompt authorities, and aliases. For the
+current catalog it reports `matty` 3.0.0 as complete and `engram` 2.0.0 as
+degraded on that surface, with the optional `lifecycle:engram-memory`
+exclusion. It
+does not claim observed readiness.
 
 Lifecycle preview publishes the sealed ordered phases and actions, contract,
 compatibility, consent, preservation, blockers, expected readiness, observed
@@ -70,7 +74,8 @@ report before preserving the readiness-gate exit result.
 
 ## Ordering and redaction
 
-Arrays representing sets are lexically sorted; examples include surfaces,
+Arrays representing sets use their schema-defined canonical order (lexical
+unless the owning contract defines another order); examples include surfaces,
 capabilities, blockers, evidence, aliases, bindings, exclusions, and
 contributors. Arrays representing work retain sealed execution order; examples
 include lifecycle phases, actions, completed effects, and not-started effects.

@@ -1,10 +1,15 @@
 # Packy
 
-Packy is a lightweight macOS-first installer/configurator for a global AI coding workflow. It installs a curated Matt Pocock skill bundle, wires Engram through its official setup commands, and adds small Packy-owned prompt layers for Codex and OpenCode.
+Packy is a lightweight macOS-first installer/configurator for a global AI coding workflow. It installs a curated Matt Pocock skill bundle, wires Engram through its official setup commands, and projects small Packy-owned integrations to Codex, OpenCode, and Claude Code.
 
 Packy is not a runtime orchestrator and does not copy workflow files into every project.
 
 ## Quickstart
+
+Claude users must first install a stable Claude Code **2.1.203 or newer**.
+Packy does not install or upgrade Claude Code. See the canonical
+[Claude Code guide](docs/claude-code.md) for the global layout, migration,
+readiness, preservation, and no-auth/no-model boundary.
 
 Install Packy from the Homebrew tap, initialize the package-installed source checkout, preview the setup, then apply it:
 
@@ -25,6 +30,7 @@ Packy v0 manages:
 - small Packy state at `~/.packy/config.json`
 - Codex prompt markers in `~/.codex/AGENTS.md`
 - an OpenCode prompt file and reference under `$XDG_CONFIG_HOME/opencode`
+- Claude Code global skills, instructions, and user-scoped Engram MCP setup
 - Engram install/update/setup by delegating to the Homebrew-managed Engram binary (`<brew-prefix>/bin/engram setup ...`)
 
 Packy v0 is macOS-first. Linux and other agent adapters may be added later, but they are outside v0.
@@ -46,8 +52,9 @@ packy uninstall --dry-run
 
 Packy core remains available even when the optional `matty` capability pack is
 inactive. The initial Packy-owned catalog contains only `matty` and `engram`, and
-supports only the `codex` and `opencode` surfaces. Existing installations are not
-automatically migrated or adopted.
+supports the `codex`, `opencode`, and `claude` surfaces when a Pack explicitly
+declares them. Existing Pack activations retain their recorded surfaces until an
+explicit Pack update and Claude activation remains a separate surface choice.
 
 Before opting in, inspect the catalog and current host state without mutation:
 
@@ -60,7 +67,7 @@ packy pack status matty --surface codex
 
 Then follow the explicit [manual capability-pack transition](docs/capability-packs.md).
 It documents dry-run, typed approvals, readiness gating, update, reconcile,
-recovery, and contributor-safe deactivation for both supported surfaces.
+recovery, and contributor-safe deactivation for all three supported surfaces.
 
 ## Global paths
 
@@ -71,6 +78,10 @@ recovery, and contributor-safe deactivation for both supported surfaces.
 | `~/.codex/AGENTS.md` | Codex prompt file containing Packy markers |
 | `$XDG_CONFIG_HOME/opencode/opencode.json` | OpenCode config containing the Packy prompt reference |
 | `$XDG_CONFIG_HOME/opencode/packy.md` | Packy-owned OpenCode prompt |
+| `~/.claude/skills` | Claude personal-skill symlinks |
+| `~/.claude/CLAUDE.md` | Global Claude instructions containing the Packy block |
+| `~/.claude/agents` | Explicit Pack-owned Claude agent files |
+| `~/.claude/settings.json` | Typed Pack-owned Claude command hooks |
 
 If `XDG_CONFIG_HOME` is unset or relative, Packy uses `~/.config`.
 
@@ -89,7 +100,7 @@ If `XDG_CONFIG_HOME` is unset or relative, Packy uses `~/.config`.
 - runtime profile manager
 - SDD workflow installation or SDD orchestrators
 - repo-local docs/config by default
-- Claude Code, Antigravity, GitHub Copilot CLI, Gemini, Cursor, or other adapters
+- Antigravity, GitHub Copilot CLI, Gemini, Cursor, or other adapters
 - automatic Gentle AI cleanup or migration
 - vendoring the Engram binary or installing a second copy under `~/.local/bin`; Homebrew owns Engram, and Packy only delegates setup/configuration
 - installing only a tiny skill subset
