@@ -107,20 +107,43 @@ and represented in the formula to keep the release contract ready for future
 Linux support, but Linux is not part of the v0 golden-path support promise until
 a Linux package-install smoke test is defined and accepted.
 
-## Sandboxed package-install smoke expectations
+## Real-Claude package smoke gates
 
-Never validate package-installed Packy against the operator's real `HOME` or
-`XDG_CONFIG_HOME`. A release smoke test must point both variables at disposable
-temporary directories before running Packy lifecycle commands, for example:
+Packy owns two package-installed, credential-free real-Claude gates:
+
+| Gate | Claude selection | Trigger | Effect |
+| --- | --- | --- | --- |
+| Exact floor | `2.1.203` | Every pull request and release | A failure blocks that pull request or release. |
+| Current stable | npm's recorded stable version | Daily canary and every release | A canary failure opens compatibility work without attaching to unrelated pull requests; a release failure blocks publication. |
+
+Release validation runs both selectors against the corresponding Darwin artifact
+on Intel (`amd64`) and Apple Silicon (`arm64`) before the publication job can
+create a GitHub Release, upload assets, or push the tap update.
+
+Run either contract locally from a clean checkout with:
 
 ```bash
-sandbox="$(mktemp -d)"
-export HOME="$sandbox/home"
-export XDG_CONFIG_HOME="$sandbox/xdg"
-mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+./scripts/run-claude-smoke.sh \
+  --claude-version 2.1.203 \
+  --packy-ref "$(git rev-parse HEAD)" \
+  --evidence-dir "$PWD/.scratch/claude-smoke-evidence"
+```
 
-packy --version
-packy init
+Use `--claude-version stable` for the moving-stable variant. The runner acquires
+Claude before restricting execution, installs a release-like Packy binary away
+from the checkout, and then exposes only disposable `HOME`, `XDG_CONFIG_HOME`,
+`CLAUDE_CONFIG_DIR`, cache, data, temporary, Homebrew, Installed Source, and work
+roots. Its environment allowlist omits credentials and provider variables.
+Homebrew and Engram are deterministic inert stubs; Claude is real.
+
+The Claude interposer permits only version inspection and bounded user-scoped
+MCP list/get/add/remove operations. It rejects login, authentication, REPL,
+print/model mode, project/local MCP mutation, and malformed commands before the
+real executable can observe them. The package-installed Packy sequence is:
+
+```text
+packy version
+packy init --repository-url <local-checkout> --repository-ref <proved-ref>
 packy install --dry-run
 packy install
 packy doctor
@@ -131,15 +154,13 @@ packy uninstall
 packy doctor
 ```
 
-For Homebrew-specific verification, install the released formula in a disposable
-or explicitly controlled test environment, then run the Packy commands above
-with sandboxed `HOME` and `XDG_CONFIG_HOME`. The smoke test should prove that a
-package-installed binary can initialize its Installed Source, read
-`bundle/skills` from that source, preview installation, apply the golden-path
-setup, refresh it, remove Packy-managed artifacts, and finish with a read-only
-`doctor` without touching the maintainer's real home config. If external tools
-such as Homebrew or Engram are not intentionally exercised against real accounts,
-stub or otherwise control those calls.
+Every run retains canonical JSON evidence. It binds the Packy version, ref and
+commit; OS and architecture; requested and resolved Claude version; npm
+integrity and executable digest; each Packy command and normalized nested Claude
+operation with its exit; deterministic before/after sandbox manifests; and
+explicit assertions for disposable roots, allowlisted environment, credential
+scrubbing, command confinement, unchanged source checkout, and no interactive
+Claude invocation. Missing, malformed, failed, or unsafe evidence fails closed.
 
 The automated local-release smoke test is:
 
@@ -172,6 +193,8 @@ packy doctor
 - [ ] `HOMEBREW_TAP_TOKEN` is configured with write access to
       `yersonargotev/homebrew-tap`.
 - [ ] The `Release` workflow completed from the tag commit.
+- [ ] Exact Claude `2.1.203` and recorded-current-stable evidence is green for
+      both Darwin `amd64` and `arm64` before publication.
 - [ ] All four platform artifacts and `checksums.txt` are attached to the GitHub
       Release.
 - [ ] `checksums.txt` contains one SHA-256 entry for each artifact.
@@ -179,6 +202,8 @@ packy doctor
       and checksums.
 - [ ] When explicitly requested, a real `brew install yersonargotev/tap/packy`
       in a controlled environment installs the released binary.
+- [ ] Durable smoke evidence binds the tag/SHA, platform, Claude version and
+      digest, commands/exits, and before/after sandbox manifests without secrets.
 - [ ] A sandboxed package install can run `packy init`, `packy install --dry-run`,
       `packy install`, `packy doctor`, `packy update --dry-run`, `packy update`,
       `packy uninstall --dry-run`, `packy uninstall`, and final `packy doctor`

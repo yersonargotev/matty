@@ -1,0 +1,68 @@
+name: Claude stable canary
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: claude-stable-canary
+  cancel-in-progress: false
+
+jobs:
+  stable-smoke:
+    name: Claude current-stable package smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run current-stable package smoke
+        id: smoke
+        run: |
+          ./scripts/run-claude-smoke.sh \
+            --claude-version stable \
+            --packy-ref "$GITHUB_SHA" \
+            --evidence-dir "$RUNNER_TEMP/claude-stable-evidence"
+
+      - name: Retain current-stable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-stable-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/claude-stable-evidence
+          if-no-files-found: error
+
+      - name: Open compatibility work on failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Claude stable canary compatibility failure"
+          if gh issue list --state open --search "$title in:title" --json title --jq '.[].title' | grep -Fxq "$title"; then
+            echo "Compatibility issue already open"
+            exit 0
+          fi
+          gh issue create \
+            --title "$title" \
+            --label bug \
+            --body "The scheduled real-Claude stable smoke failed. Durable evidence is attached to [$RUN_URL]($RUN_URL). The exact-floor pull-request gate remains independent."

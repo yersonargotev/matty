@@ -30,3 +30,40 @@ jobs:
 
       - name: Validate allowlisted Packy-owned code
         run: ./scripts/validate-packy.sh
+
+  claude-floor-smoke:
+    name: Claude 2.1.203 package smoke
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run exact-floor package smoke
+        run: |
+          ./scripts/run-claude-smoke.sh \
+            --claude-version 2.1.203 \
+            --packy-ref "$GITHUB_SHA" \
+            --evidence-dir "$RUNNER_TEMP/claude-floor-evidence"
+
+      - name: Retain exact-floor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-floor-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/claude-floor-evidence
+          if-no-files-found: error

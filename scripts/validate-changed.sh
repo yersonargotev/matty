@@ -15,6 +15,7 @@ readonly packages=(
   ./internal/capabilitypack
   ./internal/ci
   ./internal/cli
+  ./internal/claudesmoke
   ./internal/codex
   ./internal/corelifecycle
   ./internal/engrambin
@@ -29,6 +30,7 @@ readonly packages=(
   ./internal/release
   ./internal/setuphealth
   ./internal/skillbundle
+  ./internal/tools/claudesmoke
   ./internal/tools/syncpacksource
   ./internal/version
   ./internal/workstation
