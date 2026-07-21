@@ -134,6 +134,24 @@ func TestSandboxBoundaryAllowsOnlyConfiguredRootWrites(t *testing.T) {
 	}
 }
 
+func TestSandboxOutputKeepsSuccessDiagnosticsOutOfStructuredStdout(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	command := filepath.Join(root, "command")
+	if err := writeStub(command, "#!/bin/sh\nprintf '%s' '{\"version\":\"2.1.203\"}'\nprintf '%s' 'npm notice update available' >&2\n"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := sandboxOutput(context.Background(), root, root, RestrictedEnv(root, filepath.Join(root, "bin")), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `{"version":"2.1.203"}` {
+		t.Fatalf("structured stdout was contaminated: %q", out)
+	}
+}
+
 func TestManifestDeterministicAndContentBound(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "b"), []byte("b"), 0600); err != nil {

@@ -936,13 +936,13 @@ func sandboxOutput(ctx context.Context, writableRoot, dir string, env []string, 
 	}
 	cmd.Dir = dir
 	cmd.Env = env
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%s: %w: %s", name, err, out.String())
+		return "", fmt.Errorf("%s: %w: %s%s", name, err, stdout.String(), stderr.String())
 	}
-	return out.String(), nil
+	return stdout.String(), nil
 }
 
 // prepareInstallableSource leaves the proved checkout untouched while adapting
