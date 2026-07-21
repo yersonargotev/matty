@@ -128,6 +128,9 @@ func EvaluatePublication(proposal Proposal, state PublicationState) (Publication
 		decision.Action = PublicationCreate
 		return decision, nil
 	}
+	if !state.Branch.Exists && state.PR.Exists && !state.PR.Open {
+		return blocked(decision, "the recorded source pull request is closed and its stable branch is absent")
+	}
 	if !state.Branch.Exists || !state.PR.Exists {
 		return blocked(decision, "stable branch or pull request ownership is absent or ambiguous")
 	}
@@ -152,16 +155,23 @@ func EvaluatePublication(proposal Proposal, state PublicationState) (Publication
 	if state.PR.MetadataHash != state.Record.MetadataHash || state.Branch.ManagedMetadataHash != state.Record.MetadataHash {
 		return blocked(decision, "managed pull request metadata was edited")
 	}
-	if state.Record.BaseSHA != proposal.BaseSHA || state.Record.ProvenanceSHA256 == "" {
+	if state.Record.ProvenanceSHA256 == "" {
 		return blocked(decision, "publication record base or provenance is stale")
 	}
-	exact := state.Record.PlanID == proposal.PlanID && state.Record.CandidateSHA == proposal.CandidateSHA && state.Record.HeadSHA == proposal.HeadSHA && state.Record.ResultTreeSHA == proposal.ResultTreeSHA && state.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256
+	exact := state.Record.PlanID == proposal.PlanID && state.Record.BaseSHA == proposal.BaseSHA && state.Record.CandidateSHA == proposal.CandidateSHA && state.Record.HeadSHA == proposal.HeadSHA && state.Record.ResultTreeSHA == proposal.ResultTreeSHA && state.Record.ProvenanceSHA256 == proposal.ProvenanceSHA256
 	if exact {
 		decision.Action = PublicationNoop
 		return decision, nil
 	}
 	if state.Record.CandidateSHA == proposal.CandidateSHA {
+		if state.Record.BaseSHA != proposal.BaseSHA {
+			decision.Action = PublicationUpdate
+			return decision, nil
+		}
 		return blocked(decision, "plan or result identity is stale for the same candidate")
+	}
+	if state.Record.BaseSHA != proposal.BaseSHA {
+		return blocked(decision, "publication record base or provenance is stale")
 	}
 	if state.CandidateRelation != CandidateAdvancing {
 		return blocked(decision, "candidate advancement is not proven")
@@ -207,6 +217,8 @@ func recoveryForPublicationBlocker(message string) string {
 		return "Select a candidate that advances the current automation-owned proposal; never rewrite it backward."
 	case "the owned source pull request is closed":
 		return "A maintainer must decide whether to reopen the exact owned pull request; automation must not open a competitor."
+	case "the recorded source pull request is closed and its stable branch is absent":
+		return "A maintainer must restore the exact recorded automation-owned branch at its recorded head, reopen the exact pull request, then start a fresh Check; automation must not restore or reopen it."
 	case "managed pull request metadata was edited":
 		return "Review and preserve the human metadata edit; automation must not overwrite it."
 	case "source branch contains human commits", "source branch or pull request diverged from the last publication":

@@ -19,6 +19,7 @@ const (
 	baseB      = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	candidateA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	headA      = "cccccccccccccccccccccccccccccccccccccccc"
+	headB      = "ffffffffffffffffffffffffffffffffffffffff"
 )
 
 func TestGitHubGatewayPristineCreateFinalizesOnlyAfterExactReobservation(t *testing.T) {
@@ -405,6 +406,63 @@ func TestGitHubGatewayPristineUpdateUsesStableBranchAndSamePR(t *testing.T) {
 	}
 }
 
+func TestGitHubGatewayRestoredSameCandidateOnOldBaseUpdatesAfterFreshBase(t *testing.T) {
+	old := lifecycleProposal()
+	old.PlanID = "old-plan"
+	pr := managedFakePR(t, old, "old managed", "old evidence", false)
+	fake := &fakeGitHubCommands{baseHead: baseB, branchHead: headA, pr: pr, pushedPlanID: "new-base-plan", pushedBaseSHA: baseB, pushedHeadSHA: headB}
+	gateway := lifecycleGateway(t, fake)
+	proposal := lifecycleProposal()
+	proposal.BaseSHA = baseB
+	proposal.PlanID = "new-base-plan"
+	proposal.ResultTreeSHA = headB
+	proposal.HeadSHA = headB
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(prepared, state)
+	if err != nil || decision.Action != packsyncworkflow.PublicationUpdate || decision.PRNumber != 7 {
+		t.Fatalf("new-base update decision = %#v, %v", decision, err)
+	}
+	if _, err := gateway.Publish(context.Background(), prepared, decision); err != nil {
+		t.Fatal(err)
+	}
+	if fake.pushCalls != 1 || fake.editCalls != 1 || fake.createCalls != 0 || fake.pr.number != 7 {
+		t.Fatalf("new-base update writes = pushes:%d edits:%d creates:%d pr:%#v", fake.pushCalls, fake.editCalls, fake.createCalls, fake.pr)
+	}
+}
+
+func TestGitHubGatewayClosedPRWithAbsentBranchRemainsZeroWriteBlock(t *testing.T) {
+	proposal := lifecycleProposal()
+	pr := managedFakePR(t, proposal, proposal.ManagedTitle, "existing evidence", false)
+	pr.open = false
+	fake := &fakeGitHubCommands{pr: pr}
+	gateway := lifecycleGateway(t, fake)
+	prepared, err := gateway.Prepare(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := gateway.Observe(context.Background(), proposal.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ProvenanceCurrent = true
+	decision, err := packsyncworkflow.EvaluatePublication(prepared, state)
+	var failure packsyncworkflow.Failure
+	if err == nil || !errors.As(err, &failure) || decision.Action != packsyncworkflow.PublicationBlock || !strings.Contains(failure.Recovery, "restore the exact recorded automation-owned branch") || !strings.Contains(failure.Recovery, "reopen the exact pull request") {
+		t.Fatalf("closed/absent decision = %#v, %#v, %v", decision, failure, err)
+	}
+	if fake.pushCalls != 0 || fake.editCalls != 0 || fake.createCalls != 0 {
+		t.Fatalf("closed/absent state wrote: pushes=%d edits=%d creates=%d", fake.pushCalls, fake.editCalls, fake.createCalls)
+	}
+}
+
 func TestGitHubGatewayReviewerPushAfterLeaseBlocksPRMutation(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		fake := &fakeGitHubCommands{mutateBranchAfterPush: true}
@@ -577,6 +635,9 @@ type fakeGitHubCommands struct {
 	lastEditor                   string
 	lastEditUnavailable          bool
 	pushErr                      error
+	pushedPlanID                 string
+	pushedBaseSHA                string
+	pushedHeadSHA                string
 	pushCalls                    int
 	createCalls                  int
 	editCalls                    int
@@ -651,6 +712,13 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 				message = fmt.Sprintf("sync(mattpocock-skills): %s [%s]", record.CandidateSHA[:12], record.PlanID)
 				parent = record.BaseSHA
 			}
+		} else if fake.pushCalls > 0 {
+			if fake.pushedPlanID != "" {
+				message = fmt.Sprintf("sync(mattpocock-skills): %s [%s]", candidateA[:12], fake.pushedPlanID)
+			}
+			if fake.pushedBaseSHA != "" {
+				parent = fake.pushedBaseSHA
+			}
 		}
 		if output, err := exec.Command("git", "-C", directory, "log", "-1", "--format=%s").Output(); err == nil {
 			message = strings.TrimSpace(string(output))
@@ -666,11 +734,14 @@ func (fake *fakeGitHubCommands) run(_ context.Context, directory string, name st
 			return "", fake.pushErr
 		}
 		fake.branchHead = headA
+		if fake.pushedHeadSHA != "" {
+			fake.branchHead = fake.pushedHeadSHA
+		}
 		if output, err := exec.Command("git", "-C", directory, "rev-parse", "HEAD").Output(); err == nil {
 			fake.branchHead = strings.TrimSpace(string(output))
 		}
 		if fake.pr != nil {
-			fake.pr.head = headA
+			fake.pr.head = fake.branchHead
 		}
 		if fake.mutateBranchAfterPush {
 			fake.branchHead = baseB
