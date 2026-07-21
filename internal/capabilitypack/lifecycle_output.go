@@ -1,6 +1,11 @@
 package capabilitypack
 
-import "sort"
+import (
+	"errors"
+	"sort"
+)
+
+const LifecycleJSONSchemaVersion = 2
 
 // LifecycleContract is the canonical, host-neutral description rendered by
 // every lifecycle entry point. Renderers must not reconstruct these facts
@@ -183,6 +188,7 @@ type JSONLifecyclePlan struct {
 	PendingHumanActions []string                   `json:"pending_human_actions"`
 	ExpectedReadiness   ReadinessStatus            `json:"expected_readiness"`
 	ReadinessObserved   ReadinessObservationStatus `json:"readiness_observed"`
+	Evidence            []string                   `json:"evidence"`
 	PendingEvidence     []string                   `json:"pending_evidence"`
 	Recovery            bool                       `json:"recovery"`
 	MandatoryActions    []ProjectionAction         `json:"mandatory_actions"`
@@ -235,11 +241,11 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 	if retained == nil {
 		retained = []RetainedProjection{}
 	}
-	return JSONLifecyclePlan{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-preview", PlanID: p.id,
+	return JSONLifecyclePlan{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-preview", PlanID: p.id,
 		Operation: p.operation, Disposition: p.Disposition(), Digest: p.digest, Pack: p.pack.ID, PackVersion: p.pack.Version,
 		Surface: p.surface, IntentRevision: p.intentRevision, Contract: contract, Aliases: contract.Aliases,
 		Contributors: contributors, Blockers: blockers, Phases: phases, PendingHumanActions: sortedCopy(p.pendingHumanActions),
-		ExpectedReadiness: p.readiness, ReadinessObserved: p.readinessObserved, PendingEvidence: sortedCopy(p.evidence),
+		ExpectedReadiness: p.readiness, ReadinessObserved: p.readinessObserved, Evidence: sortedCopy(p.observedEvidence), PendingEvidence: sortedCopy(p.evidence),
 		Recovery: p.recovery, MandatoryActions: mandatory, ContractDiff: diff, Migrations: lifecycleMigrations(p),
 		RetainedProjections: retained, RemovedContributors: removed, DryRun: dryRun}
 }
@@ -301,10 +307,13 @@ type JSONLifecycleFailure struct {
 }
 
 func JSONFailureFor(stage string, err error, plan *ReconciliationPlan, approvalRequested *bool, actionsExecuted *int) JSONLifecycleFailure {
-	result := JSONLifecycleFailure{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-failure", Stage: stage, Error: err.Error()}
+	result := JSONLifecycleFailure{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-failure", Stage: stage, Error: err.Error()}
 	result.ApprovalRequested, result.ActionsExecuted = approvalRequested, actionsExecuted
 	if plan != nil {
 		report := plan.JSONReport(false)
+		if errors.Is(err, ErrStalePlan) && report.Contract.CompatibilityObserved {
+			report.Contract.Compatibility = CompatibilityBlocked
+		}
 		result.Plan = &report
 	}
 	return result
@@ -321,7 +330,7 @@ type JSONApplyResult struct {
 }
 
 func JSONApplyResultFor(plan ReconciliationPlan, applied ApplyResult) JSONApplyResult {
-	return JSONApplyResult{SchemaVersion: StatusSchemaVersion, Report: "pack-lifecycle-apply", Plan: plan.JSONReport(false),
+	return JSONApplyResult{SchemaVersion: LifecycleJSONSchemaVersion, Report: "pack-lifecycle-apply", Plan: plan.JSONReport(false),
 		Verified: applied.Verified, Projections: applied.Projections,
 		Readiness: JSONReadiness{
 			Configured: optionalBool(applied.ReadinessObserved.Configured, applied.Readiness.Configured),

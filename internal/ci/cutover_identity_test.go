@@ -374,6 +374,8 @@ func normalizeV3PackTestCutover(data []byte) []byte {
 		{`len(report.Entries) != 5`, `len(report.Entries) != 4`},
 		{`"Active version: 3.0.0"`, `"Active version: 2.0.0"`},
 		{` || !report.ReadinessObserved.Configured || report.PendingEvidence == nil`, ``},
+		{`report.SchemaVersion != capabilitypack.LifecycleJSONSchemaVersion || `, ``},
+		{` || !report.ReadinessObserved.Configured || report.Evidence == nil || report.PendingEvidence == nil`, ``},
 	}
 	for _, replacement := range replacements {
 		data = bytes.Replace(data, []byte(replacement[0]), []byte(replacement[1]), 1)

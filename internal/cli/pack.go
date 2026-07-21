@@ -403,7 +403,7 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 		return err
 	}
 	readiness, observed := plan.Readiness(), plan.ReadinessObserved()
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Expected readiness: configured=%s, authorized=%s, usable=%s\nPending evidence: %s\n", readinessValue(observed.Configured, readiness.Configured), readinessValue(observed.Authorization, readiness.Authorized), readinessValue(observed.Usability, readiness.Usable), renderPendingAction(plan.Evidence())); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Expected readiness: configured=%s, authorized=%s, usable=%s\nObserved evidence: %s\nPending evidence: %s\n", readinessValue(observed.Configured, readiness.Configured), readinessValue(observed.Authorization, readiness.Authorized), readinessValue(observed.Usability, readiness.Usable), renderPendingAction(plan.Evidence()), renderPendingAction(plan.PendingEvidence())); err != nil {
 		return err
 	}
 	structured := plan.JSONReport(dryRun)

@@ -108,11 +108,15 @@ func TestReconciliationPlanJSONReportIsDeterministicAndComplete(t *testing.T) {
 		t.Fatalf("unstable JSON:\n%s\n%s", first, second)
 	}
 	got := plan.JSONReport(true)
-	if got.Disposition != PlanMixed || !got.Recovery || got.IntentRevision != 3 {
+	if got.SchemaVersion != LifecycleJSONSchemaVersion || got.Disposition != PlanMixed || !got.Recovery || got.IntentRevision != 3 {
 		t.Fatalf("facts = %#v", got)
 	}
 	if got.Contract.Compatibility != CompatibilityBlocked || got.ExpectedReadiness.Configured || !got.ReadinessObserved.Configured || !reflect.DeepEqual(got.PendingEvidence, []string{"a", "z"}) {
 		t.Fatalf("planned lifecycle facts = %#v", got)
+	}
+	failure := JSONFailureFor("apply", ErrStalePlan, &plan, nil, nil)
+	if failure.SchemaVersion != LifecycleJSONSchemaVersion || failure.Plan.Contract.Compatibility != CompatibilityBlocked {
+		t.Fatalf("stale failure lifecycle facts = %#v", failure)
 	}
 	if !reflect.DeepEqual(got.Contributors["projection"], []string{"a", "z"}) || got.MandatoryActions[0].ID != "a" {
 		t.Fatalf("canonical facts = %#v", got)

@@ -366,6 +366,7 @@ type ReconciliationPlan struct {
 	resolutions            []ExecutableResolution
 	readiness              ReadinessStatus
 	readinessObserved      ReadinessObservationStatus
+	observedEvidence       []string
 	evidence               []string
 	pendingHumanActions    []string
 	noOp                   bool
@@ -494,8 +495,11 @@ func (p ReconciliationPlan) Readiness() ReadinessStatus { return p.readiness }
 func (p ReconciliationPlan) ReadinessObserved() ReadinessObservationStatus {
 	return p.readinessObserved
 }
-func (p ReconciliationPlan) Evidence() []string { return append([]string(nil), p.evidence...) }
-func (p ReconciliationPlan) Recovery() bool     { return p.recovery }
+func (p ReconciliationPlan) Evidence() []string { return append([]string(nil), p.observedEvidence...) }
+func (p ReconciliationPlan) PendingEvidence() []string {
+	return append([]string(nil), p.evidence...)
+}
+func (p ReconciliationPlan) Recovery() bool { return p.recovery }
 func (p ReconciliationPlan) HistoricalAttempt() *ApplyingJournal {
 	if p.historicalAttempt == nil {
 		return nil
@@ -740,7 +744,9 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	readiness.Authorized = readiness.Configured && observation.Readiness.AuthorizationObserved && observation.Readiness.Authorized
 	readiness.Usable = readiness.Authorized && observation.Readiness.UsabilityObserved && observation.Readiness.Usable
 	readinessObserved := ReadinessObservationStatus{Configured: true, Authorization: observation.Readiness.AuthorizationObserved, Usability: observation.Readiness.UsabilityObserved}
-	evidence := append([]string(nil), observation.Readiness.Evidence...)
+	observedEvidence := append([]string(nil), observation.Readiness.Evidence...)
+	sort.Strings(observedEvidence)
+	evidence := []string{}
 	for _, projection := range observation.Projections {
 		if projection.ObservedFingerprint != projection.DesiredFingerprint && !projection.ExternallyManaged {
 			evidence = append(evidence, projection.ID+": verification pending Apply")
@@ -755,7 +761,7 @@ func (f Facade) preview(ctx context.Context, request ActivationRequest, operatio
 	sort.Strings(evidence)
 	pendingHumanActions := append([]string(nil), observation.PendingHumanActions...)
 	sort.Strings(pendingHumanActions)
-	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, aliases: cloneAliases(aliases), previousAliases: previousAliases, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, readinessObserved: readinessObserved, evidence: evidence, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), beforeCompositionFacts: beforeCompositionFacts}
+	plan := ReconciliationPlan{pack: requested, operation: operation, surface: request.Surface, intentRevision: state.Intent.Revision, oldVersion: oldVersion, aliases: cloneAliases(aliases), previousAliases: previousAliases, observationFingerprint: observationDigest(observation), resolutions: resolutions, readiness: readiness, readinessObserved: readinessObserved, observedEvidence: observedEvidence, evidence: evidence, pendingHumanActions: pendingHumanActions, noOp: noOp, activations: composition.activations, contributors: composition.contributors, blockers: composition.blockers, compositionFacts: composition.packs, intentFacts: composition.intentFacts, ownershipFacts: cloneOwnership(state.Ownership), beforeCompositionFacts: beforeCompositionFacts}
 	recovery := recoveryAttempt(state, operation, request.PackID, request.Surface)
 	plan.attachRecovery(state, recovery)
 	for _, resource := range pack.Resources {
