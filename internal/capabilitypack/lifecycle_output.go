@@ -3,6 +3,7 @@ package capabilitypack
 import (
 	"errors"
 	"sort"
+	"strings"
 )
 
 const LifecycleJSONSchemaVersion = 2
@@ -263,7 +264,10 @@ type JSONLifecyclePlan struct {
 }
 
 type JSONContractDiff struct {
-	Added, Changed, Removed, Retained []string
+	Added    []string `json:"added"`
+	Changed  []string `json:"changed"`
+	Removed  []string `json:"removed"`
+	Retained []string `json:"retained"`
 }
 
 func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
@@ -274,12 +278,9 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 		for i := range actions {
 			actions[i] = actionForReport(actions[i])
 		}
-		sort.Slice(actions, func(i, j int) bool { return actions[i].ID < actions[j].ID })
 		phases = append(phases, JSONLifecyclePhase{Kind: phase.Kind, Digest: phase.Digest, ApprovalRequired: phase.ApprovalRequired, Actions: actions})
 		mandatory = append(mandatory, actions...)
 	}
-	sort.Slice(phases, func(i, j int) bool { return phases[i].Kind < phases[j].Kind })
-	sort.Slice(mandatory, func(i, j int) bool { return mandatory[i].ID < mandatory[j].ID })
 	contributors := p.Contributors()
 	if contributors == nil {
 		contributors = map[string][]string{}
@@ -317,13 +318,38 @@ func (p ReconciliationPlan) JSONReport(dryRun bool) JSONLifecyclePlan {
 }
 
 func actionForReport(action ProjectionAction) ProjectionAction {
-	// Typed host effects can carry a complete merged host document so the
-	// adapter can apply the sealed plan. Reports disclose the exact action but
-	// never render that mixed-store content.
-	if action.Consent == ConsentExecutableExternal {
-		action.Content = ""
-	}
+	// Host effects can carry complete merged documents so an adapter can apply
+	// the sealed plan. Structured reports disclose the ordered redacted effect,
+	// never raw owned or mixed-store content.
+	action.Content = ""
+	action.Args = redactedActionArgs(action.Args)
 	return action
+}
+
+func redactedActionArgs(args []string) []string {
+	result := append([]string(nil), args...)
+	for i := range result {
+		if result[i] == "--env" || result[i] == "-e" {
+			if i+1 < len(result) {
+				result[i+1] = redactEnvironmentArgument(result[i+1])
+				i++
+			}
+			continue
+		}
+		for _, prefix := range []string{"--env=", "-e="} {
+			if strings.HasPrefix(result[i], prefix) {
+				result[i] = prefix + redactEnvironmentArgument(strings.TrimPrefix(result[i], prefix))
+			}
+		}
+	}
+	return result
+}
+
+func redactEnvironmentArgument(value string) string {
+	if key, _, ok := strings.Cut(value, "="); ok {
+		return key + "=<redacted>"
+	}
+	return "<redacted>"
 }
 
 func lifecycleContractDiff(before, after []Pack) JSONContractDiff {

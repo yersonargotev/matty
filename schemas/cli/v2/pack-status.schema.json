@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/cli/v2/pack-status.schema.json",
+  "title": "Packy capability-pack status reports v2",
+  "$defs": {
+    "optional_bool": {
+      "type": "object",
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "known",
+            "unknown"
+          ]
+        },
+        "value": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "readiness": {
+      "type": "object",
+      "required": [
+        "configured",
+        "authorized",
+        "usable"
+      ],
+      "properties": {
+        "configured": {
+          "$ref": "#/$defs/optional_bool"
+        },
+        "authorized": {
+          "$ref": "#/$defs/optional_bool"
+        },
+        "usable": {
+          "$ref": "#/$defs/optional_bool"
+        }
+      },
+      "additionalProperties": false
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "pack",
+        "pack_version",
+        "surface",
+        "intent",
+        "update_available",
+        "latest_attempt",
+        "projection_summary",
+        "projection_details",
+        "contract",
+        "readiness",
+        "blockers",
+        "evidence",
+        "pending_human_actions"
+      ],
+      "properties": {
+        "pack": {
+          "type": "string"
+        },
+        "pack_version": {
+          "type": "string"
+        },
+        "surface": {
+          "enum": [
+            "claude",
+            "codex",
+            "opencode"
+          ]
+        },
+        "intent": {
+          "type": "object",
+          "required": [
+            "state",
+            "active",
+            "revision"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "absent",
+                "known"
+              ]
+            },
+            "active": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "revision": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "update_available": {
+          "type": "boolean"
+        },
+        "latest_attempt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "outcome",
+                "plan_id"
+              ],
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "applying",
+                    "verified",
+                    "recovery-required",
+                    "unknown"
+                  ]
+                },
+                "plan_id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "projection_summary": {
+          "type": "object",
+          "required": [
+            "verified",
+            "missing",
+            "drifted",
+            "ambiguous",
+            "unmanaged"
+          ],
+          "properties": {
+            "verified": {
+              "type": "integer"
+            },
+            "missing": {
+              "type": "integer"
+            },
+            "drifted": {
+              "type": "integer"
+            },
+            "ambiguous": {
+              "type": "integer"
+            },
+            "unmanaged": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        },
+        "projection_details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "target",
+              "owner",
+              "health",
+              "observed_fingerprint",
+              "desired_fingerprint",
+              "contributors"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "health": {
+                "enum": [
+                  "verified",
+                  "missing",
+                  "drifted",
+                  "ambiguous",
+                  "unmanaged"
+                ]
+              },
+              "observed_fingerprint": {
+                "type": "string"
+              },
+              "desired_fingerprint": {
+                "type": "string"
+              },
+              "contributors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "contract": {
+          "$ref": "lifecycle-contract.schema.json"
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pending_human_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "report",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "report": {
+      "enum": [
+        "pack-status",
+        "pack-status-overview"
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "additionalProperties": false
+}

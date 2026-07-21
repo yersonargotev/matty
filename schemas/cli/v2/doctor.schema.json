@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yersonargotev.github.io/packy/schemas/cli/v2/doctor.schema.json",
+  "title": "Packy doctor report v2",
+  "type": "object",
+  "required": ["schema_version", "report", "checks", "summary"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "report": {"const": "doctor"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "severity", "detail"],
+        "properties": {"name": {"type": "string", "minLength": 1}, "severity": {"enum": ["PASS", "WARN", "FAIL"]}, "detail": {"type": "string", "minLength": 1}},
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["status", "passes", "warnings", "failures"],
+      "properties": {"status": {"enum": ["healthy", "warnings", "failures"]}, "passes": {"type": "integer", "minimum": 0}, "warnings": {"type": "integer", "minimum": 0}, "failures": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

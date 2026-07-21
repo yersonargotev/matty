@@ -142,18 +142,21 @@ func TestReconciliationPlanJSONReportIsDeterministicAndComplete(t *testing.T) {
 	if err != nil || !json.Valid(failureJSON) || !strings.Contains(string(failureJSON), `"compatibility":"blocked"`) {
 		t.Fatalf("stale failure wire contract = %s, err=%v", failureJSON, err)
 	}
-	if !reflect.DeepEqual(got.Contributors["projection"], []string{"a", "z"}) || got.MandatoryActions[0].ID != "a" {
+	if !reflect.DeepEqual(got.Contributors["projection"], []string{"a", "z"}) || !reflect.DeepEqual([]string{got.MandatoryActions[0].ID, got.MandatoryActions[1].ID}, []string{"z", "a"}) {
 		t.Fatalf("canonical facts = %#v", got)
 	}
 }
 
 func TestLifecycleReportRedactsSealedExternalHostContent(t *testing.T) {
-	plan := ReconciliationPlan{pack: Pack{ID: "p", Version: "1"}, phases: []PlanPhase{{Kind: ConsentExecutableExternal, Actions: []ProjectionAction{{ID: "hook:x", Consent: ConsentExecutableExternal, Content: "foreign-secret", Description: "event=SessionStart command=engram"}}}}}
+	plan := ReconciliationPlan{pack: Pack{ID: "p", Version: "1"}, phases: []PlanPhase{
+		{Kind: ConsentReversibleLocal, Actions: []ProjectionAction{{ID: "instruction:x", Content: "foreign-document"}}},
+		{Kind: ConsentExecutableExternal, Actions: []ProjectionAction{{ID: "hook:x", Consent: ConsentExecutableExternal, Content: "foreign-secret", Args: []string{"mcp", "add", "--env", "TOKEN=secret", "--env=OTHER=value"}, Description: "event=SessionStart command=engram"}}},
+	}}
 	encoded, err := json.Marshal(plan.JSONReport(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "foreign-secret") || !strings.Contains(string(encoded), "event=SessionStart command=engram") {
+	if strings.Contains(string(encoded), "foreign-secret") || strings.Contains(string(encoded), "foreign-document") || strings.Contains(string(encoded), "TOKEN=secret") || strings.Contains(string(encoded), "OTHER=value") || !strings.Contains(string(encoded), "redacted") || !strings.Contains(string(encoded), "event=SessionStart command=engram") {
 		t.Fatalf("report = %s", encoded)
 	}
 }

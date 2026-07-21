@@ -26,19 +26,22 @@ import (
 // Options carries injectable process boundaries for tests and future command
 // implementations. The zero value uses the real OS environment and runner.
 type Options struct {
-	Env                 Env
-	Getwd               func() (string, error)
-	Runner              Runner
-	Clock               func() time.Time
-	Terminal            Terminal
-	SurfaceAdapters     map[capabilitypack.Surface]capabilitypack.SurfaceAdapter
-	EngramFacts         engrambin.Facts
-	SetupHealthDiagnose func() (setuphealth.Report, error)
-	ClaudeRunner        claudecode.Runner
-	ClaudeLookPath      claudecode.LookPath
+	Env                   Env
+	Getwd                 func() (string, error)
+	Runner                Runner
+	Clock                 func() time.Time
+	Terminal              Terminal
+	SurfaceAdapters       map[capabilitypack.Surface]capabilitypack.SurfaceAdapter
+	EngramFacts           engrambin.Facts
+	SetupHealthDiagnose   func() (setuphealth.Report, error)
+	ClaudeRunner          claudecode.Runner
+	ClaudeLookPath        claudecode.LookPath
+	ClaudeAuthorization   claudecode.AuthorizationObserver
+	ClaudeRuntimeEvidence claudecode.RuntimeEvidenceObserver
 }
 
 func (o Options) withDefaults() Options {
+	runnerInjected := o.Runner != nil
 	if o.Env == nil {
 		o.Env = osEnv{}
 	}
@@ -46,7 +49,11 @@ func (o Options) withDefaults() Options {
 		o.Runner = execRunner{}
 	}
 	if o.ClaudeRunner == nil {
-		o.ClaudeRunner = execClaudeRunner{}
+		if runnerInjected {
+			o.ClaudeRunner = claudeRunner{runner: o.Runner}
+		} else {
+			o.ClaudeRunner = execClaudeRunner{}
+		}
 	}
 	if o.ClaudeLookPath == nil {
 		o.ClaudeLookPath = claudecode.LookPath(o.Runner.LookPath)
@@ -182,23 +189,32 @@ func defaultInitRepositoryRef(explicitRef, currentVersion string) string {
 }
 
 func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
-	var dryRun bool
+	var dryRun, jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install Packy-managed global workflow configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			operation := corelifecycle.Install
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
 			lifecycle := corelifecycle.NewFacade(composition.config, opts.Runner, opts.Clock)
-			plan, err := lifecycle.Preview(corelifecycle.Install)
+			plan, err := lifecycle.Preview(operation)
 			if err != nil {
 				return err
 			}
-			if err := printSkillSourceReport(cmd.OutOrStdout(), composition.skillSource, composition.installedSource); err != nil {
-				return err
+			if !jsonOutput {
+				if err := printSkillSourceReport(cmd.OutOrStdout(), composition.skillSource, composition.installedSource); err != nil {
+					return err
+				}
+			}
+			if dryRun && jsonOutput {
+				if err := renderClassicLifecyclePlanJSON(cmd.OutOrStdout(), operation, plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			if dryRun {
 				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy install", plan); err != nil {
@@ -206,9 +222,21 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 				}
 				return classicLifecycleOutcomeError(plan.Outcome())
 			}
-			result, err := lifecycle.Apply(cmd.Context(), plan)
-			if err != nil {
+			result, applyErr := lifecycle.Apply(cmd.Context(), plan)
+			if jsonOutput {
+				if err := renderClassicLifecycleResultJSON(cmd.OutOrStdout(), operation, plan, result, applyErr == nil); err != nil {
+					return err
+				}
+				if applyErr != nil {
+					return applyErr
+				}
+				return classicLifecycleOutcomeError(result.Outcome())
+			}
+			if err := renderClassicLifecycleResultHuman(cmd.OutOrStdout(), plan, result, applyErr == nil); err != nil {
 				return err
+			}
+			if applyErr != nil {
+				return applyErr
 			}
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
@@ -220,6 +248,7 @@ func newInstallCommand(opts Options, workstationResolver *workstation.Resolver) 
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed changes without writing files")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
 	return cmd
 }
 
@@ -280,6 +309,12 @@ func diagnoseSetupHealth(ctx context.Context, opts Options, resolver *workstatio
 		ctx, claudecode.NewCanonicalLayout(snapshot.Home()), claudeExecutable, opts.ClaudeRunner,
 		lifecycleObservation.State().ClaudeOwnershipSnapshot(),
 	)
+	if opts.ClaudeAuthorization != nil {
+		claudeObservation.Authorization = opts.ClaudeAuthorization.ObserveAuthorization(ctx)
+	}
+	if opts.ClaudeRuntimeEvidence != nil {
+		claudeObservation.RuntimeEvidence = opts.ClaudeRuntimeEvidence.ObserveRuntimeEvidence(ctx)
+	}
 
 	return setuphealth.Diagnose(
 		snapshot.Home(),
@@ -293,23 +328,32 @@ func diagnoseSetupHealth(ctx context.Context, opts Options, resolver *workstatio
 }
 
 func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
-	var dryRun bool
+	var dryRun, jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Refresh Packy-managed tools and configuration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			operation := corelifecycle.Update
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
 			lifecycle := corelifecycle.NewFacade(composition.config, opts.Runner, opts.Clock)
-			plan, err := lifecycle.Preview(corelifecycle.Update)
+			plan, err := lifecycle.Preview(operation)
 			if err != nil {
 				return err
 			}
-			if err := printSkillSourceReport(cmd.OutOrStdout(), composition.skillSource, composition.installedSource); err != nil {
-				return err
+			if !jsonOutput {
+				if err := printSkillSourceReport(cmd.OutOrStdout(), composition.skillSource, composition.installedSource); err != nil {
+					return err
+				}
+			}
+			if dryRun && jsonOutput {
+				if err := renderClassicLifecyclePlanJSON(cmd.OutOrStdout(), operation, plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			if dryRun {
 				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy update", plan); err != nil {
@@ -317,9 +361,21 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 				}
 				return classicLifecycleOutcomeError(plan.Outcome())
 			}
-			result, err := lifecycle.Apply(cmd.Context(), plan)
-			if err != nil {
+			result, applyErr := lifecycle.Apply(cmd.Context(), plan)
+			if jsonOutput {
+				if err := renderClassicLifecycleResultJSON(cmd.OutOrStdout(), operation, plan, result, applyErr == nil); err != nil {
+					return err
+				}
+				if applyErr != nil {
+					return applyErr
+				}
+				return classicLifecycleOutcomeError(result.Outcome())
+			}
+			if err := renderClassicLifecycleResultHuman(cmd.OutOrStdout(), plan, result, applyErr == nil); err != nil {
 				return err
+			}
+			if applyErr != nil {
+				return applyErr
 			}
 			if err := printWarnings(cmd.OutOrStdout(), result.Warnings()); err != nil {
 				return err
@@ -331,6 +387,7 @@ func newUpdateCommand(opts Options, workstationResolver *workstation.Resolver) *
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed update changes without writing files or running commands")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
 	return cmd
 }
 
@@ -385,6 +442,11 @@ func printLifecycleDryRunPlan(out io.Writer, command string, plan corelifecycle.
 			return err
 		}
 	}
+	for _, value := range plan.RecoveryEvidence() {
+		if _, err := fmt.Fprintf(out, "Recovery: %s\n", value); err != nil {
+			return err
+		}
+	}
 	for _, action := range plan.Actions() {
 		if _, err := fmt.Fprintf(out, "- %s: %s", action.Kind, action.Description); err != nil {
 			return err
@@ -417,20 +479,27 @@ func printWarnings(out io.Writer, warnings []string) error {
 }
 
 func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
-	var dryRun bool
+	var dryRun, jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove only Packy-managed artifacts",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			operation := corelifecycle.Uninstall
 			composition, err := resolveClassicLifecycle(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
 			lifecycle := corelifecycle.NewFacade(composition.config, opts.Runner, opts.Clock)
-			plan, err := lifecycle.Preview(corelifecycle.Uninstall)
+			plan, err := lifecycle.Preview(operation)
 			if err != nil {
 				return err
+			}
+			if dryRun && jsonOutput {
+				if err := renderClassicLifecyclePlanJSON(cmd.OutOrStdout(), operation, plan); err != nil {
+					return err
+				}
+				return classicLifecycleOutcomeError(plan.Outcome())
 			}
 			if dryRun {
 				if err := printLifecycleDryRunPlan(cmd.OutOrStdout(), "packy uninstall", plan); err != nil {
@@ -438,9 +507,21 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 				}
 				return classicLifecycleOutcomeError(plan.Outcome())
 			}
-			result, err := lifecycle.Apply(cmd.Context(), plan)
-			if err != nil {
+			result, applyErr := lifecycle.Apply(cmd.Context(), plan)
+			if jsonOutput {
+				if err := renderClassicLifecycleResultJSON(cmd.OutOrStdout(), operation, plan, result, applyErr == nil); err != nil {
+					return err
+				}
+				if applyErr != nil {
+					return applyErr
+				}
+				return classicLifecycleOutcomeError(result.Outcome())
+			}
+			if err := renderClassicLifecycleResultHuman(cmd.OutOrStdout(), plan, result, applyErr == nil); err != nil {
 				return err
+			}
+			if applyErr != nil {
+				return applyErr
 			}
 			if !result.HasWork() {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "packy uninstall: no Packy-managed artifacts found")
@@ -453,6 +534,7 @@ func newUninstallCommand(opts Options, workstationResolver *workstation.Resolver
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview Packy-managed removals without deleting files")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
 	return cmd
 }
 

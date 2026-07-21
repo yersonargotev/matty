@@ -31,9 +31,9 @@ func TestRenderSetupHealthHuman(t *testing.T) {
 	}
 }
 
-func TestRenderSetupHealthJSONV1OmitsContext(t *testing.T) {
+func TestRenderSetupHealthJSONV2OmitsContext(t *testing.T) {
 	report := setuphealth.Report{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Kind:          "doctor",
 		Context:       setuphealth.Context{HomeDir: "/must-not-appear"},
 		Checks:        []setuphealth.Check{{Name: "fixture", Severity: setuphealth.Pass, Detail: "healthy"}},
@@ -44,12 +44,12 @@ func TestRenderSetupHealthJSONV1OmitsContext(t *testing.T) {
 	if err := renderSetupHealthJSON(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	want := "{\"schema_version\":1,\"report\":\"doctor\",\"checks\":[{\"name\":\"fixture\",\"severity\":\"PASS\",\"detail\":\"healthy\"}],\"summary\":{\"status\":\"healthy\",\"passes\":1,\"warnings\":0,\"failures\":0}}\n"
+	want := "{\"schema_version\":2,\"report\":\"doctor\",\"checks\":[{\"name\":\"fixture\",\"severity\":\"PASS\",\"detail\":\"healthy\"}],\"summary\":{\"status\":\"healthy\",\"passes\":1,\"warnings\":0,\"failures\":0}}\n"
 	if output.String() != want {
 		t.Fatalf("JSON output = %q, want %q", output.String(), want)
 	}
 	if strings.Contains(output.String(), "must-not-appear") {
-		t.Fatalf("JSON v1 included report context: %s", output.String())
+		t.Fatalf("JSON v2 included report context: %s", output.String())
 	}
 }
 

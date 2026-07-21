@@ -24,7 +24,7 @@ func newPackCommand(opts Options, workstationResolver *workstation.Resolver) *co
 	cmd := &cobra.Command{
 		Use:   "pack",
 		Short: "Discover and manage capability packs",
-		Long: `Discover and manage opt-in capability packs independently on Codex and OpenCode.
+		Long: `Discover and manage opt-in capability packs independently on Claude Code, Codex, and OpenCode.
 
 Lifecycle commands preview an immutable plan before interactive Apply. Approvals
 are requested separately for each consent kind. A verified Apply can succeed while
@@ -36,10 +36,14 @@ verb to inspect fresh state and receive a new Preview. Packy never retries it
 automatically.`,
 		Example: `  packy pack list
   packy pack show matty
+  packy pack show engram --json
   packy pack status
+  packy pack status engram --surface claude
+  packy pack status engram --surface claude --require usable --json
   packy pack status engram --surface codex
   packy pack status engram --surface codex --require usable
   packy pack activate matty --surface codex --dry-run
+  packy pack activate engram --surface claude --dry-run --json
   packy pack activate matty --surface codex
   packy pack update matty --surface codex
   packy pack reconcile matty --surface codex
@@ -310,14 +314,23 @@ func activationFacade(opts Options, workstationResolver *workstation.Resolver) (
 	openCodeAdapter := opencode.NewSurfaceAdapter(composition.bundleRoot, composition.skills.Root(), composition.openCode.ConfigFile(), composition.openCode.PromptFile())
 	store := capabilitypack.NewFileActivationStore(composition.state.File())
 	claudeLayout := composition.claude
-	claudeExecutable, _ := opts.Runner.LookPath("claude")
+	claudeExecutable, _ := opts.ClaudeLookPath("claude")
 	claudePacks := make(map[string]capabilitypack.Pack)
 	for _, pack := range composition.catalog.List() {
 		if slices.Contains(pack.Surfaces, capabilitypack.SurfaceClaude) {
 			claudePacks[pack.ID] = pack
 		}
 	}
-	claudeAdapter := claudecode.NewSurfaceAdapter(composition.bundleRoot, claudeLayout, filepath.Dir(composition.state.File()), claudeExecutable, claudeRunner{runner: opts.Runner}, claudecode.NewCapabilityPackOwnershipProvider(store, claudePacks, claudeLayout, composition.bundleRoot))
+	ownership := claudecode.NewCapabilityPackOwnershipProvider(store, claudePacks, claudeLayout, composition.bundleRoot)
+	var claudeAdapter *claudecode.SurfaceAdapter
+	if opts.ClaudeAuthorization != nil {
+		claudeAdapter = claudecode.NewSurfaceAdapterWithAuthorization(composition.bundleRoot, claudeLayout, filepath.Dir(composition.state.File()), claudeExecutable, opts.ClaudeRunner, ownership, opts.ClaudeAuthorization)
+	} else {
+		claudeAdapter = claudecode.NewSurfaceAdapter(composition.bundleRoot, claudeLayout, filepath.Dir(composition.state.File()), claudeExecutable, opts.ClaudeRunner, ownership)
+	}
+	if opts.ClaudeRuntimeEvidence != nil {
+		claudeAdapter = claudeAdapter.WithRuntimeEvidence(opts.ClaudeRuntimeEvidence)
+	}
 	adapters := opts.SurfaceAdapters
 	if adapters == nil {
 		adapters = map[capabilitypack.Surface]capabilitypack.SurfaceAdapter{
@@ -701,7 +714,8 @@ func newPackListCommand(opts Options, workstationResolver *workstation.Resolver)
 }
 
 func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver) *cobra.Command {
-	return &cobra.Command{
+	var jsonOutput bool
+	cmd := &cobra.Command{
 		Use: "show <pack>", Short: "Show a capability pack", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			catalog, err := discoverPackCatalog(opts, workstationResolver)
@@ -711,6 +725,9 @@ func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver)
 			pack, err := catalog.Show(args[0])
 			if err != nil {
 				return err
+			}
+			if jsonOutput {
+				return renderPackShowJSON(cmd.OutOrStdout(), pack)
 			}
 			counts := pack.ResourceCounts()
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDescription: %s\nSupported CLI surfaces: %s\nProvides capabilities: %s\nRequires capabilities: %s\nRequires global tools: %s\nConflicts with capabilities: %s\nResources: %d skill, %d instruction, %d mcp_server, %d lifecycle\n",
@@ -730,6 +747,8 @@ func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
+	return cmd
 }
 
 type packComposition struct {
