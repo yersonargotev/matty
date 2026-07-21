@@ -496,7 +496,7 @@ func TestGitHubGatewayRestoredSameCandidateBlocksWhenPRHeadProjectionNeverSettle
 	}
 	_, err = gateway.Publish(context.Background(), prepared, decision)
 	var failure packsyncworkflow.Failure
-	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureTransient || fake.pushCalls != 1 || fake.editCalls != 0 {
+	if !errors.As(err, &failure) || failure.Kind != packsyncworkflow.FailureOwnership || fake.pushCalls != 1 || fake.editCalls != 0 {
 		t.Fatalf("unsettled projection crossed bounded retry: pushes=%d edits=%d failure=%#v err=%v", fake.pushCalls, fake.editCalls, failure, err)
 	}
 }

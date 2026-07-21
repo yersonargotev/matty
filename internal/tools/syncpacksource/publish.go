@@ -589,15 +589,12 @@ func (gateway *githubGateway) Finalize(ctx context.Context, proposal packsyncwor
 
 func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, proposal packsyncworkflow.Proposal, beforePR packsyncworkflow.PRState, beforeRecord, targetRecord packsyncworkflow.PublicationRecord, body string) error {
 	return gateway.retry.Do(ctx, func() error {
-		state, err := gateway.observeMutationOnce(ctx, proposal)
+		state, err := gateway.observeMutationBeforeEdit(ctx, proposal, beforePR, beforeRecord)
 		if err != nil {
 			return packsyncworkflow.ClassifyNetworkFailure(err)
 		}
 		if state.matchesPR(proposal, beforePR, targetRecord) {
 			return nil
-		}
-		if state.matchesPRHeadProjectionLag(proposal, beforePR, beforeRecord) {
-			return packsyncworkflow.Failure{Kind: packsyncworkflow.FailureTransient, Err: errors.New("pull request head projection is stale after branch update")}
 		}
 		if !state.matchesPR(proposal, beforePR, beforeRecord) {
 			return publicationCASFailure("branch or pull request state changed before an automation edit")
@@ -615,6 +612,18 @@ func (gateway *githubGateway) editPRWithReobserve(ctx context.Context, proposal 
 		}
 		return packsyncworkflow.ClassifyNetworkFailure(editErr)
 	})
+}
+
+func (gateway *githubGateway) observeMutationBeforeEdit(ctx context.Context, proposal packsyncworkflow.Proposal, expected packsyncworkflow.PRState, record packsyncworkflow.PublicationRecord) (mutationObservation, error) {
+	var state mutationObservation
+	for observation := 0; observation < gateway.retry.MaxAttempts; observation++ {
+		var err error
+		state, err = gateway.observeMutationOnce(ctx, proposal)
+		if err != nil || !state.matchesPRHeadProjectionLag(proposal, expected, record) {
+			return state, err
+		}
+	}
+	return state, nil
 }
 
 type ghPR struct {
