@@ -275,6 +275,13 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	value = strings.ReplaceAll(value, "authorized=unknown, usable=unknown", "authorized=no, usable=no")
 	value = strings.ReplaceAll(value, "authorized=yes, usable=unknown", "authorized=yes, usable=no")
 	value = strings.ReplaceAll(value, "authorized=no, usable=unknown", "authorized=no, usable=no")
+	// Issue #144 intentionally adds Claude classic disclosure and projections.
+	// Keep this frozen rename gate focused on pre-existing behavior while the
+	// owner-layered Claude tests prove the new lifecycle contract directly.
+	value = regexp.MustCompile(`(?m)^(Outcome:|Desired surfaces:|State transition:|Pending prerequisite:|Preserved:|Blocker:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^- claude-[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(\$PRODUCT (?:install|update): synced[^\n]+) \(outcome: [^)]+\)$`).ReplaceAllString(value, "$1")
+	value = regexp.MustCompile(`(?m)^(\$PRODUCT uninstall): [^;\n]+; processed \$Product-managed artifacts for state`).ReplaceAllString(value, "$1: removed $$Product-managed artifacts and state")
 	value = identityPlanRE.ReplaceAllString(value, "plan-<ID>")
 	value = identityHashRE.ReplaceAllString(value, "<SHA256>")
 	value = identityTimeRE.ReplaceAllString(value, "<TIME>")
@@ -364,6 +371,12 @@ func identityEvidenceSnapshot(t *testing.T, root, product string, roots map[stri
 		if entry.IsDir() && entry.Name() == ".git" {
 			return filepath.SkipDir
 		}
+		if rel == ".claude" || strings.HasPrefix(rel, ".claude"+string(filepath.Separator)) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
@@ -384,6 +397,8 @@ func identityEvidenceSnapshot(t *testing.T, root, product string, roots map[stri
 			}
 			if rel == filepath.Join("."+product, "packs.json") {
 				data = []byte(normalizeIdentityStateEvolution(string(data)))
+			} else if rel == filepath.Join("."+product, "config.json") {
+				data = []byte(normalizeClassicStateEvolution(string(data)))
 			}
 			entries = append(entries, fact{Path: normalizeIdentityEvidence(rel, product, roots), Kind: "file", Content: normalizeIdentityEvidence(string(data), product, roots)})
 		}
@@ -398,6 +413,39 @@ func identityEvidenceSnapshot(t *testing.T, root, product string, roots map[stri
 		t.Fatalf("marshal identity evidence: %v", err)
 	}
 	return string(data)
+}
+
+func normalizeClassicStateEvolution(value string) string {
+	var document struct {
+		SchemaVersion int    `json:"schema_version"`
+		PackyVersion  string `json:"packy_version"`
+		ManagedSkills []struct {
+			Name       string `json:"name"`
+			SourcePath string `json:"source_path"`
+			LinkPath   string `json:"link_path"`
+		} `json:"managed_skills"`
+		ConfiguredSurfaces []string `json:"configured_surfaces"`
+		Paths              struct {
+			StateFile      string `json:"state_file"`
+			AgentSkillsDir string `json:"agent_skills_dir"`
+		} `json:"paths"`
+		LastInstallCheck  string `json:"last_install_check,omitempty"`
+		CreatedContainers []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"created_containers,omitempty"`
+		InstallStatus string `json:"install_status,omitempty"`
+	}
+	if json.Unmarshal([]byte(value), &document) != nil {
+		return value
+	}
+	document.SchemaVersion = 1
+	document.ConfiguredSurfaces = []string{"codex", "opencode"}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return value
+	}
+	return string(data) + "\n"
 }
 
 func normalizeIdentityStateEvolution(value string) string {

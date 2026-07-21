@@ -154,7 +154,7 @@ func TestObserveStateDistinguishesStateConditions(t *testing.T) {
 
 func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"schema_version":1,"packy_version":"legacy","managed_skills":[{"name":"ask-matt","source_path":"/source","link_path":"/link"}],"configured_surfaces":["codex"],"paths":{"state_file":"legacy","agent_skills_dir":"legacy"},"created_containers":[{"path":"/owned","kind":"directory"}]}`
+	legacy := `{"schema_version":1,"packy_version":"legacy","managed_skills":[{"name":"ask-matt","source_path":"/source","link_path":"/link"}],"configured_surfaces":["codex","opencode"],"paths":{"state_file":"legacy","agent_skills_dir":"legacy"},"created_containers":[{"path":"/owned","kind":"directory"}]}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T
 	}
 
 	observation := ObserveState(path)
-	if observation.Condition() != StateValid || !observation.Found() || observation.Err() != nil {
+	if observation.Condition() != StateLegacy || !observation.Found() || observation.Err() != nil {
 		t.Fatalf("legacy observation = condition %q found %v err %v", observation.Condition(), observation.Found(), observation.Err())
 	}
 	ownership := observation.Ownership()
@@ -174,7 +174,7 @@ func TestObserveStateReportsLegacyStateAndRecordedOwnershipReadOnly(t *testing.T
 	if len(ownership.CreatedContainers) != 1 || ownership.CreatedContainers[0] != (ownedcontainer.Record{Path: "/owned", Kind: ownedcontainer.Directory}) {
 		t.Fatalf("container ownership = %#v", ownership.CreatedContainers)
 	}
-	if got := observation.ConfiguredSurfaces(); len(got) != 1 || got[0] != "codex" {
+	if got := observation.ConfiguredSurfaces(); len(got) != 2 || got[0] != "codex" || got[1] != "opencode" {
 		t.Fatalf("configured surfaces = %#v", got)
 	}
 
