@@ -5,6 +5,7 @@ package claudesmoke
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -600,6 +601,13 @@ func ValidateEvidence(e Evidence) error {
 	if e.SchemaVersion != 1 || e.PackyVersion == "" || e.PackyRef == "" || len(e.PackySHA) != 40 || e.InstalledSourceSHA != e.PackySHA || e.ResolvedClaudeVersion == "" || e.ClaudeIntegrity == "" || len(e.ClaudeDigest) != 64 {
 		return errors.New("missing or malformed canonical evidence")
 	}
+	packySHA, shaErr := hex.DecodeString(e.PackySHA)
+	if shaErr != nil || len(packySHA) != sha1.Size {
+		return errors.New("missing or malformed canonical evidence")
+	}
+	if !validManifestEvidence(e.Before) || !validManifestEvidence(e.After) {
+		return errors.New("missing or malformed sandbox manifests")
+	}
 	s := e.Safety
 	if !s.DisposableSandbox || !s.AllowlistEnvironment || !s.CredentialsScrubbed || !s.CommandAllowlist || !s.CheckoutUnchanged || !s.ConfiguredWritableRootsConfined || !s.EvidencePathOutsideSandbox || !s.NoInteractiveClaude || !s.WriteBoundaryEnforced {
 		return errors.New("unsafe evidence")
@@ -655,6 +663,33 @@ func ValidateEvidence(e Evidence) error {
 		}
 	}
 	return nil
+}
+
+func validManifestEvidence(items []FileEvidence) bool {
+	if len(items) == 0 {
+		return false
+	}
+	previous := ""
+	for _, item := range items {
+		if item.Path == "" || filepath.IsAbs(item.Path) || filepath.Clean(item.Path) != item.Path || item.Path == "." || item.Path == ".." || strings.HasPrefix(item.Path, ".."+string(filepath.Separator)) || item.Path <= previous {
+			return false
+		}
+		mode := os.FileMode(item.Mode)
+		if mode.IsRegular() && item.SHA256 == "" {
+			return false
+		}
+		if !mode.IsRegular() && item.SHA256 != "" {
+			return false
+		}
+		if item.SHA256 != "" {
+			decoded, err := hex.DecodeString(item.SHA256)
+			if err != nil || len(decoded) != sha256.Size {
+				return false
+			}
+		}
+		previous = item.Path
+	}
+	return true
 }
 func directoryAbsentOrEmpty(path string) (bool, error) {
 	entries, err := os.ReadDir(path)

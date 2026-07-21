@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -128,88 +127,46 @@ func TestReleaseEvidenceVerifierRequiresExactCandidateParity(t *testing.T) {
 	}
 
 	evidenceRoot := filepath.Join(t.TempDir(), "evidence")
-	for _, arch := range []string{"amd64", "arm64"} {
-		for _, selector := range []string{"2.1.203", "stable"} {
-			dir := filepath.Join(evidenceRoot, arch+"-"+selector)
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			evidence := releaseEvidenceFixture(tag, commit, arch, selector)
-			data, err := json.Marshal(evidence)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "evidence.json"), data, 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if err := os.MkdirAll(evidenceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := t.TempDir()
+	canonicalLog := filepath.Join(t.TempDir(), "canonical-validator.log")
+	fakeGo := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CANONICAL_LOG\"\n[ \"${FAIL_CANONICAL:-0}\" != 1 ]\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	notes := filepath.Join(metadata, "release-notes.md")
-	run := func() ([]byte, error) {
+	run := func(failCanonical bool) ([]byte, error) {
 		cmd := exec.Command("bash", filepath.Join(root, "scripts", "verify-release-evidence.sh"),
 			"--tag", tag, "--commit", commit, "--dist", dist, "--evidence-root", evidenceRoot,
 			"--formula", formula, "--notes-template", filepath.Join(root, "docs", "release-notes", "next.md"), "--notes-output", notes)
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
+		fail := "0"
+		if failCanonical {
+			fail = "1"
+		}
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"), "CANONICAL_LOG="+canonicalLog, "FAIL_CANONICAL="+fail)
 		return cmd.CombinedOutput()
 	}
-	if output, err := run(); err != nil {
+	if output, err := run(false); err != nil {
 		t.Fatalf("verify complete candidate: %v\n%s", err, output)
 	}
 	if rendered, err := os.ReadFile(notes); err != nil || !strings.Contains(string(rendered), "# "+tag) || strings.Contains(string(rendered), "{{TAG}}") {
 		t.Fatalf("rendered notes are not tag-bound: %v\n%s", err, rendered)
 	}
-
-	tamperedPath := filepath.Join(evidenceRoot, "amd64-stable", "evidence.json")
-	var tampered map[string]any
-	data, _ := os.ReadFile(tamperedPath)
-	validData := append([]byte(nil), data...)
-	if err := json.Unmarshal(data, &tampered); err != nil {
+	invocation, err := os.ReadFile(canonicalLog)
+	if err != nil {
 		t.Fatal(err)
 	}
-	delete(tampered["safety"].(map[string]any), "write_boundary_enforced")
-	data, _ = json.Marshal(tampered)
-	if err := os.WriteFile(tamperedPath, data, 0o600); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit} {
+		if !strings.Contains(string(invocation), want) {
+			t.Fatalf("release verifier did not delegate %q to the canonical owner:\n%s", want, invocation)
+		}
 	}
-	if output, err := run(); err == nil || !strings.Contains(string(output), "incomplete or mismatched smoke evidence") {
-		t.Fatalf("verifier accepted incomplete safety evidence: %v\n%s", err, output)
-	}
-	if err := json.Unmarshal(validData, &tampered); err != nil {
-		t.Fatal(err)
-	}
-	tampered["installed_source_sha"] = strings.Repeat("b", 40)
-	data, _ = json.Marshal(tampered)
-	if err := os.WriteFile(tamperedPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if output, err := run(); err == nil || !strings.Contains(string(output), "incomplete or mismatched smoke evidence") {
-		t.Fatalf("verifier accepted cross-commit Installed Source: %v\n%s", err, output)
-	}
-}
-
-func releaseEvidenceFixture(tag, commit, arch, selector string) map[string]any {
-	commands := make([]map[string]any, 11)
-	for i := range commands {
-		commands[i] = map[string]any{"exit_code": 0}
-	}
-	return map[string]any{
-		"schema_version": 1, "packy_version": tag, "packy_ref": commit, "packy_sha": commit, "installed_source_sha": commit,
-		"os": "darwin", "arch": arch, "requested_claude_version": selector, "resolved_claude_version": "2.1.203",
-		"claude_npm_integrity": "sha512-fixture", "claude_executable_sha256": strings.Repeat("c", 64), "commands": commands,
-		"safety": map[string]bool{
-			"disposable_sandbox": true, "allowlist_environment": true, "credentials_scrubbed": true, "command_allowlist": true,
-			"checkout_unchanged": true, "configured_writable_roots_confined": true, "evidence_path_outside_sandbox": true,
-			"no_interactive_claude": true, "write_boundary_enforced": true,
-		},
-		"assertions": map[string]bool{
-			"foreign_content_preserved": true, "install_created_managed_state": true, "install_created_managed_projections": true,
-			"install_projected_claude_mcp": true, "dry_runs_unchanged": true, "uninstall_removed_managed_state": true,
-			"uninstall_removed_managed_projections": true, "residual_managed_artifacts_absent": true, "engram_stub_protocol_verified": true,
-			"sensitive_fixture_redacted": true, "foreign_mcp_exact_after_install": true, "foreign_mcp_exact_after_update": true,
-			"foreign_mcp_exact_after_uninstall": true,
-		},
+	if output, err := run(true); err == nil {
+		t.Fatalf("release verifier ignored canonical evidence rejection:\n%s", output)
 	}
 }
 

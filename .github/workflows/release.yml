@@ -141,6 +141,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.build.outputs.commit }}
 
+      - name: Set up Go for evidence validation
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Download proved release candidate
         uses: actions/download-artifact@v4
         with:

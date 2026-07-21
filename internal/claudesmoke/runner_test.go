@@ -220,7 +220,8 @@ func validEvidence() Evidence {
 		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
 	}
 	sha := strings.Repeat("a", 40)
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: sha, InstalledSourceSHA: sha, RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
+	manifest := []FileEvidence{{Path: "fixture", SHA256: strings.Repeat("c", 64), Mode: 0o600, Size: 1}}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: sha, InstalledSourceSHA: sha, RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Before: manifest, After: manifest, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true, ForeignMCPExactAfterInstall: true, ForeignMCPExactAfterUpdate: true, ForeignMCPExactAfterUninstall: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -260,6 +261,27 @@ func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e.Assertions.InstallCreatedManagedProjections = false
 	if err := ValidateEvidence(e); err == nil {
 		t.Fatal("accepted no-op lifecycle assertions")
+	}
+	e = validEvidence()
+	e.Before = nil
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted missing before manifest")
+	}
+	e = validEvidence()
+	e.After[0].Path = "../outside"
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted unsafe after manifest path")
+	}
+	e = validEvidence()
+	e.After[0].SHA256 = ""
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted regular file without content digest")
+	}
+	e = validEvidence()
+	e.PackySHA = strings.Repeat("z", 40)
+	e.InstalledSourceSHA = e.PackySHA
+	if err := ValidateEvidence(e); err == nil {
+		t.Fatal("accepted malformed Packy SHA")
 	}
 	e = validEvidence()
 	e.InstalledSourceSHA = strings.Repeat("c", 40)

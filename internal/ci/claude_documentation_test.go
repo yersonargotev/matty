@@ -13,12 +13,12 @@ func TestClaudeDocumentationContractStaysCurrent(t *testing.T) {
 	root := repositoryRoot(t)
 	documents := map[string][]string{
 		"README.md":                  {"Claude Code", "docs/claude-code.md", claudecode.MinimumSupportedVersion},
-		"docs/claude-code.md":        {"Prerequisite", "Global projections", "migration", "Preservation", "recovery", "readiness", "cleanup", "No authentication or model calls"},
-		"docs/product/packy-v0.md":   {"Claude Code"},
-		"docs/roadmap.md":            {"Claude Code"},
+		"docs/claude-code.md":        {"Prerequisite", "Global projections", "migration", "Preservation", "recovery", "readiness", "cleanup", "No authentication or model calls", claudecode.MinimumSupportedVersion},
+		"docs/product/packy-v0.md":   {"Claude Code", claudecode.MinimumSupportedVersion},
+		"docs/roadmap.md":            {"Claude Code", claudecode.MinimumSupportedVersion},
 		"docs/capability-packs.md":   {"manifest v3", "Claude Code", "matty 3.0.0", "engram 2.0.0"},
 		"docs/structured-output.md":  {"schema_version: 2", "claude-readiness"},
-		"docs/release.md":            {"./scripts/validate-packy.sh", "Fail-closed publication gate"},
+		"docs/release.md":            {"./scripts/validate-packy.sh", "Fail-closed publication gate", claudecode.MinimumSupportedVersion},
 		"docs/release-notes/next.md": {"{{TAG}}", claudecode.MinimumSupportedVersion, "state schema v2", "matty 3.0.0", "engram 2.0.0", "degraded"},
 	}
 
@@ -36,7 +36,7 @@ func TestClaudeDocumentationContractStaysCurrent(t *testing.T) {
 		}
 		for _, line := range strings.Split(text, "\n") {
 			lower := strings.ToLower(line)
-			if !strings.Contains(lower, "claude") || (!strings.Contains(lower, "floor") && !strings.Contains(lower, "prerequisite") && !strings.Contains(lower, "or newer")) {
+			if !strings.Contains(lower, "floor") && !strings.Contains(lower, "prerequisite") && !strings.Contains(lower, "or newer") && !strings.Contains(line, "+") {
 				continue
 			}
 			for _, version := range versionLiteral.FindAllString(line, -1) {

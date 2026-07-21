@@ -48,7 +48,7 @@ for value in "$dist" "$evidence_root" "$formula" "$notes_template" "$notes_outpu
     exit 2
   fi
 done
-for command in jq sed grep find sort cmp; do
+for command in go sed grep find sort cmp; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -99,35 +99,10 @@ for platform in "${platforms[@]}"; do
 done
 grep -Fq '"#{bin}/packy", "--version"' "$formula" || { echo "formula test surface changed" >&2; exit 1; }
 
-find "$evidence_root" -type f -name evidence.json | sort > "$scratch/evidence-files"
-evidence_count="$(wc -l < "$scratch/evidence-files" | tr -d ' ')"
-if [[ "$evidence_count" != 4 ]]; then
-  echo "release requires exactly four Claude smoke evidence documents; got $evidence_count" >&2
-  exit 1
-fi
-while IFS= read -r evidence; do
-  combo="$(jq -er --arg tag "$tag" --arg commit "$commit" '
-    select(.schema_version == 1) |
-    select(.packy_version == $tag) |
-    select(.packy_ref == $commit and .packy_sha == $commit and .installed_source_sha == $commit) |
-    select(.os == "darwin" and (.arch == "amd64" or .arch == "arm64")) |
-    select(.requested_claude_version == "2.1.203" or .requested_claude_version == "stable") |
-    select(.resolved_claude_version != "" and .claude_npm_integrity != "" and (.claude_executable_sha256 | length) == 64) |
-    select((.safety | keys | sort) == ["allowlist_environment", "checkout_unchanged", "command_allowlist", "configured_writable_roots_confined", "credentials_scrubbed", "disposable_sandbox", "evidence_path_outside_sandbox", "no_interactive_claude", "write_boundary_enforced"]) |
-    select([.safety[]] | all) |
-    select((.assertions | keys | sort) == ["dry_runs_unchanged", "engram_stub_protocol_verified", "foreign_content_preserved", "foreign_mcp_exact_after_install", "foreign_mcp_exact_after_uninstall", "foreign_mcp_exact_after_update", "install_created_managed_projections", "install_created_managed_state", "install_projected_claude_mcp", "residual_managed_artifacts_absent", "sensitive_fixture_redacted", "uninstall_removed_managed_projections", "uninstall_removed_managed_state"]) |
-    select([.assertions[]] | all) |
-    select((.commands | length) >= 11 and ([.commands[].exit_code] | all(. == 0))) |
-    "\(.arch)|\(.requested_claude_version)"
-  ' "$evidence")" || { echo "incomplete or mismatched smoke evidence: $evidence" >&2; exit 1; }
-  printf '%s\n' "$combo" >> "$scratch/combos-unsorted"
-done < "$scratch/evidence-files"
-sort "$scratch/combos-unsorted" > "$scratch/combos"
-printf '%s\n' 'amd64|2.1.203' 'amd64|stable' 'arm64|2.1.203' 'arm64|stable' > "$scratch/required-combos"
-if ! cmp -s "$scratch/required-combos" "$scratch/combos"; then
-  echo "Claude smoke matrix is duplicated or incomplete" >&2
-  exit 1
-fi
+go run ./internal/tools/claudesmoke verify-release \
+  --evidence-root "$evidence_root" \
+  --packy-version "$tag" \
+  --packy-sha "$commit"
 
 [[ -f "$notes_template" ]] || { echo "release-note template is missing" >&2; exit 1; }
 if [[ "$(grep -Fo '{{TAG}}' "$notes_template" | wc -l | tr -d ' ')" != 1 ]]; then
