@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,64 @@ func TestAcquisitionEnvUsesOnlyDisposableNPMState(t *testing.T) {
 	}
 	if strings.Contains(env, "operator-secret") || strings.Contains(env, "NPM_TOKEN") {
 		t.Fatal("acquisition inherited npm credential")
+	}
+}
+
+func TestAcquisitionCommandCannotObserveCallerNPMRC(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	caller := filepath.Join(root, "caller")
+	acquisition := filepath.Join(root, "acquisition", "home")
+	for _, dir := range []string{caller, acquisition, filepath.Join(root, "acquisition", "config"), filepath.Join(root, "acquisition", "cache"), filepath.Join(root, "acquisition", "tmp")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(caller, ".npmrc"), []byte("//registry/:_authToken=CALLER_SECRET"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(root, "fake-npm")
+	if err := writeStub(fake, "#!/bin/sh\npwd\n[ ! -e .npmrc ] || cat .npmrc\n"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := sandboxOutput(context.Background(), root, acquisition, acquisitionEnv(root, fake), fake, "view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realAcquisition, err := filepath.EvalSymlinks(acquisition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "CALLER_SECRET") || strings.TrimSpace(out) != realAcquisition {
+		t.Fatalf("caller npmrc observed: %q", out)
+	}
+}
+
+func TestSandboxBoundaryAllowsOnlyConfiguredRootWrites(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	inside := filepath.Join(root, "inside")
+	cmd, err := sandboxCommand(context.Background(), root, "/usr/bin/touch", inside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("inside write: %v: %s", err, out)
+	}
+	cmd, err = sandboxCommand(context.Background(), root, "/usr/bin/touch", outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("outside write escaped sandbox")
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatal("outside file was created")
 	}
 }
 
@@ -145,7 +204,7 @@ func validEvidence() Evidence {
 	for i := range args {
 		commands[i] = CommandEvidence{Name: "packy", Args: args[i], ExitCode: 0}
 	}
-	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true}}
+	return Evidence{SchemaVersion: 1, PackyVersion: "v1", PackyRef: "v1", PackySHA: strings.Repeat("a", 40), RequestedClaudeVersion: ExactFloor, ResolvedClaudeVersion: ExactFloor, ClaudeIntegrity: "sha512-x", ClaudeDigest: strings.Repeat("b", 64), Commands: commands, Safety: SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, CheckoutUnchanged: true, ConfiguredWritableRootsConfined: true, EvidencePathOutsideSandbox: true, NoInteractiveClaude: true, WriteBoundaryEnforced: true}, Assertions: AssertionEvidence{ForeignContentPreserved: true, InstallCreatedManagedState: true, InstallCreatedManagedProjections: true, InstallProjectedClaudeMCP: true, DryRunsUnchanged: true, UninstallRemovedManagedState: true, UninstallRemovedManagedProjections: true, ResidualManagedArtifactsAbsent: true, EngramStubProtocolVerified: true, SensitiveFixtureRedacted: true}}
 }
 func TestValidateEvidenceRejectsTampering(t *testing.T) {
 	e := validEvidence()
@@ -257,7 +316,7 @@ func TestPackyTriggeredClaudeInvocationIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := []string{"PATH=" + stubBin + ":/usr/bin:/bin"}
-	outer := runAllowed(context.Background(), root, env, packy, claude, []string{packy, "install"})
+	outer := runAllowed(context.Background(), root, root, env, packy, claude, []string{packy, "install"})
 	if outer.ExitCode != 0 {
 		t.Fatalf("fake Packy failed: %#v", outer)
 	}

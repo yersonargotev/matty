@@ -119,9 +119,11 @@ Packy owns two package-installed, credential-free real-Claude gates:
 Release validation runs both selectors against the corresponding Darwin artifact
 on Intel (`amd64`) and Apple Silicon (`arm64`) before the publication job can
 create a GitHub Release, upload assets, or push the tap update. The release
-workflow validates the exact tag once, builds and checksums one candidate set,
-passes those same Darwin binaries through smoke, and publishes that same proved
-artifact set without rebuilding it.
+workflow resolves the tag to one immutable commit, validates that commit once,
+builds and checksums one candidate set, passes those same Darwin binaries and
+commit SHA through smoke, and publishes that same proved artifact set without
+rebuilding it. Publication stops if the tag no longer resolves to the proved
+commit.
 
 Run either contract locally from a clean checkout with:
 

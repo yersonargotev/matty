@@ -71,6 +71,7 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		"Validate exact tag commit",
 		"./scripts/validate-packy.sh",
 		"name: packy-release-${{ steps.release.outputs.tag }}",
+		"commit: ${{ steps.release.outputs.commit }}",
 		"needs: build",
 		"needs: [build, claude-smoke]",
 		"runner: macos-15-intel",
@@ -82,7 +83,11 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		"scripts/build-release-artifacts.sh",
 		"actions/download-artifact@v4",
 		"packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}",
-		"--packy-ref \"${{ needs.build.outputs.tag }}\"",
+		"ref: ${{ needs.build.outputs.commit }}",
+		"--packy-ref \"${{ needs.build.outputs.commit }}\"",
+		`current="$(git rev-parse "${tag}^{commit}")"`,
+		`[[ "$current" != "$candidate" ]]`,
+		"Reverify release tag before publication",
 		"actions/upload-artifact@v4",
 	} {
 		if !strings.Contains(text, want) {

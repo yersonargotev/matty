@@ -21,10 +21,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yersonargotev/packy/internal/claudecode"
+	"github.com/yersonargotev/packy/internal/prompt"
 	"github.com/yersonargotev/packy/internal/skillbundle"
 )
 
 const ExactFloor = "2.1.203"
+const sensitiveFixtureValue = "PACKY_SMOKE_SECRET_7f6e5d4c3b2a"
 
 type Config struct {
 	Packy, SourceRepo, SourceRef, ClaudeSelector, EvidencePath, NPM string
@@ -37,6 +40,34 @@ type CommandEvidence struct {
 	Stdout   string   `json:"stdout,omitempty"`
 	Stderr   string   `json:"stderr,omitempty"`
 }
+type smokePhase struct {
+	Name   string
+	Argv   []string
+	DryRun bool
+}
+
+type sandboxLayout struct {
+	Root, Home, Config, Cache, Data, Temp, StubBin, Homebrew, NPM, InstalledSource, Work, Acquisition, SourceRepository string
+}
+
+func newSandboxLayout(root string) sandboxLayout {
+	return sandboxLayout{Root: root, Home: filepath.Join(root, "home"), Config: filepath.Join(root, "config"), Cache: filepath.Join(root, "cache"), Data: filepath.Join(root, "data"), Temp: filepath.Join(root, "tmp"), StubBin: filepath.Join(root, "stub-bin"), Homebrew: filepath.Join(root, "homebrew"), NPM: filepath.Join(root, "npm"), InstalledSource: filepath.Join(root, "installed-source"), Work: filepath.Join(root, "work"), Acquisition: filepath.Join(root, "acquisition"), SourceRepository: filepath.Join(root, "source-repository")}
+}
+func (l sandboxLayout) writableDirectories() []string {
+	return []string{l.Home, l.Config, l.Cache, l.Data, l.Temp, l.StubBin, filepath.Join(l.Homebrew, "bin"), l.NPM, l.InstalledSource, l.Work, filepath.Join(l.Acquisition, "home"), filepath.Join(l.Acquisition, "config"), filepath.Join(l.Acquisition, "cache"), filepath.Join(l.Acquisition, "tmp")}
+}
+func (l sandboxLayout) valid() bool {
+	if !filepath.IsAbs(l.Root) {
+		return false
+	}
+	for _, p := range append(l.writableDirectories(), l.SourceRepository) {
+		if !pathWithin(l.Root, p) {
+			return false
+		}
+	}
+	return true
+}
+
 type FileEvidence struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256,omitempty"`
@@ -52,6 +83,7 @@ type SafetyEvidence struct {
 	ConfiguredWritableRootsConfined bool `json:"configured_writable_roots_confined"`
 	EvidencePathOutsideSandbox      bool `json:"evidence_path_outside_sandbox"`
 	NoInteractiveClaude             bool `json:"no_interactive_claude"`
+	WriteBoundaryEnforced           bool `json:"write_boundary_enforced"`
 }
 type AssertionEvidence struct {
 	ForeignContentPreserved            bool `json:"foreign_content_preserved"`
@@ -63,6 +95,7 @@ type AssertionEvidence struct {
 	UninstallRemovedManagedProjections bool `json:"uninstall_removed_managed_projections"`
 	ResidualManagedArtifactsAbsent     bool `json:"residual_managed_artifacts_absent"`
 	EngramStubProtocolVerified         bool `json:"engram_stub_protocol_verified"`
+	SensitiveFixtureRedacted           bool `json:"sensitive_fixture_redacted"`
 }
 type Evidence struct {
 	SchemaVersion          int               `json:"schema_version"`
@@ -150,9 +183,12 @@ func Run(ctx context.Context, cfg Config) (Evidence, error) {
 		return Evidence{}, err
 	}
 	defer os.RemoveAll(sandbox)
-	roots := []string{"home", "config", "cache", "data", "tmp", "stub-bin", "homebrew/bin", "npm", "installed-source", "work", "acquisition/home", "acquisition/config", "acquisition/cache", "acquisition/tmp"}
-	for _, root := range roots {
-		if err := os.MkdirAll(filepath.Join(sandbox, root), 0700); err != nil {
+	layout := newSandboxLayout(sandbox)
+	if !layout.valid() {
+		return Evidence{}, errors.New("invalid sandbox layout")
+	}
+	for _, root := range layout.writableDirectories() {
+		if err := os.MkdirAll(root, 0700); err != nil {
 			return Evidence{}, err
 		}
 	}
@@ -161,7 +197,7 @@ func Run(ctx context.Context, cfg Config) (Evidence, error) {
 		return Evidence{}, err
 	}
 	acquireEnv := acquisitionEnv(sandbox, npmExecutable)
-	meta, err := hostOutputEnv(ctx, "", acquireEnv, npmExecutable, "view", "@anthropic-ai/claude-code@"+cfg.ClaudeSelector, "version", "dist.integrity", "--json")
+	meta, err := sandboxOutput(ctx, sandbox, filepath.Join(sandbox, "acquisition", "home"), acquireEnv, npmExecutable, "view", "@anthropic-ai/claude-code@"+cfg.ClaudeSelector, "version", "dist.integrity", "--json")
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -173,7 +209,11 @@ func Run(ctx context.Context, cfg Config) (Evidence, error) {
 	if err != nil {
 		return Evidence{}, err
 	}
-	install := exec.CommandContext(ctx, npmExecutable, "install", "--prefix", filepath.Join(sandbox, "npm"), "--no-audit", "--no-fund", "@anthropic-ai/claude-code@"+resolved)
+	install, err := sandboxCommand(ctx, sandbox, npmExecutable, "install", "--prefix", filepath.Join(sandbox, "npm"), "--no-audit", "--no-fund", "@anthropic-ai/claude-code@"+resolved)
+	if err != nil {
+		return Evidence{}, err
+	}
+	install.Dir = filepath.Join(sandbox, "acquisition", "home")
 	install.Env = acquireEnv
 	var installOut bytes.Buffer
 	install.Stdout = &installOut
@@ -221,6 +261,7 @@ esac
 	foreignMCPPath := filepath.Join(sandbox, "home", ".claude.json")
 	foreignMCPMarker := "FOREIGN-BYTE-EXACT-MCP"
 	foreignMCP := []byte("{\"mcpServers\":{\"foreign\":{\"type\":\"stdio\",\"command\":\"/bin/echo\",\"args\":[\"FOREIGN-BYTE-EXACT-MCP\"]}}}\n")
+	sensitiveFixture := sensitiveFixtureValue
 	if err := os.MkdirAll(filepath.Dir(foreignInstructionPath), 0700); err != nil {
 		return Evidence{}, err
 	}
@@ -230,6 +271,9 @@ esac
 	if err := os.WriteFile(foreignMCPPath, foreignMCP, 0600); err != nil {
 		return Evidence{}, err
 	}
+	if err := os.WriteFile(filepath.Join(sandbox, "home", "fixture.bin"), []byte(sensitiveFixture), 0600); err != nil {
+		return Evidence{}, err
+	}
 	engramProbe, probeErr := probeEngramStub(ctx, filepath.Join(sandbox, "stub-bin", "engram"), env)
 	before, err := Manifest(sandbox)
 	if err != nil {
@@ -237,22 +281,29 @@ esac
 	}
 	e := Evidence{SchemaVersion: 1, PackyRef: cfg.SourceRef, PackySHA: sourceSHA, OS: runtime.GOOS, Arch: runtime.GOARCH, RequestedClaudeVersion: cfg.ClaudeSelector, ResolvedClaudeVersion: resolved, ClaudeIntegrity: integrity, ClaudeDigest: digest, Sandbox: sandbox, Before: before}
 	e.Assertions.EngramStubProtocolVerified = probeErr == nil && engramProbe
-	e.Safety = SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, NoInteractiveClaude: true}
-	commands := [][]string{
-		{packy, "version"},
-		{packy, "init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", installRepo, "--repository-ref", installRef},
-		{packy, "install", "--dry-run"}, {packy, "install"}, {packy, "doctor"},
-		{packy, "update", "--dry-run"}, {packy, "update"}, {packy, "uninstall", "--dry-run"}, {packy, "uninstall"}, {packy, "doctor"},
+	e.Safety = SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, NoInteractiveClaude: true, WriteBoundaryEnforced: runtime.GOOS == "darwin"}
+	phases := []smokePhase{
+		{Name: "claude-version", Argv: []string{claudeInterposer, "--version"}},
+		{Name: "packy-version", Argv: []string{packy, "version"}},
+		{Name: "init", Argv: []string{packy, "init", "--home", filepath.Join(sandbox, "home"), "--source-root", filepath.Join(sandbox, "installed-source"), "--repository-url", installRepo, "--repository-ref", installRef}},
+		{Name: "install-preview", Argv: []string{packy, "install", "--dry-run"}, DryRun: true},
+		{Name: "install", Argv: []string{packy, "install"}},
+		{Name: "doctor-installed", Argv: []string{packy, "doctor"}},
+		{Name: "update-preview", Argv: []string{packy, "update", "--dry-run"}, DryRun: true},
+		{Name: "update", Argv: []string{packy, "update"}},
+		{Name: "uninstall-preview", Argv: []string{packy, "uninstall", "--dry-run"}, DryRun: true},
+		{Name: "uninstall", Argv: []string{packy, "uninstall"}},
+		{Name: "doctor-final", Argv: []string{packy, "doctor"}},
 	}
-	// Claude version is the only direct Claude invocation. Packy's user-scoped
-	// MCP calls are constrained by PATH/HOME and captured as part of its command.
-	commands = append([][]string{{claudeInterposer, "--version"}}, commands...)
-	var dryBefore []FileEvidence
-	for index, argv := range commands {
-		if index == 3 || index == 6 || index == 8 {
-			dryBefore, _ = Manifest(filepath.Join(sandbox, "home"))
+	for _, phase := range phases {
+		var dryBefore []FileEvidence
+		if phase.DryRun {
+			dryBefore, err = Manifest(filepath.Join(sandbox, "home"))
+			if err != nil {
+				return e, err
+			}
 		}
-		ce := runAllowed(ctx, filepath.Join(sandbox, "work"), env, packy, claudeInterposer, argv)
+		ce := runAllowed(ctx, sandbox, filepath.Join(sandbox, "work"), env, packy, claudeInterposer, phase.Argv)
 		e.Commands = append(e.Commands, ce)
 		if ce.ExitCode != 0 {
 			e.Commands = append(e.Commands, readClaudeInvocations(claudeLog)...)
@@ -260,30 +311,61 @@ esac
 			_ = writeEvidence(cfg.EvidencePath, e)
 			return e, fmt.Errorf("%s exited %d", ce.Name, ce.ExitCode)
 		}
-		if index == 3 || index == 6 || index == 8 {
-			dryAfter, _ := Manifest(filepath.Join(sandbox, "home"))
-			e.Assertions.DryRunsUnchanged = (index == 3 || e.Assertions.DryRunsUnchanged) && reflect.DeepEqual(dryBefore, dryAfter)
+		if phase.DryRun {
+			dryAfter, manifestErr := Manifest(filepath.Join(sandbox, "home"))
+			if manifestErr != nil {
+				return e, manifestErr
+			}
+			e.Assertions.DryRunsUnchanged = (phase.Name == "install-preview" || e.Assertions.DryRunsUnchanged) && reflect.DeepEqual(dryBefore, dryAfter)
 		}
-		if index == 4 {
+		switch phase.Name {
+		case "install":
 			_, stateErr := os.Stat(filepath.Join(sandbox, "home", ".packy", "config.json"))
 			e.Assertions.InstallCreatedManagedState = stateErr == nil
-			e.Assertions.InstallCreatedManagedProjections = classicSkillTopologyExact(filepath.Join(sandbox, "home"), filepath.Join(sandbox, "installed-source", "bundle", "skills")) && fileContains(filepath.Join(sandbox, "home", ".claude", "CLAUDE.md"), []byte("<!-- packy:"))
+			e.Assertions.InstallCreatedManagedProjections = classicSkillTopologyExact(filepath.Join(sandbox, "home"), filepath.Join(sandbox, "installed-source", "bundle", "skills")) && exactClaudeClassicProjections(filepath.Join(sandbox, "home"))
 			e.Assertions.InstallProjectedClaudeMCP = containsClaudeOperation(claudeLog, "mcp-add")
-			installedInstruction, _ := os.ReadFile(foreignInstructionPath)
-			installedMCP, _ := os.ReadFile(foreignMCPPath)
+			installedInstruction, readErr := os.ReadFile(foreignInstructionPath)
+			if readErr != nil {
+				return e, readErr
+			}
+			installedMCP, readErr := os.ReadFile(foreignMCPPath)
+			if readErr != nil {
+				return e, readErr
+			}
 			e.Assertions.ForeignContentPreserved = bytes.Contains(installedInstruction, foreignInstruction) && bytes.Contains(installedMCP, []byte(foreignMCPMarker))
-		}
-		if index == 9 {
+		case "update":
+			updatedInstruction, readErr := os.ReadFile(foreignInstructionPath)
+			if readErr != nil {
+				return e, readErr
+			}
+			updatedMCP, readErr := os.ReadFile(foreignMCPPath)
+			if readErr != nil {
+				return e, readErr
+			}
+			e.Assertions.ForeignContentPreserved = e.Assertions.ForeignContentPreserved && bytes.Contains(updatedInstruction, foreignInstruction) && bytes.Contains(updatedMCP, []byte(foreignMCPMarker)) && exactClaudeClassicProjections(filepath.Join(sandbox, "home"))
+		case "uninstall":
 			_, stateErr := os.Stat(filepath.Join(sandbox, "home", ".packy", "config.json"))
 			e.Assertions.UninstallRemovedManagedState = os.IsNotExist(stateErr)
 			e.Assertions.UninstallRemovedManagedProjections = !hasEntries(filepath.Join(sandbox, "home", ".agents", "skills")) && bytes.Equal(mustReadFile(foreignInstructionPath), foreignInstruction) && !bytes.Contains(mustReadFile(foreignMCPPath), []byte(`"engram"`)) && containsClaudeOperation(claudeLog, "mcp-remove")
 		}
 	}
-	gotInstruction, _ := os.ReadFile(foreignInstructionPath)
-	gotMCP, _ := os.ReadFile(foreignMCPPath)
+	gotInstruction, err := os.ReadFile(foreignInstructionPath)
+	if err != nil {
+		return e, err
+	}
+	gotMCP, err := os.ReadFile(foreignMCPPath)
+	if err != nil {
+		return e, err
+	}
 	e.Assertions.ForeignContentPreserved = e.Assertions.ForeignContentPreserved && bytes.Equal(gotInstruction, foreignInstruction) && bytes.Contains(gotMCP, []byte(foreignMCPMarker))
 	e.Assertions.ResidualManagedArtifactsAbsent = !fileExists(filepath.Join(sandbox, "home", ".packy", "config.json")) && !hasEntries(filepath.Join(sandbox, "home", ".agents", "skills")) && !bytes.Contains(gotMCP, []byte(`"engram"`))
 	e.Commands = append(e.Commands, readClaudeInvocations(claudeLog)...)
+	projectionBytes := append(append([]byte{}, gotInstruction...), gotMCP...)
+	redacted := !bytes.Contains(projectionBytes, []byte(sensitiveFixture))
+	for _, command := range e.Commands {
+		redacted = redacted && !strings.Contains(command.Stdout, sensitiveFixture) && !strings.Contains(command.Stderr, sensitiveFixture)
+	}
+	e.Assertions.SensitiveFixtureRedacted = redacted
 	e.PackyVersion = parsePackyVersion(e.Commands[1].Stdout)
 	afterStatus, err := hostOutput(ctx, repo, "git", "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil {
@@ -294,7 +376,7 @@ esac
 		return e, err
 	}
 	e.Safety.CheckoutUnchanged = status == afterStatus && strings.TrimSpace(head) == strings.TrimSpace(afterHead)
-	e.Safety.ConfiguredWritableRootsConfined = configuredRootsConfined(sandbox)
+	e.Safety.ConfiguredWritableRootsConfined = layout.valid()
 	e.Safety.EvidencePathOutsideSandbox = e.Safety.ConfiguredWritableRootsConfined && e.Safety.CheckoutUnchanged && !pathWithin(sandbox, cfg.EvidencePath)
 	e.After, err = Manifest(sandbox)
 	if err != nil {
@@ -306,7 +388,7 @@ esac
 	return e, nil
 }
 
-func runAllowed(ctx context.Context, dir string, env []string, packy, claude string, argv []string) CommandEvidence {
+func runAllowed(ctx context.Context, sandbox, dir string, env []string, packy, claude string, argv []string) CommandEvidence {
 	ce := CommandEvidence{Name: filepath.Base(argv[0]), Args: append([]string(nil), argv[1:]...), ExitCode: -1}
 	if !AllowedCommand(packy, claude, argv) {
 		ce.Stderr = "forbidden command"
@@ -314,7 +396,11 @@ func runAllowed(ctx context.Context, dir string, env []string, packy, claude str
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
+	cmd, boundaryErr := sandboxCommand(cctx, sandbox, argv[0], argv[1:]...)
+	if boundaryErr != nil {
+		ce.Stderr = boundaryErr.Error()
+		return ce
+	}
 	cmd.Dir = dir
 	cmd.Env = env
 	var out, stderr bytes.Buffer
@@ -399,7 +485,10 @@ func Manifest(root string) ([]FileEvidence, error) {
 		rel, _ := filepath.Rel(root, path)
 		item := FileEvidence{Path: filepath.ToSlash(rel), Mode: uint32(info.Mode()), Size: info.Size()}
 		if info.Mode().IsRegular() {
-			item.SHA256, _ = fileDigest(path)
+			item.SHA256, err = fileDigest(path)
+			if err != nil {
+				return err
+			}
 		}
 		out = append(out, item)
 		return nil
@@ -432,7 +521,7 @@ func ValidateEvidence(e Evidence) error {
 		return errors.New("missing or malformed canonical evidence")
 	}
 	s := e.Safety
-	if !s.DisposableSandbox || !s.AllowlistEnvironment || !s.CredentialsScrubbed || !s.CommandAllowlist || !s.CheckoutUnchanged || !s.ConfiguredWritableRootsConfined || !s.EvidencePathOutsideSandbox || !s.NoInteractiveClaude {
+	if !s.DisposableSandbox || !s.AllowlistEnvironment || !s.CredentialsScrubbed || !s.CommandAllowlist || !s.CheckoutUnchanged || !s.ConfiguredWritableRootsConfined || !s.EvidencePathOutsideSandbox || !s.NoInteractiveClaude || !s.WriteBoundaryEnforced {
 		return errors.New("unsafe evidence")
 	}
 	if len(e.Commands) == 0 {
@@ -471,7 +560,7 @@ func ValidateEvidence(e Evidence) error {
 		return errors.New("malformed Claude acquisition evidence")
 	}
 	a := e.Assertions
-	if !a.ForeignContentPreserved || !a.InstallCreatedManagedState || !a.InstallCreatedManagedProjections || !a.InstallProjectedClaudeMCP || !a.DryRunsUnchanged || !a.UninstallRemovedManagedState || !a.UninstallRemovedManagedProjections || !a.ResidualManagedArtifactsAbsent || !a.EngramStubProtocolVerified {
+	if !a.ForeignContentPreserved || !a.InstallCreatedManagedState || !a.InstallCreatedManagedProjections || !a.InstallProjectedClaudeMCP || !a.DryRunsUnchanged || !a.UninstallRemovedManagedState || !a.UninstallRemovedManagedProjections || !a.ResidualManagedArtifactsAbsent || !a.EngramStubProtocolVerified || !a.SensitiveFixtureRedacted {
 		return errors.New("lifecycle assertions are incomplete")
 	}
 	for _, c := range e.Commands {
@@ -480,7 +569,7 @@ func ValidateEvidence(e Evidence) error {
 		}
 	}
 	raw, _ := json.Marshal(e)
-	for _, needle := range []string{"ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY"} {
+	for _, needle := range []string{"ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", sensitiveFixtureValue} {
 		if strings.Contains(string(raw), needle) {
 			return errors.New("evidence contains credential material")
 		}
@@ -525,6 +614,15 @@ func classicSkillTopologyExact(home, source string) bool {
 		}
 	}
 	return true
+}
+func exactClaudeClassicProjections(home string) bool {
+	instructions := claudecode.ObserveInstructions(filepath.Join(home, ".claude", "CLAUDE.md"))
+	wantInstruction := prompt.CodexContent() + "\n" + prompt.RulesContent()
+	if instructions.Err != nil || instructions.MarkerCardinality != 1 || instructions.Contributions["classic"] != claudecode.Fingerprint([]byte(strings.TrimSpace(wantInstruction))) {
+		return false
+	}
+	mcp := claudecode.ObserveUserMCP(filepath.Join(home, ".claude.json"), "engram")
+	return mcp.Err == nil && mcp.Present && mcp.Identity.Command == "engram" && reflect.DeepEqual(mcp.Identity.Args, []string{"mcp", "--tools=agent"}) && len(mcp.Identity.EnvironmentKeys) == 0
 }
 func validateAndWriteEvidence(path string, evidence Evidence) error {
 	validationErr := ValidateEvidence(evidence)
@@ -637,6 +735,36 @@ func hostOutputEnv(ctx context.Context, dir string, env []string, name string, a
 	if env != nil {
 		cmd.Env = env
 	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%s: %w: %s", name, err, out.String())
+	}
+	return out.String(), nil
+}
+func sandboxCommand(ctx context.Context, writableRoot, name string, args ...string) (*exec.Cmd, error) {
+	if runtime.GOOS != "darwin" {
+		return nil, errors.New("enforceable smoke write boundary requires macOS sandbox-exec")
+	}
+	if !filepath.IsAbs(writableRoot) {
+		return nil, errors.New("sandbox writable root must be absolute")
+	}
+	if resolved, err := filepath.EvalSymlinks(writableRoot); err == nil {
+		writableRoot = resolved
+	}
+	escaped := strings.ReplaceAll(writableRoot, "\"", "\\\"")
+	profile := `(version 1)(allow default)(deny file-write*)(allow file-write* (literal "/dev/null") (subpath "` + escaped + `"))`
+	argv := append([]string{"-p", profile, name}, args...)
+	return exec.CommandContext(ctx, "/usr/bin/sandbox-exec", argv...), nil
+}
+func sandboxOutput(ctx context.Context, writableRoot, dir string, env []string, name string, args ...string) (string, error) {
+	cmd, err := sandboxCommand(ctx, writableRoot, name, args...)
+	if err != nil {
+		return "", err
+	}
+	cmd.Dir = dir
+	cmd.Env = env
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
