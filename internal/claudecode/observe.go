@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,19 @@ type SetupObservation struct {
 	MCP          []MCPObservation
 }
 type RuntimeEvidence struct{ Kind, ID, Signal, Revision string }
+type AuthorizationObservation struct {
+	PolicyObserved, ToolPermissionObserved bool
+	Disabled, Shadowed                     bool
+	Err                                    error
+}
+type AuthorizationObserver interface {
+	ObserveAuthorization(context.Context) AuthorizationObservation
+}
+type AuthorizationObserverFunc func(context.Context) AuthorizationObservation
+
+func (f AuthorizationObserverFunc) ObserveAuthorization(ctx context.Context) AuthorizationObservation {
+	return f(ctx)
+}
 
 func ObserveSkill(path, expectedSource string) SkillObservation {
 	o := SkillObservation{Path: path, ExpectedSource: expectedSource}
@@ -159,72 +173,71 @@ func ObserveInstructions(path string) InstructionObservation {
 	return o
 }
 
-func observeHookPolicy(path string) (HookObservation, error) {
-	o := HookObservation{Path: path}
-	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		o.Parseable = true
-		o.Revision = Fingerprint(nil)
-		return o, nil
-	}
-	if err != nil {
-		return o, err
-	}
-	o.Revision = Fingerprint(b)
-	var root map[string]any
-	if err = json.Unmarshal(b, &root); err != nil {
-		return o, fmt.Errorf("invalid Claude settings JSON: %w", err)
-	}
-	o.Parseable = true
-	if disabled, ok := root["disableAllHooks"].(bool); ok {
-		o.Disabled = disabled
-	}
-	return o, nil
+type SettingsObservation struct {
+	Path, Revision                string
+	Raw                           []byte
+	Parseable, Disabled, Shadowed bool
+	Root                          map[string]any
+	Err                           error
 }
 
-// ObserveHooks statically classifies one exact typed hook. Policy may be
-// supplied from a higher-precedence settings document and is never mutated.
-func ObserveHooks(path string, wanted CommandHookEntry, higherPrecedence []byte) HookObservation {
-	o := HookObservation{Path: path}
+func ObserveSettings(path string, higherPrecedence []byte) SettingsObservation {
+	o := SettingsObservation{Path: path}
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		o.Parseable = true
 		o.Revision = Fingerprint(nil)
+		o.Raw = []byte{}
 		return o
 	}
 	if err != nil {
 		o.Err = err
 		return o
 	}
+	o.Raw = append([]byte(nil), b...)
 	o.Revision = Fingerprint(b)
-	var root map[string]any
-	if err = json.Unmarshal(b, &root); err != nil {
+	if err = json.Unmarshal(b, &o.Root); err != nil {
 		o.Err = fmt.Errorf("invalid Claude settings JSON: %w", err)
 		return o
 	}
 	o.Parseable = true
-	if disabled, ok := root["disableAllHooks"].(bool); ok {
+	if disabled, ok := o.Root["disableAllHooks"].(bool); ok {
 		o.Disabled = disabled
 	}
-	hooks, _ := root["hooks"].(map[string]any)
+	if len(higherPrecedence) > 0 {
+		var policy map[string]any
+		if err = json.Unmarshal(higherPrecedence, &policy); err != nil {
+			o.Err = fmt.Errorf("invalid higher-precedence Claude policy JSON: %w", err)
+			return o
+		}
+		if v, ok := policy["disableAllHooks"].(bool); ok && v {
+			o.Disabled = true
+			o.Shadowed = true
+		}
+		if policy["hooks"] != nil {
+			o.Shadowed = true
+		}
+	}
+	return o
+}
+
+// ObserveHooks statically classifies one exact typed hook. Policy may be
+// supplied from a higher-precedence settings document and is never mutated.
+func ObserveHooks(path string, wanted CommandHookEntry, higherPrecedence []byte) HookObservation {
+	return EnrichHookObservation(ObserveSettings(path, higherPrecedence), wanted)
+}
+func EnrichHookObservation(settings SettingsObservation, wanted CommandHookEntry) HookObservation {
+	o := HookObservation{Path: settings.Path, Revision: settings.Revision, Parseable: settings.Parseable, Disabled: settings.Disabled, Shadowed: settings.Shadowed, Err: settings.Err}
+	if o.Err != nil {
+		return o
+	}
+	hooks, _ := settings.Root["hooks"].(map[string]any)
 	entries, _ := hooks[wanted.Event].([]any)
 	target := canonicalFingerprint(hookJSON(wanted))
 	for _, e := range entries {
 		if canonicalFingerprint(e) == target {
 			o.MatchingEntries = append(o.MatchingEntries, target)
 			o.EntryFingerprint = target
-		}
-	}
-	if len(higherPrecedence) > 0 {
-		var policy map[string]any
-		if json.Unmarshal(higherPrecedence, &policy) == nil {
-			if v, ok := policy["disableAllHooks"].(bool); ok && v {
-				o.Disabled = true
-				o.Shadowed = true
-			}
-			if h, ok := policy["hooks"].(map[string]any); ok && h[wanted.Event] != nil {
-				o.Shadowed = true
-			}
 		}
 	}
 	return o

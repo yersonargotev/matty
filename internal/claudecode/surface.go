@@ -2,7 +2,6 @@ package claudecode
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +27,13 @@ type SurfaceAdapter struct {
 	bundleRoot, stateRoot, executable string
 	runner                            Runner
 	ownership                         OwnershipSnapshotProvider
+	authorization                     AuthorizationObserver
+}
+
+func NewSurfaceAdapterWithAuthorization(bundleRoot string, layout CanonicalLayout, stateRoot, executable string, runner Runner, ownership OwnershipSnapshotProvider, authorization AuthorizationObserver) *SurfaceAdapter {
+	a := NewSurfaceAdapter(bundleRoot, layout, stateRoot, executable, runner, ownership)
+	a.authorization = authorization
+	return a
 }
 
 func NewSurfaceAdapter(bundleRoot string, layout CanonicalLayout, stateRoot, executable string, runner Runner, ownership OwnershipSnapshotProvider) *SurfaceAdapter {
@@ -49,6 +55,10 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	}
 	var result capabilitypack.SurfaceInspection
 	revision := []string{}
+	settingsObservation := ObserveSettings(a.layout.SettingsFile, nil)
+	if settingsObservation.Err != nil {
+		return result, settingsObservation.Err
+	}
 	for _, r := range pack.Resources {
 		b, ok := claudeBinding(r)
 		if !ok {
@@ -118,15 +128,12 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 				return result, errors.New("Claude command hook is missing typed definition")
 			}
 			hook := fromBindingHook(b)
-			settings, err := readOptional(a.layout.SettingsFile)
-			if err != nil {
-				return result, fmt.Errorf("read Claude settings: %w", err)
-			}
+			settings := settingsObservation.Raw
 			merged, err := MergeCommandHook(settings, hook, false)
 			if err != nil {
 				return result, err
 			}
-			ho := ObserveHooks(a.layout.SettingsFile, hook, nil)
+			ho := EnrichHookObservation(settingsObservation, hook)
 			if ho.Err != nil {
 				return result, ho.Err
 			}
@@ -172,14 +179,26 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	result.Revision = Fingerprint([]byte(strings.Join(revision, "\n")))
 	version := ObserveVersion(ctx, a.executable, a.runner)
 	supported := ClassifyVersion(version) == CompatibilitySupported
-	policy, policyErr := observeHookPolicy(a.layout.SettingsFile)
-	authorized := supported && policyErr == nil && !policy.Disabled && !policy.Shadowed
+	configured := true
+	for _, p := range result.Projections {
+		if p.Goal == capabilitypack.ProjectionPresent && (!p.Exists || p.ObservedFingerprint != p.DesiredFingerprint || p.ExternallyManaged) {
+			configured = false
+		}
+	}
+	auth := AuthorizationObservation{}
+	if a.authorization != nil {
+		auth = a.authorization.ObserveAuthorization(ctx)
+	}
+	authorized := configured && supported && auth.Err == nil && auth.PolicyObserved && auth.ToolPermissionObserved && !auth.Disabled && !auth.Shadowed
 	pending := []string{"supply explicit Claude Code runtime loading evidence"}
 	if !supported {
 		pending = append(pending, ClassifyVersion(version).Remediation())
 	}
-	if policyErr != nil || policy.Disabled || policy.Shadowed {
-		pending = append(pending, "enable observable Claude Code hook policy")
+	if auth.Err != nil || !auth.PolicyObserved || !auth.ToolPermissionObserved || auth.Disabled || auth.Shadowed {
+		pending = append(pending, "provide explicit observable Claude Code policy and tool-permission evidence")
+	}
+	if !configured {
+		pending = append(pending, "converge every exact desired Claude Code projection")
 	}
 	result.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: authorized, Authorized: authorized, PendingHumanActions: pending, Evidence: []string{"filesystem and static user MCP definitions inspected; runtime use was not invoked"}}
 	return result, nil
@@ -228,16 +247,17 @@ func (a *SurfaceAdapter) inspectRemoval(pack capabilitypack.Pack, r capabilitypa
 		if b.Hook == nil {
 			return capabilitypack.ObservedProjection{}, "", errors.New("missing typed hook")
 		}
-		settings, err := readOptional(a.layout.SettingsFile)
-		if err != nil {
-			return capabilitypack.ObservedProjection{}, "", err
+		settingsObservation := ObserveSettings(a.layout.SettingsFile, nil)
+		if settingsObservation.Err != nil {
+			return capabilitypack.ObservedProjection{}, "", settingsObservation.Err
 		}
+		settings := settingsObservation.Raw
 		hook := fromBindingHook(b)
 		merged, err := MergeCommandHook(settings, hook, true)
 		if err != nil {
 			return capabilitypack.ObservedProjection{}, "", err
 		}
-		o := ObserveHooks(a.layout.SettingsFile, hook, nil)
+		o := EnrichHookObservation(settingsObservation, hook)
 		if o.Err != nil {
 			return capabilitypack.ObservedProjection{}, "", o.Err
 		}
@@ -260,7 +280,7 @@ func (a *SurfaceAdapter) inspectRemoval(pack capabilitypack.Pack, r capabilitypa
 func ownsExact(snapshot OwnershipSnapshot, id, kind, target, fingerprint string) bool {
 	matches := 0
 	for _, r := range snapshot.Records {
-		if r.ID == id && r.Kind == kind && filepath.Clean(r.Target) == filepath.Clean(target) && fingerprintsEqual(r.Fingerprint, fingerprint) {
+		if r.StateOwner != "" && r.ContributorID != "" && slices.Contains(r.Contributors, r.ContributorID) && r.ID == id && r.Kind == kind && filepath.Clean(r.Target) == filepath.Clean(target) && r.Fingerprint == fingerprint {
 			matches++
 		}
 	}
@@ -381,6 +401,9 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 		if x.Command != "" && Fingerprint(current) != x.Command {
 			return errors.New("stale Claude shared document revision")
 		}
+		if x.Mode == capabilitypack.ProjectionRemoveContent && string(current) == x.Content {
+			return nil
+		}
 	}
 	switch x.Kind {
 	case ActionSkillLink:
@@ -394,6 +417,16 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 		}
 		return atomicWrite(x.Target, []byte(x.Content), 0644)
 	case ActionUserMCP:
+		name, remove := mcpActionName(x.Args)
+		if remove {
+			observed := ObserveUserMCP(a.layout.UserMCPFile, name)
+			if observed.Err != nil {
+				return errors.New("Claude Code user MCP verification failed")
+			}
+			if !observed.Present {
+				return nil
+			}
+		}
 		r := a.runner.Run(ctx, Command{Executable: x.Command, Args: append([]string(nil), x.Args...), Timeout: 15_000_000_000, Description: x.Description})
 		if r.TimedOut {
 			return context.DeadlineExceeded
@@ -404,7 +437,6 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 		if r.ExitCode != 0 {
 			return fmt.Errorf("Claude Code user MCP command failed with status %d", r.ExitCode)
 		}
-		name, remove := mcpActionName(x.Args)
 		observed := ObserveUserMCP(a.layout.UserMCPFile, name)
 		if observed.Err != nil {
 			return errors.New("Claude Code user MCP verification failed")
@@ -460,7 +492,7 @@ func (a *SurfaceAdapter) validateFreshOwnership(x capabilitypack.ProjectionActio
 			if err != nil {
 				return err
 			}
-			if !ok && x.Mode != capabilitypack.ProjectionDeleteTarget {
+			if !ok && x.Mode != capabilitypack.ProjectionDeleteTarget && x.Mode != capabilitypack.ProjectionRemoveContent {
 				return errors.New("owned Claude command hook changed; preserving it")
 			}
 		}
@@ -503,6 +535,16 @@ func (a *SurfaceAdapter) validateFreshOwnership(x capabilitypack.ProjectionActio
 
 func (a *SurfaceAdapter) preflight(actions []capabilitypack.ProjectionAction, snapshot OwnershipSnapshot) (string, error) {
 	for _, x := range actions {
+		if x.Kind == ActionUserMCP && x.Mode == capabilitypack.ProjectionDeleteTarget {
+			name, _ := mcpActionName(x.Args)
+			o := ObserveUserMCP(a.layout.UserMCPFile, name)
+			if o.Err != nil {
+				return x.ID, o.Err
+			}
+			if !o.Present {
+				continue
+			}
+		}
 		if err := a.validateFreshOwnership(x, snapshot); err != nil {
 			return x.ID, err
 		}
@@ -623,18 +665,14 @@ func readOptional(path string) ([]byte, error) {
 	return b, err
 }
 func settingsContainsFingerprint(path, fingerprint string) (bool, error) {
-	b, err := readOptional(path)
-	if err != nil {
-		return false, err
+	settings := ObserveSettings(path, nil)
+	if settings.Err != nil {
+		return false, settings.Err
 	}
-	if len(b) == 0 {
+	if len(settings.Raw) == 0 {
 		return false, nil
 	}
-	var root map[string]any
-	if err = json.Unmarshal(b, &root); err != nil {
-		return false, err
-	}
-	hooks, _ := root["hooks"].(map[string]any)
+	hooks, _ := settings.Root["hooks"].(map[string]any)
 	for _, raw := range hooks {
 		entries, _ := raw.([]any)
 		for _, entry := range entries {

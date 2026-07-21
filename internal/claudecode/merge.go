@@ -111,7 +111,7 @@ func (h CommandHookEntry) Validate() error {
 	}
 	return nil
 }
-func (h CommandHookEntry) Fingerprint() string { return canonicalFingerprint(h) }
+func (h CommandHookEntry) Fingerprint() string { return canonicalFingerprint(hookJSON(h)) }
 
 // MergeCommandHook preserves all unrelated JSON values and entries.
 func MergeCommandHook(settings []byte, hook CommandHookEntry, remove bool) ([]byte, error) {
@@ -136,35 +136,247 @@ func MergeCommandHook(settings []byte, hook CommandHookEntry, remove bool) ([]by
 		return nil, errors.New("Claude hook event entries must be an array")
 	}
 	wanted := hookJSON(hook)
-	out := make([]any, 0, len(entries)+1)
+	wantedBytes, _ := json.Marshal(wanted)
 	matches := 0
 	for _, e := range entries {
 		if canonicalFingerprint(e) == canonicalFingerprint(wanted) {
 			matches++
-			if remove {
-				continue
-			}
 		}
-		out = append(out, e)
 	}
 	if matches > 1 {
 		return nil, errors.New("duplicate canonical Claude command hook")
 	}
-	if !remove && matches == 0 {
-		out = append(out, wanted)
+	if remove && matches == 0 {
+		return append([]byte(nil), settings...), nil
 	}
-	if len(out) == 0 {
-		delete(hooks, hook.Event)
-	} else {
-		hooks[hook.Event] = out
+	if !remove && matches == 1 {
+		return append([]byte(nil), settings...), nil
 	}
-	if len(hooks) == 0 {
-		delete(root, "hooks")
-	} else {
-		root["hooks"] = hooks
+	data := settings
+	if len(strings.TrimSpace(string(data))) == 0 {
+		data = []byte("{}")
 	}
-	return json.MarshalIndent(root, "", "  ")
+	hs, he, found, err := jsonField(data, 0, len(data), "hooks")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		if remove {
+			return append([]byte(nil), data...), nil
+		}
+		eventObject, _ := json.Marshal(map[string]any{hook.Event: []any{wanted}})
+		return insertObjectField(data, 0, len(data), "hooks", eventObject)
+	}
+	es, ee, found, err := jsonField(data, hs, he, hook.Event)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		if remove {
+			return append([]byte(nil), data...), nil
+		}
+		arr := append([]byte{'['}, wantedBytes...)
+		arr = append(arr, ']')
+		return insertObjectField(data, hs, he, hook.Event, arr)
+	}
+	if remove {
+		return removeMatchingArrayElement(data, es, ee, canonicalFingerprint(wanted))
+	}
+	return appendArrayElement(data, es, ee, wantedBytes)
 }
 func hookJSON(h CommandHookEntry) map[string]any {
 	return map[string]any{"type": h.Type, "matcher": h.Matcher, "command": h.Command, "args": h.Args, "timeout_seconds": h.TimeoutSeconds, "blocking": h.Blocking, "failure": h.Failure, "authorities": h.Authorities}
+}
+
+func jsonField(data []byte, start, end int, key string) (int, int, bool, error) {
+	i := skipSpace(data, start)
+	if i >= end || data[i] != '{' {
+		return 0, 0, false, errors.New("JSON value must be an object")
+	}
+	i++
+	for {
+		i = skipDelimiters(data, i)
+		if i >= end || data[i] == '}' {
+			return 0, 0, false, nil
+		}
+		ks, ke, err := scanString(data, i)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		var name string
+		if err = json.Unmarshal(data[ks:ke], &name); err != nil {
+			return 0, 0, false, err
+		}
+		i = skipSpace(data, ke)
+		if i >= end || data[i] != ':' {
+			return 0, 0, false, errors.New("invalid JSON object")
+		}
+		vs := skipSpace(data, i+1)
+		ve, err := scanValue(data, vs)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		if name == key {
+			return vs, ve, true, nil
+		}
+		i = ve
+	}
+}
+func scanString(data []byte, i int) (int, int, error) {
+	if i >= len(data) || data[i] != '"' {
+		return 0, 0, errors.New("expected JSON string")
+	}
+	start := i
+	i++
+	for i < len(data) {
+		if data[i] == '\\' {
+			i += 2
+			continue
+		}
+		if data[i] == '"' {
+			return start, i + 1, nil
+		}
+		i++
+	}
+	return 0, 0, errors.New("unterminated JSON string")
+}
+func scanValue(data []byte, i int) (int, error) {
+	if i >= len(data) {
+		return 0, errors.New("missing JSON value")
+	}
+	if data[i] == '"' {
+		_, e, err := scanString(data, i)
+		return e, err
+	}
+	depth := 0
+	inString := false
+	for j := i; j < len(data); j++ {
+		c := data[j]
+		if inString {
+			if c == '\\' {
+				j++
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		if c == '{' || c == '[' {
+			depth++
+		}
+		if c == '}' || c == ']' {
+			if depth == 0 {
+				return j, nil
+			}
+			depth--
+			if depth == 0 {
+				return j + 1, nil
+			}
+		}
+		if depth == 0 && (c == ',' || c == '}' || c == ']') {
+			return j, nil
+		}
+	}
+	return len(data), nil
+}
+func skipSpace(data []byte, i int) int {
+	for i < len(data) && (data[i] == ' ' || data[i] == '\n' || data[i] == '\r' || data[i] == '\t') {
+		i++
+	}
+	return i
+}
+func skipDelimiters(data []byte, i int) int {
+	i = skipSpace(data, i)
+	if i < len(data) && data[i] == ',' {
+		i = skipSpace(data, i+1)
+	}
+	return i
+}
+func insertObjectField(data []byte, start, end int, key string, value []byte) ([]byte, error) {
+	close := end - 1
+	for close >= start && data[close] != '}' {
+		close--
+	}
+	if close < start {
+		return nil, errors.New("invalid JSON object")
+	}
+	inner := strings.TrimSpace(string(data[start+1 : close]))
+	field, _ := json.Marshal(key)
+	insert := append(field, ':')
+	insert = append(insert, value...)
+	if inner != "" {
+		insert = append([]byte{','}, insert...)
+	}
+	out := append([]byte(nil), data[:close]...)
+	out = append(out, insert...)
+	out = append(out, data[close:]...)
+	return out, nil
+}
+func appendArrayElement(data []byte, start, end int, value []byte) ([]byte, error) {
+	close := end - 1
+	for close >= start && data[close] != ']' {
+		close--
+	}
+	if close < start {
+		return nil, errors.New("invalid hook array")
+	}
+	insert := value
+	if strings.TrimSpace(string(data[start+1:close])) != "" {
+		insert = append([]byte{','}, insert...)
+	}
+	out := append([]byte(nil), data[:close]...)
+	out = append(out, insert...)
+	out = append(out, data[close:]...)
+	return out, nil
+}
+func removeMatchingArrayElement(data []byte, start, end int, want string) ([]byte, error) {
+	i := skipSpace(data, start)
+	if i >= end || data[i] != '[' {
+		return nil, errors.New("hook entries must be an array")
+	}
+	i++
+	type span struct{ s, e int }
+	var spans []span
+	for {
+		i = skipDelimiters(data, i)
+		if i >= end || data[i] == ']' {
+			break
+		}
+		e, err := scanValue(data, i)
+		if err != nil {
+			return nil, err
+		}
+		var v any
+		if err = json.Unmarshal(data[i:e], &v); err != nil {
+			return nil, err
+		}
+		if canonicalFingerprint(v) == want {
+			spans = append(spans, span{i, e})
+		}
+		i = e
+	}
+	if len(spans) != 1 {
+		return nil, errors.New("duplicate or missing canonical Claude command hook")
+	}
+	s, e := spans[0].s, spans[0].e
+	left := s - 1
+	for left > start && (data[left] == ' ' || data[left] == '\n' || data[left] == '\r' || data[left] == '\t') {
+		left--
+	}
+	if data[left] == ',' {
+		s = left
+	} else {
+		right := skipSpace(data, e)
+		if right < end && data[right] == ',' {
+			e = right + 1
+		}
+	}
+	out := append([]byte(nil), data[:s]...)
+	out = append(out, data[e:]...)
+	return out, nil
 }

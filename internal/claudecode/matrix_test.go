@@ -243,7 +243,12 @@ func TestSurfaceInspectionUsesExactProjectionIdentityDomainsAndObservedAuthoriza
 		{Kind: "instruction", ID: "guide", Source: "instructions/guide.md", Bindings: []capabilitypack.Binding{{Surface: capabilitypack.SurfaceClaude, Projection: "instruction", Name: "guide"}}},
 		{Kind: "lifecycle", ID: "session", Bindings: []capabilitypack.Binding{{Surface: capabilitypack.SurfaceClaude, Projection: "command_hook", Name: "session", Hook: &capabilitypack.CommandHook{Type: "command", Event: "SessionStart", Command: "engram", Args: []string{"session"}, TimeoutSeconds: 5, Blocking: true, Failure: "block", Authorities: []string{}}}}},
 	}}
-	a := NewSurfaceAdapter(bundle, l, filepath.Join(home, "state"), "claude", &recordingRunner{result: Result{Stdout: "2.1.203"}}, StaticOwnershipSnapshot(OwnershipSnapshot{}))
+	agentTarget := filepath.Join(l.AgentsDir, "coach.md")
+	agentFP, _, _ := localprojection.FingerprintPath(agentTarget)
+	ownership := NewOwnershipSnapshot(OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:coach", ID: "agent:coach", Kind: string(ActionAgentFile), Target: agentTarget, Fingerprint: agentFP, Contributors: []string{"pack:p:coach"}})
+	a := NewSurfaceAdapterWithAuthorization(bundle, l, filepath.Join(home, "state"), "claude", &recordingRunner{result: Result{Stdout: "2.1.203"}}, StaticOwnershipSnapshot(ownership), AuthorizationObserverFunc(func(context.Context) AuthorizationObservation {
+		return AuthorizationObservation{PolicyObserved: true, ToolPermissionObserved: true}
+	}))
 	inspection, err := a.InspectSurface(context.Background(), capabilitypack.SurfaceTransition{Desired: pack})
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +345,11 @@ func TestExactCleanupMatrixForSkillInstructionHookAndMCP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(got), `"command": "x"`) || !strings.Contains(string(got), `"command": "foreign"`) {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		os.WriteFile(path, got, 0600)
+		removed := ObserveHooks(path, hook, nil)
+		preserved := ObserveHooks(path, foreign, nil)
+		if len(removed.MatchingEntries) != 0 || len(preserved.MatchingEntries) != 1 {
 			t.Fatalf("hook cleanup=%s", got)
 		}
 		again, err := MergeCommandHook(got, hook, true)
@@ -362,4 +371,67 @@ func TestExactCleanupMatrixForSkillInstructionHookAndMCP(t *testing.T) {
 			t.Fatal("MCP effect ran after collision")
 		}
 	})
+}
+
+func TestHookMergeRoundTripPreservesEveryForeignByte(t *testing.T) {
+	hook := CommandHookEntry{Type: "command", Event: "SessionStart", Command: "packy-owned", Args: []string{}, TimeoutSeconds: 3, Blocking: true, Failure: "block", Authorities: []string{}}
+	original := []byte("{\n  \"z_foreign\" : [ 1, 2 ],\n  \"hooks\" : {\n    \"SessionStart\" : [ { \"type\":\"command\", \"matcher\":\"\", \"command\":\"foreign\", \"args\":[], \"timeout_seconds\":9, \"blocking\":false, \"failure\":\"warn\", \"authorities\":[] } ]\n  },\n  \"a_foreign\": { \"spacing\" : true }\n}\n")
+	added, err := MergeCommandHook(original, hook, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, foreign := range [][]byte{[]byte("\"z_foreign\" : [ 1, 2 ]"), []byte("{ \"type\":\"command\", \"matcher\":\"\", \"command\":\"foreign\""), []byte("\"a_foreign\": { \"spacing\" : true }")} {
+		if !strings.Contains(string(added), string(foreign)) {
+			t.Fatalf("foreign bytes changed:\n%s", added)
+		}
+	}
+	removed, err := MergeCommandHook(added, hook, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(removed) != string(original) {
+		t.Fatalf("round trip changed foreign bytes\nwant:%q\n got:%q", original, removed)
+	}
+}
+
+func TestMissingHookAndMCPRemovalConvergeWithoutEffects(t *testing.T) {
+	home := t.TempDir()
+	l := NewCanonicalLayout(home)
+	os.MkdirAll(l.ConfigDir, 0700)
+	original := []byte("{ \"foreign\" : true }\n")
+	os.WriteFile(l.SettingsFile, original, 0600)
+	before, _ := os.Stat(l.SettingsFile)
+	runner := &recordingRunner{}
+	a := NewSurfaceAdapter("", l, filepath.Join(home, "state"), "claude", runner, StaticOwnershipSnapshot(OwnershipSnapshot{}))
+	hook := capabilitypack.ProjectionAction{ID: "hook:missing", Kind: ActionCommandHook, Target: l.SettingsFile, Content: string(original), Command: Fingerprint(original), Mode: capabilitypack.ProjectionRemoveContent}
+	mcp := capabilitypack.ProjectionAction{ID: "mcp_server:missing", Kind: ActionUserMCP, Target: "missing", Command: "claude", Args: []string{"mcp", "remove", "missing", "--scope", "user"}, Mode: capabilitypack.ProjectionDeleteTarget}
+	if err := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{hook, mcp}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(l.SettingsFile)
+	if !os.SameFile(before, after) {
+		t.Fatal("missing hook cleanup rewrote settings")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatal("missing MCP cleanup invoked Claude")
+	}
+	mustFile(t, l.SettingsFile, string(original))
+}
+
+func TestStaleMCPRemovalPreservesEntryWithoutEffect(t *testing.T) {
+	home := t.TempDir()
+	l := NewCanonicalLayout(home)
+	definition := []byte(`{"mcpServers":{"memory":{"command":"foreign","args":[],"env":{}}}}`)
+	os.WriteFile(l.UserMCPFile, definition, 0600)
+	record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: "pack:p:m", ID: "mcp_server:memory", Kind: string(ActionUserMCP), Target: "memory", Fingerprint: Fingerprint([]byte("different")), DeletionAuthorized: true, Contributors: []string{"pack:p:m"}}
+	runner := &recordingRunner{}
+	a := NewSurfaceAdapter("", l, filepath.Join(home, "state"), "claude", runner, StaticOwnershipSnapshot(NewOwnershipSnapshot(record)))
+	remove := capabilitypack.ProjectionAction{ID: record.ID, Kind: ActionUserMCP, Target: "memory", Command: "claude", Args: []string{"mcp", "remove", "memory", "--scope", "user"}, Mode: capabilitypack.ProjectionDeleteTarget}
+	if err := a.ApplyProjections(context.Background(), []capabilitypack.ProjectionAction{remove}); err == nil {
+		t.Fatal("stale MCP cleanup accepted")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatal("stale MCP cleanup invoked Claude")
+	}
+	mustFile(t, l.UserMCPFile, string(definition))
 }
