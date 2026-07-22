@@ -44,6 +44,35 @@ func TestAllowedCommandRejectsInteractiveClaudeAndUnknownPacky(t *testing.T) {
 	}
 }
 
+func TestRunAllowedUsesCanonicalConfiguredPackyIdentity(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"packy", "packy_v0.1.9_darwin_amd64"} {
+		configured := filepath.Join(root, name)
+		if err := writeStub(configured, "#!/bin/sh\nexit 0\n"); err != nil {
+			t.Fatal(err)
+		}
+		evidence := validEvidence()
+		evidence.Commands[1] = runAllowed(context.Background(), root, root, RestrictedEnv(root, root), configured, filepath.Join(root, "claude"), []string{configured, "version"})
+		if err := ValidateEvidence(evidence); err != nil {
+			t.Fatalf("configured %s evidence was rejected: %v", name, err)
+		}
+	}
+
+	configured := filepath.Join(root, "packy_v0.1.9_darwin_amd64")
+	foreign := filepath.Join(root, "packy_v9.9.9_darwin_amd64")
+	if err := writeStub(foreign, "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	evidence := validEvidence()
+	evidence.Commands[1] = runAllowed(context.Background(), root, root, RestrictedEnv(root, root), configured, filepath.Join(root, "claude"), []string{foreign, "version"})
+	if err := ValidateEvidence(evidence); err == nil {
+		t.Fatal("accepted substituted Packy executable")
+	}
+}
+
 func TestRestrictedEnvIsAllowlistAndScrubsCredentials(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "super-secret")
 	env := RestrictedEnv("/sandbox", "/sandbox/npm/bin")

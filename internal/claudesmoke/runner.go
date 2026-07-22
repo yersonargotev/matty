@@ -486,6 +486,9 @@ func runAllowed(ctx context.Context, sandbox, dir string, env []string, packy, c
 		ce.Stderr = "forbidden command"
 		return ce
 	}
+	if argv[0] == packy {
+		ce.Name = "packy"
+	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd, boundaryErr := sandboxCommand(cctx, sandbox, argv[0], argv[1:]...)
