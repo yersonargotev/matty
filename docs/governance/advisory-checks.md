@@ -42,13 +42,25 @@ Authorization-Exception: private-security|urgent-revert|automation
 Authorization-Record: https://github.com/yersonargotev/packy/<canonical-record>
 ```
 
-`private-security` accepts an accessible active repository security advisory;
-`urgent-revert` accepts an open same-repository retrospective issue; and
-`automation` accepts a successful completed same-repository Actions run. The
-validator rejects unknown or duplicate headers, mixed issue/exception evidence,
-cross-repository records, inaccessible records, noncanonical URLs, and failed or
-stale record state. Completion of the two protected proposal workflows
-recomputes their associated PRs.
+`private-security` is denied fail-closed in this repository-only workflow.
+GitHub Actions has no `repository_advisory` trigger, so accepting private
+advisories could leave a stale successful status after an advisory changes.
+Supporting that exception requires separately authorized external infrastructure
+that can recompute every affected PR immediately. `urgent-revert` accepts an
+open same-repository retrospective whose body links the PR and whose creation is
+no later than 24 hours after the PR. The protected adapter projects only the
+binding fact; it never persists the retrospective body.
+
+`automation` accepts the PR itself for a current `app/dependabot` proposal on a
+`dependabot/*` branch, or a successful completed `workflow_dispatch` run of the
+protected `Synchronize pack source`/`sync/*` or `Release`/`release/*` proposal
+path, initiated by `yersonargotev` and proposed by `app/github-actions`.
+
+The validator rejects unknown or duplicate headers, mixed issue/exception
+evidence, cross-repository records, inaccessible records, noncanonical URLs,
+unbound records, and failed or stale record state. Issue and approved
+proposal-workflow events search exact record URLs in open PR bodies and
+recompute every match; the search result is only target discovery, never proof.
 
 CI and Security also run weekly. Dependency Review compares the current commit
 with its first parent outside pull-request events, so scheduled and `main` runs

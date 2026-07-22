@@ -47,6 +47,12 @@ jobs:
           set -euo pipefail
           owner="${GITHUB_REPOSITORY%%/*}"
           repository="${GITHUB_REPOSITORY#*/}"
+          linked_by_body() {
+            local record_url="$1"
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+              --search "\"$record_url\" in:body" --json body,number |
+              jq -r --arg record_url "$record_url" '.[] | select((.body // "") | contains($record_url)) | .number'
+          }
           case "$EVENT_NAME" in
             pull_request_target)
               targets="$EVENT_PR_NUMBER"
@@ -54,15 +60,20 @@ jobs:
             issues)
               # GraphQL variables are expanded by GitHub, not Bash.
               # shellcheck disable=SC2016
-              targets="$(gh api graphql \
+              closing_targets="$(gh api graphql \
                 -f query='query($owner:String!,$repository:String!,$number:Int!){repository(owner:$owner,name:$repository){issue(number:$number){closedByPullRequestsReferences(first:100){nodes{number state}}}}}' \
                 -f owner="$owner" \
                 -f repository="$repository" \
                 -F number="$EVENT_ISSUE_NUMBER" \
                 --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN") | .number')"
+              record_url="$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")"
+              targets="$closing_targets
+              $(linked_by_body "$record_url")"
               ;;
             workflow_run)
-              targets="$(jq -r '.workflow_run.pull_requests[].number' "$GITHUB_EVENT_PATH")"
+              record_url="$(jq -r '.workflow_run.html_url' "$GITHUB_EVENT_PATH")"
+              targets="$(jq -r '.workflow_run.pull_requests[].number' "$GITHUB_EVENT_PATH")
+              $(linked_by_body "$record_url")"
               ;;
             *)
               echo "unsupported event: $EVENT_NAME" >&2
@@ -90,7 +101,6 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
-      security-events: read
       statuses: write
     steps:
       - name: Check out the trusted definition
@@ -127,7 +137,7 @@ jobs:
 
           pr="$directory/pr.json"
           gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json baseRefName,baseRefOid,body,closingIssuesReferences,headRefOid,number >"$pr"
+            --json author,baseRefName,baseRefOid,body,closingIssuesReferences,createdAt,headRefName,headRefOid,number,url >"$pr"
           head_sha="$(jq -r '.headRefOid' "$pr")"
           publish "$head_sha" pending 'Validating current authorization metadata'
 
@@ -168,29 +178,21 @@ jobs:
               record_url="$(jq -r '.url' "$directory/declaration.json")"
               case "$exception_type" in
                 private-security)
-                  pattern="^https://github.com/$GITHUB_REPOSITORY/security/advisories/(GHSA-[A-Za-z0-9-]+)$"
-                  if [[ "$record_url" =~ $pattern ]]; then
-                    advisory="${BASH_REMATCH[1]}"
-                    gh api "repos/$GITHUB_REPOSITORY/security-advisories/$advisory" \
-                      --jq '{state}' >"$directory/record.json" || result=$?
-                    if ((result == 0)); then
-                      jq --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" \
-                        '. + {type:$type,url:$url,kind:"security-advisory",repository:$repository,accessible:true}' \
-                        "$directory/record.json" >"$directory/exception.json" || result=$?
-                    fi
-                  else
-                    result=1
-                  fi
+                  # GitHub Actions has no repository_advisory trigger. Deny
+                  # until authorized external infrastructure can recompute on
+                  # every advisory change without leaving stale success.
+                  result=1
                   ;;
                 urgent-revert)
                   pattern="^https://github.com/$GITHUB_REPOSITORY/issues/([1-9][0-9]*)$"
                   if [[ "$record_url" =~ $pattern ]]; then
                     issue_number="${BASH_REMATCH[1]}"
                     gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" \
-                      --json state >"$directory/record.json" || result=$?
+                      --json body,createdAt,state >"$directory/record.json" || result=$?
                     if ((result == 0)); then
                       jq --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" \
-                        '. + {type:$type,url:$url,kind:"issue",repository:$repository,accessible:true}' \
+                        --arg pr_url "$(jq -r '.url' "$pr")" --argjson pr "$PR_NUMBER" \
+                        '{type:$type,url:$url,kind:"issue",repository:$repository,state,created_at:.createdAt,accessible:true,pull_request_number:(if ((.body // "") | contains($pr_url)) then $pr else 0 end)}' \
                         "$directory/record.json" >"$directory/exception.json" || result=$?
                     fi
                   else
@@ -198,16 +200,21 @@ jobs:
                   fi
                   ;;
                 automation)
-                  pattern="^https://github.com/$GITHUB_REPOSITORY/actions/runs/([1-9][0-9]*)$"
-                  if [[ "$record_url" =~ $pattern ]]; then
+                  run_pattern="^https://github.com/$GITHUB_REPOSITORY/actions/runs/([1-9][0-9]*)$"
+                  pr_pattern="^https://github.com/$GITHUB_REPOSITORY/pull/([1-9][0-9]*)$"
+                  if [[ "$record_url" =~ $run_pattern ]]; then
                     run_id="${BASH_REMATCH[1]}"
                     gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
-                      --jq '{state:.status,conclusion}' >"$directory/record.json" || result=$?
+                      --jq '{state:.status,conclusion,workflow:.name,path,event,head_branch,head_sha,actor:.actor.login}' >"$directory/record.json" || result=$?
                     if ((result == 0)); then
                       jq --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" \
                         '. + {type:$type,url:$url,kind:"actions-run",repository:$repository,accessible:true}' \
                         "$directory/record.json" >"$directory/exception.json" || result=$?
                     fi
+                  elif [[ "$record_url" =~ $pr_pattern ]] && [[ "${BASH_REMATCH[1]}" == "$PR_NUMBER" ]]; then
+                    jq -n --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR_NUMBER" \
+                      '{type:$type,url:$url,kind:"dependabot-pr",repository:$repository,state:"OPEN",accessible:true,pull_request_number:$pr}' \
+                      >"$directory/exception.json" || result=$?
                   else
                     result=1
                   fi
@@ -236,6 +243,9 @@ jobs:
                   pull_request: {
                     number: $pr[0].number,
                     body: $pr[0].body,
+                    created_at: $pr[0].createdAt,
+                    author: $pr[0].author.login,
+                    head_ref: $pr[0].headRefName,
                     base: {ref: $pr[0].baseRefName, sha: $pr[0].baseRefOid}
                   }
                 },

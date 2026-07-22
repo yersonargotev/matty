@@ -4,7 +4,7 @@
     "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
     "pull_request": {
       "number": 212,
-      "body": "Authorization-Exception: private-security\nAuthorization-Record: https://github.com/yersonargotev/packy/security/advisories/GHSA-abcd-1234-5678",
+      "body": "Authorization-Exception: urgent-revert\nAuthorization-Record: https://github.com/yersonargotev/packy/issues/212",
       "base": {"ref": "main", "sha": "6666666666666666666666666666666666666666"}
     }
   },

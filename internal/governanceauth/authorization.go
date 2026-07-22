@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const ApprovedLabel = "status:approved"
@@ -28,9 +29,12 @@ type Event struct {
 		DefaultBranch string `json:"default_branch"`
 	} `json:"repository"`
 	PullRequest struct {
-		Number int    `json:"number"`
-		Body   string `json:"body"`
-		Base   struct {
+		Number    int    `json:"number"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+		Author    string `json:"author"`
+		HeadRef   string `json:"head_ref"`
+		Base      struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"base"`
@@ -53,6 +57,14 @@ type ExceptionRecord struct {
 	State      string `json:"state"`
 	Conclusion string `json:"conclusion,omitempty"`
 	Accessible bool   `json:"accessible"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	PRNumber   int    `json:"pull_request_number,omitempty"`
+	Workflow   string `json:"workflow,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Event      string `json:"event,omitempty"`
+	HeadBranch string `json:"head_branch,omitempty"`
+	HeadSHA    string `json:"head_sha,omitempty"`
+	Actor      string `json:"actor,omitempty"`
 }
 
 type ExceptionDeclaration struct {
@@ -99,7 +111,7 @@ func Validate(event Event, metadata Metadata) error {
 		if len(metadata.ClosingIssuesReferences) != 0 || len(metadata.Issues) != 0 {
 			return errors.New("approved-issue and exception authorization cannot be mixed")
 		}
-		return validateException(event.Repository.FullName, declaration, metadata.Exception)
+		return validateException(event, declaration, metadata.Exception)
 	}
 	if metadata.Exception != nil {
 		return errors.New("exception metadata exists without a declaration")
@@ -190,32 +202,61 @@ func ParseExceptionDeclaration(body string) (ExceptionDeclaration, bool, error) 
 	return ExceptionDeclaration{Type: types[0], URL: records[0]}, true, nil
 }
 
-func validateException(repository string, declaration ExceptionDeclaration, record *ExceptionRecord) error {
+func validateException(event Event, declaration ExceptionDeclaration, record *ExceptionRecord) error {
+	if declaration.Type == "private-security" {
+		return errors.New("private-security exception is unavailable without immediate advisory-change recomputation")
+	}
 	if record == nil || !record.Accessible {
 		return errors.New("declared exception record is inaccessible")
 	}
 	if record.Type != declaration.Type || record.URL != declaration.URL {
 		return errors.New("trusted exception record does not match declaration")
 	}
-	if record.Repository != repository {
-		return fmt.Errorf("exception repository %q does not match %q", record.Repository, repository)
+	if record.Repository != event.Repository.FullName {
+		return fmt.Errorf("exception repository %q does not match %q", record.Repository, event.Repository.FullName)
 	}
-	if err := validateCanonicalRecordURL(repository, declaration); err != nil {
+	if err := validateCanonicalRecordURL(event.Repository.FullName, declaration); err != nil {
 		return err
 	}
 
 	switch declaration.Type {
-	case "private-security":
-		if record.Kind != "security-advisory" || (record.State != "triage" && record.State != "draft" && record.State != "published") {
-			return errors.New("private-security record is not an active repository advisory")
-		}
 	case "urgent-revert":
 		if record.Kind != "issue" || record.State != "OPEN" {
 			return errors.New("urgent-revert record is not an open retrospective issue")
 		}
+		if record.PRNumber != event.PullRequest.Number {
+			return errors.New("urgent-revert retrospective is not bound to this pull request")
+		}
+		created, createdErr := time.Parse(time.RFC3339, record.CreatedAt)
+		prCreated, prCreatedErr := time.Parse(time.RFC3339, event.PullRequest.CreatedAt)
+		if createdErr != nil || prCreatedErr != nil || created.Before(prCreated) || created.After(prCreated.Add(24*time.Hour)) {
+			return errors.New("urgent-revert retrospective was not opened within 24 hours of the pull request")
+		}
 	case "automation":
-		if record.Kind != "actions-run" || record.State != "completed" || record.Conclusion != "success" {
-			return errors.New("automation record is not a successful completed workflow run")
+		switch record.Kind {
+		case "dependabot-pr":
+			if record.State != "OPEN" || record.PRNumber != event.PullRequest.Number || event.PullRequest.Author != "app/dependabot" || !strings.HasPrefix(event.PullRequest.HeadRef, "dependabot/") {
+				return errors.New("automation record is not this Dependabot pull request")
+			}
+		case "actions-run":
+			if record.State != "completed" || record.Conclusion != "success" {
+				return errors.New("automation record is not a successful completed workflow run")
+			}
+			if record.Event != "workflow_dispatch" || record.HeadBranch != event.Repository.DefaultBranch || record.HeadSHA == "" || record.Actor != "yersonargotev" || event.PullRequest.Author != "app/github-actions" {
+				return errors.New("automation run lacks the protected workflow identity")
+			}
+			allowed := false
+			switch {
+			case record.Workflow == "Synchronize pack source" && record.Path == ".github/workflows/sync-pack-source.yml" && strings.HasPrefix(event.PullRequest.HeadRef, "sync/"):
+				allowed = true
+			case record.Workflow == "Release" && record.Path == ".github/workflows/release.yml" && strings.HasPrefix(event.PullRequest.HeadRef, "release/"):
+				allowed = true
+			}
+			if !allowed {
+				return errors.New("automation run is not an authorized proposal workflow for this branch")
+			}
+		default:
+			return errors.New("automation record kind is not authorized")
 		}
 	}
 	return nil
@@ -247,7 +288,11 @@ func validateCanonicalRecordURL(repository string, declaration ExceptionDeclarat
 			return errors.New("urgent-revert record URL has no issue number")
 		}
 	case "automation":
-		identifier = strings.TrimPrefix(remainder, "actions/runs/")
+		prefix := "actions/runs/"
+		if strings.HasPrefix(remainder, "pull/") {
+			prefix = "pull/"
+		}
+		identifier = strings.TrimPrefix(remainder, prefix)
 		if identifier == remainder || strings.Contains(identifier, "/") {
 			return errors.New("automation record URL is not canonical")
 		}

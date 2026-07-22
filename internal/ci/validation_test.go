@@ -228,7 +228,14 @@ func TestGovernanceChecksKeepStableProtectedAdvisoryIdentities(t *testing.T) {
 			t.Fatalf("governance workflow missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"pull_request:\n", "contents: write", "issues: write", "pull-requests: write"} {
+	for _, forbidden := range []string{
+		"pull_request:\n",
+		"contents: write",
+		"issues: write",
+		"pull-requests: write",
+		"security-events: read",
+		"/security-advisories/",
+	} {
 		if strings.Contains(governance, forbidden) {
 			t.Fatalf("governance workflow contains unsafe boundary %q", forbidden)
 		}
