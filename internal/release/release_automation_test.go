@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/yersonargotev/packy/internal/release"
 )
 
 var supportedReleasePlatforms = []string{
@@ -101,25 +103,42 @@ func TestReleaseWorkflowValidatesCompleteEvidenceBeforePublication(t *testing.T)
 func TestReleaseEvidenceVerifierRequiresExactCandidateParity(t *testing.T) {
 	root := repoRoot(t)
 	tag := "v0.99.0"
-	commit := strings.Repeat("a", 40)
+	commit := gitOutput(t, root, "rev-parse", "HEAD")
 	dist := filepath.Join(t.TempDir(), "dist")
 	if err := os.MkdirAll(dist, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var checksumLines []string
 	for _, asset := range releaseAssets(tag) {
 		path := filepath.Join(dist, asset)
 		if err := os.WriteFile(path, []byte("candidate "+asset), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		checksumLines = append(checksumLines, sha256File(t, path)+"  "+asset)
 	}
-	if err := os.WriteFile(filepath.Join(dist, "checksums.txt"), []byte(strings.Join(checksumLines, "\n")+"\n"), 0o600); err != nil {
+	sbomSource := filepath.Join(t.TempDir(), release.SBOMName)
+	generateSBOM := exec.Command("go", "run", "./internal/tools/releasesbom", "--version", tag, "--created", gitOutput(t, root, "show", "-s", "--format=%cI", commit), "--dist", dist, "--out", sbomSource)
+	generateSBOM.Dir = root
+	generateSBOM.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
+	if output, err := generateSBOM.CombinedOutput(); err != nil {
+		t.Fatalf("generate SBOM: %v\n%s", err, output)
+	}
+	sbom, err := os.ReadFile(sbomSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, release.SBOMName), sbom, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var checksumLines []string
+	for _, name := range append(releaseAssets(tag), release.SBOMName) {
+		checksumLines = append(checksumLines, sha256File(t, filepath.Join(dist, name))+"  "+name)
+	}
+	sort.Strings(checksumLines)
+	if err := os.WriteFile(filepath.Join(dist, release.ChecksumsName), []byte(strings.Join(checksumLines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	metadata := filepath.Join(t.TempDir(), "metadata")
 	formula := filepath.Join(metadata, "packy.rb")
-	generate := exec.Command("bash", filepath.Join(root, "scripts", "generate-homebrew-formula.sh"), "--version", tag, "--checksums", filepath.Join(dist, "checksums.txt"), "--out", formula)
+	generate := exec.Command("bash", filepath.Join(root, "scripts", "generate-homebrew-formula.sh"), "--version", tag, "--checksums", filepath.Join(dist, release.ChecksumsName), "--out", formula)
 	generate.Dir = root
 	generate.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
 	if output, err := generate.CombinedOutput(); err != nil {
@@ -132,7 +151,20 @@ func TestReleaseEvidenceVerifierRequiresExactCandidateParity(t *testing.T) {
 	}
 	fakeBin := t.TempDir()
 	canonicalLog := filepath.Join(t.TempDir(), "canonical-validator.log")
-	fakeGo := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CANONICAL_LOG\"\n[ \"${FAIL_CANONICAL:-0}\" != 1 ]\n"
+	fakeGo := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$CANONICAL_LOG"
+if [ "${1:-}" = run ] && [ "${2:-}" = ./internal/tools/releasesbom ]; then
+  out=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --out ]; then out="$2"; break; fi
+    shift
+  done
+  cp "$FAKE_SBOM" "$out"
+  exit 0
+fi
+[ "${FAIL_CANONICAL:-0}" != 1 ]
+`
 	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +179,7 @@ func TestReleaseEvidenceVerifierRequiresExactCandidateParity(t *testing.T) {
 		if failCanonical {
 			fail = "1"
 		}
-		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"), "CANONICAL_LOG="+canonicalLog, "FAIL_CANONICAL="+fail)
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"), "CANONICAL_LOG="+canonicalLog, "FAKE_SBOM="+filepath.Join(dist, release.SBOMName), "FAIL_CANONICAL="+fail)
 		return cmd.CombinedOutput()
 	}
 	if output, err := run(false); err != nil {
@@ -289,7 +321,7 @@ func TestBuildReleaseArtifactsCreatesChecksummedSupportedPlatforms(t *testing.T)
 	}
 
 	wantAssets := releaseAssets("v0.1.7")
-	wantEntries := append(append([]string{}, wantAssets...), "checksums.txt")
+	wantEntries := append(append([]string{}, wantAssets...), release.ChecksumsName, release.SBOMName)
 	sort.Strings(wantEntries)
 
 	entries, err := os.ReadDir(outDir)
@@ -308,18 +340,21 @@ func TestBuildReleaseArtifactsCreatesChecksummedSupportedPlatforms(t *testing.T)
 		t.Fatalf("v0.1.7 release directory mismatch\nwant:\n%s\ngot:\n%s", strings.Join(wantEntries, "\n"), strings.Join(gotEntries, "\n"))
 	}
 
-	checksums := readChecksums(t, filepath.Join(outDir, "checksums.txt"))
+	checksums := readChecksums(t, filepath.Join(outDir, release.ChecksumsName))
 	for _, asset := range wantAssets {
 		gotChecksum, ok := checksums[asset]
 		if !ok {
-			t.Fatalf("checksums.txt missing checksum for %s", asset)
+			t.Fatalf("SHA256SUMS missing checksum for %s", asset)
 		}
 		if gotChecksum != sha256File(t, filepath.Join(outDir, asset)) {
 			t.Fatalf("checksum for %s does not match artifact bytes", asset)
 		}
 	}
-	if len(checksums) != len(wantAssets) {
-		t.Fatalf("checksums.txt should contain exactly release artifacts; got %d entries", len(checksums))
+	if got := checksums[release.SBOMName]; got != sha256File(t, filepath.Join(outDir, release.SBOMName)) {
+		t.Fatalf("SHA256SUMS does not bind the SBOM: %q", got)
+	}
+	if len(checksums) != len(wantAssets)+1 {
+		t.Fatalf("SHA256SUMS should contain exactly binaries and SBOM; got %d entries", len(checksums))
 	}
 }
 
@@ -597,6 +632,7 @@ func validFormulaChecksumLines(version string) []string {
 		fmt.Sprintf("%s  packy_%s_darwin_arm64", strings.Repeat("b", sha256.Size*2), version),
 		fmt.Sprintf("%s  packy_%s_linux_amd64", strings.Repeat("c", sha256.Size*2), version),
 		fmt.Sprintf("%s  packy_%s_linux_arm64", strings.Repeat("d", sha256.Size*2), version),
+		fmt.Sprintf("%s  %s", strings.Repeat("e", sha256.Size*2), release.SBOMName),
 	}
 }
 
@@ -612,12 +648,19 @@ func writeChecksumManifest(t *testing.T, lines []string) string {
 
 func fakeGoBuild(t *testing.T) (string, string) {
 	t.Helper()
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "go-build.log")
 	goPath := filepath.Join(dir, "go")
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 echo "$*" >> %q
+if [[ "${1:-}" == "run" ]]; then
+  exec %q "$@"
+fi
 out=""
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-o" ]]; then
@@ -630,11 +673,22 @@ if [[ -n "$out" ]]; then
   mkdir -p "$(dirname "$out")"
   printf 'fake binary for %%s\n' "$(basename "$out")" > "$out"
 fi
-`, logPath)
+`, logPath, realGo)
 	if err := os.WriteFile(goPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir, logPath
+}
+
+func gitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func releaseAssets(version string) []string {

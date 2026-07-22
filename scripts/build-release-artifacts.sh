@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Build Packy release artifacts and a SHA-256 checksum manifest.
+Build Packy release artifacts, an SPDX SBOM, and a SHA-256 manifest.
 
 Usage:
   scripts/build-release-artifacts.sh --version <v0.x.y> [--out-dir <dir>]
@@ -50,6 +50,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 mkdir -p "$out_dir"
 out_dir="$(cd "$out_dir" && pwd)"
+if find "$out_dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  echo "release output directory must be empty: $out_dir" >&2
+  exit 1
+fi
 
 platforms=(
   "darwin/amd64"
@@ -70,16 +74,29 @@ for platform in "${platforms[@]}"; do
   artifacts+=("$artifact")
 done
 
+metadata_dir="$(mktemp -d "$(dirname "$out_dir")/.packy-release-metadata.XXXXXX")"
+trap 'rm -rf "$metadata_dir"' EXIT
+created="$(git show -s --format=%cI HEAD)"
+go run ./internal/tools/releasesbom \
+  --version "$version" \
+  --created "$created" \
+  --dist "$out_dir" \
+  --out "$metadata_dir/sbom.spdx.json" >/dev/null
+ln "$metadata_dir/sbom.spdx.json" "$out_dir/sbom.spdx.json"
+artifacts+=("sbom.spdx.json")
+IFS=$'\n' artifacts=($(printf '%s\n' "${artifacts[@]}" | sort))
+unset IFS
+
 (
   cd "$out_dir"
-  : > checksums.txt
+  : > SHA256SUMS
   for artifact in "${artifacts[@]}"; do
     if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum "$artifact" >> checksums.txt
+      sha256sum "$artifact" >> SHA256SUMS
     else
-      shasum -a 256 "$artifact" >> checksums.txt
+      shasum -a 256 "$artifact" >> SHA256SUMS
     fi
   done
 )
 
-echo "wrote ${#artifacts[@]} artifacts and checksums.txt to $out_dir"
+echo "wrote four binaries, sbom.spdx.json, and SHA256SUMS to $out_dir"
