@@ -3,7 +3,7 @@
 - Issue: [#168](https://github.com/yersonargotev/packy/issues/168)
 - Baseline commit: `7255ffb48a58d82c5e1de408f272e57a68928f51`
 - REST/GraphQL/Git observation: `2026-07-22T03:24:25Z`
-- Owner UI observation: `2026-07-22T03:26:25Z`–`2026-07-22T03:30:38Z`
+- Owner UI observation: `2026-07-22T03:26:25Z`–`2026-07-22T03:47:49Z`
 - Observer: `yersonargotev` through a recently authenticated Owner session
 
 ## Evidence boundary
@@ -55,19 +55,19 @@ as implied approval merely because repository prerequisite work may proceed.
 
 | Surface | Current state | Independent evidence | Consequence |
 | --- | --- | --- | --- |
-| Ownership | Public personal repository; `yersonargotev` is the sole collaborator and Admin; no pending invitations | REST collaborator inventory and GraphQL `viewerPermission=ADMIN` agree | One human identity holds routine and break-glass authority. |
-| Merge policy | Merge, squash, and rebase enabled; auto-merge and automatic head deletion disabled | REST and GraphQL agree | Merge methods exist without an enforcement gate. |
+| Ownership | Public personal repository; `yersonargotev` is the sole collaborator and Admin; no pending invitations | REST collaborator inventory, GraphQL `viewerPermission=ADMIN`, and Owner Settings UI agree | One human identity holds routine and break-glass authority. |
+| Merge policy | Merge, squash, and rebase enabled; auto-merge and automatic head deletion disabled | REST, GraphQL, and Owner General Settings UI agree | Merge methods exist without an enforcement gate. |
 | `main` | One branch at `7255ffb48a58d82c5e1de408f272e57a68928f51`; unprotected | Branch REST and `git ls-remote` agree; classic protection returns `404` | Direct update, force-push, and deletion are not prevented. |
 | Tags | `v0.1.0`–`v0.1.7`; no tag rule | Tag REST and `git ls-remote` agree | Version refs remain mutable. |
 | Rules | No repository rulesets and no effective rule for `main` | Ruleset and effective-rules endpoints both return empty sets | No PR, review, check, signed-commit, or bypass rule is enforced. |
-| Actions policy | Enabled; all Actions allowed; full-SHA enforcement disabled; default token read-only; workflow tokens may approve PR reviews; first-time-contributor fork approval; 90-day retention | Actions policy endpoints and checked-in workflows | `can_approve_pull_request_reviews` drifted from `false` on 2026-07-20 to `true`; later work must use live state. |
+| Actions policy | Enabled; all Actions allowed; full-SHA enforcement disabled; default token read-only; workflow tokens may approve PR reviews; first-time-contributor fork approval; 90-day retention | Actions policy endpoints and Owner Actions Settings UI agree | `can_approve_pull_request_reviews` drifted from `false` on 2026-07-20 to `true`; later work must use live state. |
 | Workflows | CI, Claude stable canary, Release, Synchronize pack source, and GitHub-managed Pages are active | Workflow REST matches four checked-in definitions plus the managed Pages workflow | Release and synchronization contain scoped write paths; canary can write issues. |
-| Environments | Only `github-pages`; Admin bypass enabled; custom branches `main`, `gh-pages`, and stale `feat/packy-atomic-cutover`; no environment secrets or reviewers | Environment and branch-policy endpoints | No protected `release` or `homebrew` authority boundary exists. |
+| Environments | Only `github-pages`; Admin bypass enabled; custom branches `main`, `gh-pages`, and stale `feat/packy-atomic-cutover`; no environment secrets or reviewers | Environment/branch-policy endpoints and Owner Environment Settings UI agree | No protected `release` or `homebrew` authority boundary exists. |
 | Credentials | Repository secret `HOMEBREW_TAP_TOKEN`; no repository variables, Dependabot secrets, Codespaces secrets, or environment secrets | Secret-name API and Release workflow reference agree | Token value was not queried; type and external scope remain unverified. |
 | Releases | Eight published releases, five assets each, all mutable | Release REST and `gh release list` agree | Existing assets and tags lack immutable-release enforcement. |
-| Pages | Legacy build from `main:/`; public and HTTPS-enforced | Pages endpoint and environment state | Pages follows unprotected `main`. |
-| Security | Secret scanning and push protection enabled; zero visible secret alerts; Dependabot alerts/updates and automated fixes disabled; no CodeQL analysis; private vulnerability reporting disabled | Security feature endpoints and repository files | Three future security checks do not yet exist. |
-| Keys/hooks | No deploy keys or repository webhooks | Independent endpoints return empty sets | Installed Apps and workflow tokens remain separate authority surfaces. |
+| Pages | Legacy build from `main:/`; public and HTTPS-enforced | Pages endpoint and Owner Pages Settings UI agree | Pages follows unprotected `main`. |
+| Security | Secret scanning and push protection enabled; zero visible secret alerts; dependency graph, Dependabot alerts/updates, and automated fixes disabled; no CodeQL analysis; private vulnerability reporting disabled | Security feature endpoints and Owner Advanced Security Settings UI agree on enablement | Three future security checks do not yet exist. |
+| Keys/hooks | No deploy keys or repository webhooks | Each REST inventory agrees with its independent Owner Settings UI | Installed Apps and workflow tokens remain separate authority surfaces. |
 
 ### Check identity and source registry
 
@@ -266,5 +266,7 @@ The Owner sign-off statement is:
 > for enforcement, and credential/environment promotion remains blocked until
 > `HOMEBREW_TAP_TOKEN` metadata is verified.
 
-This sign-off does not authorize #172–#176 or any repository-setting,
-credential, environment, release, tag, or protected-ref mutation.
+This sign-off does not authorize #172–#176, enforcement, or any credential,
+environment, release, tag, protected-ref, or repository-setting mutation except
+the independently reversible repository Actions policy prerequisite scoped to
+#170.

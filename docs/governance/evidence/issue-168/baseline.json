@@ -5,7 +5,7 @@
   "capture": {
     "api_observed_at": "2026-07-22T03:24:25Z",
     "owner_ui_observed_from": "2026-07-22T03:26:25Z",
-    "owner_ui_observed_through": "2026-07-22T03:30:38Z",
+    "owner_ui_observed_through": "2026-07-22T03:47:49Z",
     "base_commit": "7255ffb48a58d82c5e1de408f272e57a68928f51",
     "actor": "yersonargotev",
     "secret_values_observed": false
@@ -233,6 +233,7 @@
     "secret_scanning_push_protection": "enabled",
     "secret_scanning_non_provider_patterns": "disabled",
     "secret_scanning_validity_checks": "disabled",
+    "dependency_graph": "disabled",
     "dependabot_alerts": "disabled",
     "dependabot_security_updates": "disabled",
     "automated_security_fixes": "disabled",
@@ -257,14 +258,20 @@
     "secret_or_recovery_material_recorded": false
   },
   "evidence_agreement": [
-    {"surface": "repository identity, merge settings, and Owner permission", "primary": "REST", "independent": "GraphQL", "result": "agree"},
+    {"surface": "repository identity, merge settings, release immutability, and Owner permission", "primary": "REST and GraphQL", "independent": "Owner Settings UI", "result": "agree"},
     {"surface": "branch and tag refs", "primary": "REST", "independent": "Git protocol ls-remote", "result": "agree"},
     {"surface": "workflow inventory and declared permissions", "primary": "REST", "independent": "checked-in workflow definitions", "result": "agree"},
     {"surface": "check names and sources", "primary": "check-runs REST", "independent": "checked-in job names", "result": "agree-for-existing-checks"},
+    {"surface": "repository Actions policy", "primary": "REST", "independent": "Owner Actions Settings UI", "result": "agree"},
+    {"surface": "environments and github-pages protection", "primary": "REST", "independent": "Owner Environments Settings UI", "result": "agree"},
     {"surface": "repository credential identifiers", "primary": "secrets metadata REST", "independent": "checked-in workflow references", "result": "agree-on-name-only"},
     {"surface": "release inventory", "primary": "REST", "independent": "gh release list", "result": "agree"},
+    {"surface": "Pages source and HTTPS policy", "primary": "REST", "independent": "Owner Pages Settings UI", "result": "agree"},
+    {"surface": "security feature enablement", "primary": "REST", "independent": "Owner Advanced Security Settings UI", "result": "agree"},
+    {"surface": "deploy keys", "primary": "REST", "independent": "Owner Deploy Keys Settings UI", "result": "agree-empty"},
+    {"surface": "repository webhooks", "primary": "REST", "independent": "Owner Webhooks Settings UI", "result": "agree-empty"},
     {"surface": "installed Apps", "primary": "Owner Settings UI inventory", "independent": "individual installation configuration views", "result": "agree"},
-    {"surface": "Owner access and recovery configuration", "primary": "REST and GraphQL Owner permission", "independent": "Owner Settings UI", "result": "admin-access-agrees; human recovery attestations pending"}
+    {"surface": "Owner access and recovery configuration", "primary": "REST and GraphQL Owner permission", "independent": "Owner Settings UI plus sanitized Owner attestation", "result": "agree-and-attested"}
   ],
   "readiness": {
     "state": "repository-prerequisites-authorized",
@@ -279,6 +286,7 @@
       "evidence": "explicit issue-delivery conversation confirmation"
     },
     "later_issues_authorized": [169, 170, 171],
+    "settings_authorized": ["issue #170 repository Actions policy prerequisite only"],
     "controls_authorized_for_enforcement": false,
     "credential_or_environment_promotion_authorized": false
   }
