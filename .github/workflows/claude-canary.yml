@@ -5,9 +5,7 @@ on:
     - cron: '17 7 * * *'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 concurrency:
   group: claude-stable-canary
@@ -16,22 +14,27 @@ concurrency:
 jobs:
   stable-smoke:
     name: Claude current-stable package smoke
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: macos-15
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -45,7 +48,7 @@ jobs:
 
       - name: Retain current-stable evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: claude-stable-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
           path: ${{ runner.temp }}/claude-stable-evidence

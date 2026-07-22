@@ -31,9 +31,9 @@ func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
 		"push:",
 		"- 'v0.*.*'",
 		"required: true",
-		"actions/checkout@v5",
+		"actions/checkout@",
 		"fetch-depth: 0",
-		"actions/setup-go@v6",
+		"actions/setup-go@",
 		"go-version-file: go.mod",
 		"git checkout --detach \"$tag\"",
 		`echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"`,
@@ -181,11 +181,11 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		`git checkout --detach "$candidate"`,
 	})
 	setupGoIndex := releaseWorkflowStepIndex(t, workflow, "Set up Go from proved commit", []string{
-		"uses: actions/setup-go@v6",
+		"uses: actions/setup-go@",
 		"go-version-file: go.mod",
 	})
 	provedArtifactIndex := releaseWorkflowStepIndex(t, workflow, "Download proved release artifacts and checksums.txt", []string{
-		"uses: actions/download-artifact@v4", "path: dist",
+		"uses: actions/download-artifact@", "path: dist",
 	})
 	requireTapTokenIndex := releaseWorkflowStepIndex(t, workflow, "Require Homebrew tap token", []string{
 		"HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
@@ -193,7 +193,7 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		"yersonargotev/homebrew-tap",
 	})
 	tapCheckoutIndex := releaseWorkflowStepIndex(t, workflow, "Check out Homebrew tap", []string{
-		"uses: actions/checkout@v5",
+		"uses: actions/checkout@",
 		"repository: yersonargotev/homebrew-tap",
 		"path: homebrew-tap",
 		"token: ${{ secrets.HOMEBREW_TAP_TOKEN }}",

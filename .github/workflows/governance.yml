@@ -32,6 +32,7 @@ permissions: {}
 jobs:
   targets:
     name: Identify affected pull requests
+    if: github.repository == 'yersonargotev/packy'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -99,7 +100,7 @@ jobs:
   validate-authorization:
     name: Validate authorization metadata
     needs: targets
-    if: needs.targets.outputs.matrix != '[]'
+    if: github.repository == 'yersonargotev/packy' && needs.targets.outputs.matrix != '[]'
     strategy:
       fail-fast: false
       matrix:

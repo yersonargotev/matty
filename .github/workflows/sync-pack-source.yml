@@ -80,6 +80,7 @@ concurrency:
 jobs:
   inspect:
     name: Inspect
+    if: github.repository == 'yersonargotev/packy' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       continue: ${{ steps.route.outputs.continue }}
@@ -95,10 +96,10 @@ jobs:
           source_id="$PACKY_SOURCE_ID"
           [[ "$source_id" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || source_id=unknown
           jq -n --arg source_id "$source_id" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Inspect job ended before a canonical result was produced."],recovery:["Start a fresh manual dispatch after checking the failed job."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/packy-sync/inspect/operational-artifact.json"
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -142,7 +143,7 @@ jobs:
             echo "noop=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Upload sealed inspection
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-inspection-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect/
@@ -150,7 +151,7 @@ jobs:
           retention-days: 1
       - name: Upload canonical no-op result
         if: ${{ steps.route.outputs.noop == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-noop-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect/no-op.json
@@ -158,7 +159,7 @@ jobs:
           retention-days: 30
       - name: Upload pre-publication operational artifact
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-failure-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect/operational-artifact.json
@@ -180,14 +181,14 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/packy-sync/classification"
           jq -n --arg source_id "$PACKY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Classify job ended before canonical evidence was produced."],recovery:["Start a fresh dispatch for the exact sealed candidate; do not fall back between AI and human classification."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/packy-sync/classification/operational-artifact.json"
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-inspection-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect
@@ -205,7 +206,7 @@ jobs:
             --plan "$RUNNER_TEMP/packy-sync/inspect/plan.json" \
             --output "$RUNNER_TEMP/packy-sync/classification"
       - name: Upload classified plan
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-classification-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/classification/
@@ -213,7 +214,7 @@ jobs:
           retention-days: 1
       - name: Upload pre-publication operational artifact
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-failure-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/classification/operational-artifact.json
@@ -233,18 +234,18 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/packy-sync/validation"
           jq -n --arg source_id "$PACKY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The sandbox Apply or complete Packy-owned validation suite did not finish."],recovery:["Inspect the validation logs, correct the implementation separately if needed, and start a fresh dispatch."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/packy-sync/validation/operational-artifact.json"
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-inspection-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-classification-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/classification
@@ -262,7 +263,7 @@ jobs:
             --evidence "$RUNNER_TEMP/packy-sync/classification/classification.json" \
             --output "$RUNNER_TEMP/packy-sync/validation"
       - name: Upload sandbox validation proof
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/validation/validation.json
@@ -270,7 +271,7 @@ jobs:
           retention-days: 1
       - name: Upload validation failure artifact
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-failure-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/validation/operational-artifact.json
@@ -280,6 +281,7 @@ jobs:
   publish:
     name: Publish
     needs: [inspect, classify, validate]
+    if: github.repository == 'yersonargotev/packy' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -291,22 +293,24 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/packy-sync/publication"
           jq -n --arg source_id "$PACKY_SOURCE_ID" '{schema_version:1,state:"blocked",source_id:$source_id,blockers:["The Publish job ended before exact publication state was established."],recovery:["Inspect the stable branch and pull request; preserve reviewer work and start a fresh Check."],contains_secrets:false,contains_upstream_bytes:false}' > "$RUNNER_TEMP/packy-sync/publication/operational-artifact.json"
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      # This reviewed publication checkout persists only the job-scoped token
+      # used after the ownership and exact-state admission checks pass.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: true
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-classification-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/classification
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-inspection-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/inspect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: pack-source-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/validation
@@ -339,7 +343,7 @@ jobs:
             --body-file "$RUNNER_TEMP/packy-sync/publication/automation-binding.md"
       - name: Upload operational artifact on publication block
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-failure-${{ github.run_id }}
           path: ${{ runner.temp }}/packy-sync/publication/operational-artifact.json
@@ -347,7 +351,7 @@ jobs:
           retention-days: 30
       - name: Upload canonical publication result
         if: ${{ success() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pack-source-publication-${{ github.run_id }}
           path: |

@@ -16,7 +16,7 @@ func TestPullRequestsBlockOnExactClaudeFloorAndRetainEvidence(t *testing.T) {
 		"runs-on: macos-15",
 		"--claude-version 2.1.203",
 		"--packy-ref \"$GITHUB_SHA\"",
-		"actions/upload-artifact@v4",
+		"actions/upload-artifact@",
 		"if-no-files-found: error",
 	} {
 		if !strings.Contains(text, want) {
@@ -54,7 +54,7 @@ func TestStableCanaryIsIndependentFromPullRequestsAndOpensCompatibilityWork(t *t
 		"workflow_dispatch:",
 		"runs-on: macos-15",
 		"--claude-version stable",
-		"actions/upload-artifact@v4",
+		"actions/upload-artifact@",
 		"issues: write",
 		"gh issue create",
 	} {
@@ -83,14 +83,14 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		"claude: 2.1.203",
 		"claude: stable",
 		"scripts/build-release-artifacts.sh",
-		"actions/download-artifact@v4",
+		"actions/download-artifact@",
 		"packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}",
 		"ref: ${{ needs.build.outputs.commit }}",
 		"--packy-ref \"${{ needs.build.outputs.commit }}\"",
 		`current="$(git rev-parse "${tag}^{commit}")"`,
 		`[[ "$current" != "$candidate" ]]`,
 		"Reverify release tag before publication",
-		"actions/upload-artifact@v4",
+		"actions/upload-artifact@",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release workflow missing %q", want)
