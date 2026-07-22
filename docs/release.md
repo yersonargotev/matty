@@ -130,6 +130,8 @@ also binds the exact attestation bundle digest and complete destination plan;
 that envelope is the body verified for draft recovery and publication. The
 bundle bytes are encoded in the hidden envelope so an interrupted draft can
 recover the identical bundle even when failure happened before asset upload.
+The destination plan identifies the tap repository/path and the exact generated
+formula SHA-256, so the Homebrew mutation is part of the same release identity.
 
 `scripts/generate-homebrew-formula.sh` accepts the complete manifest but derives
 URLs and hashes only for the four binaries. Packy v0 remains macOS-first. Darwin
@@ -219,8 +221,8 @@ server-reported SHA-256 digest with the retained bytes, and asks the domain
 verifier for the one-time `publish-draft` decision. There is no clobber, delete,
 recreate, replacement, tag movement, or published-version mutation path.
 The tag and protected-main refs are peeled through the Git object API and
-rechecked against the retained commit immediately before draft creation and
-again immediately before publication.
+rechecked against the retained commit immediately before draft creation, every
+asset upload, publication, and the final tap push.
 
 After publication, the Homebrew job independently reads the release again,
 checks its version, commit, body, exact inventory, server digests, and

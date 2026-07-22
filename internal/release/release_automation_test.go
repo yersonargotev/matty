@@ -62,6 +62,12 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 		"--permission contents=write",
 		"--permission id-token=write",
 	})
+	plan := releaseWorkflowStepIndex(t, workflow, "Seal exact publication plan and draft base", []string{
+		"formula_sha",
+		`repository:"yersonargotev/homebrew-tap"`,
+		`path:"Formula/packy.rb"`,
+		"sha256:$formula_sha",
+	})
 	attest := releaseWorkflowStepIndex(t, workflow, "Attest exact retained candidate", []string{
 		"actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
 		"subject-path: 'dist/*'",
@@ -79,6 +85,7 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 		"draft-base.json",
 		"attestation.bundle.jsonl",
 		"bundle_base64",
+		"jq -cnS --slurpfile base",
 		"release_set_id",
 		"release-body.md",
 	})
@@ -96,7 +103,8 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 		"--draft=false",
 	})
 
-	assertReleaseWorkflowStepBefore(t, seal, attest, "the immutable candidate must be sealed before OIDC provenance is issued")
+	assertReleaseWorkflowStepBefore(t, seal, plan, "candidate identity must precede the complete destination plan")
+	assertReleaseWorkflowStepBefore(t, plan, attest, "the complete destination plan must be sealed before OIDC provenance is issued")
 	assertReleaseWorkflowStepBefore(t, attest, verify, "the generated bundle must be verified before publication")
 	assertReleaseWorkflowStepBefore(t, verify, envelope, "the verified bundle must be bound into the final release set")
 	assertReleaseWorkflowStepBefore(t, envelope, publish, "the complete release set must reach the exact draft before one-time publication")
@@ -115,6 +123,9 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 	publishEdit := strings.Index(publishStep, "gh release edit")
 	if firstRefCheck < 0 || create < 0 || finalRefCheck < 0 || publishEdit < 0 || !(firstRefCheck < create && create < finalRefCheck && finalRefCheck < publishEdit) {
 		t.Fatal("tag and protected main must be revalidated immediately before draft creation and publication")
+	}
+	if got := strings.Count(publishStep, "assert_ref_identity >/dev/null"); got < 4 {
+		t.Fatalf("every draft creation, asset upload phase, and publication needs an adjacent ref recheck; got %d", got)
 	}
 }
 
@@ -141,7 +152,7 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 			t.Fatalf("dry-run job must stop before mutation authority %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Download built candidate for read-only attestation checks", "gh attestation verify", "--custom-trusted-root"} {
+	for _, want := range []string{"Download built candidate for read-only attestation checks", "gh attestation verify", "--custom-trusted-root", "canonical-body.md"} {
 		if !strings.Contains(inspect, want) {
 			t.Fatalf("read-only inspection should verify an available existing bundle with %q", want)
 		}
@@ -338,6 +349,8 @@ func TestReleaseWorkflowVerifiesPublishedGitHubBytesBeforeHomebrew(t *testing.T)
 		"attestation.bundle.jsonl",
 		"cmp \"$RUNNER_TEMP/expected-assets\" \"$RUNNER_TEMP/actual-assets\"",
 		"sha256sum --check SHA256SUMS",
+		"publication_plan.homebrew.sha256",
+		"diverged before tap push",
 		"git push --dry-run origin HEAD:main",
 		"git push origin HEAD:main",
 	} {

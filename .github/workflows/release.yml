@@ -198,12 +198,15 @@ jobs:
       - name: Seal exact publication plan and draft base
         run: |
           set -euo pipefail
+          formula_sha="$(sha256sum release-metadata/packy.rb | awk '{print $1}')"
           jq -n --arg tag "${{ needs.build.outputs.tag }}" \
             --arg commit "${{ needs.build.outputs.commit }}" \
+            --arg formula_sha "$formula_sha" \
             --slurpfile candidate release-metadata/candidate.json \
             '{schema_version:1,tag:$tag,target_commit:$commit,draft:true,
               candidate_id:$candidate[0].id,candidate_assets:$candidate[0].subjects,
-              attestation:"attestation.bundle.jsonl",tap:"yersonargotev/homebrew-tap:Formula/packy.rb"}' \
+              attestation:"attestation.bundle.jsonl",
+              homebrew:{repository:"yersonargotev/homebrew-tap",path:"Formula/packy.rb",sha256:$formula_sha}}' \
             > release-metadata/publication-plan.json
           jq -n --slurpfile candidate release-metadata/candidate.json \
             --slurpfile provenance release-metadata/provenance.json \
@@ -329,8 +332,18 @@ jobs:
              (.release_set_id|test("^[0-9a-f]{64}$"))' \
             "$RUNNER_TEMP/observed-metadata.json" >/dev/null
           observed_set_id="$(jq -r .release_set_id "$RUNNER_TEMP/observed-metadata.json")"
-          calculated_set_id="$(jq -cS 'del(.release_set_id)' "$RUNNER_TEMP/observed-metadata.json" | sha256sum | awk '{print $1}')"
+          jq -cS 'del(.release_set_id)' "$RUNNER_TEMP/observed-metadata.json" > "$RUNNER_TEMP/release-set-without-id.json"
+          calculated_set_id="$(sha256sum "$RUNNER_TEMP/release-set-without-id.json" | awk '{print $1}')"
           [[ "$observed_set_id" == "$calculated_set_id" ]] || { echo 'release set identity mismatch' >&2; exit 1; }
+          jq --arg id "$observed_set_id" '.+{release_set_id:$id}' \
+            "$RUNNER_TEMP/release-set-without-id.json" > "$RUNNER_TEMP/canonical-metadata.json"
+          {
+            cat release-metadata/release-notes.md
+            printf '\n<!-- packy-release-metadata\n'
+            cat "$RUNNER_TEMP/canonical-metadata.json"
+            printf '%s\n' '-->'
+          } > "$RUNNER_TEMP/canonical-body.md"
+          cmp "$RUNNER_TEMP/canonical-body.md" "$RUNNER_TEMP/read-body.md"
           jq --slurpfile metadata "$RUNNER_TEMP/observed-metadata.json" \
             --arg repository "$GITHUB_REPOSITORY" --arg ref refs/heads/main \
             --arg workflow .github/workflows/release.yml \
@@ -472,7 +485,7 @@ jobs:
           bundle=attestation/attestation.bundle.jsonl
           bundle_sha="$(sha256sum "$bundle" | awk '{print $1}')"
           bundle_base64="$(base64 < "$bundle" | tr -d '\n')"
-          jq -cS --slurpfile base release-metadata/draft-base.json \
+          jq -cnS --slurpfile base release-metadata/draft-base.json \
             --arg sha "$bundle_sha" --arg bundle "$bundle_base64" \
             '$base[0]+{attestation:{name:"attestation.bundle.jsonl",sha256:$sha,bundle_base64:$bundle}}' \
             > attestation/release-set-without-id.json
@@ -566,6 +579,7 @@ jobs:
             -f owner="$owner" -f repository="$repository" -f tag="$RELEASE_TAG" \
             --jq '.data.repository.release.id // ""')"
           if [[ -z "$release_id" ]]; then
+            assert_ref_identity >/dev/null
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft \
               --title "$RELEASE_TAG" --notes-file "$expected_body"
           fi
@@ -626,9 +640,11 @@ jobs:
             --state "$RUNNER_TEMP/state.json" --mode draft > "$RUNNER_TEMP/decision.json"
           jq -r '.missing_assets[].name' "$RUNNER_TEMP/decision.json" | while read -r name; do
             [[ -n "$name" ]]
+            assert_ref_identity >/dev/null
             gh release upload "$RELEASE_TAG" "dist/$name" --repo "$GITHUB_REPOSITORY"
           done
           if ! jq -e '.assets | any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null; then
+            assert_ref_identity >/dev/null
             gh release upload "$RELEASE_TAG" "$bundle" --repo "$GITHUB_REPOSITORY"
           fi
 
@@ -708,6 +724,10 @@ jobs:
           [[ "$bundle_sha" == "$(jq -r .attestation.sha256 attestation/body-metadata.json)" ]] || {
             echo 'published attestation bundle does not match release set envelope' >&2; exit 1;
           }
+          formula_sha="$(sha256sum release-metadata/packy.rb | awk '{print $1}')"
+          [[ "$formula_sha" == "$(jq -r .publication_plan.homebrew.sha256 attestation/body-metadata.json)" ]] || {
+            echo 'Homebrew formula does not match release set destination plan' >&2; exit 1;
+          }
       - name: Check out Homebrew tap with only its scoped credential
         # This is the sole persist-credentials exception: the checkout contains
         # only the dedicated tap token needed for its reviewed dry-run and push.
@@ -724,6 +744,8 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
+          formula_sha="$(sha256sum ../release-metadata/packy.rb | awk '{print $1}')"
+          [[ "$formula_sha" == "$(jq -r .publication_plan.homebrew.sha256 ../attestation/body-metadata.json)" ]] || exit 1
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           mkdir -p Formula
@@ -736,7 +758,28 @@ jobs:
       - name: Prove tap push then publish it
         if: steps.tap.outputs.changed == 'true'
         working-directory: homebrew-tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
         run: |
           set -euo pipefail
+          resolve_ref_commit() {
+            local ref="$1" object object_type object_sha hops=0
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$ref" --jq '[.object.type,.object.sha]|@tsv')"
+            IFS=$'\t' read -r object_type object_sha <<< "$object"
+            while [[ "$object_type" == tag && "$hops" -lt 8 ]]; do
+              object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq '[.object.type,.object.sha]|@tsv')"
+              IFS=$'\t' read -r object_type object_sha <<< "$object"
+              hops=$((hops + 1))
+            done
+            [[ "$object_type" == commit && "$object_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+            printf '%s\n' "$object_sha"
+          }
+          tag_commit="$(resolve_ref_commit "tags/$RELEASE_TAG")"
+          main_commit="$(resolve_ref_commit heads/main)"
+          [[ "$tag_commit" == "$RELEASE_COMMIT" && "$main_commit" == "$tag_commit" ]] || {
+            echo 'tag, protected main, and candidate commit diverged before tap push' >&2; exit 1;
+          }
           git push --dry-run origin HEAD:main
           git push origin HEAD:main
