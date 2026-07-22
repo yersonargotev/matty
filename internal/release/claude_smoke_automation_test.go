@@ -52,6 +52,7 @@ func TestStableCanaryIsIndependentFromPullRequestsAndOpensCompatibilityWork(t *t
 	for _, want := range []string{
 		"schedule:",
 		"workflow_dispatch:",
+		"runs-on: macos-15",
 		"--claude-version stable",
 		"actions/upload-artifact@v4",
 		"issues: write",

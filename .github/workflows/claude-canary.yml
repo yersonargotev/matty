@@ -16,7 +16,7 @@ concurrency:
 jobs:
   stable-smoke:
     name: Claude current-stable package smoke
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - name: Check out repository
