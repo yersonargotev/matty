@@ -1,6 +1,9 @@
 package release_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,87 +11,129 @@ import (
 	"github.com/yersonargotev/packy/internal/release"
 )
 
-func TestCandidateIdentityIsCanonicalAndDetached(t *testing.T) {
-	permissions := []release.Permission{{Name: "contents", Access: "write"}, {Name: "actions", Access: "read"}}
-	subjects := fixtureSubjects()
-	candidate := fixtureCandidate(t, permissions, subjects)
-	reversed := fixtureCandidate(t, reversePermissions(permissions), reverseSubjects(subjects))
-	if candidate.ID != reversed.ID || !reflect.DeepEqual(candidate, reversed) {
-		t.Fatalf("identity depends on input order:\n%+v\n%+v", candidate, reversed)
+func TestCandidateIdentityIsCanonicalDetachedAndBindsNotes(t *testing.T) {
+	observation := fixtureObservation()
+	candidate := mustCandidate(t, observation)
+	reversed := observation
+	reversed.Permissions = reversePermissions(observation.Permissions)
+	reversed.Subjects = reverseSubjects(observation.Subjects)
+	other := mustCandidate(t, reversed)
+	if candidate.ID != other.ID || !reflect.DeepEqual(candidate, other) {
+		t.Fatalf("identity depends on input order:\n%+v\n%+v", candidate, other)
 	}
-	permissions[0].Access = "none"
-	subjects[0].SHA256 = strings.Repeat("f", 64)
-	if candidate.Permissions[1].Access != "write" || candidate.Subjects[0].SHA256 != strings.Repeat("a", 64) {
+	observation.Permissions[0].Access = "write"
+	observation.Subjects[0].SHA256 = strings.Repeat("f", 64)
+	if candidate.Permissions[0].Access != "read" || candidate.Subjects[0].SHA256 == strings.Repeat("f", 64) {
 		t.Fatal("candidate aliases caller-owned input")
+	}
+	changedNotes := fixtureObservation()
+	changedNotes.ReleaseNotesSHA256 = strings.Repeat("e", 64)
+	if mustCandidate(t, changedNotes).ID == candidate.ID {
+		t.Fatal("release notes digest is absent from candidate identity")
 	}
 }
 
-func TestCandidateRejectsUnauthorizedOrMalformedIdentity(t *testing.T) {
-	authority := fixtureAuthority()
-	permissions := authority.Permissions
-	subjects := fixtureSubjects()
+func TestCandidateEnforcesFixedPackyPolicy(t *testing.T) {
 	tests := []struct {
-		name        string
-		version     string
-		repository  string
-		ref         string
-		commit      string
-		workflow    string
-		workflowSHA string
-		perms       []release.Permission
-		subjects    []release.Subject
+		name   string
+		mutate func(*release.Observation)
 	}{
-		{"version", "v1.2.3", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, subjects},
-		{"repository", "v0.1.2", "attacker/fork", authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, subjects},
-		{"ref", "v0.1.2", authority.Repository, "refs/pull/1/head", strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, subjects},
-		{"commit", "v0.1.2", authority.Repository, authority.Ref, "main", authority.Workflow, authority.WorkflowSHA, permissions, subjects},
-		{"workflow", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), "evil.yml", authority.WorkflowSHA, permissions, subjects},
-		{"workflow digest", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, strings.Repeat("e", 64), permissions, subjects},
-		{"permission", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, append(append([]release.Permission(nil), permissions...), release.Permission{Name: "issues", Access: "write"}), subjects},
-		{"duplicate subject", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, append(subjects, subjects[0])},
-		{"bad digest", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, []release.Subject{{Name: "packy", SHA256: "short"}}},
-		{"unsafe subject", "v0.1.2", authority.Repository, authority.Ref, strings.Repeat("c", 40), authority.Workflow, authority.WorkflowSHA, permissions, []release.Subject{{Name: "../packy", SHA256: strings.Repeat("a", 64)}}},
+		{"version", func(o *release.Observation) { o.Version = "v1.2.3" }},
+		{"repository", func(o *release.Observation) { o.Repository = "attacker/fork" }},
+		{"ref", func(o *release.Observation) { o.Ref = "refs/pull/1/head" }},
+		{"commit", func(o *release.Observation) { o.Commit = "main" }},
+		{"workflow", func(o *release.Observation) { o.Workflow = "evil.yml" }},
+		{"workflow digest", func(o *release.Observation) { o.WorkflowSHA = "short" }},
+		{"notes digest", func(o *release.Observation) { o.ReleaseNotesSHA256 = "short" }},
+		{"unknown permission", func(o *release.Observation) {
+			o.Permissions = append(o.Permissions, release.Permission{Name: "issues", Access: "write"})
+		}},
+		{"excess permission", func(o *release.Observation) { o.Permissions[0].Access = "write" }},
+		{"duplicate permission", func(o *release.Observation) { o.Permissions = append(o.Permissions, o.Permissions[0]) }},
+		{"duplicate subject", func(o *release.Observation) { o.Subjects = append(o.Subjects, o.Subjects[0]) }},
+		{"unsafe subject", func(o *release.Observation) { o.Subjects[0].Name = "../packy" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := release.NewCandidate(test.version, test.repository, test.ref, test.commit, test.workflow, test.workflowSHA, test.perms, test.subjects, authority); err == nil {
+			observation := fixtureObservation()
+			test.mutate(&observation)
+			if _, err := release.NewCandidate(observation); err == nil {
 				t.Fatal("expected fail-closed validation")
 			}
 		})
 	}
 }
 
+func TestCandidateValidatesExactSHA256SUMSAndSPDX(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*release.Observation)
+	}{
+		{"missing checksums subject", func(o *release.Observation) { o.Subjects = dropSubject(o.Subjects, release.ChecksumsName) }},
+		{"missing sbom subject", func(o *release.Observation) { o.Subjects = dropSubject(o.Subjects, release.SBOMName) }},
+		{"stale checksum bytes", func(o *release.Observation) { o.SHA256SUMS[0] = 'f' }},
+		{"malformed checksum", func(o *release.Observation) { replaceChecksums(o, "malformed\n") }},
+		{"unterminated checksum", func(o *release.Observation) { replaceChecksums(o, strings.TrimSuffix(string(o.SHA256SUMS), "\n")) }},
+		{"checksum missing", func(o *release.Observation) { replaceChecksums(o, checksumLine(o.Subjects, release.SBOMName)) }},
+		{"checksum extra", func(o *release.Observation) {
+			replaceChecksums(o, string(o.SHA256SUMS)+strings.Repeat("e", 64)+"  extra\n")
+		}},
+		{"checksum duplicate", func(o *release.Observation) {
+			replaceChecksums(o, string(o.SHA256SUMS)+checksumLine(o.Subjects, release.SBOMName))
+		}},
+		{"checksum mismatch", func(o *release.Observation) {
+			replaceChecksums(o, strings.Repeat("e", 64)+"  packy_v0.1.2_linux_amd64.tar.gz\n"+checksumLine(o.Subjects, release.SBOMName))
+		}},
+		{"malformed sbom", func(o *release.Observation) { replaceSBOM(o, []byte("{")) }},
+		{"stale sbom name", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.ReplaceAll(string(o.SBOM), "packy-v0.1.2", "packy-v0.1.1")))
+		}},
+		{"sbom missing", func(o *release.Observation) {
+			replaceSBOM(o, []byte(`{"spdxVersion":"SPDX-2.3","name":"packy-v0.1.2","documentNamespace":"https://packy.dev/spdx/v0.1.2","files":[]}`))
+		}},
+		{"sbom mismatch", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.ReplaceAll(string(o.SBOM), strings.Repeat("b", 64), strings.Repeat("e", 64))))
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observation := fixtureObservation()
+			test.mutate(&observation)
+			if _, err := release.NewCandidate(observation); err == nil {
+				t.Fatal("invalid metadata accepted")
+			}
+		})
+	}
+}
+
 func TestProvenanceBindsEveryCandidateInputOffline(t *testing.T) {
-	candidate := fixtureCandidate(t, fixtureAuthority().Permissions, fixtureSubjects())
-	provenance := release.ProvenanceFor(candidate)
-	if err := release.VerifyProvenance(candidate, provenance); err != nil {
+	candidate := mustCandidate(t, fixtureObservation())
+	if err := release.VerifyProvenance(candidate, release.ProvenanceFor(candidate)); err != nil {
 		t.Fatal(err)
 	}
-
 	mutations := []func(*release.Provenance){
 		func(p *release.Provenance) { p.Repository = "attacker/fork" },
-		func(p *release.Provenance) { p.Workflow = "evil.yml" },
-		func(p *release.Provenance) { p.WorkflowSHA = strings.Repeat("e", 64) },
 		func(p *release.Provenance) { p.Ref = "refs/tags/v0.1.2" },
 		func(p *release.Provenance) { p.Commit = strings.Repeat("d", 40) },
+		func(p *release.Provenance) { p.Workflow = "evil.yml" },
+		func(p *release.Provenance) { p.WorkflowSHA = strings.Repeat("e", 64) },
+		func(p *release.Provenance) { p.ReleaseNotesSHA256 = strings.Repeat("e", 64) },
 		func(p *release.Provenance) { p.Permissions[0].Access = "write" },
-		func(p *release.Provenance) { p.Subjects[0].SHA256 = strings.Repeat("f", 64) },
-		func(p *release.Provenance) { p.Subjects = p.Subjects[:1] },
-		func(p *release.Provenance) {
-			p.Subjects = append(p.Subjects, release.Subject{Name: "extra", SHA256: strings.Repeat("e", 64)})
-		},
+		func(p *release.Provenance) { p.Subjects = p.Subjects[:2] },
+		func(p *release.Provenance) { p.Subjects[0].SHA256 = strings.Repeat("e", 64) },
 	}
 	for i, mutate := range mutations {
-		p := release.ProvenanceFor(candidate)
-		mutate(&p)
-		if err := release.VerifyProvenance(candidate, p); err == nil {
+		provenance := release.ProvenanceFor(candidate)
+		mutate(&provenance)
+		if err := release.VerifyProvenance(candidate, provenance); err == nil {
 			t.Fatalf("mutation %d accepted", i)
 		}
 	}
 }
 
-func TestDraftLifecycleRecoveryAndPublication(t *testing.T) {
-	candidate := fixtureCandidate(t, fixtureAuthority().Permissions, fixtureSubjects())
+func TestDraftLifecycleBindsFullMetadataAndAssetsWithoutMutation(t *testing.T) {
+	candidate := mustCandidate(t, fixtureObservation())
+	exact := exactRelease(candidate, true, candidate.Subjects)
 	tests := []struct {
 		name     string
 		releases []release.Release
@@ -96,9 +141,9 @@ func TestDraftLifecycleRecoveryAndPublication(t *testing.T) {
 		missing  []release.Subject
 	}{
 		{"absent", nil, release.ResumeDraft, candidate.Subjects},
-		{"partial draft", []release.Release{{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: []release.Subject{candidate.Subjects[1]}}}, release.ResumeDraft, []release.Subject{candidate.Subjects[0]}},
-		{"complete draft order independent", []release.Release{{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: reverseSubjects(candidate.Subjects)}}, release.PublishDraft, nil},
-		{"complete published", []release.Release{{Version: candidate.Version, CandidateID: candidate.ID, Assets: candidate.Subjects}}, release.ContinuePublished, nil},
+		{"partial", []release.Release{exactRelease(candidate, true, []release.Subject{candidate.Subjects[0]})}, release.ResumeDraft, candidate.Subjects[1:]},
+		{"complete draft", []release.Release{exact}, release.PublishDraft, nil},
+		{"published continuation", []release.Release{exactRelease(candidate, false, reverseSubjects(candidate.Subjects))}, release.ContinuePublished, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -111,61 +156,122 @@ func TestDraftLifecycleRecoveryAndPublication(t *testing.T) {
 				t.Fatalf("got %+v, want %s %+v", got, test.want, test.missing)
 			}
 			if !reflect.DeepEqual(test.releases, before) {
-				t.Fatal("verification mutated observed releases")
+				t.Fatal("verification mutated observed state")
 			}
 		})
 	}
 }
 
-func TestDraftLifecycleRejectsDivergenceAmbiguityAndBadAssets(t *testing.T) {
-	candidate := fixtureCandidate(t, fixtureAuthority().Permissions, fixtureSubjects())
-	exact := release.Release{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: candidate.Subjects}
-	tests := []release.Release{
-		{Version: candidate.Version, CandidateID: strings.Repeat("f", 64), Draft: true},
-		{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: []release.Subject{{Name: "packy_checksums.txt", SHA256: strings.Repeat("f", 64)}}},
-		{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: append(append([]release.Subject(nil), candidate.Subjects...), release.Subject{Name: "extra", SHA256: strings.Repeat("e", 64)})},
-		{Version: candidate.Version, CandidateID: candidate.ID, Draft: true, Assets: []release.Subject{candidate.Subjects[0], candidate.Subjects[0]}},
-		{Version: candidate.Version, CandidateID: candidate.ID, Draft: false, Assets: candidate.Subjects[:1]},
+func TestDraftLifecycleRejectsAlteredMetadataAndAmbiguity(t *testing.T) {
+	candidate := mustCandidate(t, fixtureObservation())
+	mutations := []func(*release.Release){
+		func(r *release.Release) { r.CandidateID = strings.Repeat("e", 64) },
+		func(r *release.Release) { r.ProvenanceCandidateID = strings.Repeat("e", 64) },
+		func(r *release.Release) { r.Repository = "attacker/fork" },
+		func(r *release.Release) { r.Ref = "refs/tags/v0.1.2" },
+		func(r *release.Release) { r.TargetCommit = strings.Repeat("e", 40) },
+		func(r *release.Release) { r.Workflow = "evil.yml" },
+		func(r *release.Release) { r.WorkflowSHA = strings.Repeat("e", 64) },
+		func(r *release.Release) { r.ReleaseNotesSHA256 = strings.Repeat("e", 64) },
+		func(r *release.Release) { r.Assets[0].SHA256 = strings.Repeat("e", 64) },
+		func(r *release.Release) {
+			r.Assets = append(r.Assets, release.Subject{Name: "extra", SHA256: strings.Repeat("e", 64)})
+		},
+		func(r *release.Release) { r.Assets = append(r.Assets, r.Assets[0]) },
 	}
-	for i, observed := range tests {
+	for i, mutate := range mutations {
+		observed := exactRelease(candidate, true, candidate.Subjects)
+		mutate(&observed)
 		if _, err := release.VerifyLifecycle(candidate, []release.Release{observed}); err == nil {
-			t.Fatalf("divergent state %d accepted", i)
+			t.Fatalf("mutation %d accepted", i)
 		}
 	}
+	exact := exactRelease(candidate, true, candidate.Subjects)
 	if _, err := release.VerifyLifecycle(candidate, []release.Release{exact, exact}); err == nil {
-		t.Fatal("ambiguous duplicate releases accepted")
+		t.Fatal("ambiguous releases accepted")
 	}
-	published := exact
-	published.Draft = false
+	published := exactRelease(candidate, false, candidate.Subjects)
 	if _, err := release.VerifyDraftPreparation(candidate, []release.Release{published}); err == nil {
-		t.Fatal("draft preparation accepted an already-published release")
+		t.Fatal("published release accepted for draft preparation")
 	}
 	if err := release.VerifyPublishedContinuation(candidate, []release.Release{published}); err != nil {
-		t.Fatalf("exact published continuation rejected: %v", err)
-	}
-	if err := release.VerifyPublishedContinuation(candidate, []release.Release{exact}); err == nil {
-		t.Fatal("published continuation accepted a draft")
+		t.Fatal(err)
 	}
 }
 
-func fixtureAuthority() release.Authorization {
-	return release.Authorization{Repository: "yersonargotev/packy", Ref: "refs/heads/main", Workflow: ".github/workflows/release.yml", WorkflowSHA: strings.Repeat("d", 64), Permissions: []release.Permission{{Name: "actions", Access: "read"}, {Name: "contents", Access: "write"}}}
+func fixtureObservation() release.Observation {
+	binary := release.Subject{Name: "packy_v0.1.2_linux_amd64.tar.gz", SHA256: strings.Repeat("b", 64)}
+	sbom := []byte(fmt.Sprintf(`{"spdxVersion":"SPDX-2.3","name":"packy-v0.1.2","documentNamespace":"https://packy.dev/spdx/v0.1.2","files":[{"fileName":%q,"checksums":[{"algorithm":"SHA256","checksumValue":%q}]}]}`, binary.Name, binary.SHA256))
+	sbomSubject := release.Subject{Name: release.SBOMName, SHA256: digest(sbom)}
+	checksums := []byte(binary.SHA256 + "  " + binary.Name + "\n" + sbomSubject.SHA256 + "  " + sbomSubject.Name + "\n")
+	return release.Observation{
+		Version: "v0.1.2", Repository: release.PackyRepository, Ref: release.PackyMainRef,
+		Commit: strings.Repeat("c", 40), Workflow: release.PackyReleaseWorkflow,
+		WorkflowSHA: strings.Repeat("d", 64), ReleaseNotesSHA256: strings.Repeat("c", 64),
+		Permissions: []release.Permission{{Name: "actions", Access: "read"}, {Name: "contents", Access: "write"}},
+		Subjects:    []release.Subject{binary, sbomSubject, {Name: release.ChecksumsName, SHA256: digest(checksums)}},
+		SHA256SUMS:  checksums, SBOM: sbom,
+	}
 }
 
-func fixtureSubjects() []release.Subject {
-	return []release.Subject{{Name: "packy_checksums.txt", SHA256: strings.Repeat("a", 64)}, {Name: "packy_v0.1.2_linux_amd64.tar.gz", SHA256: strings.Repeat("b", 64)}}
+func exactRelease(c release.Candidate, draft bool, assets []release.Subject) release.Release {
+	return release.Release{
+		Version: c.Version, CandidateID: c.ID, ProvenanceCandidateID: c.ID, Repository: c.Repository, Ref: c.Ref,
+		TargetCommit: c.Commit, Workflow: c.Workflow, WorkflowSHA: c.WorkflowSHA,
+		ReleaseNotesSHA256: c.ReleaseNotesSHA256, Draft: draft, Assets: append([]release.Subject(nil), assets...),
+	}
 }
-
-func fixtureCandidate(t *testing.T, permissions []release.Permission, subjects []release.Subject) release.Candidate {
+func replaceChecksums(o *release.Observation, content string) {
+	o.SHA256SUMS = []byte(content)
+	for i := range o.Subjects {
+		if o.Subjects[i].Name == release.ChecksumsName {
+			o.Subjects[i].SHA256 = digest(o.SHA256SUMS)
+		}
+	}
+}
+func replaceSBOM(o *release.Observation, content []byte) {
+	o.SBOM = content
+	for i := range o.Subjects {
+		if o.Subjects[i].Name == release.SBOMName {
+			o.Subjects[i].SHA256 = digest(content)
+		}
+	}
+	// Keep the checksum manifest internally consistent so the SBOM validator is the failing gate.
+	var lines []string
+	for _, s := range o.Subjects {
+		if s.Name != release.ChecksumsName {
+			lines = append(lines, s.SHA256+"  "+s.Name)
+		}
+	}
+	sortStrings(lines)
+	replaceChecksums(o, strings.Join(lines, "\n")+"\n")
+}
+func checksumLine(subjects []release.Subject, name string) string {
+	for _, s := range subjects {
+		if s.Name == name {
+			return s.SHA256 + "  " + s.Name + "\n"
+		}
+	}
+	return ""
+}
+func dropSubject(subjects []release.Subject, name string) []release.Subject {
+	var out []release.Subject
+	for _, s := range subjects {
+		if s.Name != name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+func digest(content []byte) string { sum := sha256.Sum256(content); return hex.EncodeToString(sum[:]) }
+func mustCandidate(t *testing.T, observation release.Observation) release.Candidate {
 	t.Helper()
-	a := fixtureAuthority()
-	c, err := release.NewCandidate("v0.1.2", a.Repository, a.Ref, strings.Repeat("c", 40), a.Workflow, a.WorkflowSHA, permissions, subjects, a)
+	candidate, err := release.NewCandidate(observation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return candidate
 }
-
 func reversePermissions(in []release.Permission) []release.Permission {
 	out := append([]release.Permission(nil), in...)
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
@@ -186,4 +292,13 @@ func cloneReleases(in []release.Release) []release.Release {
 		out[i].Assets = append([]release.Subject(nil), out[i].Assets...)
 	}
 	return out
+}
+func sortStrings(values []string) {
+	for i := range values {
+		for j := i + 1; j < len(values); j++ {
+			if values[j] < values[i] {
+				values[i], values[j] = values[j], values[i]
+			}
+		}
+	}
 }
