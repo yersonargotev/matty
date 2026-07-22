@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "issue": 168,
+  "repository": "yersonargotev/packy",
+  "capture": {
+    "api_observed_at": "2026-07-22T03:24:25Z",
+    "owner_ui_observed_from": "2026-07-22T03:26:25Z",
+    "owner_ui_observed_through": "2026-07-22T03:30:38Z",
+    "base_commit": "7255ffb48a58d82c5e1de408f272e57a68928f51",
+    "actor": "yersonargotev",
+    "secret_values_observed": false
+  },
+  "repository_settings": {
+    "owner": "yersonargotev",
+    "owner_type": "User",
+    "visibility": "public",
+    "default_branch": "main",
+    "archived": false,
+    "merge_commit_allowed": true,
+    "squash_merge_allowed": true,
+    "rebase_merge_allowed": true,
+    "auto_merge_allowed": false,
+    "delete_branch_on_merge": false,
+    "web_commit_signoff_required": false
+  },
+  "authority": {
+    "viewer_permission": "ADMIN",
+    "collaborators": [
+      {
+        "login": "yersonargotev",
+        "role": "admin"
+      }
+    ],
+    "pending_invitations": []
+  },
+  "refs_and_rules": {
+    "branches": [
+      {
+        "name": "main",
+        "sha": "7255ffb48a58d82c5e1de408f272e57a68928f51",
+        "protected": false
+      }
+    ],
+    "tags": [
+      {"name": "v0.1.0", "sha": "90f70a97fe88439a08320801dfb2e81d292c7569"},
+      {"name": "v0.1.1", "sha": "2f687ed755c5fd83b5f99da5ca25bcecfde82978"},
+      {"name": "v0.1.2", "sha": "d6f042a716f78fc1a45d7ac8a785f074e54d9adc"},
+      {"name": "v0.1.3", "sha": "0af9859bb89c8ce206196e9696eb779850803f7f"},
+      {"name": "v0.1.4", "sha": "f348b84e50222a4eeadf5abbcedef7a24974cd88"},
+      {"name": "v0.1.5", "sha": "e092b8563bdb84ae69d371180bd131b1c3ce7576"},
+      {"name": "v0.1.6", "sha": "68aec8969374fa9e9a6ea86b33e6719646b999f8"},
+      {"name": "v0.1.7", "sha": "283e726e9e1886d8b51e3222434022ac56f733eb"}
+    ],
+    "repository_rulesets": [],
+    "effective_main_rules": [],
+    "classic_main_protection": "absent",
+    "tag_protection": "absent"
+  },
+  "actions": {
+    "enabled": true,
+    "allowed_actions": "all",
+    "sha_pinning_required": false,
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": true,
+    "fork_pull_request_approval_policy": "first_time_contributors",
+    "artifact_and_log_retention_days": 90,
+    "drift_from_2026_07_20_audit": [
+      "can_approve_pull_request_reviews changed from false to true"
+    ],
+    "workflows": [
+      {"name": "CI", "path": ".github/workflows/ci.yml", "state": "active"},
+      {"name": "Claude stable canary", "path": ".github/workflows/claude-canary.yml", "state": "active"},
+      {"name": "Release", "path": ".github/workflows/release.yml", "state": "active"},
+      {"name": "Synchronize pack source", "path": ".github/workflows/sync-pack-source.yml", "state": "active"},
+      {"name": "pages-build-deployment", "path": "dynamic/pages/pages-build-deployment", "state": "active"}
+    ]
+  },
+  "check_source_registry": [
+    {
+      "context": "Validate Packy-owned code",
+      "qualified_name": "CI / Validate Packy-owned code",
+      "state": "observed-success",
+      "expected_app": {"name": "GitHub Actions", "slug": "github-actions", "id": 15368}
+    },
+    {
+      "context": "Claude 2.1.203 package smoke",
+      "qualified_name": "CI / Claude 2.1.203 package smoke",
+      "state": "observed-skipped-on-main",
+      "expected_app": {"name": "GitHub Actions", "slug": "github-actions", "id": 15368}
+    },
+    {
+      "context": "Validate authorization",
+      "qualified_name": "Governance / Validate authorization",
+      "state": "absent-unproven",
+      "expected_app": {"name": "GitHub Actions", "slug": "github-actions", "id": 15368}
+    },
+    {
+      "context": "CodeQL",
+      "qualified_name": "Security / CodeQL",
+      "state": "absent-unproven",
+      "expected_app": {"name": "GitHub Actions", "slug": "github-actions", "id": 15368}
+    },
+    {
+      "context": "Dependency review",
+      "qualified_name": "Security / Dependency review",
+      "state": "absent-unproven",
+      "expected_app": {"name": "GitHub Actions", "slug": "github-actions", "id": 15368}
+    }
+  ],
+  "environments": [
+    {
+      "name": "github-pages",
+      "admin_bypass": true,
+      "protected_branches_only": false,
+      "custom_branch_policies": ["main", "gh-pages", "feat/packy-atomic-cutover"],
+      "required_reviewers": [],
+      "secrets": [],
+      "variables": []
+    }
+  ],
+  "credentials": {
+    "actions_repository_secrets": [
+      {
+        "name": "HOMEBREW_TAP_TOKEN",
+        "created_at": "2026-07-05T19:23:00Z",
+        "updated_at": "2026-07-05T19:23:00Z",
+        "type": "unverified",
+        "destination_scope": "unverified",
+        "permissions": "unverified",
+        "expiry": "unverified",
+        "rotation_and_revocation": "unverified"
+      }
+    ],
+    "actions_repository_variables": [],
+    "dependabot_repository_secrets": [],
+    "codespaces_repository_secrets": [],
+    "environment_secrets": [],
+    "secret_values_observed": false,
+    "account_credential_correlation": "No visible account token identifier was safely correlated with HOMEBREW_TAP_TOKEN."
+  },
+  "integrations": {
+    "deploy_keys": [],
+    "repository_webhooks": [],
+    "installed_apps_api_state": "unavailable-to-current-oauth-token",
+    "installed_apps_ui": [
+      {
+        "name": "AWS Amplify (us-east-1)",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["write:amplify.yml", "read:code,metadata", "read-write:checks,pull-requests,repository-hooks"],
+        "pending_permission_update": "remove check run and check suite"
+      },
+      {
+        "name": "AWS Amplify (us-west-2)",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["write:amplify.yml", "read:code,metadata", "read-write:checks,pull-requests,repository-hooks"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Claude",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:actions,checks,metadata", "read-write:code,discussions,issues,pull-requests,workflows"],
+        "pending_permission_update": "new read:members, new read-write:webhooks, new read:commit-statuses, actions and checks from read to read-write"
+      },
+      {
+        "name": "Cloudflare Workers and Pages",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:metadata", "read-write:administration,checks,code,deployments,pull-requests"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Google AI Studio",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:commit-statuses,issues,metadata", "read-write:administration,code,pull-requests"],
+        "pending_permission_update": "new read-write:actions,workflows"
+      },
+      {
+        "name": "Google Cloud Build",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:code,issues,metadata,pull-requests", "read-write:checks,commit-statuses"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Google Labs Jules",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:metadata", "read-write:actions,code,issues,pull-requests,workflows"],
+        "pending_permission_update": "new read:administration,artifact-metadata,checks,deployments,email-addresses,members,code-scanning-alerts"
+      },
+      {
+        "name": "Linear",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:checks,metadata", "read-write:issues,pull-requests"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Railway App",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:metadata", "read-write:actions,administration,checks,code,commit-statuses,deployments,pull-requests,workflows"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Render",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:dependabot-alerts,code,metadata", "read-write:actions,checks,commit-statuses,deployments,environments,issues,pull-requests,repository-hooks,workflows"],
+        "pending_permission_update": null
+      },
+      {
+        "name": "Vercel",
+        "repository_access": "all-current-and-future-owner-repositories",
+        "permissions": ["read:actions,metadata", "read-write:administration,checks,code,commit-statuses,deployments,issues,pull-requests,repository-hooks,workflows"],
+        "pending_permission_update": null
+      }
+    ],
+    "pending_app_expansions_approved": false
+  },
+  "releases": {
+    "count": 8,
+    "tags": ["v0.1.0", "v0.1.1", "v0.1.2", "v0.1.3", "v0.1.4", "v0.1.5", "v0.1.6", "v0.1.7"],
+    "all_published": true,
+    "all_mutable": true,
+    "all_asset_counts": 5,
+    "latest": "v0.1.7"
+  },
+  "pages": {
+    "status": "built",
+    "build_type": "legacy",
+    "source": {"branch": "main", "path": "/"},
+    "public": true,
+    "https_enforced": true
+  },
+  "security_features": {
+    "secret_scanning": "enabled",
+    "secret_scanning_alert_count": 0,
+    "secret_scanning_push_protection": "enabled",
+    "secret_scanning_non_provider_patterns": "disabled",
+    "secret_scanning_validity_checks": "disabled",
+    "dependabot_alerts": "disabled",
+    "dependabot_security_updates": "disabled",
+    "automated_security_fixes": "disabled",
+    "code_scanning": "no-analysis-found",
+    "private_vulnerability_reporting": "disabled"
+  },
+  "owner_recovery": {
+    "admin_access_verified": true,
+    "recent_authenticated_owner_session_preserved": true,
+    "verified_email_count": 1,
+    "password_configured": true,
+    "passkey_count": 1,
+    "two_factor_authentication": "enabled",
+    "authenticator_app": "configured",
+    "github_mobile_device_count": 2,
+    "recovery_codes": "viewed",
+    "recovery_codes_ui_warning": "not downloaded or printed in the last year",
+    "independent_recovery_paths_attested": true,
+    "recovery_material_stored_outside_account_attested": true,
+    "restoration_tabletop_attested": true,
+    "owner_attested_at": "2026-07-22T03:40:53Z",
+    "secret_or_recovery_material_recorded": false
+  },
+  "evidence_agreement": [
+    {"surface": "repository identity, merge settings, and Owner permission", "primary": "REST", "independent": "GraphQL", "result": "agree"},
+    {"surface": "branch and tag refs", "primary": "REST", "independent": "Git protocol ls-remote", "result": "agree"},
+    {"surface": "workflow inventory and declared permissions", "primary": "REST", "independent": "checked-in workflow definitions", "result": "agree"},
+    {"surface": "check names and sources", "primary": "check-runs REST", "independent": "checked-in job names", "result": "agree-for-existing-checks"},
+    {"surface": "repository credential identifiers", "primary": "secrets metadata REST", "independent": "checked-in workflow references", "result": "agree-on-name-only"},
+    {"surface": "release inventory", "primary": "REST", "independent": "gh release list", "result": "agree"},
+    {"surface": "installed Apps", "primary": "Owner Settings UI inventory", "independent": "individual installation configuration views", "result": "agree"},
+    {"surface": "Owner access and recovery configuration", "primary": "REST and GraphQL Owner permission", "independent": "Owner Settings UI", "result": "admin-access-agrees; human recovery attestations pending"}
+  ],
+  "readiness": {
+    "state": "repository-prerequisites-authorized",
+    "blockers": [
+      "HOMEBREW_TAP_TOKEN type, destination allowlist, scopes, expiry, rotation, and revocation remain unverified; credential migration and credential-consuming promotion remain blocked.",
+      "The three absent checks and the skipped Claude floor result remain unproven; no context may become required until exact-head scenario evidence succeeds."
+    ],
+    "owner_signoff": {
+      "owner": "yersonargotev",
+      "decision": "authorize-repository-prerequisites-only",
+      "attested_at": "2026-07-22T03:40:53Z",
+      "evidence": "explicit issue-delivery conversation confirmation"
+    },
+    "later_issues_authorized": [169, 170, 171],
+    "controls_authorized_for_enforcement": false,
+    "credential_or_environment_promotion_authorized": false
+  }
+}
