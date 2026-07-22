@@ -6,11 +6,11 @@ usage() {
 Generate a Homebrew formula for Packy from a release checksum manifest.
 
 Usage:
-  scripts/generate-homebrew-formula.sh --version <v0.x.y> --checksums <checksums.txt> --out <Formula/packy.rb> [options]
+  scripts/generate-homebrew-formula.sh --version <v0.x.y> --checksums <SHA256SUMS> --out <Formula/packy.rb> [options]
 
 Options:
   --version   Release tag used in artifact filenames, for example v0.1.0.
-  --checksums Path to the release checksums.txt manifest.
+  --checksums Path to the complete release SHA256SUMS manifest.
   --out       Output formula path.
   --repo      GitHub repository in owner/name form. Defaults to yersonargotev/packy.
   --homepage  Formula homepage. Defaults to https://github.com/<repo>.
@@ -165,12 +165,14 @@ darwin_amd64_artifact="packy_${version}_darwin_amd64"
 darwin_arm64_artifact="packy_${version}_darwin_arm64"
 linux_amd64_artifact="packy_${version}_linux_amd64"
 linux_arm64_artifact="packy_${version}_linux_arm64"
+sbom_artifact="sbom.spdx.json"
 
 expected_artifacts=(
   "$darwin_amd64_artifact"
   "$darwin_arm64_artifact"
   "$linux_amd64_artifact"
   "$linux_arm64_artifact"
+  "$sbom_artifact"
 )
 
 darwin_amd64_sha=""

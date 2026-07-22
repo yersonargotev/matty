@@ -56,30 +56,41 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/packy-release-evidence.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 platforms=(darwin_amd64 darwin_arm64 linux_amd64 linux_arm64)
 {
-  printf '%s\n' checksums.txt
+  printf '%s\n' SHA256SUMS
   for platform in "${platforms[@]}"; do
     printf 'packy_%s_%s\n' "$tag" "$platform"
   done
 } | sort > "$scratch/expected-entries"
-find "$dist" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort > "$scratch/actual-entries"
+printf '%s\n' sbom.spdx.json >> "$scratch/expected-entries"
+sort -o "$scratch/expected-entries" "$scratch/expected-entries"
+find "$dist" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort > "$scratch/actual-entries"
 if ! cmp -s "$scratch/expected-entries" "$scratch/actual-entries"; then
   echo "release candidate artifact set is incomplete or unexpected" >&2
   diff -u "$scratch/expected-entries" "$scratch/actual-entries" >&2 || true
   exit 1
 fi
+while IFS= read -r name; do
+  if [[ ! -f "$dist/$name" || -L "$dist/$name" ]]; then
+    echo "release candidate entry is not a regular non-symlink file: $name" >&2
+    exit 1
+  fi
+done < "$scratch/expected-entries"
 
-if ! awk 'NF != 2 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ { exit 1 }' "$dist/checksums.txt"; then
-  echo "checksums.txt is malformed" >&2
+if ! awk 'NF != 2 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ { exit 1 }' "$dist/SHA256SUMS"; then
+  echo "SHA256SUMS is malformed" >&2
   exit 1
 fi
-if [[ "$(wc -l < "$dist/checksums.txt" | tr -d ' ')" != 4 ]]; then
-  echo "checksums.txt must contain exactly four Packy artifacts" >&2
+if [[ "$(wc -l < "$dist/SHA256SUMS" | tr -d ' ')" != 5 ]]; then
+  echo "SHA256SUMS must contain exactly four Packy binaries and the SBOM" >&2
   exit 1
 fi
-for platform in "${platforms[@]}"; do
-  name="packy_${tag}_${platform}"
-  matches="$(awk -v name="$name" '$2 == name { print $1 }' "$dist/checksums.txt")"
-  [[ "$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')" == 1 ]] || { echo "checksums.txt missing or duplicates $name" >&2; exit 1; }
+subjects=(sbom.spdx.json)
+for platform in "${platforms[@]}"; do subjects+=("packy_${tag}_${platform}"); done
+IFS=$'\n' subjects=($(printf '%s\n' "${subjects[@]}" | sort))
+unset IFS
+for name in "${subjects[@]}"; do
+  matches="$(awk -v name="$name" '$2 == name { print $1 }' "$dist/SHA256SUMS")"
+  [[ "$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')" == 1 ]] || { echo "SHA256SUMS missing or duplicates $name" >&2; exit 1; }
   want="$matches"
   if command -v sha256sum >/dev/null; then
     got="$(sha256sum "$dist/$name" | awk '{print $1}')"
@@ -89,12 +100,27 @@ for platform in "${platforms[@]}"; do
   [[ "$got" == "$want" ]] || { echo "checksum mismatch for $name" >&2; exit 1; }
 done
 
+mkdir "$scratch/binaries"
+for platform in "${platforms[@]}"; do
+  ln "$dist/packy_${tag}_${platform}" "$scratch/binaries/packy_${tag}_${platform}"
+done
+created="$(git show -s --format=%cI "$commit")"
+go run ./internal/tools/releasesbom \
+  --version "$tag" \
+  --created "$created" \
+  --dist "$scratch/binaries" \
+  --out "$scratch/sbom.spdx.json" >/dev/null
+cmp "$scratch/sbom.spdx.json" "$dist/sbom.spdx.json" || {
+  echo "sbom.spdx.json is stale or does not describe the retained binaries" >&2
+  exit 1
+}
+
 [[ -f "$formula" ]] || { echo "proved Homebrew formula is missing" >&2; exit 1; }
 grep -Fq "version \"${tag#v}\"" "$formula" || { echo "formula version does not match $tag" >&2; exit 1; }
 for platform in "${platforms[@]}"; do
   name="packy_${tag}_${platform}"
   grep -Fq "$name" "$formula" || { echo "formula missing $name" >&2; exit 1; }
-  digest="$(awk -v name="$name" '$2 == name { print $1 }' "$dist/checksums.txt")"
+  digest="$(awk -v name="$name" '$2 == name { print $1 }' "$dist/SHA256SUMS")"
   grep -Fq "$digest" "$formula" || { echo "formula checksum does not match $name" >&2; exit 1; }
 done
 grep -Fq '"#{bin}/packy", "--version"' "$formula" || { echo "formula test surface changed" >&2; exit 1; }

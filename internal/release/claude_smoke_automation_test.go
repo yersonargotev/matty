@@ -87,19 +87,19 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		"packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}",
 		"ref: ${{ needs.build.outputs.commit }}",
 		"--packy-ref \"${{ needs.build.outputs.commit }}\"",
-		`current="$(git rev-parse "${tag}^{commit}")"`,
-		`[[ "$current" != "$candidate" ]]`,
-		"Reverify release tag before publication",
+		`tag_commit="$(git rev-parse --verify "${RELEASE_TAG}^{commit}")"`,
+		`[[ "$head" == "$main" && "$head" == "$tag_commit" ]]`,
+		"Create or resume exact draft and publish once",
 		"actions/upload-artifact@",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release workflow missing %q", want)
 		}
 	}
-	if strings.Index(text, "claude-smoke:") > strings.Index(text, "release:") {
+	if strings.Index(text, "claude-smoke:") > strings.Index(text, "publish-github:") {
 		t.Fatal("release smoke must be declared before publication")
 	}
-	publication := text[strings.LastIndex(text, "  release:"):]
+	publication := text[strings.LastIndex(text, "  publish-github:"):]
 	if strings.Contains(publication, "scripts/build-release-artifacts.sh") {
 		t.Fatal("publication must consume the proved candidate instead of rebuilding artifacts")
 	}
