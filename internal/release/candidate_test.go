@@ -107,8 +107,26 @@ func TestCandidateValidatesExactSHA256SUMSAndSPDX(t *testing.T) {
 		{"wrong creator", func(o *release.Observation) {
 			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "Tool: packy-release", "Person: attacker", 1)))
 		}},
+		{"unknown top-level field", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "{", `{"unknown":true,`, 1)))
+		}},
+		{"unknown creation field", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"creationInfo":{`, `"creationInfo":{"unknown":true,`, 1)))
+		}},
+		{"unknown file field", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"files":[{`, `"files":[{"unknown":true,`, 1)))
+		}},
+		{"unknown checksum field", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"checksums":[{`, `"checksums":[{"unknown":true,`, 1)))
+		}},
+		{"extra checksum", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `}],"licenseConcluded"`, `},{"algorithm":"SHA256","checksumValue":"`+strings.Repeat("b", 64)+`"}],"licenseConcluded"`, 1)))
+		}},
+		{"invalid checksum algorithm", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"algorithm":"SHA256"`, `"algorithm":"SHA1"`, 1)))
+		}},
 		{"missing file id", func(o *release.Observation) {
-			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"SPDXID":"SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz",`, "", 1)))
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"SPDXID":"SPDXRef-File-7061636b795f76302e312e325f6c696e75785f616d6436342e7461722e677a",`, "", 1)))
 		}},
 		{"missing file license", func(o *release.Observation) {
 			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `,"licenseConcluded":"NOASSERTION"`, "", 1)))
@@ -117,7 +135,7 @@ func TestCandidateValidatesExactSHA256SUMSAndSPDX(t *testing.T) {
 			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `,"copyrightText":"NOASSERTION"`, "", 1)))
 		}},
 		{"missing document describes", func(o *release.Observation) {
-			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"documentDescribes":["SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz"],`, "", 1)))
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"documentDescribes":["SPDXRef-File-7061636b795f76302e312e325f6c696e75785f616d6436342e7461722e677a"],`, "", 1)))
 		}},
 		{"sbom missing", func(o *release.Observation) {
 			replaceSBOM(o, []byte(`{"spdxVersion":"SPDX-2.3","name":"packy-v0.1.2","documentNamespace":"https://packy.dev/spdx/v0.1.2","files":[]}`))
@@ -159,6 +177,14 @@ func TestProvenanceBindsEveryCandidateInputOffline(t *testing.T) {
 		if err := release.VerifyProvenance(candidate, provenance); err == nil {
 			t.Fatalf("mutation %d accepted", i)
 		}
+	}
+}
+
+func TestSPDXFileIDsAreInjectiveForSimilarNames(t *testing.T) {
+	subjects := []release.Subject{{Name: "foo-bar", SHA256: strings.Repeat("a", 64)}, {Name: "foo_bar", SHA256: strings.Repeat("b", 64)}}
+	document := []byte(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","dataLicense":"CC0-1.0","name":"packy-v0.1.2","documentNamespace":"https://github.com/yersonargotev/packy/releases/download/v0.1.2/sbom.spdx.json","creationInfo":{"created":"2026-01-02T03:04:05Z","creators":["Tool: packy-release"]},"documentDescribes":["SPDXRef-File-666f6f2d626172","SPDXRef-File-666f6f5f626172"],"files":[{"fileName":"foo-bar","SPDXID":"SPDXRef-File-666f6f2d626172","checksums":[{"algorithm":"SHA256","checksumValue":"` + strings.Repeat("a", 64) + `"}],"licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION"},{"fileName":"foo_bar","SPDXID":"SPDXRef-File-666f6f5f626172","checksums":[{"algorithm":"SHA256","checksumValue":"` + strings.Repeat("b", 64) + `"}],"licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION"}]}`)
+	if err := release.VerifySPDXSBOM(document, "v0.1.2", subjects); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -253,7 +279,7 @@ func TestDraftLifecycleRejectsAlteredMetadataAndAmbiguity(t *testing.T) {
 
 func fixtureObservation() release.Observation {
 	binary := release.Subject{Name: "packy_v0.1.2_linux_amd64.tar.gz", SHA256: strings.Repeat("b", 64)}
-	sbom := []byte(fmt.Sprintf(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","dataLicense":"CC0-1.0","name":"packy-v0.1.2","documentNamespace":"https://github.com/yersonargotev/packy/releases/download/v0.1.2/sbom.spdx.json","creationInfo":{"created":"2026-01-02T03:04:05Z","creators":["Tool: packy-release"]},"documentDescribes":["SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz"],"files":[{"fileName":%q,"SPDXID":"SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz","checksums":[{"algorithm":"SHA256","checksumValue":%q}],"licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION"}]}`, binary.Name, binary.SHA256))
+	sbom := []byte(fmt.Sprintf(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","dataLicense":"CC0-1.0","name":"packy-v0.1.2","documentNamespace":"https://github.com/yersonargotev/packy/releases/download/v0.1.2/sbom.spdx.json","creationInfo":{"created":"2026-01-02T03:04:05Z","creators":["Tool: packy-release"]},"documentDescribes":["SPDXRef-File-7061636b795f76302e312e325f6c696e75785f616d6436342e7461722e677a"],"files":[{"fileName":%q,"SPDXID":"SPDXRef-File-7061636b795f76302e312e325f6c696e75785f616d6436342e7461722e677a","checksums":[{"algorithm":"SHA256","checksumValue":%q}],"licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION"}]}`, binary.Name, binary.SHA256))
 	sbomSubject := release.Subject{Name: release.SBOMName, SHA256: digest(sbom)}
 	checksums := []byte(binary.SHA256 + "  " + binary.Name + "\n" + sbomSubject.SHA256 + "  " + sbomSubject.Name + "\n")
 	return release.Observation{

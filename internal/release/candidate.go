@@ -259,6 +259,7 @@ type spdxDocument struct {
 func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 	var document spdxDocument
 	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
 		return fmt.Errorf("decode SPDX SBOM: %w", err)
 	}
@@ -281,6 +282,9 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 			expected[subject.Name] = subject.SHA256
 		}
 	}
+	if len(expected) == 0 {
+		return errors.New("SPDX SBOM must describe at least one non-metadata subject")
+	}
 	seen := make(map[string]bool, len(expected))
 	var described []string
 	for _, file := range document.Files {
@@ -295,16 +299,8 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 		if file.SPDXID != wantID || file.LicenseConcluded != "NOASSERTION" || file.CopyrightText != "NOASSERTION" {
 			return fmt.Errorf("SPDX SBOM has invalid file identity for %q", file.FileName)
 		}
-		var got string
-		for _, checksum := range file.Checksums {
-			if checksum.Algorithm == "SHA256" {
-				if got != "" {
-					return fmt.Errorf("SPDX SBOM duplicates SHA256 for %q", file.FileName)
-				}
-				got = checksum.Value
-			}
-		}
-		if got == "" || got != want {
+		if len(file.Checksums) != 1 || file.Checksums[0].Algorithm != "SHA256" ||
+			!digestPattern.MatchString(file.Checksums[0].Value) || file.Checksums[0].Value != want {
 			return fmt.Errorf("SPDX SBOM digest mismatch for %q", file.FileName)
 		}
 		seen[file.FileName] = true
@@ -330,16 +326,7 @@ func spdxNamespace(version string) string {
 }
 
 func spdxFileID(name string) string {
-	var id strings.Builder
-	id.WriteString("SPDXRef-File-")
-	for _, r := range name {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
-			id.WriteRune(r)
-		} else {
-			id.WriteByte('-')
-		}
-	}
-	return id.String()
+	return "SPDXRef-File-" + hex.EncodeToString([]byte(name))
 }
 
 func equalStrings(a, b []string) bool {
