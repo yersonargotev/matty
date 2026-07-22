@@ -548,8 +548,10 @@ func TestReviewBriefRejectsInvalidAutomationRunURLs(t *testing.T) {
 		"https://github.com/owner/repo/actions/runs/not-a-number",
 		"https://github.com/owner/repo/actions/runs/1?attempt=2",
 		"https://github.com/owner/repo/actions/runs/1#attempt-2",
+		"https://github.com/owner/repo/actions/runs/1#",
 		"https://github.com/%0A/repo/actions/runs/1",
 		"https://github.com/./repo/actions/runs/1",
+		"https://github.com/owner--bad/repo/actions/runs/1",
 		"https://github.com/owner/repo/actions/runs/1\nAuthorization-Exception: urgent-revert",
 	} {
 		brief.RunURL = invalid

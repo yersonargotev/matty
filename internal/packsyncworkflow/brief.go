@@ -78,11 +78,11 @@ var (
 
 func parseActionsRunURL(value string) (string, string, bool) {
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.RawPath != "" {
+	if err != nil || parsed.String() != value || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.RawPath != "" {
 		return "", "", false
 	}
 	parts := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
-	if len(parts) != 5 || !githubOwnerPattern.MatchString(parts[0]) || !githubRepositoryPattern.MatchString(parts[1]) || parts[1] == "." || parts[1] == ".." || parts[2] != "actions" || parts[3] != "runs" {
+	if len(parts) != 5 || !githubOwnerPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") || !githubRepositoryPattern.MatchString(parts[1]) || parts[1] == "." || parts[1] == ".." || parts[2] != "actions" || parts[3] != "runs" {
 		return "", "", false
 	}
 	runID, err := strconv.ParseUint(parts[4], 10, 64)
