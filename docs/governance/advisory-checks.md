@@ -16,7 +16,9 @@ only: no branch protection or repository ruleset requires them in this stage.
 
 The expected source is a policy binding, not proof. Issue #172 must observe each
 exact name and App identity on current-head runs before any later ruleset can
-require it. A rename or source mismatch stops promotion.
+require it. The non-destructive procedure and authoritative evidence boundary
+are defined in [Governance shadow qualification](shadow-qualification.md). A
+rename or source mismatch stops promotion.
 
 ## Authorization boundary
 
