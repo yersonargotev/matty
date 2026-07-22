@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -88,6 +89,36 @@ func TestCandidateValidatesExactSHA256SUMSAndSPDX(t *testing.T) {
 		{"stale sbom name", func(o *release.Observation) {
 			replaceSBOM(o, []byte(strings.ReplaceAll(string(o.SBOM), "packy-v0.1.2", "packy-v0.1.1")))
 		}},
+		{"wrong SPDX version", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "SPDX-2.3", "SPDX-2.2", 1)))
+		}},
+		{"missing document id", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"SPDXID":"SPDXRef-DOCUMENT",`, "", 1)))
+		}},
+		{"wrong data license", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "CC0-1.0", "MIT", 1)))
+		}},
+		{"namespace collision", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "releases/download/v0.1.2/sbom.spdx.json", "attacker/v0.1.2/sbom.spdx.json", 1)))
+		}},
+		{"invalid created", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "2026-01-02T03:04:05Z", "yesterday", 1)))
+		}},
+		{"wrong creator", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), "Tool: packy-release", "Person: attacker", 1)))
+		}},
+		{"missing file id", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"SPDXID":"SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz",`, "", 1)))
+		}},
+		{"missing file license", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `,"licenseConcluded":"NOASSERTION"`, "", 1)))
+		}},
+		{"missing copyright", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `,"copyrightText":"NOASSERTION"`, "", 1)))
+		}},
+		{"missing document describes", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"documentDescribes":["SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz"],`, "", 1)))
+		}},
 		{"sbom missing", func(o *release.Observation) {
 			replaceSBOM(o, []byte(`{"spdxVersion":"SPDX-2.3","name":"packy-v0.1.2","documentNamespace":"https://packy.dev/spdx/v0.1.2","files":[]}`))
 		}},
@@ -166,7 +197,6 @@ func TestDraftLifecycleRejectsAlteredMetadataAndAmbiguity(t *testing.T) {
 	candidate := mustCandidate(t, fixtureObservation())
 	mutations := []func(*release.Release){
 		func(r *release.Release) { r.CandidateID = strings.Repeat("e", 64) },
-		func(r *release.Release) { r.ProvenanceCandidateID = strings.Repeat("e", 64) },
 		func(r *release.Release) { r.Repository = "attacker/fork" },
 		func(r *release.Release) { r.Ref = "refs/tags/v0.1.2" },
 		func(r *release.Release) { r.TargetCommit = strings.Repeat("e", 40) },
@@ -186,6 +216,28 @@ func TestDraftLifecycleRejectsAlteredMetadataAndAmbiguity(t *testing.T) {
 			t.Fatalf("mutation %d accepted", i)
 		}
 	}
+	provenanceMutations := []func(*release.Provenance){
+		func(p *release.Provenance) { p.CandidateID = strings.Repeat("e", 64) },
+		func(p *release.Provenance) { p.Version = "v0.1.1" },
+		func(p *release.Provenance) { p.Repository = "attacker/fork" },
+		func(p *release.Provenance) { p.Ref = "refs/tags/v0.1.2" },
+		func(p *release.Provenance) { p.Commit = strings.Repeat("e", 40) },
+		func(p *release.Provenance) { p.Workflow = "evil.yml" },
+		func(p *release.Provenance) { p.WorkflowSHA = strings.Repeat("e", 64) },
+		func(p *release.Provenance) { p.ReleaseNotesSHA256 = strings.Repeat("e", 64) },
+		func(p *release.Provenance) { p.Permissions[0].Access = "write" },
+		func(p *release.Provenance) { p.Subjects[0].SHA256 = strings.Repeat("e", 64) },
+	}
+	for i, mutate := range provenanceMutations {
+		observed := exactRelease(candidate, true, candidate.Subjects)
+		mutate(&observed.Provenance)
+		if observed.CandidateID != candidate.ID {
+			t.Fatal("fixture changed apparent candidate ID")
+		}
+		if _, err := release.VerifyLifecycle(candidate, []release.Release{observed}); err == nil {
+			t.Fatalf("provenance mutation %d accepted", i)
+		}
+	}
 	exact := exactRelease(candidate, true, candidate.Subjects)
 	if _, err := release.VerifyLifecycle(candidate, []release.Release{exact, exact}); err == nil {
 		t.Fatal("ambiguous releases accepted")
@@ -201,7 +253,7 @@ func TestDraftLifecycleRejectsAlteredMetadataAndAmbiguity(t *testing.T) {
 
 func fixtureObservation() release.Observation {
 	binary := release.Subject{Name: "packy_v0.1.2_linux_amd64.tar.gz", SHA256: strings.Repeat("b", 64)}
-	sbom := []byte(fmt.Sprintf(`{"spdxVersion":"SPDX-2.3","name":"packy-v0.1.2","documentNamespace":"https://packy.dev/spdx/v0.1.2","files":[{"fileName":%q,"checksums":[{"algorithm":"SHA256","checksumValue":%q}]}]}`, binary.Name, binary.SHA256))
+	sbom := []byte(fmt.Sprintf(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","dataLicense":"CC0-1.0","name":"packy-v0.1.2","documentNamespace":"https://github.com/yersonargotev/packy/releases/download/v0.1.2/sbom.spdx.json","creationInfo":{"created":"2026-01-02T03:04:05Z","creators":["Tool: packy-release"]},"documentDescribes":["SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz"],"files":[{"fileName":%q,"SPDXID":"SPDXRef-File-packy-v0.1.2-linux-amd64.tar.gz","checksums":[{"algorithm":"SHA256","checksumValue":%q}],"licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION"}]}`, binary.Name, binary.SHA256))
 	sbomSubject := release.Subject{Name: release.SBOMName, SHA256: digest(sbom)}
 	checksums := []byte(binary.SHA256 + "  " + binary.Name + "\n" + sbomSubject.SHA256 + "  " + sbomSubject.Name + "\n")
 	return release.Observation{
@@ -216,7 +268,7 @@ func fixtureObservation() release.Observation {
 
 func exactRelease(c release.Candidate, draft bool, assets []release.Subject) release.Release {
 	return release.Release{
-		Version: c.Version, CandidateID: c.ID, ProvenanceCandidateID: c.ID, Repository: c.Repository, Ref: c.Ref,
+		Version: c.Version, CandidateID: c.ID, Provenance: release.ProvenanceFor(c), Repository: c.Repository, Ref: c.Ref,
 		TargetCommit: c.Commit, Workflow: c.Workflow, WorkflowSHA: c.WorkflowSHA,
 		ReleaseNotesSHA256: c.ReleaseNotesSHA256, Draft: draft, Assets: append([]release.Subject(nil), assets...),
 	}
@@ -243,7 +295,7 @@ func replaceSBOM(o *release.Observation, content []byte) {
 			lines = append(lines, s.SHA256+"  "+s.Name)
 		}
 	}
-	sortStrings(lines)
+	sort.Strings(lines)
 	replaceChecksums(o, strings.Join(lines, "\n")+"\n")
 }
 func checksumLine(subjects []release.Subject, name string) string {
@@ -292,13 +344,4 @@ func cloneReleases(in []release.Release) []release.Release {
 		out[i].Assets = append([]release.Subject(nil), out[i].Assets...)
 	}
 	return out
-}
-func sortStrings(values []string) {
-	for i := range values {
-		for j := i + 1; j < len(values); j++ {
-			if values[j] < values[i] {
-				values[i], values[j] = values[j], values[i]
-			}
-		}
-	}
 }

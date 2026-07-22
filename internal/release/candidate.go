@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -232,14 +233,24 @@ func VerifySHA256SUMS(content []byte, subjects []Subject) error {
 
 type spdxDocument struct {
 	SPDXVersion       string `json:"spdxVersion"`
+	SPDXID            string `json:"SPDXID"`
+	DataLicense       string `json:"dataLicense"`
 	Name              string `json:"name"`
 	DocumentNamespace string `json:"documentNamespace"`
+	CreationInfo      struct {
+		Created  string   `json:"created"`
+		Creators []string `json:"creators"`
+	} `json:"creationInfo"`
+	DocumentDescribes []string `json:"documentDescribes"`
 	Files             []struct {
 		FileName  string `json:"fileName"`
+		SPDXID    string `json:"SPDXID"`
 		Checksums []struct {
 			Algorithm string `json:"algorithm"`
 			Value     string `json:"checksumValue"`
 		} `json:"checksums"`
+		LicenseConcluded string `json:"licenseConcluded"`
+		CopyrightText    string `json:"copyrightText"`
 	} `json:"files"`
 }
 
@@ -254,9 +265,15 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return errors.New("SPDX SBOM contains trailing JSON")
 	}
-	if document.SPDXVersion != "SPDX-2.3" || document.Name != "packy-"+version ||
-		document.DocumentNamespace == "" || !strings.Contains(document.DocumentNamespace, version) {
+	if document.SPDXVersion != "SPDX-2.3" || document.SPDXID != "SPDXRef-DOCUMENT" ||
+		document.DataLicense != "CC0-1.0" || document.Name != "packy-"+version ||
+		document.DocumentNamespace != spdxNamespace(version) {
 		return errors.New("SPDX SBOM has stale or mismatched document identity")
+	}
+	created, err := time.Parse(time.RFC3339, document.CreationInfo.Created)
+	if err != nil || created.Location() != time.UTC ||
+		!equalStrings(document.CreationInfo.Creators, []string{"Tool: packy-release"}) {
+		return errors.New("SPDX SBOM has invalid creation information")
 	}
 	expected := make(map[string]string)
 	for _, subject := range subjects {
@@ -265,6 +282,7 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 		}
 	}
 	seen := make(map[string]bool, len(expected))
+	var described []string
 	for _, file := range document.Files {
 		want, ok := expected[file.FileName]
 		if !ok {
@@ -272,6 +290,10 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 		}
 		if seen[file.FileName] {
 			return fmt.Errorf("SPDX SBOM duplicates subject %q", file.FileName)
+		}
+		wantID := spdxFileID(file.FileName)
+		if file.SPDXID != wantID || file.LicenseConcluded != "NOASSERTION" || file.CopyrightText != "NOASSERTION" {
+			return fmt.Errorf("SPDX SBOM has invalid file identity for %q", file.FileName)
 		}
 		var got string
 		for _, checksum := range file.Checksums {
@@ -286,13 +308,50 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 			return fmt.Errorf("SPDX SBOM digest mismatch for %q", file.FileName)
 		}
 		seen[file.FileName] = true
+		described = append(described, wantID)
 	}
 	for name := range expected {
 		if !seen[name] {
 			return fmt.Errorf("SPDX SBOM is missing subject %q", name)
 		}
 	}
+	sort.Strings(described)
+	wantDescribes := append([]string(nil), described...)
+	gotDescribes := append([]string(nil), document.DocumentDescribes...)
+	sort.Strings(gotDescribes)
+	if !equalStrings(gotDescribes, wantDescribes) {
+		return errors.New("SPDX SBOM documentDescribes does not match its files")
+	}
 	return nil
+}
+
+func spdxNamespace(version string) string {
+	return "https://github.com/yersonargotev/packy/releases/download/" + version + "/sbom.spdx.json"
+}
+
+func spdxFileID(name string) string {
+	var id strings.Builder
+	id.WriteString("SPDXRef-File-")
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			id.WriteRune(r)
+		} else {
+			id.WriteByte('-')
+		}
+	}
+	return id.String()
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func identityDigest(candidate Candidate) string {
@@ -373,17 +432,17 @@ func VerifyProvenance(candidate Candidate, provenance Provenance) error {
 
 // Release is a complete read-only projection of the GitHub release metadata.
 type Release struct {
-	Version               string
-	CandidateID           string
-	ProvenanceCandidateID string
-	Repository            string
-	Ref                   string
-	TargetCommit          string
-	Workflow              string
-	WorkflowSHA           string
-	ReleaseNotesSHA256    string
-	Draft                 bool
-	Assets                []Subject
+	Version            string
+	CandidateID        string
+	Provenance         Provenance
+	Repository         string
+	Ref                string
+	TargetCommit       string
+	Workflow           string
+	WorkflowSHA        string
+	ReleaseNotesSHA256 string
+	Draft              bool
+	Assets             []Subject
 }
 
 type Lifecycle string
@@ -416,7 +475,10 @@ func VerifyLifecycle(candidate Candidate, releases []Release) (LifecycleDecision
 		return LifecycleDecision{Lifecycle: ResumeDraft, Missing: append([]Subject(nil), candidate.Subjects...)}, nil
 	}
 	observed := matching[0]
-	if observed.CandidateID != candidate.ID || observed.ProvenanceCandidateID != candidate.ID || observed.Repository != candidate.Repository ||
+	if err := VerifyProvenance(candidate, observed.Provenance); err != nil {
+		return LifecycleDecision{}, fmt.Errorf("release provenance: %w", err)
+	}
+	if observed.CandidateID != candidate.ID || observed.Repository != candidate.Repository ||
 		observed.Ref != candidate.Ref || observed.TargetCommit != candidate.Commit ||
 		observed.Workflow != candidate.Workflow || observed.WorkflowSHA != candidate.WorkflowSHA ||
 		observed.ReleaseNotesSHA256 != candidate.ReleaseNotesSHA256 {
