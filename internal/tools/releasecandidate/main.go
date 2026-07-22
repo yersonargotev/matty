@@ -28,6 +28,8 @@ func main() {
 
 type stringList []string
 
+var errDestinationExists = errors.New("destination already exists")
+
 func (v *stringList) String() string     { return strings.Join(*v, ",") }
 func (v *stringList) Set(s string) error { *v = append(*v, s); return nil }
 
@@ -368,7 +370,10 @@ func writePairAtomic(dir string, candidate, provenance []byte) error {
 			return err
 		}
 	}
-	if err := os.Rename(stage, dir); err != nil {
+	if err := renameNoReplace(stage, dir); err != nil {
+		if errors.Is(err, errDestinationExists) {
+			return errors.New("refusing to overwrite existing output-dir")
+		}
 		return fmt.Errorf("publish metadata directory: %w", err)
 	}
 	return nil

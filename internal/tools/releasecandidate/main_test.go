@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,46 @@ func TestStrictEvidenceAndStateJSONRejectDuplicateAndUnknownFields(t *testing.T)
 	}
 	if err := strictReadJSON(statePath, &state, stateSchema); err == nil || !strings.Contains(err.Error(), "non-null") {
 		t.Fatalf("null draft error = %v", err)
+	}
+}
+
+func TestRenameNoReplaceIsAtomicAndExclusive(t *testing.T) {
+	root := t.TempDir()
+	stage := filepath.Join(root, "stage")
+	destination := filepath.Join(root, "destination")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "candidate.json"), []byte("candidate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameNoReplace(stage, destination); err != errDestinationExists {
+		if strings.Contains(fmt.Sprint(err), "unsupported") {
+			t.Skip(err)
+		}
+		t.Fatalf("exclusive rename error = %v", err)
+	}
+	entries, err := os.ReadDir(destination)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty destination was not preserved: entries=%v err=%v", entries, err)
+	}
+	if string(mustRead(t, filepath.Join(stage, "candidate.json"))) != "candidate" {
+		t.Fatal("stage disappeared after refused rename")
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameNoReplace(stage, destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(stage); !os.IsNotExist(err) {
+		t.Fatalf("stage still visible after publish: %v", err)
+	}
+	if string(mustRead(t, filepath.Join(destination, "candidate.json"))) != "candidate" {
+		t.Fatal("published directory is incomplete")
 	}
 }
 
