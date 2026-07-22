@@ -162,7 +162,7 @@ func TestClassicLifecycleOutcomeExitMappingIsStable(t *testing.T) {
 	}
 }
 
-func TestDoctorCompositionAcceptsExplicitClaudeEvidence(t *testing.T) {
+func TestDoctorCompositionDoesNotActivelyObserveClaudeRuntimeEvidence(t *testing.T) {
 	opts, _, _ := sandboxOptions(t)
 	observer := &countingClaudeObserver{}
 	opts.ClaudeLookPath = func(string) (string, error) { return "/sandbox/bin/claude", nil }
@@ -173,8 +173,8 @@ func TestDoctorCompositionAcceptsExplicitClaudeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out)
 	}
-	if observer.runnerCalls == 0 || observer.authorizationCalls == 0 || observer.runtimeCalls == 0 {
-		t.Fatalf("evidence calls runner=%d authorization=%d runtime=%d", observer.runnerCalls, observer.authorizationCalls, observer.runtimeCalls)
+	if observer.runnerCalls != 1 || observer.authorizationCalls != 0 || observer.runtimeCalls != 0 {
+		t.Fatalf("doctor calls runner=%d authorization=%d runtime=%d", observer.runnerCalls, observer.authorizationCalls, observer.runtimeCalls)
 	}
 }
 

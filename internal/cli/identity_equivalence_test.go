@@ -281,6 +281,10 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	value = regexp.MustCompile(`(?m)^(Outcome:|Desired surfaces:|State transition:|Pending prerequisite:|Pending prerequisites:|Preserved:|Blocker:|Lifecycle blockers:|Recovery:|Completed effects:|Failed effect:|Not started effects:)[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^- claude-[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^(?:PASS|WARN|FAIL) claude-[^\n]*\n`).ReplaceAllString(value, "")
+	// Issue #152 adds the human equivalent of the structured doctor summary.
+	// The dedicated doctor contract tests own that new output; the frozen
+	// rename baseline predates it and remains focused on pre-Claude behavior.
+	value = regexp.MustCompile(`(?m)^SUMMARY status=[^\n]*\n`).ReplaceAllString(value, "")
 	value = regexp.MustCompile(`(?m)^(\$PRODUCT (?:install|update): synced[^\n]+) \(outcome: [^)]+\)$`).ReplaceAllString(value, "$1")
 	value = regexp.MustCompile(`(?m)^(\$PRODUCT uninstall): [^;\n]+; processed \$Product-managed artifacts for state`).ReplaceAllString(value, "$1: removed $$Product-managed artifacts and state")
 	value = identityPlanRE.ReplaceAllString(value, "plan-<ID>")
