@@ -257,6 +257,9 @@ type spdxDocument struct {
 // VerifySPDXSBOM validates a minimal SPDX 2.3 inventory. It must describe every
 // non-metadata retained subject exactly once with the exact SHA-256.
 func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
+	if err := validateSPDXKeys(content); err != nil {
+		return err
+	}
 	var document spdxDocument
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
@@ -317,6 +320,114 @@ func VerifySPDXSBOM(content []byte, version string, subjects []Subject) error {
 	sort.Strings(gotDescribes)
 	if !equalStrings(gotDescribes, wantDescribes) {
 		return errors.New("SPDX SBOM documentDescribes does not match its files")
+	}
+	return nil
+}
+
+type jsonShape struct {
+	objectKeys map[string]jsonShape
+	arrayElem  *jsonShape
+}
+
+var (
+	jsonScalar    = jsonShape{}
+	checksumShape = jsonShape{objectKeys: map[string]jsonShape{
+		"algorithm": jsonScalar, "checksumValue": jsonScalar,
+	}}
+	fileShape = jsonShape{objectKeys: map[string]jsonShape{
+		"fileName": jsonScalar, "SPDXID": jsonScalar,
+		"checksums":        {arrayElem: &checksumShape},
+		"licenseConcluded": jsonScalar, "copyrightText": jsonScalar,
+	}}
+	creationShape = jsonShape{objectKeys: map[string]jsonShape{
+		"created": jsonScalar, "creators": {arrayElem: &jsonScalar},
+	}}
+	spdxShape = jsonShape{objectKeys: map[string]jsonShape{
+		"spdxVersion": jsonScalar, "SPDXID": jsonScalar, "dataLicense": jsonScalar,
+		"name": jsonScalar, "documentNamespace": jsonScalar,
+		"creationInfo":      creationShape,
+		"documentDescribes": {arrayElem: &jsonScalar},
+		"files":             {arrayElem: &fileShape},
+	}}
+)
+
+// validateSPDXKeys closes two encoding/json ambiguities before typed decoding:
+// field matching is otherwise case-insensitive and duplicate keys use the last
+// value. Packy's deterministic subset permits neither behavior.
+func validateSPDXKeys(content []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	if err := validateJSONShape(decoder, spdxShape); err != nil {
+		return fmt.Errorf("validate SPDX JSON keys: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return errors.New("validate SPDX JSON keys: trailing data")
+		}
+		return fmt.Errorf("validate SPDX JSON keys: trailing data: %w", err)
+	}
+	return nil
+}
+
+func validateJSONShape(decoder *json.Decoder, shape jsonShape) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if shape.objectKeys != nil {
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+			return errors.New("expected object")
+		}
+		seen := make(map[string]bool, len(shape.objectKeys))
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("object key is not a string")
+			}
+			child, allowed := shape.objectKeys[key]
+			if !allowed {
+				return fmt.Errorf("unknown or incorrectly cased key %q", key)
+			}
+			if seen[key] {
+				return fmt.Errorf("duplicate key %q", key)
+			}
+			seen[key] = true
+			if err := validateJSONShape(decoder, child); err != nil {
+				return fmt.Errorf("key %q: %w", key, err)
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := end.(json.Delim); !ok || delimiter != '}' {
+			return errors.New("object is not closed")
+		}
+		return nil
+	}
+	if shape.arrayElem != nil {
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != '[' {
+			return errors.New("expected array")
+		}
+		for decoder.More() {
+			if err := validateJSONShape(decoder, *shape.arrayElem); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := end.(json.Delim); !ok || delimiter != ']' {
+			return errors.New("array is not closed")
+		}
+		return nil
+	}
+	if _, nested := token.(json.Delim); nested {
+		return errors.New("expected scalar")
 	}
 	return nil
 }

@@ -119,6 +119,22 @@ func TestCandidateValidatesExactSHA256SUMSAndSPDX(t *testing.T) {
 		{"unknown checksum field", func(o *release.Observation) {
 			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"checksums":[{`, `"checksums":[{"unknown":true,`, 1)))
 		}},
+		{"case-variant top-level key", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"spdxVersion":`, `"SpdxVersion":`, 1)))
+		}},
+		{"duplicate top-level last-value-wins", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"spdxVersion":"SPDX-2.3"`, `"spdxVersion":"SPDX-2.2","spdxVersion":"SPDX-2.3"`, 1)))
+		}},
+		{"case-variant nested checksum key", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"algorithm":`, `"Algorithm":`, 1)))
+		}},
+		{"duplicate nested checksum algorithm last-value-wins", func(o *release.Observation) {
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"algorithm":"SHA256"`, `"algorithm":"SHA1","algorithm":"SHA256"`, 1)))
+		}},
+		{"duplicate nested checksum value last-value-wins", func(o *release.Observation) {
+			good := strings.Repeat("b", 64)
+			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `"checksumValue":"`+good+`"`, `"checksumValue":"`+strings.Repeat("e", 64)+`","checksumValue":"`+good+`"`, 1)))
+		}},
 		{"extra checksum", func(o *release.Observation) {
 			replaceSBOM(o, []byte(strings.Replace(string(o.SBOM), `}],"licenseConcluded"`, `},{"algorithm":"SHA256","checksumValue":"`+strings.Repeat("b", 64)+`"}],"licenseConcluded"`, 1)))
 		}},
