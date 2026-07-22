@@ -1,0 +1,294 @@
+name: Governance
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+  issues:
+    types:
+      - closed
+      - edited
+      - labeled
+      - reopened
+      - unlabeled
+  issue_comment:
+    types:
+      - created
+      - deleted
+      - edited
+  workflow_run:
+    workflows:
+      - Release
+      - Synchronize pack source
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  targets:
+    name: Identify affected pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - name: Resolve affected pull requests from trusted metadata
+        id: targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repository="${GITHUB_REPOSITORY#*/}"
+          linked_by_body() {
+            local record_url="$1"
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+              --search "\"$record_url\" in:body" --json body,number |
+              jq -r --arg record_url "$record_url" '.[] | select((.body // "") | contains($record_url)) | .number'
+          }
+          case "$EVENT_NAME" in
+            pull_request_target)
+              targets="$EVENT_PR_NUMBER"
+              ;;
+            issues)
+              # GraphQL variables are expanded by GitHub, not Bash.
+              # shellcheck disable=SC2016
+              closing_targets="$(gh api graphql \
+                -f query='query($owner:String!,$repository:String!,$number:Int!){repository(owner:$owner,name:$repository){issue(number:$number){closedByPullRequestsReferences(first:100){nodes{number state}}}}}' \
+                -f owner="$owner" \
+                -f repository="$repository" \
+                -F number="$EVENT_ISSUE_NUMBER" \
+                --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN") | .number')"
+              record_url="$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")"
+              targets="$closing_targets
+              $(linked_by_body "$record_url")"
+              ;;
+            issue_comment)
+              if jq -e '.issue.pull_request != null' "$GITHUB_EVENT_PATH" >/dev/null; then
+                targets="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+              else
+                targets=""
+              fi
+              ;;
+            workflow_run)
+              record_url="$(jq -r '.workflow_run.html_url' "$GITHUB_EVENT_PATH")"
+              targets="$(jq -r '.workflow_run.pull_requests[].number' "$GITHUB_EVENT_PATH")
+              $(linked_by_body "$record_url")"
+              ;;
+            *)
+              echo "unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          matrix="$(printf '%s\n' "$targets" | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber) | unique')"
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+
+  validate-authorization:
+    name: Validate authorization metadata
+    needs: targets
+    if: needs.targets.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    concurrency:
+      group: governance-authorization-${{ matrix.pr }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out the trusted definition
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate and publish current-head authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          context='Governance / Validate authorization'
+          directory="$RUNNER_TEMP/authorization-$PR_NUMBER"
+          mkdir -p "$directory/issues"
+
+          publish() {
+            local sha="$1" state="$2" description="$3"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+              -f state="$state" \
+              -f context="$context" \
+              -f description="$description" \
+              -f target_url="$RUN_URL" >/dev/null
+          }
+
+          pr="$directory/pr.json"
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json author,baseRefName,baseRefOid,body,closingIssuesReferences,createdAt,headRefName,headRefOid,number,url >"$pr"
+          head_sha="$(jq -r '.headRefOid' "$pr")"
+          publish "$head_sha" pending 'Validating current authorization metadata'
+
+          result=0
+          jq '{body}' "$pr" >"$directory/declaration-input.json"
+          go run ./internal/tools/governanceauth \
+            --declaration "$directory/declaration-input.json" \
+            >"$directory/declaration.json" || result=$?
+
+          if ((result == 0)); then
+            while IFS=$'\t' read -r closing_repo issue_number; do
+              if [[ "$closing_repo" != "$GITHUB_REPOSITORY" ]]; then
+                result=1
+                break
+              fi
+              gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                --json labels,number,state,url >"$directory/issues/$issue_number.json" || {
+                  result=$?
+                  break
+                }
+            done < <(jq -r '.closingIssuesReferences[] | [(.repository.owner.login + "/" + .repository.name), (.number | tostring)] | @tsv' "$pr")
+          fi
+
+          shopt -s nullglob
+          issue_files=("$directory"/issues/*.json)
+          if ((${#issue_files[@]} == 0)); then
+            echo '[]' >"$directory/issues.json"
+          else
+            jq -s '.' "${issue_files[@]}" >"$directory/issues.json" || result=$?
+          fi
+
+          echo 'null' >"$directory/exception.json"
+          if ((result == 0)) && jq -e '. != null' "$directory/declaration.json" >/dev/null; then
+            if ((${#issue_files[@]} != 0)); then
+              result=1
+            else
+              exception_type="$(jq -r '.type' "$directory/declaration.json")"
+              record_url="$(jq -r '.url' "$directory/declaration.json")"
+              case "$exception_type" in
+                private-security)
+                  # GitHub Actions has no repository_advisory trigger. Deny
+                  # until authorized external infrastructure can recompute on
+                  # every advisory change without leaving stale success.
+                  result=1
+                  ;;
+                urgent-revert)
+                  pattern="^https://github.com/$GITHUB_REPOSITORY/issues/([1-9][0-9]*)$"
+                  if [[ "$record_url" =~ $pattern ]]; then
+                    issue_number="${BASH_REMATCH[1]}"
+                    gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                      --json body,createdAt,state >"$directory/record.json" || result=$?
+                    if ((result == 0)); then
+                      jq --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" \
+                        --arg pr_url "$(jq -r '.url' "$pr")" --argjson pr "$PR_NUMBER" \
+                        '{type:$type,url:$url,kind:"issue",repository:$repository,state,created_at:.createdAt,accessible:true,pull_request_number:(if ((.body // "") | contains($pr_url)) then $pr else 0 end)}' \
+                        "$directory/record.json" >"$directory/exception.json" || result=$?
+                    fi
+                  else
+                    result=1
+                  fi
+                  ;;
+                automation)
+                  run_pattern="^https://github.com/$GITHUB_REPOSITORY/actions/runs/([1-9][0-9]*)$"
+                  pr_pattern="^https://github.com/$GITHUB_REPOSITORY/pull/([1-9][0-9]*)$"
+                  if [[ "$record_url" =~ $run_pattern ]]; then
+                    run_id="${BASH_REMATCH[1]}"
+                    gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+                      --jq '{state:.status,conclusion,workflow:.name,path,event,head_branch,head_sha,actor:.actor.login}' >"$directory/record.json" || result=$?
+                    if ((result == 0)); then
+                      pr_head_sha="$(jq -r '.headRefOid' "$pr")"
+                      gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+                        >"$directory/proposal-comments.json" || result=$?
+                    fi
+                    if ((result == 0)); then
+                      jq --arg run_url "$record_url" --arg head_sha "$pr_head_sha" --argjson pr "$PR_NUMBER" \
+                        'map(select(.body == ("<!-- packy-canonical-automation\nrun: " + $run_url + "\nhead: " + $head_sha + "\n-->") and .user.id == 41898282 and .user.login == "github-actions[bot]" and .user.type == "Bot")) | last // {} | {proposal_run_url:$run_url,proposal_head_sha:$head_sha,binding_comment_author_id:.user.id,pull_request_number:$pr}' \
+                        "$directory/proposal-comments.json" >"$directory/proposal-binding.json" || result=$?
+                    fi
+                    if ((result == 0)); then
+                      jq -s --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" \
+                        '.[0] + .[1] + {type:$type,url:$url,kind:"actions-run",repository:$repository,accessible:true}' \
+                        "$directory/record.json" "$directory/proposal-binding.json" >"$directory/exception.json" || result=$?
+                    fi
+                  elif [[ "$record_url" =~ $pr_pattern ]] && [[ "${BASH_REMATCH[1]}" == "$PR_NUMBER" ]]; then
+                    jq -n --arg type "$exception_type" --arg url "$record_url" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR_NUMBER" \
+                      '{type:$type,url:$url,kind:"dependabot-pr",repository:$repository,state:"OPEN",accessible:true,pull_request_number:$pr}' \
+                      >"$directory/exception.json" || result=$?
+                  else
+                    result=1
+                  fi
+                  ;;
+                *)
+                  result=1
+                  ;;
+              esac
+            fi
+          fi
+
+          if ((result == 0)); then
+            default_branch="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq '.defaultBranchRef.name')" || result=$?
+          fi
+          if ((result == 0)); then
+            jq -n \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg default_branch "$default_branch" \
+              --slurpfile pr "$pr" \
+              --slurpfile issues "$directory/issues.json" \
+              --slurpfile exception "$directory/exception.json" \
+              '{
+                event: {
+                  action: "recompute",
+                  repository: {full_name: $repository, default_branch: $default_branch},
+                  pull_request: {
+                    number: $pr[0].number,
+                    body: $pr[0].body,
+                    created_at: $pr[0].createdAt,
+                    author: $pr[0].author.login,
+                    head_ref: $pr[0].headRefName,
+                    head_sha: $pr[0].headRefOid,
+                    base: {ref: $pr[0].baseRefName, sha: $pr[0].baseRefOid}
+                  }
+                },
+                metadata: {
+                  closingIssuesReferences: $pr[0].closingIssuesReferences,
+                  issues: $issues[0],
+                  exception: $exception[0]
+                }
+              }' >"$directory/authorization.json" || result=$?
+          fi
+
+          if ((result == 0)); then
+            go run ./internal/tools/governanceauth \
+              --authorization "$directory/authorization.json" || result=$?
+          fi
+
+          if ((result == 0)); then
+            publish "$head_sha" success 'Authorization metadata is current'
+          else
+            publish "$head_sha" failure 'Authorization is absent, ambiguous, stale, or inaccessible'
+          fi
+          exit "$result"

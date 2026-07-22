@@ -1,0 +1,16 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 207, "base": {"ref": "release", "sha": "1111111111111111111111111111111111111111"}}
+  },
+  "metadata": {
+    "closingIssuesReferences": [
+      {"number": 169, "repository": {"name": "packy", "owner": {"login": "yersonargotev"}}}
+    ],
+    "issues": [
+      {"number": 169, "state": "OPEN", "labels": [{"name": "status:approved"}]}
+    ]
+  },
+  "want_error": "is not default branch"
+}

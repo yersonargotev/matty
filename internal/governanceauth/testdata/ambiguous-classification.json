@@ -1,0 +1,16 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 208, "base": {"ref": "main", "sha": "2222222222222222222222222222222222222222"}}
+  },
+  "metadata": {
+    "closingIssuesReferences": [
+      {"number": 169, "repository": {"name": "packy", "owner": {"login": "yersonargotev"}}}
+    ],
+    "issues": [
+      {"number": 169, "state": "OPEN", "labels": [{"name": "status:approved"}, {"name": "needs-info"}]}
+    ]
+  },
+  "want_error": "does not have exactly one approved delivery status"
+}

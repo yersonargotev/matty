@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/packsync"
@@ -23,6 +26,7 @@ type ReviewBrief struct {
 	RunID                   string                            `json:"run_id"`
 	RunAttempt              string                            `json:"run_attempt"`
 	RunURL                  string                            `json:"run_url"`
+	Repository              string                            `json:"repository"`
 	Request                 DispatchRequest                   `json:"request"`
 	Candidate               packsync.Candidate                `json:"candidate"`
 	PlanID                  string                            `json:"plan_id"`
@@ -51,7 +55,8 @@ type ReviewBrief struct {
 
 func (brief ReviewBrief) CanonicalJSON() ([]byte, error) {
 	validPreviousSnapshot := len(brief.PreviousSnapshotSHA256) == 64 || (brief.Request.Operation == OperationRegister && brief.PreviousSnapshotSHA256 == "")
-	if brief.SchemaVersion != 1 || brief.Request.Validate() != nil || brief.PlanID == "" || brief.Branch != "sync/"+brief.Request.SourceID || requireFullSHA("base", brief.BaseSHA) != nil || requireFullSHA("head", brief.HeadSHA) != nil || requireFullSHA("result tree", brief.ResultTreeSHA) != nil || len(brief.SelectedResources) == 0 || !validPreviousSnapshot || len(brief.ProposedSnapshotSHA256) != 64 || !brief.Validation.Complete() || brief.UpstreamContentExecuted || brief.AutoMerge || !brief.ManualMergeRequired {
+	repository, runID, validRun := parseActionsRunURL(brief.RunURL)
+	if brief.SchemaVersion != 1 || brief.Request.Validate() != nil || !validRun || repository != brief.Repository || runID != brief.RunID || brief.PlanID == "" || brief.Branch != "sync/"+brief.Request.SourceID || requireFullSHA("base", brief.BaseSHA) != nil || requireFullSHA("head", brief.HeadSHA) != nil || requireFullSHA("result tree", brief.ResultTreeSHA) != nil || len(brief.SelectedResources) == 0 || !validPreviousSnapshot || len(brief.ProposedSnapshotSHA256) != 64 || !brief.Validation.Complete() || brief.UpstreamContentExecuted || brief.AutoMerge || !brief.ManualMergeRequired {
 		return nil, fmt.Errorf("review brief is incomplete or contradicts synchronization policy")
 	}
 	data, err := json.Marshal(brief)
@@ -66,6 +71,27 @@ func (brief ReviewBrief) CanonicalJSON() ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+var (
+	githubOwnerPattern      = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+	githubRepositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+)
+
+func parseActionsRunURL(value string) (string, string, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.String() != value || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.RawPath != "" {
+		return "", "", false
+	}
+	parts := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
+	if len(parts) != 5 || !githubOwnerPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") || !githubRepositoryPattern.MatchString(parts[1]) || parts[1] == "." || parts[1] == ".." || parts[2] != "actions" || parts[3] != "runs" {
+		return "", "", false
+	}
+	runID, err := strconv.ParseUint(parts[4], 10, 64)
+	if err != nil || runID == 0 || strconv.FormatUint(runID, 10) != parts[4] {
+		return "", "", false
+	}
+	return parts[0] + "/" + parts[1], parts[4], true
+}
+
 // Markdown renders only the canonical JSON plus a fixed summary. It never
 // recomputes plan, provenance, classification, or readiness facts.
 func (brief ReviewBrief) Markdown() (string, error) {
@@ -77,5 +103,5 @@ func (brief ReviewBrief) Markdown() (string, error) {
 	if brief.DecisionReady {
 		status = "decision-ready"
 	}
-	return fmt.Sprintf("## Packy pack synchronization\n\n- Source: `%s`\n- Candidate: `%s`\n- Plan: `%s`\n- Base/head/tree: `%s` / `%s` / `%s`\n- State: **%s**\n- Auto-merge: disabled; manual merge required.\n\n<details><summary>Canonical synchronization evidence</summary>\n\n```json\n%s```\n</details>\n", brief.Request.SourceID, brief.Candidate.Commit, brief.PlanID, brief.BaseSHA, brief.HeadSHA, brief.ResultTreeSHA, status, strings.TrimSuffix(string(canonical), "\n")+"\n"), nil
+	return fmt.Sprintf("## Packy pack synchronization\n\n- Source: `%s`\n- Candidate: `%s`\n- Plan: `%s`\n- Base/head/tree: `%s` / `%s` / `%s`\n- State: **%s**\n- Auto-merge: disabled; manual merge required.\n\nAuthorization-Exception: automation\nAuthorization-Record: %s\n\n<details><summary>Canonical synchronization evidence</summary>\n\n```json\n%s```\n</details>\n", brief.Request.SourceID, brief.Candidate.Commit, brief.PlanID, brief.BaseSHA, brief.HeadSHA, brief.ResultTreeSHA, status, brief.RunURL, strings.TrimSuffix(string(canonical), "\n")+"\n"), nil
 }

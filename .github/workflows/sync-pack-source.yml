@@ -325,6 +325,18 @@ jobs:
             --evidence "$RUNNER_TEMP/packy-sync/classification/classification.json" \
             --validation "$RUNNER_TEMP/packy-sync/validation/validation.json" \
             --output "$RUNNER_TEMP/packy-sync/publication"
+      - name: Bind the canonical automation run to the exact proposal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          head_sha="$(jq -r '.head_sha' "$RUNNER_TEMP/packy-sync/publication/publication.json")"
+          pr_number="$(jq -r '.pr_number' "$RUNNER_TEMP/packy-sync/publication/publication.json")"
+          printf '<!-- packy-canonical-automation\nrun: %s\nhead: %s\n-->\n' "$RUN_URL" "$head_sha" \
+            >"$RUNNER_TEMP/packy-sync/publication/automation-binding.md"
+          gh pr comment "$pr_number" --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/packy-sync/publication/automation-binding.md"
       - name: Upload operational artifact on publication block
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

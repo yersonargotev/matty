@@ -1,0 +1,13 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {
+      "number": 212,
+      "body": "Authorization-Exception: urgent-revert\nAuthorization-Record: https://github.com/yersonargotev/packy/issues/212",
+      "base": {"ref": "main", "sha": "6666666666666666666666666666666666666666"}
+    }
+  },
+  "metadata": {"closingIssuesReferences": [], "issues": [], "exception": null},
+  "want_error": "inaccessible"
+}

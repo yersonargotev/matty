@@ -1,0 +1,9 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 218, "body": "Authorization-Exception: automation\nAuthorization-Record: https://github.com/yersonargotev/packy/pull/218", "created_at": "2026-07-22T04:00:00Z", "author": "app/dependabot", "head_ref": "dependabot/go_modules/example-1.2.3", "base": {"ref": "main", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad"}}
+  },
+  "metadata": {"closingIssuesReferences": [], "issues": [], "exception": {"type": "automation", "url": "https://github.com/yersonargotev/packy/pull/218", "kind": "dependabot-pr", "repository": "yersonargotev/packy", "state": "OPEN", "pull_request_number": 218, "accessible": true}},
+  "want_error": ""
+}

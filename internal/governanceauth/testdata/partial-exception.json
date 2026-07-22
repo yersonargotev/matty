@@ -1,0 +1,13 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {
+      "number": 214,
+      "body": "Authorization-Exception: urgent-revert",
+      "base": {"ref": "main", "sha": "8888888888888888888888888888888888888888"}
+    }
+  },
+  "metadata": {"closingIssuesReferences": [], "issues": [], "exception": null},
+  "want_error": "exactly one type and one record"
+}

@@ -1,0 +1,9 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 203, "base": {"ref": "main", "sha": "cccccccccccccccccccccccccccccccccccccccc"}}
+  },
+  "metadata": {"closingIssuesReferences": [], "issues": []},
+  "want_error": "no closing issue reference"
+}

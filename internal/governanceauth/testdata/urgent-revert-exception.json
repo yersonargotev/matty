@@ -1,0 +1,35 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {
+      "full_name": "yersonargotev/packy",
+      "default_branch": "main"
+    },
+    "pull_request": {
+      "number": 210,
+      "body": "Authorization-Exception: urgent-revert\nAuthorization-Record: https://github.com/yersonargotev/packy/issues/210",
+      "base": {
+        "ref": "main",
+        "sha": "4444444444444444444444444444444444444444"
+      },
+      "created_at": "2026-07-22T04:00:00Z",
+      "author": "yersonargotev",
+      "head_ref": "revert/urgent"
+    }
+  },
+  "metadata": {
+    "closingIssuesReferences": [],
+    "issues": [],
+    "exception": {
+      "type": "urgent-revert",
+      "url": "https://github.com/yersonargotev/packy/issues/210",
+      "kind": "issue",
+      "repository": "yersonargotev/packy",
+      "state": "OPEN",
+      "accessible": true,
+      "pull_request_number": 210,
+      "created_at": "2026-07-22T05:00:00Z"
+    }
+  },
+  "want_error": ""
+}

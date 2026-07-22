@@ -660,7 +660,7 @@ func lifecycleProposal() packsyncworkflow.Proposal {
 }
 
 func lifecycleBrief() packsyncworkflow.ReviewBrief {
-	return packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: "maintainer", RunID: "1", RunAttempt: "1", RunURL: "https://github.com/owner/repo/actions/runs/1", Request: packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "mattpocock-skills", Selector: packsyncworkflow.SelectorCommit, SelectorRef: candidateA, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "test"}, Candidate: packsync.Candidate{Commit: candidateA}, PlanID: "plan-1", BaseSHA: baseA, HeadSHA: headA, ResultTreeSHA: headA, Branch: "sync/mattpocock-skills", SelectedResources: []packsync.ResourceEvidence{{SHA256: strings.Repeat("4", 64)}}, PreviousSnapshotSHA256: strings.Repeat("3", 64), ProposedSnapshotSHA256: strings.Repeat("5", 64), ApplyStatus: "applied", ManualMergeRequired: true}
+	return packsyncworkflow.ReviewBrief{SchemaVersion: 1, Actor: "maintainer", RunID: "1", RunAttempt: "1", RunURL: "https://github.com/owner/repo/actions/runs/1", Repository: "owner/repo", Request: packsyncworkflow.DispatchRequest{SchemaVersion: 1, SourceID: "mattpocock-skills", Selector: packsyncworkflow.SelectorCommit, SelectorRef: candidateA, ClassificationMode: packsyncworkflow.ClassificationAI, RequestReason: "test"}, Candidate: packsync.Candidate{Commit: candidateA}, PlanID: "plan-1", BaseSHA: baseA, HeadSHA: headA, ResultTreeSHA: headA, Branch: "sync/mattpocock-skills", SelectedResources: []packsync.ResourceEvidence{{SHA256: strings.Repeat("4", 64)}}, PreviousSnapshotSHA256: strings.Repeat("3", 64), ProposedSnapshotSHA256: strings.Repeat("5", 64), ApplyStatus: "applied", ManualMergeRequired: true}
 }
 
 type noWaitSleeper struct{}

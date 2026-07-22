@@ -1,0 +1,19 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {
+      "number": 213,
+      "body": "Authorization-Exception: urgent-revert\nAuthorization-Record: https://github.com/yersonargotev/packy/issues/213",
+      "base": {"ref": "main", "sha": "7777777777777777777777777777777777777777"}
+    }
+  },
+  "metadata": {
+    "closingIssuesReferences": [
+      {"number": 169, "repository": {"name": "packy", "owner": {"login": "yersonargotev"}}}
+    ],
+    "issues": [{"number": 169, "state": "OPEN", "labels": [{"name": "status:approved"}]}],
+    "exception": null
+  },
+  "want_error": "cannot be mixed"
+}

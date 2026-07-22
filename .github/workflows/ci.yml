@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
@@ -30,6 +32,14 @@ jobs:
 
       - name: Validate allowlisted Packy-owned code
         run: ./scripts/validate-packy.sh
+
+      - name: Scan Packy-owned Go code for known vulnerabilities
+        continue-on-error: true
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+          repo-checkout: false
 
   claude-floor-smoke:
     name: Claude 2.1.203 package smoke

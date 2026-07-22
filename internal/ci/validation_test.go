@@ -33,6 +33,7 @@ var packyOwnedPackages = []string{
 	"./internal/codex",
 	"./internal/corelifecycle",
 	"./internal/engrambin",
+	"./internal/governanceauth",
 	"./internal/localprojection",
 	"./internal/opencode",
 	"./internal/ownedcontainer",
@@ -45,6 +46,7 @@ var packyOwnedPackages = []string{
 	"./internal/setuphealth",
 	"./internal/skillbundle",
 	"./internal/tools/claudesmoke",
+	"./internal/tools/governanceauth",
 	"./internal/tools/syncpacksource",
 	"./internal/version",
 	"./internal/workstation",
@@ -200,6 +202,108 @@ func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 	for _, unsafe := range []string{"go test", "go vet", "go build", "gofmt"} {
 		if strings.Contains(workflow, "run: "+unsafe) {
 			t.Fatalf("CI bypasses validation entrypoint with %q", unsafe)
+		}
+	}
+}
+
+func TestGovernanceChecksKeepStableProtectedAdvisoryIdentities(t *testing.T) {
+	root := repositoryRoot(t)
+	governance := readFile(t, filepath.Join(root, ".github", "workflows", "governance.yml"))
+	for _, required := range []string{
+		"name: Governance",
+		"pull_request_target:",
+		"issues:",
+		"- edited",
+		"issue_comment:",
+		"workflow_run:",
+		"name: Validate authorization metadata",
+		"cancel-in-progress: true",
+		"statuses: write",
+		"ref: ${{ github.sha }}",
+		"persist-credentials: false",
+		"context='Governance / Validate authorization'",
+		"go run ./internal/tools/governanceauth",
+		"--authorization \"$directory/authorization.json\"",
+		"--declaration",
+		"packy-canonical-automation",
+	} {
+		if !strings.Contains(governance, required) {
+			t.Fatalf("governance workflow missing %q", required)
+		}
+	}
+	syncWorkflow := readFile(t, filepath.Join(root, ".github", "workflows", "sync-pack-source.yml"))
+	for _, required := range []string{"packy-canonical-automation", "gh pr comment", "--body-file"} {
+		if !strings.Contains(syncWorkflow, required) {
+			t.Fatalf("synchronization workflow missing canonical proposal binding %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"pull_request:\n",
+		"contents: write",
+		"issues: write",
+		"pull-requests: write",
+		"security-events: read",
+		"/security-advisories/",
+	} {
+		if strings.Contains(governance, forbidden) {
+			t.Fatalf("governance workflow contains unsafe boundary %q", forbidden)
+		}
+	}
+
+	security := readFile(t, filepath.Join(root, ".github", "workflows", "security.yml"))
+	for _, required := range []string{
+		"name: Security",
+		"name: CodeQL",
+		"name: Dependency review",
+		"schedule:",
+		"security-events: write",
+		"warn-only: true",
+	} {
+		if !strings.Contains(security, required) {
+			t.Fatalf("security workflow missing %q", required)
+		}
+	}
+	if strings.Contains(security, "contents: write") || strings.Contains(security, "pull-requests: write") {
+		t.Fatal("advisory security workflow has repository write authority")
+	}
+
+	registry := readFile(t, filepath.Join(root, "docs", "governance", "advisory-checks.md"))
+	for _, identity := range []string{
+		"CI / Validate Packy-owned code",
+		"CI / Claude 2.1.203 package smoke",
+		"Governance / Validate authorization",
+		"Security / CodeQL",
+		"Security / Dependency review",
+	} {
+		if strings.Count(registry, "`"+identity+"`") != 1 {
+			t.Fatalf("check registry must contain stable identity %q exactly once", identity)
+		}
+	}
+	if strings.Count(registry, "App ID `15368`, slug `github-actions`") != 5 {
+		t.Fatal("each stable identity must record the expected GitHub Actions App source")
+	}
+}
+
+func TestCodeownersMatchesAcceptedSensitivePathPolicy(t *testing.T) {
+	owners := readFile(t, filepath.Join(repositoryRoot(t), ".github", "CODEOWNERS"))
+	for _, path := range []string{
+		"/.github/",
+		"/.agents/",
+		"/AGENTS.md",
+		"/workflows/",
+		"/scripts/",
+		"/go.mod",
+		"/go.sum",
+		"/bundle/sources.json",
+		"/internal/ci/",
+		"/internal/release/",
+		"/internal/claudesmoke/",
+		"/internal/packsync/",
+		"/internal/packsyncworkflow/",
+		"/internal/tools/",
+	} {
+		if !strings.Contains(owners, path+" @yersonargotev") {
+			t.Fatalf("CODEOWNERS missing accepted sensitive path %q", path)
 		}
 	}
 }

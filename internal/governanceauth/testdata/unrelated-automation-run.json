@@ -1,0 +1,9 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 216, "body": "Authorization-Exception: automation\nAuthorization-Record: https://github.com/yersonargotev/packy/actions/runs/987654321", "created_at": "2026-07-22T04:00:00Z", "author": "app/github-actions", "head_ref": "misc/generated", "base": {"ref": "main", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"}}
+  },
+  "metadata": {"closingIssuesReferences": [], "issues": [], "exception": {"type": "automation", "url": "https://github.com/yersonargotev/packy/actions/runs/987654321", "kind": "actions-run", "repository": "yersonargotev/packy", "state": "completed", "conclusion": "success", "workflow": "CI", "path": ".github/workflows/ci.yml", "event": "workflow_dispatch", "head_branch": "main", "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "actor": "yersonargotev", "accessible": true}},
+  "want_error": "not an authorized proposal workflow"
+}
