@@ -4870,6 +4870,30 @@
   "token_count": 2
 },
     {
+  "class": "release-formula-removal",
+  "line_sha256": "4008a4ac457d4e725f4d02a8d15d2708f05fc1c773449bb163612b05e11bb244",
+  "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
+  "token_count": 1
+},
+    {
+  "class": "release-formula-removal",
+  "line_sha256": "649e588d9968236dfc1c466113c58b980953eda2da8a4244b578ab680ac776e1",
+  "path_b64": "c2NyaXB0cy9wbGFuLWhvbWVicmV3LWVmZmVjdHMuc2g",
+  "token_count": 1
+},
+    {
+  "class": "release-formula-removal",
+  "line_sha256": "10613bf3ba813b7f37d5d49db453ae36b1ef86056d147611cab291fcb2a4698e",
+  "path_b64": "c2NyaXB0cy9wbGFuLWhvbWVicmV3LWVmZmVjdHMuc2g",
+  "token_count": 1
+},
+    {
+  "class": "release-formula-removal",
+  "line_sha256": "8d0e52b9285667ed7b47f43e74404b5e03bf5ba01659e0e3deb1849b55ae277a",
+  "path_b64": "c2NyaXB0cy9wbGFuLWhvbWVicmV3LWVmZmVjdHMuc2g",
+  "token_count": 1
+},
+    {
   "class": "semantic-pack",
   "line_sha256": "699d5a31d8d1018ec21832bdd6ca80ca650931326fcab4a8a3ce3c9882e235f0",
   "path_b64": "c2NyaXB0cy92ZXJpZnktcmVsZWFzZS1ldmlkZW5jZS5zaA",

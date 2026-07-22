@@ -194,6 +194,7 @@ jobs:
             --permission attestations=write \
             --permission contents=write --permission id-token=write >/dev/null
           cp release-candidate-parent/sealed/{candidate.json,provenance.json} release-metadata/
+          cp scripts/plan-homebrew-effects.sh release-metadata/
           go build -trimpath -o release-metadata/releasecandidate ./internal/tools/releasecandidate
       - name: Seal exact publication plan and draft base
         run: |
@@ -302,6 +303,20 @@ jobs:
           [[ "$tag_commit" == "${{ needs.build.outputs.commit }}" && "$main_commit" == "$tag_commit" ]] || {
             echo 'tag, protected main, and candidate commit diverged' >&2; exit 1;
           }
+          tap_url=https://github.com/yersonargotev/homebrew-tap.git
+          tap_ref=refs/heads/main
+          git clone --quiet --depth 1 --branch main "$tap_url" "$RUNNER_TEMP/homebrew-tap"
+          mapfile -t tap_refs < <(git ls-remote --exit-code "$tap_url" "$tap_ref")
+          [[ "${#tap_refs[@]}" == 1 ]] || { echo 'tap main did not resolve uniquely' >&2; exit 1; }
+          read -r tap_commit observed_tap_ref <<< "${tap_refs[0]}"
+          [[ "$observed_tap_ref" == "$tap_ref" && "$tap_commit" =~ ^[0-9a-f]{40}$ &&
+             "$tap_commit" == "$(git -C "$RUNNER_TEMP/homebrew-tap" rev-parse HEAD)" ]] || {
+            echo 'tap main changed during read-only inspection' >&2; exit 1;
+          }
+          bash release-metadata/plan-homebrew-effects.sh \
+            --tap-dir "$RUNNER_TEMP/homebrew-tap" --formula release-metadata/packy.rb \
+            --repository yersonargotev/homebrew-tap --ref "$tap_ref" \
+            > "$RUNNER_TEMP/homebrew-effects.json"
           # GraphQL variables expand server-side.
           # shellcheck disable=SC2016
           release_id="$(gh api graphql \
@@ -310,7 +325,8 @@ jobs:
             --jq '.data.repository.release.id // ""')"
           if [[ -z "$release_id" ]]; then
             effects="$(jq -cn --slurpfile candidate release-metadata/candidate.json \
-              '{attestation:"issue-new",github:{action:"create-draft",upload_assets:([$candidate[0].subjects[].name]+["attestation.bundle.jsonl"]),publish:true},homebrew:{action:"verify-and-update-if-needed"}}')"
+              --slurpfile homebrew "$RUNNER_TEMP/homebrew-effects.json" \
+              '{attestation:"issue-new",github:{action:"create-draft",upload_assets:([$candidate[0].subjects[].name]+["attestation.bundle.jsonl"]),publish:true},homebrew:$homebrew[0]}')"
             {
               echo 'state=absent'
               echo 'has_bundle=false'
@@ -410,7 +426,8 @@ jobs:
           if jq -e '.isDraft' "$RUNNER_TEMP/release.json" >/dev/null; then release_state=draft; fi
           bundle_asset=false
           if jq -e '.assets|any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null; then bundle_asset=true; fi
-          effects="$(jq -cn --slurpfile decision "$RUNNER_TEMP/decision.json" --argjson bundle_asset "$bundle_asset" '
+          effects="$(jq -cn --slurpfile decision "$RUNNER_TEMP/decision.json" \
+            --slurpfile homebrew "$RUNNER_TEMP/homebrew-effects.json" --argjson bundle_asset "$bundle_asset" '
             ($decision[0].missing_assets|map(.name)) as $missing |
             (if $bundle_asset then $missing else $missing+["attestation.bundle.jsonl"] end) as $uploads |
             {attestation:"reuse-and-verify",
@@ -419,7 +436,7 @@ jobs:
                      else
                        {action:$decision[0].decision,upload_assets:$uploads,publish:true}
                      end),
-             homebrew:{action:"verify-and-update-if-needed"}}')"
+             homebrew:$homebrew[0]}')"
           {
             echo "state=$release_state"
             echo 'has_bundle=true'

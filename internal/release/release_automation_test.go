@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -158,7 +159,7 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 			t.Fatalf("dry-run job must stop before mutation authority %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Download built candidate for read-only attestation checks", "gh attestation verify", "--custom-trusted-root", "canonical-body.md", "effects=$effects"} {
+	for _, want := range []string{"Download built candidate for read-only attestation checks", "git clone --quiet --depth 1 --branch main", "plan-homebrew-effects.sh", "homebrew:$homebrew[0]", "gh attestation verify", "--custom-trusted-root", "canonical-body.md", "effects=$effects"} {
 		if !strings.Contains(inspect, want) {
 			t.Fatalf("read-only inspection should verify an available existing bundle with %q", want)
 		}
@@ -187,6 +188,80 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 	}
 	if got := strings.Count(homebrew, "HOMEBREW_TAP_TOKEN"); got != 1 {
 		t.Fatalf("Homebrew token must appear only in the post-readback tap checkout; got %d references", got)
+	}
+}
+
+func TestHomebrewEffectPlanIsExactForObservedTapFixtures(t *testing.T) {
+	root := repoRoot(t)
+	script := filepath.Join(root, "scripts", "plan-homebrew-effects.sh")
+	formula := filepath.Join(t.TempDir(), "packy.rb")
+	if err := os.WriteFile(formula, []byte("class Packy < Formula\nend\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	formulaSHA := sha256.Sum256([]byte("class Packy < Formula\nend\n"))
+
+	makeTap := func(t *testing.T, observedFormula string, legacy bool) string {
+		t.Helper()
+		tap := t.TempDir()
+		if err := os.Mkdir(filepath.Join(tap, "Formula"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if observedFormula != "" {
+			if err := os.WriteFile(filepath.Join(tap, "Formula", "packy.rb"), []byte(observedFormula), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if legacy {
+			if err := os.WriteFile(filepath.Join(tap, "Formula", "matty.rb"), []byte("legacy\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}, {"add", "."}, {"commit", "-qm", "fixture"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = tap
+			cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		return tap
+	}
+
+	for _, tc := range []struct {
+		name            string
+		observedFormula string
+		legacy          bool
+		action          string
+		write           bool
+		deletions       int
+	}{
+		{name: "exact no-op", observedFormula: "class Packy < Formula\nend\n", action: "no-op"},
+		{name: "stale formula and legacy deletion", observedFormula: "stale\n", legacy: true, action: "commit-and-push", write: true, deletions: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tap := makeTap(t, tc.observedFormula, tc.legacy)
+			cmd := exec.Command("bash", script, "--tap-dir", tap, "--formula", formula, "--repository", "yersonargotev/homebrew-tap", "--ref", "refs/heads/main")
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "XDG_CONFIG_HOME="+t.TempDir())
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plan struct {
+				Action  string `json:"action"`
+				Formula struct {
+					SHA256 string `json:"sha256"`
+					Write  bool   `json:"write"`
+				} `json:"formula"`
+				DeletePaths []string `json:"delete_paths"`
+			}
+			if err := json.Unmarshal(output, &plan); err != nil {
+				t.Fatal(err)
+			}
+			if plan.Action != tc.action || plan.Formula.Write != tc.write || len(plan.DeletePaths) != tc.deletions || plan.Formula.SHA256 != hex.EncodeToString(formulaSHA[:]) {
+				t.Fatalf("unexpected plan: %s", output)
+			}
+		})
 	}
 }
 
