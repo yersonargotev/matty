@@ -4,19 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing v0.x.y tag to publish.
+        description: Existing v0.x.y tag on protected main to publish.
         required: true
         type: string
-  push:
-    tags:
-      - 'v0.*.*'
+      dry_run:
+        description: Prove every safe check and report planned writes without OIDC or mutation.
+        required: true
+        default: true
+        type: boolean
 
 permissions: {}
 
 jobs:
   build:
-    name: Validate and build release candidate
-    if: github.repository == 'yersonargotev/packy' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')))
+    name: Validate main and build once
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,31 +26,30 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
     steps:
-      - name: Check out repository
+      - name: Check out protected main
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve release tag
+      - name: Resolve exact existing main tag
         id: release
         env:
-          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
-          if [[ ! "$tag" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must be a v0.x.y tag such as v0.1.0; got '$tag'" >&2
+          [[ "$RELEASE_TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]] || { echo "tag must be v0.x.y" >&2; exit 1; }
+          git fetch --force origin main 'refs/tags/*:refs/tags/*'
+          head="$(git rev-parse HEAD)"
+          main="$(git rev-parse origin/main)"
+          tag_commit="$(git rev-parse --verify "${RELEASE_TAG}^{commit}")"
+          [[ "$head" == "$main" && "$head" == "$tag_commit" ]] || {
+            echo "HEAD, origin/main, and $RELEASE_TAG must resolve to one commit" >&2
+            printf 'HEAD=%s origin/main=%s tag=%s\n' "$head" "$main" "$tag_commit" >&2
             exit 1
-          fi
-          git fetch --tags --force
-          if ! git rev-parse --verify --quiet "${tag}^{commit}" >/dev/null; then
-            echo "Tag '$tag' does not exist in this repository" >&2
-            exit 1
-          fi
-          git checkout --detach "$tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          }
+          git checkout --detach "$head"
+          printf 'tag=%s\ncommit=%s\n' "$RELEASE_TAG" "$head" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -59,15 +60,29 @@ jobs:
       - name: Validate exact tag commit
         run: ./scripts/validate-packy.sh
 
-      - name: Build release artifacts, SBOM, and SHA256SUMS
+      - name: Build four binaries, deterministic SBOM, and SHA256SUMS once
         run: scripts/build-release-artifacts.sh --version "${{ steps.release.outputs.tag }}" --out-dir dist
 
-      - name: Retain proved release candidate
+      - name: Require the exact six retained candidate assets
+        run: |
+          set -euo pipefail
+          find dist -mindepth 1 -maxdepth 1 -type f -not -type l -printf '%f\n' | sort > "$RUNNER_TEMP/assets"
+          {
+            printf '%s\n' SHA256SUMS sbom.spdx.json
+            printf 'packy_%s_%s\n' "${{ steps.release.outputs.tag }}" darwin_amd64
+            printf 'packy_%s_%s\n' "${{ steps.release.outputs.tag }}" darwin_arm64
+            printf 'packy_%s_%s\n' "${{ steps.release.outputs.tag }}" linux_amd64
+            printf 'packy_%s_%s\n' "${{ steps.release.outputs.tag }}" linux_arm64
+          } | sort > "$RUNNER_TEMP/expected"
+          cmp "$RUNNER_TEMP/expected" "$RUNNER_TEMP/assets"
+
+      - name: Retain the one built candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: packy-release-${{ steps.release.outputs.tag }}
           path: dist
           if-no-files-found: error
+          retention-days: 7
 
   claude-smoke:
     name: Claude ${{ matrix.claude }} smoke (${{ matrix.arch }})
@@ -76,58 +91,44 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-intel
-            arch: amd64
-            claude: 2.1.203
-          - runner: macos-15-intel
-            arch: amd64
-            claude: stable
-          - runner: macos-15
-            arch: arm64
-            claude: 2.1.203
-          - runner: macos-15
-            arch: arm64
-            claude: stable
+          - { runner: macos-15-intel, arch: amd64, claude: 2.1.203 }
+          - { runner: macos-15-intel, arch: amd64, claude: stable }
+          - { runner: macos-15, arch: arm64, claude: 2.1.203 }
+          - { runner: macos-15, arch: arm64, claude: stable }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     permissions:
       contents: read
     steps:
-      - name: Check out repository
+      - name: Check out proved commit
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           ref: ${{ needs.build.outputs.commit }}
           persist-credentials: false
-
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-
-      - name: Download proved release candidate
+      - name: Download the built candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: packy-release-${{ needs.build.outputs.tag }}
           path: ${{ runner.temp }}/dist
-
-      - name: Restore executable mode
-        run: chmod +x "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}"
-
       - name: Run release package smoke
         run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}"
           ./scripts/run-claude-smoke.sh \
             --claude-version "${{ matrix.claude }}" \
             --packy-ref "${{ needs.build.outputs.commit }}" \
             --packy-binary "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}" \
             --evidence-dir "$RUNNER_TEMP/claude-release-evidence"
-
       - name: Retain release smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -137,7 +138,7 @@ jobs:
           if-no-files-found: error
 
   validate-release-evidence:
-    name: Validate complete release evidence
+    name: Validate evidence and seal publication plan
     needs: [build, claude-smoke]
     runs-on: ubuntu-latest
     permissions:
@@ -149,192 +150,426 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.build.outputs.commit }}
           persist-credentials: false
-
-      - name: Set up Go for evidence validation
+      - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Download proved release candidate
+      - name: Download the built candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: packy-release-${{ needs.build.outputs.tag }}
           path: dist
-
       - name: Download complete Claude smoke matrix
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: claude-release-*
           path: claude-evidence
-
       - name: Generate candidate Homebrew formula
         run: |
-          mkdir -p release-metadata
+          set -euo pipefail
+          mkdir release-metadata
           scripts/generate-homebrew-formula.sh \
-            --version "${{ needs.build.outputs.tag }}" \
-            --checksums dist/SHA256SUMS \
-            --out release-metadata/packy.rb \
-            --repo yersonargotev/packy \
-            --homepage https://github.com/yersonargotev/packy \
-            --desc "AI coding workflow installer"
-
+            --version "${{ needs.build.outputs.tag }}" --checksums dist/SHA256SUMS \
+            --out release-metadata/packy.rb --repo yersonargotev/packy \
+            --homepage https://github.com/yersonargotev/packy --desc "AI coding workflow installer"
       - name: Verify candidate parity and render release notes
         run: |
+          set -euo pipefail
           scripts/verify-release-evidence.sh \
-            --tag "${{ needs.build.outputs.tag }}" \
-            --commit "${{ needs.build.outputs.commit }}" \
-            --dist dist \
-            --evidence-root claude-evidence \
-            --formula release-metadata/packy.rb \
-            --notes-template docs/release-notes/next.md \
-            --notes-output release-metadata/release-notes.md
-
+            --tag "${{ needs.build.outputs.tag }}" --commit "${{ needs.build.outputs.commit }}" \
+            --dist dist --evidence-root claude-evidence --formula release-metadata/packy.rb \
+            --notes-template docs/release-notes/next.md --notes-output release-metadata/release-notes.md
+      - name: Create immutable candidate and provenance metadata
+        run: |
+          set -euo pipefail
+          workflow_sha="$(sha256sum .github/workflows/release.yml | awk '{print $1}')"
+          mkdir release-candidate-parent
+          go run ./internal/tools/releasecandidate create \
+            --version "${{ needs.build.outputs.tag }}" --repository "$GITHUB_REPOSITORY" \
+            --ref refs/heads/main --commit "${{ needs.build.outputs.commit }}" \
+            --workflow .github/workflows/release.yml --workflow-sha "$workflow_sha" \
+            --release-notes release-metadata/release-notes.md --dist dist \
+            --output-dir release-candidate-parent/sealed \
+            --permission attestations=write \
+            --permission contents=write --permission id-token=write >/dev/null
+          cp release-candidate-parent/sealed/{candidate.json,provenance.json} release-metadata/
+          go build -trimpath -o release-metadata/releasecandidate ./internal/tools/releasecandidate
+      - name: Seal exact hidden body metadata and publication plan
+        run: |
+          set -euo pipefail
+          jq -n --slurpfile candidate release-metadata/candidate.json \
+            --slurpfile provenance release-metadata/provenance.json \
+            --arg target "${{ needs.build.outputs.commit }}" \
+            '{schema_version:1,candidate_id:$candidate[0].id,provenance:$provenance[0],target_commit:$target}' \
+            > release-metadata/body-metadata.json
+          {
+            cat release-metadata/release-notes.md
+            printf '\n<!-- packy-release-metadata\n'
+            cat release-metadata/body-metadata.json
+            printf '%s\n' '-->'
+          } > release-metadata/release-body.md
+          jq -n --arg tag "${{ needs.build.outputs.tag }}" \
+            --arg commit "${{ needs.build.outputs.commit }}" \
+            --argjson dry_run '${{ inputs.dry_run }}' \
+            --slurpfile candidate release-metadata/candidate.json \
+            '{schema_version:1,tag:$tag,target_commit:$commit,draft:true,dry_run:$dry_run,
+              candidate_id:$candidate[0].id,candidate_assets:$candidate[0].subjects,
+              attestation:"attestation.bundle.jsonl",tap:"yersonargotev/homebrew-tap:Formula/packy.rb"}' \
+            > release-metadata/publication-plan.json
       - name: Retain proved publication metadata
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: packy-release-metadata-${{ needs.build.outputs.tag }}
           path: release-metadata
           if-no-files-found: error
+          retention-days: 7
 
-  release:
-    name: Build and publish release artifacts
+  dry-run:
+    name: Report exact dry-run effects
+    needs: [build, validate-release-evidence, inspect-release]
+    if: inputs.dry_run == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download sealed publication plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packy-release-metadata-${{ needs.build.outputs.tag }}
+          path: release-metadata
+      - name: Report writes that real publication would perform
+        run: |
+          set -euo pipefail
+          cat release-metadata/publication-plan.json
+          {
+            echo '## Release dry run'
+            echo '- Existing release state: ${{ needs.inspect-release.outputs.state }} (read-only inspection completed)'
+            echo '- OIDC issuance: planned, not performed'
+            echo '- GitHub draft creation/resume and asset upload: planned, not performed'
+            echo '- GitHub draft-to-published transition: planned, not performed'
+            echo '- Homebrew tap dry-run/push: planned, not performed'
+            echo '```json'
+            cat release-metadata/publication-plan.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  inspect-release:
+    name: Inspect existing GitHub release read-only
     needs: [build, validate-release-evidence]
-    if: success() && github.repository == 'yersonargotev/packy' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      state: ${{ steps.inspect.outputs.state }}
+      has_bundle: ${{ steps.inspect.outputs.has_bundle }}
+    steps:
+      - name: Download sealed metadata and verifier
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packy-release-metadata-${{ needs.build.outputs.tag }}
+          path: release-metadata
+      - name: Inspect tag release without mutation
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir existing-attestation
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,targetCommitish,body,assets > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            echo 'state=absent' >> "$GITHUB_OUTPUT"
+            echo 'has_bundle=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq -e --arg tag "$RELEASE_TAG" '.tagName==$tag' "$RUNNER_TEMP/release.json" >/dev/null
+          chmod +x release-metadata/releasecandidate
+          jq -j .body "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/read-body.md"
+          cmp release-metadata/release-body.md "$RUNNER_TEMP/read-body.md"
+          awk '/^<!-- packy-release-metadata$/{capture=1;next}/^-->$/{capture=0}capture' \
+            "$RUNNER_TEMP/read-body.md" > "$RUNNER_TEMP/observed-metadata.json"
+          jq -e '.schema_version==1' "$RUNNER_TEMP/observed-metadata.json" >/dev/null
+          jq --slurpfile metadata "$RUNNER_TEMP/observed-metadata.json" \
+            --arg repository "$GITHUB_REPOSITORY" --arg ref refs/heads/main \
+            --arg workflow .github/workflows/release.yml \
+            --arg workflow_sha "$(jq -r .workflow_sha release-metadata/candidate.json)" \
+            --arg notes "$(jq -r .release_notes_sha256 release-metadata/candidate.json)" \
+            '{candidate_id:$metadata[0].candidate_id,provenance:$metadata[0].provenance,
+              version:.tagName,repository:$repository,ref:$ref,target_commit:.targetCommitish,
+              workflow:$workflow,workflow_sha:$workflow_sha,release_notes_sha256:$notes,
+              draft:.isDraft,assets:[.assets[]|select(.name!="attestation.bundle.jsonl")|{name,digest}]}' \
+            "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/state.json"
+          mode=draft
+          if jq -e '.isDraft==false' "$RUNNER_TEMP/release.json" >/dev/null; then mode=published; fi
+          release-metadata/releasecandidate verify-state \
+            --candidate release-metadata/candidate.json \
+            --provenance release-metadata/provenance.json \
+            --state "$RUNNER_TEMP/state.json" --mode "$mode" > "$RUNNER_TEMP/decision.json"
+          if jq -e '.assets | any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern attestation.bundle.jsonl --dir existing-attestation
+            echo 'has_bundle=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_bundle=false' >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$mode" == published ]]; then
+            jq -e '.assets|length==7 and any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null
+          fi
+          if jq -e '.isDraft' "$RUNNER_TEMP/release.json" >/dev/null; then echo 'state=draft' >> "$GITHUB_OUTPUT"; else echo 'state=published' >> "$GITHUB_OUTPUT"; fi
+      - name: Retain existing attestation bundle
+        if: steps.inspect.outputs.has_bundle == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: existing-attestation-${{ needs.build.outputs.tag }}
+          path: existing-attestation/attestation.bundle.jsonl
+          if-no-files-found: error
+
+  attest:
+    name: Issue or verify exact build provenance
+    needs: [build, inspect-release]
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the built candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packy-release-${{ needs.build.outputs.tag }}
+          path: dist
+      - name: Download existing exact bundle for recovery
+        if: needs.inspect-release.outputs.has_bundle == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: existing-attestation-${{ needs.build.outputs.tag }}
+          path: attestation
+      - name: Attest exact checksummed subjects
+        id: attest
+        if: needs.inspect-release.outputs.has_bundle != 'true'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Persist new Sigstore bundle
+        if: needs.inspect-release.outputs.has_bundle != 'true'
+        run: |
+          set -euo pipefail
+          mkdir attestation
+          cp "${{ steps.attest.outputs.bundle-path }}" attestation/attestation.bundle.jsonl
+      - name: Verify bundle offline against exact workflow and subjects
+        run: |
+          set -euo pipefail
+          bundle=attestation/attestation.bundle.jsonl
+          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo 'attestation bundle is missing' >&2; exit 1; }
+          gh attestation trusted-root > "$RUNNER_TEMP/trusted-root.jsonl"
+          while read -r digest name extra; do
+            [[ -z "${extra:-}" && "$digest" =~ ^[0-9a-f]{64}$ && -f "dist/$name" ]] || exit 1
+            actual="$(sha256sum "dist/$name" | awk '{print $1}')"
+            [[ "$actual" == "$digest" ]] || exit 1
+            gh attestation verify "dist/$name" --bundle "$bundle" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref refs/heads/main \
+              --source-digest "${{ needs.build.outputs.commit }}" \
+              --signer-digest "${{ needs.build.outputs.commit }}" \
+              --custom-trusted-root "$RUNNER_TEMP/trusted-root.jsonl"
+          done < dist/SHA256SUMS
+      - name: Retain verified attestation bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packy-attestation-${{ needs.build.outputs.tag }}
+          path: attestation/attestation.bundle.jsonl
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-github:
+    name: Create or resume exact draft and publish once
+    needs: [build, validate-release-evidence, inspect-release, attest]
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.build.outputs.commit }}
-          persist-credentials: false
-      - name: Verify release tag remains bound
-        id: release
-        run: |
-          set -euo pipefail
-          tag="${{ needs.build.outputs.tag }}"
-          candidate="${{ needs.build.outputs.commit }}"
-          git fetch --tags --force
-          current="$(git rev-parse "${tag}^{commit}")"
-          if [[ "$current" != "$candidate" ]]; then
-            echo "Release tag '$tag' moved after candidate validation: expected $candidate, got $current" >&2
-            exit 1
-          fi
-          git checkout --detach "$candidate"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go from proved commit
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Download proved release artifacts, SBOM, and SHA256SUMS
+      - name: Download built candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: packy-release-${{ steps.release.outputs.tag }}
+          name: packy-release-${{ needs.build.outputs.tag }}
           path: dist
-
-      - name: Download proved formula and release notes
+      - name: Download sealed metadata and verifier
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: packy-release-metadata-${{ steps.release.outputs.tag }}
+          name: packy-release-metadata-${{ needs.build.outputs.tag }}
           path: release-metadata
-
-      - name: Require Homebrew tap token
+      - name: Download verified attestation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packy-attestation-${{ needs.build.outputs.tag }}
+          path: attestation
+      - name: Create or verify draft, upload only missing assets, and publish once
+        id: publish
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
         run: |
           set -euo pipefail
-          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "HOMEBREW_TAP_TOKEN is required to update yersonargotev/homebrew-tap before publishing release assets" >&2
-            exit 1
+          verifier=release-metadata/releasecandidate
+          chmod +x "$verifier"
+          expected_body=release-metadata/release-body.md
+          candidate=release-metadata/candidate.json
+          provenance=release-metadata/provenance.json
+          bundle=attestation/attestation.bundle.jsonl
+
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --target "$RELEASE_COMMIT" --title "$RELEASE_TAG" --notes-file "$expected_body"
           fi
 
-      - name: Check out Homebrew tap
-        # This reviewed publication checkout persists only the tap-scoped token
-        # required by the final dry-run and push to the dedicated tap repository.
+          read_release() {
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,isDraft,targetCommitish,body,assets > "$RUNNER_TEMP/release.json"
+            jq -j .body "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/read-body.md"
+            cmp "$expected_body" "$RUNNER_TEMP/read-body.md"
+            awk '/^<!-- packy-release-metadata$/{capture=1;next}/^-->$/{capture=0}capture' \
+              "$RUNNER_TEMP/read-body.md" > "$RUNNER_TEMP/observed-metadata.json"
+            jq -e '.schema_version==1' "$RUNNER_TEMP/observed-metadata.json" >/dev/null
+          }
+          make_state() {
+            jq --slurpfile metadata "$RUNNER_TEMP/observed-metadata.json" \
+              --arg repository "$GITHUB_REPOSITORY" --arg ref refs/heads/main \
+              --arg workflow .github/workflows/release.yml \
+              --arg workflow_sha "$(jq -r .workflow_sha "$candidate")" \
+              --arg notes "$(jq -r .release_notes_sha256 "$candidate")" \
+              '{candidate_id:$metadata[0].candidate_id,provenance:$metadata[0].provenance,
+                version:.tagName,repository:$repository,ref:$ref,target_commit:.targetCommitish,
+                workflow:$workflow,workflow_sha:$workflow_sha,release_notes_sha256:$notes,
+                draft:.isDraft,assets:[.assets[]|select(.name!="attestation.bundle.jsonl")|{name,digest}]}' \
+              "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/state.json"
+          }
+          assert_no_extra_assets() {
+            jq -r '.subjects[].name' "$candidate" > "$RUNNER_TEMP/expected-assets"
+            printf '%s\n' attestation.bundle.jsonl >> "$RUNNER_TEMP/expected-assets"
+            sort -u -o "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/expected-assets"
+            jq -r '.assets[].name' "$RUNNER_TEMP/release.json" | sort > "$RUNNER_TEMP/actual-assets"
+            comm -13 "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets" | (! grep .)
+          }
+          assert_server_hashes() {
+            for path in dist/* "$bundle"; do
+              name="$(basename "$path")"
+              want="sha256:$(sha256sum "$path" | awk '{print $1}')"
+              got="$(jq -r --arg name "$name" '.assets[]|select(.name==$name)|.digest' "$RUNNER_TEMP/release.json")"
+              [[ "$got" == "$want" ]] || { echo "server digest mismatch for $name" >&2; exit 1; }
+            done
+          }
+
+          read_release
+          assert_no_extra_assets
+          make_state
+          if jq -e '.isDraft==false' "$RUNNER_TEMP/release.json" >/dev/null; then
+            "$verifier" verify-state --candidate "$candidate" --provenance "$provenance" \
+              --state "$RUNNER_TEMP/state.json" --mode published > "$RUNNER_TEMP/decision.json"
+            jq -e '.assets|length==7 and any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null
+            assert_server_hashes
+            echo 'published=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          "$verifier" verify-state --candidate "$candidate" --provenance "$provenance" \
+            --state "$RUNNER_TEMP/state.json" --mode draft > "$RUNNER_TEMP/decision.json"
+          jq -r '.missing_assets[].name' "$RUNNER_TEMP/decision.json" | while read -r name; do
+            [[ -n "$name" ]]
+            gh release upload "$RELEASE_TAG" "dist/$name" --repo "$GITHUB_REPOSITORY"
+          done
+          if ! jq -e '.assets | any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null; then
+            gh release upload "$RELEASE_TAG" "$bundle" --repo "$GITHUB_REPOSITORY"
+          fi
+
+          read_release
+          assert_no_extra_assets
+          make_state
+          "$verifier" verify-state --candidate "$candidate" --provenance "$provenance" \
+            --state "$RUNNER_TEMP/state.json" --mode draft > "$RUNNER_TEMP/final-decision.json"
+          jq -e '.decision=="publish-draft" and (.missing_assets|length)==0' "$RUNNER_TEMP/final-decision.json" >/dev/null
+          jq -e '.assets|length==7 and any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null
+          assert_server_hashes
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo 'published=true' >> "$GITHUB_OUTPUT"
+
+  homebrew:
+    name: Verify published bytes and update Homebrew separately
+    needs: [build, validate-release-evidence, publish-github]
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false && needs.publish-github.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Download sealed formula and verifier metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packy-release-metadata-${{ needs.build.outputs.tag }}
+          path: release-metadata
+      - name: Independently read back exact published GitHub assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ -n "$HOMEBREW_TAP_TOKEN" ]] || { echo 'HOMEBREW_TAP_TOKEN is required' >&2; exit 1; }
+          mkdir published-assets
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,targetCommitish,body,assets > "$RUNNER_TEMP/release.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "${{ needs.build.outputs.commit }}" \
+            '.tagName==$tag and .targetCommitish==$commit and .isDraft==false' "$RUNNER_TEMP/release.json" >/dev/null
+          jq -j .body "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/release-body.md"
+          cmp release-metadata/release-body.md "$RUNNER_TEMP/release-body.md"
+          jq -r '.subjects[].name' release-metadata/candidate.json > "$RUNNER_TEMP/expected-assets"
+          printf '%s\n' attestation.bundle.jsonl >> "$RUNNER_TEMP/expected-assets"
+          sort -u -o "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/expected-assets"
+          jq -r '.assets[].name' "$RUNNER_TEMP/release.json" | sort > "$RUNNER_TEMP/actual-assets"
+          cmp "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/actual-assets"
+          jq -e '.isDraft==false and (.assets|length)==7' "$RUNNER_TEMP/release.json" >/dev/null
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published-assets
+          for path in published-assets/*; do
+            name="$(basename "$path")"; want="sha256:$(sha256sum "$path" | awk '{print $1}')"
+            got="$(jq -r --arg name "$name" '.assets[]|select(.name==$name)|.digest' "$RUNNER_TEMP/release.json")"
+            [[ "$got" == "$want" ]] || { echo "published digest mismatch for $name" >&2; exit 1; }
+          done
+          (cd published-assets && sha256sum --check SHA256SUMS)
+      - name: Check out Homebrew tap with only its scoped credential
+        # This is the sole persist-credentials exception: the checkout contains
+        # only the dedicated tap token needed for its reviewed dry-run and push.
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: yersonargotev/homebrew-tap
           path: homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           persist-credentials: true
-
-      - name: Install proved Homebrew formula candidate
-        run: |
-          mkdir -p homebrew-tap/Formula
-          cp release-metadata/packy.rb homebrew-tap/Formula/packy.rb
-
-      - name: Prepare Homebrew tap formula update
-        id: prepare_tap
+      - name: Prepare exact tap commit
+        id: tap
         working-directory: homebrew-tap
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          mkdir -p Formula
+          cp ../release-metadata/packy.rb Formula/packy.rb
           git rm --ignore-unmatch Formula/matty.rb
           git add Formula/packy.rb
-          if git diff --cached --quiet; then
-            echo "Homebrew formula already matches $RELEASE_TAG"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          if git diff --cached --quiet; then echo 'changed=false' >> "$GITHUB_OUTPUT"; exit 0; fi
           git commit -m "feat: update packy formula to ${RELEASE_TAG}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Prove Homebrew tap push permission
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - name: Prove tap push then publish it
+        if: steps.tap.outputs.changed == 'true'
         working-directory: homebrew-tap
         run: |
           set -euo pipefail
           git push --dry-run origin HEAD:main
-
-      - name: Reverify release tag before publication
-        run: |
-          set -euo pipefail
-          git fetch --tags --force
-          current="$(git rev-parse "${{ needs.build.outputs.tag }}^{commit}")"
-          candidate="${{ needs.build.outputs.commit }}"
-          if [[ "$current" != "$candidate" ]]; then
-            echo "Release tag moved before publication: expected $candidate, got $current" >&2
-            exit 1
-          fi
-
-      - name: Create GitHub Release if needed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release view "$RELEASE_TAG" --json body --jq .body > "$RUNNER_TEMP/existing-release-notes.md"
-            cmp release-metadata/release-notes.md "$RUNNER_TEMP/existing-release-notes.md"
-          else
-            gh release create "$RELEASE_TAG" \
-              --title "$RELEASE_TAG" \
-              --notes-file release-metadata/release-notes.md
-          fi
-
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: gh release upload "$RELEASE_TAG" dist/* --clobber
-
-      - name: Push prepared Homebrew tap formula update
-        working-directory: homebrew-tap
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          TAP_UPDATE_CHANGED: ${{ steps.prepare_tap.outputs.changed }}
-        run: |
-          set -euo pipefail
-          if [[ "$TAP_UPDATE_CHANGED" != "true" ]]; then
-            echo "Homebrew formula already matches $RELEASE_TAG"
-            exit 0
-          fi
           git push origin HEAD:main

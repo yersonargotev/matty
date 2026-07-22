@@ -1,7 +1,7 @@
 # Publish a v0.x Release
 
 This workflow publishes Packy release artifacts to GitHub Releases and updates
-`yersonargotev/homebrew-tap` from the same `checksums.txt` manifest. Homebrew
+`yersonargotev/homebrew-tap` from the same `SHA256SUMS` manifest. Homebrew
 and direct GitHub Release installs distribute the binary only; first-run users
 must run `packy init` so the binary can clone the Packy Source of Truth into the
 default Installed Source at `~/.local/share/packy`.
@@ -13,7 +13,7 @@ Homebrew path. Keep the exact install/init/dry-run/apply command sequence there
 so release docs do not drift from the first-run instructions users see first.
 
 Direct GitHub Release users may download the matching `packy_<version>_<goos>_<goarch>`
-asset, verify it against `checksums.txt`, put it on `PATH`, then follow the same
+asset, verify it against `SHA256SUMS`, put it on `PATH`, then follow the same
 first-run sequence from the README quickstart.
 
 ## User upgrade path
@@ -37,48 +37,53 @@ Installed Source is missing or stale, run `packy init` first.
 
 ## Maintainer quick path
 
-1. Confirm the release candidate passes validation:
+Publication is manual-only. The workflow must be dispatched from protected
+`main`, and the selected exact `v0.x.y` tag must already resolve to the checked
+`origin/main` commit. The workflow never creates, moves, or pushes a tag.
+
+1. Confirm the protected-main candidate passes validation:
    ```bash
    ./scripts/validate-packy.sh
    ```
 2. Review `docs/release-notes/next.md` for this exact candidate. It must contain
-   exactly one `{{TAG}}` placeholder; replace the previous release's content
-   before creating another tag.
-3. Confirm the repository has a `HOMEBREW_TAP_TOKEN` secret with write access to
+   exactly one `{{TAG}}` placeholder.
+3. Confirm `HOMEBREW_TAP_TOKEN` has write access only to
    `yersonargotev/homebrew-tap`.
-4. Create and push an exact v0 tag:
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-5. Watch the `Release` workflow for that tag.
-6. Open the GitHub Release and verify these assets exist:
-   - `packy_v0.1.0_darwin_amd64`
-   - `packy_v0.1.0_darwin_arm64`
-   - `packy_v0.1.0_linux_amd64`
-   - `packy_v0.1.0_linux_arm64`
-   - `checksums.txt`
-7. Verify `yersonargotev/homebrew-tap` has a `Formula/packy.rb` commit for the
-   same tag and checksums.
-8. Run a sandboxed package-install smoke test before announcing the release.
+4. Create and push the exact tag through the repository's authorized process.
+5. In **Actions → Release → Run workflow**, select `main`, enter the tag, and
+   leave **dry_run** enabled.
+6. Review the dry-run summary. It performs the build, smoke/evidence gates,
+   immutable candidate sealing, and read-only release inspection, then reports
+   the planned OIDC, draft, publication, and tap effects without performing any
+   of them.
+7. Dispatch the same tag from the same protected-main commit with **dry_run**
+   disabled.
+8. Verify the published release has exactly these seven assets:
+   - four `packy_<tag>_<goos>_<goarch>` binaries;
+   - `SHA256SUMS`;
+   - `sbom.spdx.json`; and
+   - `attestation.bundle.jsonl`.
+9. Verify `yersonargotev/homebrew-tap` has a `Formula/packy.rb` commit for the
+   same immutable tag and binary hashes.
+10. Run a sandboxed package-install smoke test before announcing the release.
 
-## Manual dispatch
+## Manual dispatch and recovery
 
-Use manual dispatch when the tag already exists but release assets or the tap
-update need to be rebuilt.
+A dispatch is accepted only when the workflow checkout, freshly fetched
+`origin/main`, and the selected tag all resolve to one commit. All platform
+binaries are built once. Validation, Claude smoke, draft preparation,
+publication, and Homebrew consume those retained bytes without rebuilding.
 
-1. Go to **Actions → Release → Run workflow**.
-2. Enter an existing exact tag such as `v0.1.0`.
-3. Run the workflow.
+The default dry-run completes every safe, non-mutating check and read-only
+inspection available before stopping. It does not request an OIDC token or
+create/change a tag, attestation, draft, release, asset, or tap commit.
 
-The workflow checks out that tag and completes validation before entering the
-publication job. It builds artifacts and `checksums.txt`, runs the complete
-Claude smoke matrix, verifies the tag, Installed Source, binaries, checksums,
-formula, and reviewed release notes agree, and retains the proved formula and
-notes as publication metadata. Only then does it require `HOMEBREW_TAP_TOKEN`,
-check out the tap, prepare its commit, prove the push with `git push --dry-run`,
-create or verify the GitHub Release, upload the unchanged assets, and push the
-prepared tap commit.
+A real run creates a draft only when the version is absent. If an exact draft
+already exists, recovery revalidates its hidden candidate metadata, target
+commit, notes, provenance, and every server-reported asset digest before
+uploading only missing assets. Divergent or ambiguous state fails closed. An
+already-published exact release is read and verified, never edited or recreated;
+that recovery path may continue to the independently verified Homebrew stage.
 
 ## `HOMEBREW_TAP_TOKEN` setup
 
@@ -89,29 +94,41 @@ separate tap repository. Maintainers must create a token that can write to
 
 The token should have the narrowest practical scope that allows checkout and
 push access to `yersonargotev/homebrew-tap`. Configure it under this repository's
-**Settings → Secrets and variables → Actions → Repository secrets**. The workflow
-fails before creating or uploading release assets when the secret is missing, so
-GitHub Releases and the Homebrew tap do not drift.
+**Settings → Secrets and variables → Actions → Repository secrets**. The token is
+not exposed until the exact GitHub Release is published and independently read
+back. If it is missing, only the tap stage fails; rerunning the same version
+revalidates the immutable published release before retrying Homebrew.
 
 ## Release artifact contract
 
-`scripts/build-release-artifacts.sh` accepts exact `v0.x.y` tags and builds raw
-binaries named:
+`scripts/build-release-artifacts.sh` accepts exact `v0.x.y` tags and emits one
+closed six-file candidate directory:
 
 ```text
-packy_<version>_<goos>_<goarch>
+packy_<version>_darwin_amd64
+packy_<version>_darwin_arm64
+packy_<version>_linux_amd64
+packy_<version>_linux_arm64
+SHA256SUMS
+sbom.spdx.json
 ```
 
-It currently emits Darwin and Linux assets for `amd64` and `arm64`, plus a
-standard SHA-256 `checksums.txt` manifest. `scripts/generate-homebrew-formula.sh`
-requires the same four checksum entries and generates `Formula/packy.rb` with
-platform selectors and a `packy --version` brew test.
+`SHA256SUMS` contains exactly the four binary digests plus the SBOM digest. The
+SPDX 2.3 JSON document is deterministic for the version, commit timestamp, and
+binary bytes. Verification rejects any missing, extra, duplicate, stale,
+non-regular, symlinked, or mismatched file. The publication stage adds the
+separately verified `attestation.bundle.jsonl` as the seventh release asset.
 
-Packy v0 remains macOS-first. Darwin Homebrew installs are the supported user
-path for the first installable release. Linux artifacts are built, checksummed,
-and represented in the formula to keep the release contract ready for future
-Linux support, but Linux is not part of the v0 golden-path support promise until
-a Linux package-install smoke test is defined and accepted.
+The sealed candidate binds the version, protected-main commit/ref, repository,
+release workflow path and content digest, reviewed notes digest, exact subjects,
+and the reviewed union of effective GitHub permissions. Its deterministic
+provenance document and hidden draft-body metadata must round-trip exactly from
+GitHub before publication.
+
+`scripts/generate-homebrew-formula.sh` accepts the complete manifest but derives
+URLs and hashes only for the four binaries. Packy v0 remains macOS-first. Darwin
+Homebrew installs are the supported user path; Linux artifacts remain published
+for future support rather than the current golden path.
 
 ## Real-Claude package smoke gates
 
@@ -175,31 +192,31 @@ Claude invocation. Missing, malformed, failed, or unsafe evidence fails closed.
 
 ## Fail-closed publication gate
 
-Build and validation are separate from publication. The
-`validate-release-evidence` job downloads all four retained Claude smoke
-documents and the single release candidate, generates the candidate formula,
-and runs `scripts/verify-release-evidence.sh`. Publication cannot start unless:
+Build, evidence validation, attestation, GitHub publication, and Homebrew are
+separate jobs with separate authority:
 
-- `./scripts/validate-packy.sh` passed on the exact tag commit;
-- the four expected binaries are the only binaries in `checksums.txt`, and every
-  checksum matches;
-- exact-floor and recorded-current-stable smoke evidence is complete for Darwin
-  `amd64` and `arm64`;
-- every smoke binds the release tag version, exact commit, same-commit Installed
-  Source, Claude selector/version/digest, successful lifecycle, and complete
-  sandbox safety assertions;
-- the generated formula retains the same artifact names and checksums and tests
-  only `packy --version`; and
-- the reviewed first-support notes in
-  `docs/release-notes/next.md` render for the exact tag and retain
-  the compatibility floor, migration, Pack versions, degraded exclusion, and
-  limitations.
+- build, validation, inspection, and dry-run use read-only repository access;
+- only the attestation job receives `id-token: write` and
+  `attestations: write`;
+- only GitHub draft/publication receives `contents: write`; and
+- only the Homebrew job receives `HOMEBREW_TAP_TOKEN`, after exact published
+  GitHub bytes have been read back and verified.
 
-Missing, failed, stale, duplicated, or ambiguous evidence has no waiver or
-partial-release path. The publication job consumes the proved binaries,
-checksums, formula, and notes without rebuilding or regenerating them. If a
-GitHub Release already exists for the immutable tag, its notes must match the
-proved notes byte for byte before asset recovery continues.
+The OIDC bundle is verified against the exact repository, fully-qualified signer
+workflow, protected-main source ref, source commit, signer commit, and every
+subject named by `SHA256SUMS`. Verification uses the retained bundle and an
+explicit trusted-root document rather than fetching an arbitrary attestation.
+
+Before the draft becomes public, the workflow reads back the complete draft,
+requires the exact body metadata and seven-asset inventory, compares every
+server-reported SHA-256 digest with the retained bytes, and asks the domain
+verifier for the one-time `publish-draft` decision. There is no clobber, delete,
+recreate, replacement, tag movement, or published-version mutation path.
+
+After publication, the Homebrew job independently reads the release again,
+checks its version, commit, body, exact inventory, server digests, and
+`SHA256SUMS`, and only then checks out and pushes the tap. Missing, failed,
+stale, duplicated, partial, or ambiguous evidence has no waiver path.
 
 The automated local-release smoke test is:
 
@@ -227,25 +244,23 @@ packy doctor
 
 ## First v0.x checklist
 
-- [ ] The release candidate passed `./scripts/validate-packy.sh`.
-- [ ] The tag is an exact `v0.x.y` tag, such as `v0.1.0`.
-- [ ] `HOMEBREW_TAP_TOKEN` is configured with write access to
-      `yersonargotev/homebrew-tap`.
-- [ ] The `Release` workflow completed from the tag commit.
+- [ ] The candidate passed `./scripts/validate-packy.sh` on protected `main`.
+- [ ] The exact `v0.x.y` tag, workflow checkout, and freshly fetched
+      `origin/main` resolve to one commit.
+- [ ] `HOMEBREW_TAP_TOKEN` is configured only for the dedicated tap.
+- [ ] A default dry-run completed and reported the planned external mutations
+      without requesting OIDC or changing tag, release, attestation, or tap state.
 - [ ] Exact Claude `2.1.203` and recorded-current-stable evidence is green for
-      both Darwin `amd64` and `arm64` before publication.
-- [ ] All four platform artifacts and `checksums.txt` are attached to the GitHub
-      Release.
-- [ ] `checksums.txt` contains one SHA-256 entry for each artifact.
-- [ ] `Formula/packy.rb` in `yersonargotev/homebrew-tap` points at the same tag
-      and checksums.
-- [ ] When explicitly requested, a real `brew install yersonargotev/tap/packy`
-      in a controlled environment installs the released binary.
-- [ ] Durable smoke evidence binds the tag/SHA, platform, Claude version and
-      digest, commands/exits, and before/after sandbox manifests without secrets.
-- [ ] A sandboxed package install can run `packy init`, `packy install --dry-run`,
-      `packy install`, `packy doctor`, `packy update --dry-run`, `packy update`,
-      `packy uninstall --dry-run`, `packy uninstall`, and final `packy doctor`
-      without writing to real home config.
-- [ ] Release notes call out that v0 is macOS-first and that Linux artifacts are
-      published for future support, not the current golden path.
+      Darwin `amd64` and `arm64`.
+- [ ] `SHA256SUMS` binds exactly four binaries and `sbom.spdx.json`.
+- [ ] OIDC provenance verifies the exact protected-main commit, signer workflow,
+      signer digest, and five checksummed subjects.
+- [ ] The draft read-back exactly matches its candidate identity, notes,
+      provenance, target commit, seven assets, and server hashes before publish.
+- [ ] The published release contains exactly four binaries, `SHA256SUMS`,
+      `sbom.spdx.json`, and `attestation.bundle.jsonl`.
+- [ ] Homebrew began only after an independent exact published-release read-back.
+- [ ] `Formula/packy.rb` points at the same immutable tag and binary hashes.
+- [ ] A sandboxed package install completes the documented lifecycle without
+      writing to real home configuration.
+- [ ] Release notes retain the macOS-first support statement and Linux limitation.

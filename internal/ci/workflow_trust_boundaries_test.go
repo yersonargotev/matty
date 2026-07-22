@@ -115,7 +115,7 @@ func TestWorkflowTrustBoundaryMutationsFailClosed(t *testing.T) {
 func TestWorkflowActorRefPermissionMatrix(t *testing.T) {
 	root := repositoryRoot(t)
 	workflows := make(map[string]workflowDocument)
-	for _, name := range []string{"ci.yml", "claude-canary.yml", "governance.yml", "security.yml", "security-pr.yml", "sync-pack-source.yml"} {
+	for _, name := range []string{"ci.yml", "claude-canary.yml", "governance.yml", "release.yml", "security.yml", "security-pr.yml", "sync-pack-source.yml"} {
 		workflows[name] = readWorkflowDocument(t, root, filepath.Join(root, ".github", "workflows", name))
 	}
 
@@ -150,7 +150,7 @@ func TestWorkflowActorRefPermissionMatrix(t *testing.T) {
 	}
 
 	for name, workflow := range workflows {
-		for _, forbidden := range []string{"pages: write", "id-token: write", "actions/deploy-pages"} {
+		for _, forbidden := range []string{"pages: write", "actions/deploy-pages"} {
 			if strings.Contains(workflow.content, forbidden) {
 				t.Errorf("%s grants unintegrated Pages authority %q", name, forbidden)
 			}
@@ -307,7 +307,11 @@ var minimumJobPermissions = map[string]map[string]map[string]string{
 		"build":                     {"contents": "read"},
 		"claude-smoke":              {"contents": "read"},
 		"validate-release-evidence": {"contents": "read"},
-		"release":                   {"contents": "write"},
+		"dry-run":                   {"contents": "read"},
+		"inspect-release":           {"contents": "read"},
+		"attest":                    {"attestations": "write", "contents": "read", "id-token": "write"},
+		"publish-github":            {"contents": "write"},
+		"homebrew":                  {"contents": "read"},
 	},
 	".github/workflows/security.yml": {
 		"codeql": {"contents": "read", "packages": "read", "security-events": "write"},
@@ -349,8 +353,8 @@ func assertCheckoutCredentials(t errorReporter, workflow workflowDocument) {
 // publishes its owned proposal branch, and release publishes the proved formula
 // to the dedicated Homebrew tap. Every new exception requires review here.
 var admittedWriteCheckouts = map[string]string{
-	".github/workflows/sync-pack-source.yml|publish|":                  "publish only the canonical automation-owned proposal branch and matching pull request",
-	".github/workflows/release.yml|release|yersonargotev/homebrew-tap": "publish only the proved formula to the dedicated Homebrew tap",
+	".github/workflows/sync-pack-source.yml|publish|":                   "publish only the canonical automation-owned proposal branch and matching pull request",
+	".github/workflows/release.yml|homebrew|yersonargotev/homebrew-tap": "publish only the proved formula to the dedicated Homebrew tap",
 }
 
 func checkoutBoundaries(job string, lines []string) []checkoutBoundary {
@@ -436,7 +440,7 @@ func assertTrustedPrivilegedExecution(t errorReporter, workflow workflowDocument
 // Write-capable or secret-bearing jobs must name the trusted repository and a
 // protected ref boundary in their job-level gate. Governance is event-driven
 // from the protected base/default branch and additionally checks out github.sha,
-// never the proposed head. Release admits only protected main or its v0 tags.
+// never the proposed head. Release publication admits protected main only.
 var trustedExecutionMarkers = map[string][]string{
 	".github/workflows/claude-canary.yml|stable-smoke": {
 		"github.repository == 'yersonargotev/packy'",
@@ -446,10 +450,20 @@ var trustedExecutionMarkers = map[string][]string{
 		"github.repository == 'yersonargotev/packy'",
 		"ref: ${{ github.sha }}",
 	},
-	".github/workflows/release.yml|release": {
+	".github/workflows/release.yml|attest": {
 		"github.repository == 'yersonargotev/packy'",
 		"refs/heads/main",
-		"refs/tags/v0.",
+		"inputs.dry_run == false",
+	},
+	".github/workflows/release.yml|publish-github": {
+		"github.repository == 'yersonargotev/packy'",
+		"refs/heads/main",
+		"inputs.dry_run == false",
+	},
+	".github/workflows/release.yml|homebrew": {
+		"github.repository == 'yersonargotev/packy'",
+		"refs/heads/main",
+		"inputs.dry_run == false",
 	},
 	".github/workflows/security.yml|codeql": {
 		"github.repository == 'yersonargotev/packy'",

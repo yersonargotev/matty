@@ -24,80 +24,118 @@ var supportedReleasePlatforms = []string{
 	"linux/arm64",
 }
 
-func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
-	root := repoRoot(t)
-	text := readReleaseWorkflow(t, root)
+func TestReleaseWorkflowBuildsOneManualMainCandidate(t *testing.T) {
+	text := readReleaseWorkflow(t, repoRoot(t))
 
 	for _, want := range []string{
 		"workflow_dispatch:",
-		"tag:",
-		"push:",
-		"- 'v0.*.*'",
-		"required: true",
-		"actions/checkout@",
-		"fetch-depth: 0",
-		"actions/setup-go@",
-		"go-version-file: go.mod",
-		"git checkout --detach \"$tag\"",
-		`echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"`,
+		"dry_run:",
+		"type: boolean",
+		"github.ref == 'refs/heads/main'",
+		"git fetch --force origin main 'refs/tags/*:refs/tags/*'",
+		`[[ "$head" == "$main" && "$head" == "$tag_commit" ]]`,
 		"scripts/build-release-artifacts.sh",
-		"--out-dir dist",
-		"HOMEBREW_TAP_TOKEN",
-		"yersonargotev/homebrew-tap",
-		"scripts/generate-homebrew-formula.sh",
-		"--checksums dist/SHA256SUMS",
-		"--out release-metadata/packy.rb",
-		"--repo yersonargotev/packy",
-		"gh release upload",
-		"dist/* --clobber",
+		"sbom.spdx.json",
+		"SHA256SUMS",
+		"Retain the one built candidate",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("release workflow should contain %q so GitHub Releases and the Homebrew tap stay in sync", want)
+			t.Fatalf("release workflow should contain %q", want)
 		}
 	}
-}
-
-func TestReleaseWorkflowCreatesOrVerifiesReleaseWithProvedNotes(t *testing.T) {
-	root := repoRoot(t)
-	step := releaseWorkflowStep(t, parseReleaseWorkflow(t, readReleaseWorkflow(t, root)), "Create GitHub Release if needed")
-
-	if !strings.Contains(step.Text, "gh release view") {
-		t.Fatalf("release creation step should be idempotent by checking whether the release exists; step:\n%s", step.Text)
+	if strings.Contains(text, "push:\n    tags:") {
+		t.Fatal("publication must remain manual-only until protected-tag enforcement is enabled")
 	}
-	if !strings.Contains(step.Text, "gh release create") {
-		t.Fatalf("release creation step should create the GitHub Release; step:\n%s", step.Text)
-	}
-	if !strings.Contains(step.Text, "--notes-file release-metadata/release-notes.md") {
-		t.Fatalf("release creation should use the validated notes candidate; step:\n%s", step.Text)
-	}
-	if !strings.Contains(step.Text, "cmp") || !strings.Contains(step.Text, "--json body") {
-		t.Fatalf("an existing immutable release should fail closed when its notes differ; step:\n%s", step.Text)
-	}
-	if strings.Contains(step.Text, "--generate-notes") {
-		t.Fatalf("release creation must not bypass validated release notes; step:\n%s", step.Text)
+	if got := strings.Count(text, "scripts/build-release-artifacts.sh"); got != 1 {
+		t.Fatalf("release candidate must be built exactly once; got %d build invocations", got)
 	}
 }
 
-func TestReleaseWorkflowValidatesCompleteEvidenceBeforePublication(t *testing.T) {
+func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T) {
 	text := readReleaseWorkflow(t, repoRoot(t))
-	for _, want := range []string{
-		"validate-release-evidence:",
-		"needs: [build, claude-smoke]",
-		"pattern: claude-release-*",
-		"scripts/verify-release-evidence.sh",
-		"docs/release-notes/next.md",
-		"scripts/generate-homebrew-formula.sh",
-		"name: packy-release-metadata-${{ needs.build.outputs.tag }}",
-		"needs: [build, validate-release-evidence]",
-		"name: packy-release-metadata-${{ steps.release.outputs.tag }}",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("release workflow missing fail-closed evidence gate %q", want)
+	workflow := parseReleaseWorkflow(t, text)
+
+	seal := releaseWorkflowStepIndex(t, workflow, "Create immutable candidate and provenance metadata", []string{
+		"releasecandidate create",
+		"--ref refs/heads/main",
+		"--permission attestations=write",
+		"--permission contents=write",
+		"--permission id-token=write",
+	})
+	attest := releaseWorkflowStepIndex(t, workflow, "Attest exact checksummed subjects", []string{
+		"actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
+		"subject-checksums: dist/SHA256SUMS",
+	})
+	verify := releaseWorkflowStepIndex(t, workflow, "Verify bundle offline against exact workflow and subjects", []string{
+		"gh attestation trusted-root",
+		"--bundle \"$bundle\"",
+		"--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/release.yml\"",
+		"--source-ref refs/heads/main",
+		"--source-digest \"${{ needs.build.outputs.commit }}\"",
+		"--signer-digest \"${{ needs.build.outputs.commit }}\"",
+		"--custom-trusted-root",
+	})
+	publish := releaseWorkflowStepIndex(t, workflow, "Create or verify draft, upload only missing assets, and publish once", []string{
+		"gh release create",
+		"--draft",
+		"verify-state",
+		"--mode draft",
+		"gh release upload",
+		"assert_server_hashes",
+		"gh release edit",
+		"--draft=false",
+	})
+
+	assertReleaseWorkflowStepBefore(t, seal, attest, "the immutable candidate must be sealed before OIDC provenance is issued")
+	assertReleaseWorkflowStepBefore(t, attest, verify, "the generated bundle must be verified before publication")
+	assertReleaseWorkflowStepBefore(t, verify, publish, "the verified bundle must reach the exact draft before one-time publication")
+	for _, forbidden := range []string{"--clobber", "gh release delete", "git tag -", "git push origin refs/tags"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("immutable publication workflow must not contain %q", forbidden)
 		}
 	}
-	publication := text[strings.LastIndex(text, "  release:"):]
-	if strings.Contains(publication, "scripts/generate-homebrew-formula.sh") {
-		t.Fatal("publication must consume the proved formula instead of regenerating it")
+}
+
+func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T) {
+	text := readReleaseWorkflow(t, repoRoot(t))
+	dryRun := releaseWorkflowJob(t, text, "dry-run")
+	attest := releaseWorkflowJob(t, text, "attest")
+	github := releaseWorkflowJob(t, text, "publish-github")
+	homebrew := releaseWorkflowJob(t, text, "homebrew")
+
+	for _, want := range []string{
+		"if: inputs.dry_run == true",
+		"OIDC issuance: planned, not performed",
+		"GitHub draft creation/resume and asset upload: planned, not performed",
+		"Homebrew tap dry-run/push: planned, not performed",
+	} {
+		if !strings.Contains(dryRun, want) {
+			t.Fatalf("dry-run job should contain %q", want)
+		}
+	}
+	for _, forbidden := range []string{"id-token: write", "attest-build-provenance", "gh release create", "gh release upload", "git push origin"} {
+		if strings.Contains(dryRun, forbidden) {
+			t.Fatalf("dry-run job must stop before mutation authority %q", forbidden)
+		}
+	}
+	for _, want := range []string{"contents: read", "id-token: write", "attestations: write"} {
+		if !strings.Contains(attest, want) {
+			t.Fatalf("attestation job should have narrow permission %q", want)
+		}
+	}
+	if strings.Contains(attest, "HOMEBREW_TAP_TOKEN") || strings.Contains(attest, "contents: write") {
+		t.Fatal("attestation authority must not receive release or Homebrew write authority")
+	}
+	if !strings.Contains(github, "contents: write") || strings.Contains(github, "id-token: write") || strings.Contains(github, "HOMEBREW_TAP_TOKEN") {
+		t.Fatal("GitHub publication must have only its contents write boundary")
+	}
+	for _, want := range []string{"contents: read", "HOMEBREW_TAP_TOKEN", "repository: yersonargotev/homebrew-tap", "persist-credentials: true"} {
+		if !strings.Contains(homebrew, want) {
+			t.Fatalf("Homebrew job should contain isolated tap boundary %q", want)
+		}
+	}
+	if strings.Contains(homebrew, "id-token: write") || strings.Contains(homebrew, "contents: write") {
+		t.Fatal("Homebrew job must not receive GitHub release or attestation authority")
 	}
 }
 
@@ -253,107 +291,36 @@ fi
 	}
 }
 
-func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.T) {
-	root := repoRoot(t)
-	text := readReleaseWorkflow(t, root)
-	workflow := parseReleaseWorkflow(t, text)
-
-	resolveTagIndex := releaseWorkflowStepIndex(t, workflow, "Verify release tag remains bound", []string{
-		`candidate="${{ needs.build.outputs.commit }}"`,
-		`current="$(git rev-parse "${tag}^{commit}")"`,
-		`git checkout --detach "$candidate"`,
-	})
-	setupGoIndex := releaseWorkflowStepIndex(t, workflow, "Set up Go from proved commit", []string{
-		"uses: actions/setup-go@",
-		"go-version-file: go.mod",
-	})
-	provedArtifactIndex := releaseWorkflowStepIndex(t, workflow, "Download proved release artifacts, SBOM, and SHA256SUMS", []string{
-		"uses: actions/download-artifact@", "path: dist",
-	})
-	requireTapTokenIndex := releaseWorkflowStepIndex(t, workflow, "Require Homebrew tap token", []string{
-		"HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
-		"HOMEBREW_TAP_TOKEN is required",
-		"yersonargotev/homebrew-tap",
-	})
-	tapCheckoutIndex := releaseWorkflowStepIndex(t, workflow, "Check out Homebrew tap", []string{
-		"uses: actions/checkout@",
-		"repository: yersonargotev/homebrew-tap",
-		"path: homebrew-tap",
-		"token: ${{ secrets.HOMEBREW_TAP_TOKEN }}",
-	})
-	formulaIndex := releaseWorkflowStepIndex(t, workflow, "Install proved Homebrew formula candidate", []string{
-		"cp release-metadata/packy.rb homebrew-tap/Formula/packy.rb",
-	})
-	prepareTapIndex := releaseWorkflowStepIndex(t, workflow, "Prepare Homebrew tap formula update", []string{
-		"id: prepare_tap",
-		"working-directory: homebrew-tap",
-		`git config user.name "github-actions[bot]"`,
-		`git config user.email "github-actions[bot]@users.noreply.github.com"`,
-		"git rm --ignore-unmatch Formula/matty.rb",
-		"git add Formula/packy.rb",
-		"git diff --cached --quiet",
-		`echo "changed=false" >> "$GITHUB_OUTPUT"`,
-		`echo "changed=true" >> "$GITHUB_OUTPUT"`,
-		`git commit -m "feat: update packy formula to ${RELEASE_TAG}"`,
-	})
-	tapPushAccessProofIndex := releaseWorkflowStepIndex(t, workflow, "Prove Homebrew tap push permission", []string{
-		"working-directory: homebrew-tap",
+func TestReleaseWorkflowVerifiesPublishedGitHubBytesBeforeHomebrew(t *testing.T) {
+	text := readReleaseWorkflow(t, repoRoot(t))
+	homebrew := releaseWorkflowJob(t, text, "homebrew")
+	for _, want := range []string{
+		"needs: [build, validate-release-evidence, publish-github]",
+		"needs.publish-github.outputs.published == 'true'",
+		"Independently read back exact published GitHub assets",
+		".targetCommitish==$commit",
+		"cmp release-metadata/release-body.md",
+		"attestation.bundle.jsonl",
+		"cmp \"$RUNNER_TEMP/expected-assets\" \"$RUNNER_TEMP/actual-assets\"",
+		"sha256sum --check SHA256SUMS",
 		"git push --dry-run origin HEAD:main",
-	})
-	reverifyTagIndex := releaseWorkflowStepIndex(t, workflow, "Reverify release tag before publication", []string{
-		`current="$(git rev-parse "${{ needs.build.outputs.tag }}^{commit}")"`,
-		`candidate="${{ needs.build.outputs.commit }}"`,
-	})
-	createReleaseIndex := releaseWorkflowStepIndex(t, workflow, "Create GitHub Release if needed", []string{
-		"GH_TOKEN: ${{ github.token }}",
-		"gh release create",
-		"--notes-file release-metadata/release-notes.md",
-	})
-	uploadIndex := releaseWorkflowStepIndex(t, workflow, "Upload release assets", []string{
-		"GH_TOKEN: ${{ github.token }}",
-		"gh release upload",
-		"dist/* --clobber",
-	})
-	pushTapIndex := releaseWorkflowStepIndex(t, workflow, "Push prepared Homebrew tap formula update", []string{
-		"working-directory: homebrew-tap",
-		"TAP_UPDATE_CHANGED: ${{ steps.prepare_tap.outputs.changed }}",
-		`[[ "$TAP_UPDATE_CHANGED" != "true" ]]`,
 		"git push origin HEAD:main",
-	})
-
-	prepareTapStep := releaseWorkflowStep(t, workflow, "Prepare Homebrew tap formula update").Text
-	for _, forbidden := range []string{"formula_renames.json", "FormulaRenames", "yersonargotev/matty", "Formula/matty.rb =>"} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("release workflow must not contain legacy formula rename metadata or Matty distribution identity %q", forbidden)
+	} {
+		if !strings.Contains(homebrew, want) {
+			t.Fatalf("Homebrew publication should contain %q", want)
 		}
 	}
-	if !strings.Contains(prepareTapStep, "git rm --ignore-unmatch Formula/matty.rb") {
-		t.Fatal("tap update must remove the legacy Matty formula in the same commit as Formula/packy.rb")
+	readBack := strings.Index(homebrew, "Independently read back exact published GitHub assets")
+	checkout := strings.Index(homebrew, "Check out Homebrew tap with only its scoped credential")
+	push := strings.Index(homebrew, "git push origin HEAD:main")
+	if readBack < 0 || checkout < 0 || push < 0 || !(readBack < checkout && checkout < push) {
+		t.Fatal("published GitHub bytes must be independently verified before tap checkout and push")
 	}
-
-	if strings.Contains(releaseWorkflowStep(t, workflow, "Prove Homebrew tap push permission").Text, "git commit") {
-		t.Fatalf("tap push proof must dry-run the prepared local commit without creating another commit")
+	for _, forbidden := range []string{"formula_renames.json", "FormulaRenames", "yersonargotev/matty", "Formula/matty.rb =>"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("release workflow must not contain legacy distribution identity %q", forbidden)
+		}
 	}
-	if strings.Contains(releaseWorkflowStep(t, workflow, "Push prepared Homebrew tap formula update").Text, "git push --dry-run") {
-		t.Fatalf("final tap push must be mutating, not another dry run")
-	}
-
-	assertReleaseWorkflowStepBefore(t, resolveTagIndex, setupGoIndex, "Go must be set up from the checked-out release tag, not the workflow dispatch ref")
-	assertReleaseWorkflowStepBefore(t, setupGoIndex, provedArtifactIndex, "proved artifacts should be downloaded after the release tag checkout and Go setup")
-	assertReleaseWorkflowStepBefore(t, provedArtifactIndex, formulaIndex, "the proved formula must be installed alongside the exact proved artifacts")
-	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, tapCheckoutIndex, "the workflow must reject a missing HOMEBREW_TAP_TOKEN before falling back to anonymous tap checkout")
-	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, createReleaseIndex, "a missing HOMEBREW_TAP_TOKEN must fail before creating a GitHub Release")
-	assertReleaseWorkflowStepBefore(t, requireTapTokenIndex, uploadIndex, "a missing HOMEBREW_TAP_TOKEN must fail before re-uploading release assets")
-	assertReleaseWorkflowStepBefore(t, tapCheckoutIndex, formulaIndex, "the tap checkout must exist before writing Formula/packy.rb into it")
-	assertReleaseWorkflowStepBefore(t, formulaIndex, prepareTapIndex, "the proved formula must be staged before preparing a local tap commit")
-	assertReleaseWorkflowStepBefore(t, prepareTapIndex, tapPushAccessProofIndex, "the workflow must dry-run push the already-prepared local tap state, not the untouched checkout")
-	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, createReleaseIndex, "token-backed tap push permission must be proven before creating a GitHub Release")
-	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, reverifyTagIndex, "the candidate tag should be reverified only after every publication precondition passes")
-	assertReleaseWorkflowStepBefore(t, reverifyTagIndex, createReleaseIndex, "the immutable tag binding must be checked immediately before publication")
-	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, uploadIndex, "token-backed tap push permission must be proven before re-uploading release assets")
-	assertReleaseWorkflowStepBefore(t, uploadIndex, pushTapIndex, "the tap update must not be published until release assets exist")
-	assertReleaseWorkflowStepBefore(t, tapPushAccessProofIndex, pushTapIndex, "token-backed tap push permission must be proven before the mutating tap push")
-	assertReleaseWorkflowStepBefore(t, prepareTapIndex, pushTapIndex, "the final tap push must publish the already-prepared commit instead of creating a new commit after assets upload")
 }
 
 func TestBuildReleaseArtifactsCreatesChecksummedSupportedPlatforms(t *testing.T) {
@@ -602,6 +569,27 @@ func readReleaseWorkflow(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return string(workflow)
+}
+
+func releaseWorkflowJob(t *testing.T, workflow, name string) string {
+	t.Helper()
+	marker := "\n  " + name + ":\n"
+	start := strings.Index(workflow, marker)
+	if start < 0 {
+		t.Fatalf("release workflow missing job %q", name)
+	}
+	start++
+	end := len(workflow)
+	for offset, line := range strings.Split(workflow[start:], "\n") {
+		if offset > 0 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(line, ":") {
+			candidate := strings.Index(workflow[start:], "\n"+line+"\n")
+			if candidate >= 0 {
+				end = start + candidate
+				break
+			}
+		}
+	}
+	return workflow[start:end]
 }
 
 type workflowStep struct {

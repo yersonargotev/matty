@@ -4865,33 +4865,9 @@
 },
     {
   "class": "release-formula-removal",
-  "line_sha256": "11ae6f5154007dec656ec81cb8537de6bb52812a91f09f23ccd26cd6064ebe3b",
-  "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
-  "token_count": 1
-},
-    {
-  "class": "release-formula-removal",
   "line_sha256": "643bea1e30ca3d9338cbfe034c824d65032267b2057cdf0c016a3f35adb449e5",
   "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
   "token_count": 2
-},
-    {
-  "class": "release-formula-removal",
-  "line_sha256": "0330ea5168229089e0a335c31829a531112ec2255eb53f62adfc44298eef5037",
-  "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
-  "token_count": 1
-},
-    {
-  "class": "release-formula-removal",
-  "line_sha256": "610478bc0f2666a197f2a11727bfa477c0ab9c227140075a7170f2d2efac3ee9",
-  "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
-  "token_count": 1
-},
-    {
-  "class": "release-formula-removal",
-  "line_sha256": "739f55cdf1014f22ca7d54d04632082eecc586d282f3a54d3edca1399169af89",
-  "path_b64": "aW50ZXJuYWwvcmVsZWFzZS9yZWxlYXNlX2F1dG9tYXRpb25fdGVzdC5nbw",
-  "token_count": 1
 },
     {
   "class": "semantic-pack",
