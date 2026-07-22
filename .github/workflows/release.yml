@@ -237,19 +237,19 @@ jobs:
           name: packy-release-metadata-${{ needs.build.outputs.tag }}
           path: release-metadata
       - name: Report writes that real publication would perform
+        env:
+          RELEASE_EFFECTS: ${{ needs.inspect-release.outputs.effects }}
         run: |
           set -euo pipefail
-          cat release-metadata/publication-plan.json
+          jq -e . <<< "$RELEASE_EFFECTS" >/dev/null
           {
             echo '## Release dry run'
             echo '- Existing release state: ${{ needs.inspect-release.outputs.state }} (read-only inspection completed)'
-            echo '- OIDC issuance: planned, not performed'
-            echo '- GitHub draft creation/resume and asset upload: planned, not performed'
-            echo '- GitHub draft-to-published transition: planned, not performed'
-            echo '- Homebrew tap dry-run/push: planned, not performed'
+            echo '- Exact effects a real run would perform from the observed state:'
             echo '```json'
-            cat release-metadata/publication-plan.json
+            jq . <<< "$RELEASE_EFFECTS"
             echo '```'
+            echo '- Dry-run stopped before OIDC issuance or any GitHub Release/Homebrew mutation.'
           } >> "$GITHUB_STEP_SUMMARY"
 
   inspect-release:
@@ -261,6 +261,7 @@ jobs:
     outputs:
       state: ${{ steps.inspect.outputs.state }}
       has_bundle: ${{ steps.inspect.outputs.has_bundle }}
+      effects: ${{ steps.inspect.outputs.effects }}
     steps:
       - name: Download sealed metadata and verifier
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -308,8 +309,13 @@ jobs:
             -f owner="$owner" -f repository="$repository" -f tag="$RELEASE_TAG" \
             --jq '.data.repository.release.id // ""')"
           if [[ -z "$release_id" ]]; then
-            echo 'state=absent' >> "$GITHUB_OUTPUT"
-            echo 'has_bundle=false' >> "$GITHUB_OUTPUT"
+            effects="$(jq -cn --slurpfile candidate release-metadata/candidate.json \
+              '{attestation:"issue-new",github:{action:"create-draft",upload_assets:([$candidate[0].subjects[].name]+["attestation.bundle.jsonl"]),publish:true},homebrew:{action:"verify-and-update-if-needed"}}')"
+            {
+              echo 'state=absent'
+              echo 'has_bundle=false'
+              echo "effects=$effects"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
@@ -397,11 +403,28 @@ jobs:
              ((.[0].verificationResult.statement.subject|map({name,sha256:.digest.sha256})|sort_by(.name)) ==
               ($candidate[0].subjects|map({name,sha256:.sha256})|sort_by(.name)))' \
             "$RUNNER_TEMP/verified-attestation.json" >/dev/null
-          echo 'has_bundle=true' >> "$GITHUB_OUTPUT"
           if [[ "$mode" == published ]]; then
             jq -e '.assets|length==7 and any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null
           fi
-          if jq -e '.isDraft' "$RUNNER_TEMP/release.json" >/dev/null; then echo 'state=draft' >> "$GITHUB_OUTPUT"; else echo 'state=published' >> "$GITHUB_OUTPUT"; fi
+          release_state=published
+          if jq -e '.isDraft' "$RUNNER_TEMP/release.json" >/dev/null; then release_state=draft; fi
+          bundle_asset=false
+          if jq -e '.assets|any(.name=="attestation.bundle.jsonl")' "$RUNNER_TEMP/release.json" >/dev/null; then bundle_asset=true; fi
+          effects="$(jq -cn --slurpfile decision "$RUNNER_TEMP/decision.json" --argjson bundle_asset "$bundle_asset" '
+            ($decision[0].missing_assets|map(.name)) as $missing |
+            (if $bundle_asset then $missing else $missing+["attestation.bundle.jsonl"] end) as $uploads |
+            {attestation:"reuse-and-verify",
+             github:(if $decision[0].decision=="continue-published" then
+                       {action:"verify-published",upload_assets:[],publish:false}
+                     else
+                       {action:$decision[0].decision,upload_assets:$uploads,publish:true}
+                     end),
+             homebrew:{action:"verify-and-update-if-needed"}}')"
+          {
+            echo "state=$release_state"
+            echo 'has_bundle=true'
+            echo "effects=$effects"
+          } >> "$GITHUB_OUTPUT"
       - name: Retain existing attestation bundle
         if: steps.inspect.outputs.has_bundle == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -436,6 +459,31 @@ jobs:
         with:
           name: existing-attestation-${{ needs.build.outputs.tag }}
           path: attestation
+      - name: Revalidate refs immediately before OIDC issuance
+        if: needs.inspect-release.outputs.has_bundle != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          set -euo pipefail
+          resolve_ref_commit() {
+            local ref="$1" object object_type object_sha hops=0
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$ref" --jq '[.object.type,.object.sha]|@tsv')"
+            IFS=$'\t' read -r object_type object_sha <<< "$object"
+            while [[ "$object_type" == tag && "$hops" -lt 8 ]]; do
+              object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq '[.object.type,.object.sha]|@tsv')"
+              IFS=$'\t' read -r object_type object_sha <<< "$object"
+              hops=$((hops + 1))
+            done
+            [[ "$object_type" == commit && "$object_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+            printf '%s\n' "$object_sha"
+          }
+          tag_commit="$(resolve_ref_commit "tags/$RELEASE_TAG")"
+          main_commit="$(resolve_ref_commit heads/main)"
+          [[ "$tag_commit" == "$RELEASE_COMMIT" && "$main_commit" == "$tag_commit" ]] || {
+            echo 'tag, protected main, and candidate commit diverged before OIDC issuance' >&2; exit 1;
+          }
       - name: Attest exact retained candidate
         id: attest
         if: needs.inspect-release.outputs.has_bundle != 'true'
@@ -782,4 +830,18 @@ jobs:
             echo 'tag, protected main, and candidate commit diverged before tap push' >&2; exit 1;
           }
           git push --dry-run origin HEAD:main
+          tag_commit="$(resolve_ref_commit "tags/$RELEASE_TAG")"
+          main_commit="$(resolve_ref_commit heads/main)"
+          [[ "$tag_commit" == "$RELEASE_COMMIT" && "$main_commit" == "$tag_commit" ]] || {
+            echo 'tag, protected main, and candidate commit diverged after tap push proof' >&2; exit 1;
+          }
           git push origin HEAD:main
+          git fetch --force origin main
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || {
+            echo 'tap remote main does not resolve to the pushed commit' >&2; exit 1;
+          }
+          remote_formula_sha="$(git show origin/main:Formula/packy.rb | sha256sum | awk '{print $1}')"
+          expected_formula_sha="$(jq -r .publication_plan.homebrew.sha256 ../attestation/body-metadata.json)"
+          [[ "$remote_formula_sha" == "$expected_formula_sha" ]] || {
+            echo 'tap remote formula does not match the sealed destination plan' >&2; exit 1;
+          }

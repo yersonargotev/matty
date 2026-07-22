@@ -72,6 +72,11 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 		"actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
 		"subject-path: 'dist/*'",
 	})
+	refBeforeAttest := releaseWorkflowStepIndex(t, workflow, "Revalidate refs immediately before OIDC issuance", []string{
+		"needs.inspect-release.outputs.has_bundle != 'true'",
+		"resolve_ref_commit",
+		"diverged before OIDC issuance",
+	})
 	verify := releaseWorkflowStepIndex(t, workflow, "Verify bundle offline against exact workflow and subjects", []string{
 		"gh attestation trusted-root",
 		"--bundle \"$bundle\"",
@@ -105,6 +110,7 @@ func TestReleaseWorkflowSealsAndVerifiesProvenanceBeforePublishing(t *testing.T)
 
 	assertReleaseWorkflowStepBefore(t, seal, plan, "candidate identity must precede the complete destination plan")
 	assertReleaseWorkflowStepBefore(t, plan, attest, "the complete destination plan must be sealed before OIDC provenance is issued")
+	assertReleaseWorkflowStepBefore(t, refBeforeAttest, attest, "refs must be revalidated immediately before OIDC provenance is issued")
 	assertReleaseWorkflowStepBefore(t, attest, verify, "the generated bundle must be verified before publication")
 	assertReleaseWorkflowStepBefore(t, verify, envelope, "the verified bundle must be bound into the final release set")
 	assertReleaseWorkflowStepBefore(t, envelope, publish, "the complete release set must reach the exact draft before one-time publication")
@@ -139,9 +145,9 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 
 	for _, want := range []string{
 		"if: inputs.dry_run == true",
-		"OIDC issuance: planned, not performed",
-		"GitHub draft creation/resume and asset upload: planned, not performed",
-		"Homebrew tap dry-run/push: planned, not performed",
+		"RELEASE_EFFECTS: ${{ needs.inspect-release.outputs.effects }}",
+		"Exact effects a real run would perform from the observed state",
+		"Dry-run stopped before OIDC issuance or any GitHub Release/Homebrew mutation",
 	} {
 		if !strings.Contains(dryRun, want) {
 			t.Fatalf("dry-run job should contain %q", want)
@@ -152,7 +158,7 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 			t.Fatalf("dry-run job must stop before mutation authority %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Download built candidate for read-only attestation checks", "gh attestation verify", "--custom-trusted-root", "canonical-body.md"} {
+	for _, want := range []string{"Download built candidate for read-only attestation checks", "gh attestation verify", "--custom-trusted-root", "canonical-body.md", "effects=$effects"} {
 		if !strings.Contains(inspect, want) {
 			t.Fatalf("read-only inspection should verify an available existing bundle with %q", want)
 		}
@@ -351,6 +357,8 @@ func TestReleaseWorkflowVerifiesPublishedGitHubBytesBeforeHomebrew(t *testing.T)
 		"sha256sum --check SHA256SUMS",
 		"publication_plan.homebrew.sha256",
 		"diverged before tap push",
+		"diverged after tap push proof",
+		"tap remote formula does not match the sealed destination plan",
 		"git push --dry-run origin HEAD:main",
 		"git push origin HEAD:main",
 	} {

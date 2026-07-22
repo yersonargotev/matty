@@ -54,8 +54,8 @@ Publication is manual-only. The workflow must be dispatched from protected
    leave **dry_run** enabled.
 6. Review the dry-run summary. It performs the build, smoke/evidence gates,
    immutable candidate sealing, and read-only release inspection, then reports
-   the planned OIDC, draft, publication, and tap effects without performing any
-   of them.
+   the exact state-dependent OIDC, missing-asset, draft/publication, and tap
+   effects without performing any of them.
 7. Dispatch the same tag from the same protected-main commit with **dry_run**
    disabled.
 8. Verify the published release has exactly these seven assets:
@@ -222,7 +222,9 @@ verifier for the one-time `publish-draft` decision. There is no clobber, delete,
 recreate, replacement, tag movement, or published-version mutation path.
 The tag and protected-main refs are peeled through the Git object API and
 rechecked against the retained commit immediately before draft creation, every
-asset upload, publication, and the final tap push.
+asset upload, OIDC issuance, publication, and the final tap push. The tap stage
+also reads remote `main` and `Formula/packy.rb` back after pushing and compares
+the remote commit and formula digest with the sealed destination plan.
 
 After publication, the Homebrew job independently reads the release again,
 checks its version, commit, body, exact inventory, server digests, and
