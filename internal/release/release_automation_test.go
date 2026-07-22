@@ -44,7 +44,7 @@ func TestReleaseWorkflowPublishesPackyArtifactsAndTapFormula(t *testing.T) {
 		"HOMEBREW_TAP_TOKEN",
 		"yersonargotev/homebrew-tap",
 		"scripts/generate-homebrew-formula.sh",
-		"--checksums dist/checksums.txt",
+		"--checksums dist/SHA256SUMS",
 		"--out release-metadata/packy.rb",
 		"--repo yersonargotev/packy",
 		"gh release upload",
@@ -197,6 +197,26 @@ fi
 			t.Fatalf("release verifier did not delegate %q to the canonical owner:\n%s", want, invocation)
 		}
 	}
+	unexpectedDir := filepath.Join(dist, "unexpected-directory")
+	if err := os.Mkdir(unexpectedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run(false); err == nil || !strings.Contains(string(output), "incomplete or unexpected") {
+		t.Fatalf("release verifier accepted unexpected directory: %v\n%s", err, output)
+	}
+	if err := os.Remove(unexpectedDir); err != nil {
+		t.Fatal(err)
+	}
+	unexpectedLink := filepath.Join(dist, "unexpected-link")
+	if err := os.Symlink(filepath.Join(dist, releaseAssets(tag)[0]), unexpectedLink); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := run(false); err == nil || !strings.Contains(string(output), "incomplete or unexpected") {
+		t.Fatalf("release verifier accepted unexpected symlink: %v\n%s", err, output)
+	}
+	if err := os.Remove(unexpectedLink); err != nil {
+		t.Fatal(err)
+	}
 	if output, err := run(true); err == nil {
 		t.Fatalf("release verifier ignored canonical evidence rejection:\n%s", output)
 	}
@@ -216,7 +236,7 @@ func TestReleaseWorkflowProvesTapAccessBeforePublishingReleaseAssets(t *testing.
 		"uses: actions/setup-go@",
 		"go-version-file: go.mod",
 	})
-	provedArtifactIndex := releaseWorkflowStepIndex(t, workflow, "Download proved release artifacts and checksums.txt", []string{
+	provedArtifactIndex := releaseWorkflowStepIndex(t, workflow, "Download proved release artifacts, SBOM, and SHA256SUMS", []string{
 		"uses: actions/download-artifact@", "path: dist",
 	})
 	requireTapTokenIndex := releaseWorkflowStepIndex(t, workflow, "Require Homebrew tap token", []string{

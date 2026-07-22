@@ -59,7 +59,7 @@ jobs:
       - name: Validate exact tag commit
         run: ./scripts/validate-packy.sh
 
-      - name: Build release artifacts and checksums.txt
+      - name: Build release artifacts, SBOM, and SHA256SUMS
         run: scripts/build-release-artifacts.sh --version "${{ steps.release.outputs.tag }}" --out-dir dist
 
       - name: Retain proved release candidate
@@ -173,7 +173,7 @@ jobs:
           mkdir -p release-metadata
           scripts/generate-homebrew-formula.sh \
             --version "${{ needs.build.outputs.tag }}" \
-            --checksums dist/checksums.txt \
+            --checksums dist/SHA256SUMS \
             --out release-metadata/packy.rb \
             --repo yersonargotev/packy \
             --homepage https://github.com/yersonargotev/packy \
@@ -232,7 +232,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Download proved release artifacts and checksums.txt
+      - name: Download proved release artifacts, SBOM, and SHA256SUMS
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: packy-release-${{ steps.release.outputs.tag }}

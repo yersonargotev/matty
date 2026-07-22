@@ -63,12 +63,18 @@ platforms=(darwin_amd64 darwin_arm64 linux_amd64 linux_arm64)
 } | sort > "$scratch/expected-entries"
 printf '%s\n' sbom.spdx.json >> "$scratch/expected-entries"
 sort -o "$scratch/expected-entries" "$scratch/expected-entries"
-find "$dist" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort > "$scratch/actual-entries"
+find "$dist" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort > "$scratch/actual-entries"
 if ! cmp -s "$scratch/expected-entries" "$scratch/actual-entries"; then
   echo "release candidate artifact set is incomplete or unexpected" >&2
   diff -u "$scratch/expected-entries" "$scratch/actual-entries" >&2 || true
   exit 1
 fi
+while IFS= read -r name; do
+  if [[ ! -f "$dist/$name" || -L "$dist/$name" ]]; then
+    echo "release candidate entry is not a regular non-symlink file: $name" >&2
+    exit 1
+  fi
+done < "$scratch/expected-entries"
 
 if ! awk 'NF != 2 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ { exit 1 }' "$dist/SHA256SUMS"; then
   echo "SHA256SUMS is malformed" >&2
