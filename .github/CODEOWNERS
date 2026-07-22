@@ -1,0 +1,16 @@
+# Packy's accepted sensitive-path policy names one current Owner. Rooted
+# patterns keep the delivery-control surface explicit and auditable.
+/.github/ @yersonargotev
+/.agents/ @yersonargotev
+/AGENTS.md @yersonargotev
+/workflows/ @yersonargotev
+/scripts/ @yersonargotev
+/go.mod @yersonargotev
+/go.sum @yersonargotev
+/bundle/sources.json @yersonargotev
+/internal/ci/ @yersonargotev
+/internal/release/ @yersonargotev
+/internal/claudesmoke/ @yersonargotev
+/internal/packsync/ @yersonargotev
+/internal/packsyncworkflow/ @yersonargotev
+/internal/tools/ @yersonargotev

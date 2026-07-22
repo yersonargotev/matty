@@ -1,0 +1,18 @@
+{
+  "event": {
+    "action": "recompute",
+    "repository": {"full_name": "yersonargotev/packy", "default_branch": "main"},
+    "pull_request": {"number": 202, "base": {"ref": "main", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+  },
+  "metadata": {
+    "closingIssuesReferences": [
+      {"number": 169, "repository": {"name": "packy", "owner": {"login": "yersonargotev"}}},
+      {"number": 170, "repository": {"name": "packy", "owner": {"login": "yersonargotev"}}}
+    ],
+    "issues": [
+      {"number": 169, "state": "OPEN", "labels": [{"name": "status:approved"}]},
+      {"number": 170, "state": "OPEN", "labels": [{"name": "status:approved"}]}
+    ]
+  },
+  "want_error": ""
+}

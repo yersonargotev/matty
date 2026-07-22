@@ -1,0 +1,155 @@
+name: Governance
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - ready_for_review
+  issues:
+    types:
+      - closed
+      - labeled
+      - reopened
+      - unlabeled
+
+permissions: {}
+
+jobs:
+  recompute-authorization:
+    name: Recompute authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out the trusted base definition
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate and publish current-head authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          context='Governance / Validate authorization'
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repository="${GITHUB_REPOSITORY#*/}"
+          default_branch="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+
+          publish() {
+            local sha="$1" state="$2" description="$3"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+              -f state="$state" \
+              -f context="$context" \
+              -f description="$description" \
+              -f target_url="$RUN_URL" >/dev/null
+          }
+
+          if [[ "$EVENT_NAME" == pull_request_target ]]; then
+            targets="$EVENT_PR_NUMBER"
+          else
+            # GraphQL variables are expanded by GitHub, not Bash.
+            # shellcheck disable=SC2016
+            targets="$(gh api graphql \
+              -f query='query($owner:String!,$repository:String!,$number:Int!){repository(owner:$owner,name:$repository){issue(number:$number){closedByPullRequestsReferences(first:100){nodes{number state}}}}}' \
+              -f owner="$owner" \
+              -f repository="$repository" \
+              -F number="$EVENT_ISSUE_NUMBER" \
+              --jq '.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN") | .number')"
+          fi
+
+          denied=0
+          for pr_number in $targets; do
+            directory="$RUNNER_TEMP/authorization-$pr_number"
+            mkdir -p "$directory/issues"
+            pr="$directory/pr.json"
+            references="$directory/references.json"
+            authorization="$directory/authorization.json"
+
+            gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --json baseRefName,baseRefOid,headRefOid,number >"$pr"
+            head_sha="$(jq -r '.headRefOid' "$pr")"
+            publish "$head_sha" pending 'Validating approved issue metadata'
+
+            result=0
+            gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --json closingIssuesReferences >"$references" || result=$?
+
+            if ((result == 0)); then
+              while IFS=$'\t' read -r closing_repo issue_number; do
+                if [[ "$closing_repo" != "$GITHUB_REPOSITORY" ]]; then
+                  result=1
+                  break
+                fi
+                gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                  --json labels,number,state,url >"$directory/issues/$issue_number.json" || {
+                    result=$?
+                    break
+                  }
+              done < <(jq -r '.closingIssuesReferences[] | [(.repository.owner.login + "/" + .repository.name), (.number | tostring)] | @tsv' "$references")
+            fi
+
+            if ((result == 0)); then
+              shopt -s nullglob
+              issue_files=("$directory"/issues/*.json)
+              if ((${#issue_files[@]} == 0)); then
+                result=1
+              else
+                jq -s '.' "${issue_files[@]}" >"$directory/issues.json" || result=$?
+              fi
+            fi
+
+            if ((result == 0)); then
+              jq -n \
+                --arg repository "$GITHUB_REPOSITORY" \
+                --arg default_branch "$default_branch" \
+                --slurpfile pr "$pr" \
+                --slurpfile references "$references" \
+                --slurpfile issues "$directory/issues.json" \
+                '{
+                  event: {
+                    action: "recompute",
+                    repository: {full_name: $repository, default_branch: $default_branch},
+                    pull_request: {
+                      number: $pr[0].number,
+                      base: {ref: $pr[0].baseRefName, sha: $pr[0].baseRefOid}
+                    }
+                  },
+                  metadata: {
+                    closingIssuesReferences: $references[0].closingIssuesReferences,
+                    issues: $issues[0]
+                  }
+                }' >"$authorization" || result=$?
+            fi
+
+            if ((result == 0)); then
+              go run ./internal/tools/governanceauth --authorization "$authorization" || result=$?
+            fi
+
+            if ((result == 0)); then
+              publish "$head_sha" success 'Closing issue authorization is current'
+            else
+              publish "$head_sha" failure 'Authorization is absent, ambiguous, stale, or inaccessible'
+              denied=1
+            fi
+          done
+
+          exit "$denied"
