@@ -312,12 +312,6 @@ func diagnoseSetupHealth(ctx context.Context, opts Options, resolver *workstatio
 		ctx, claudecode.NewCanonicalLayout(snapshot.Home()), claudeExecutable, opts.ClaudeRunner,
 		lifecycleObservation.State().ClaudeOwnershipSnapshot(),
 	)
-	if opts.ClaudeAuthorization != nil {
-		claudeObservation.Authorization = opts.ClaudeAuthorization.ObserveAuthorization(ctx)
-	}
-	if opts.ClaudeRuntimeEvidence != nil {
-		claudeObservation.RuntimeEvidence = opts.ClaudeRuntimeEvidence.ObserveRuntimeEvidence(ctx)
-	}
 
 	return setuphealth.Diagnose(
 		snapshot.Home(),

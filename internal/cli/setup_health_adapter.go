@@ -31,7 +31,9 @@ func renderSetupHealthHuman(w io.Writer, report setuphealth.Report) error {
 			return err
 		}
 	}
-	return nil
+	summary := report.Summary
+	_, err := fmt.Fprintf(w, "SUMMARY status=%s passes=%d warnings=%d failures=%d\n", summary.Status, summary.Passes, summary.Warnings, summary.Failures)
+	return err
 }
 
 type setupHealthJSONCheck struct {

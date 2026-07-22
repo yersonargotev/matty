@@ -53,7 +53,8 @@ func TestDoctorCommandPreservesHumanAndJSONWarningContractsReadOnly(t *testing.T
 		"PASS claude-instructions: 0 recorded Claude instruction projections match\n" +
 		"PASS claude-hooks: 0 recorded Claude hook projections match\n" +
 		"PASS claude-mcp: 0 recorded Claude user MCP projections match\n" +
-		"WARN claude-readiness: Claude runtime usability is unknown; start Claude Code explicitly to verify loading, connection, and hook firing\n"
+		"WARN claude-readiness: Claude runtime usability is unknown; start Claude Code explicitly to verify loading, connection, and hook firing\n" +
+		"SUMMARY status=warnings passes=9 warnings=6 failures=0\n"
 	if human != wantHuman {
 		t.Fatalf("human doctor contract changed:\ngot:\n%s\nwant:\n%s", human, wantHuman)
 	}

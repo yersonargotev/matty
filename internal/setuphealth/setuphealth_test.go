@@ -146,12 +146,16 @@ func TestClaudeChecksOwnPublicObservationBoundaries(t *testing.T) {
 		change              func(*claudecode.SetupObservation)
 	}{
 		{name: "missing skill", check: "claude-skills", detail: "missing", change: func(o *claudecode.SetupObservation) { o.Skills = nil }},
+		{name: "skill path collision", check: "claude-skills", detail: "collision", change: func(o *claudecode.SetupObservation) { o.Skills[0].Kind = claudecode.PathFile }},
 		{name: "drifted skill", check: "claude-skills", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Skills[0].TreeFingerprint = "changed" }},
 		{name: "drifted instruction", check: "claude-instructions", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Instructions.Contributions["classic"] = "changed" }},
 		{name: "invalid instruction document", check: "claude-instructions", detail: "invalid", change: func(o *claudecode.SetupObservation) { o.Instructions.Err = errors.New("invalid markers") }},
 		{name: "disabled hook", check: "claude-hooks", detail: "disables", change: func(o *claudecode.SetupObservation) { o.Hooks.Disabled = true }},
 		{name: "shadowed hook", check: "claude-hooks", detail: "shadows", change: func(o *claudecode.SetupObservation) { o.Hooks.Shadowed = true }},
 		{name: "drifted hook", check: "claude-hooks", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.Hooks.MatchingEntries[0] = "changed" }},
+		{name: "duplicate hook", check: "claude-hooks", detail: "duplicated", change: func(o *claudecode.SetupObservation) {
+			o.Hooks.MatchingEntries = append(o.Hooks.MatchingEntries, "hook-fp")
+		}},
 		{name: "missing mcp", check: "claude-mcp", detail: "missing", change: func(o *claudecode.SetupObservation) { o.MCP = nil }},
 		{name: "unreadable mcp", check: "claude-mcp", detail: "unreadable", change: func(o *claudecode.SetupObservation) { o.MCP[0].Err = errors.New("invalid JSON") }},
 		{name: "drifted mcp", check: "claude-mcp", detail: "drifted", change: func(o *claudecode.SetupObservation) { o.MCP[0].DefinitionFingerprint = "changed" }},
