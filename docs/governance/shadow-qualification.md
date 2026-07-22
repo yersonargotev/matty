@@ -33,10 +33,14 @@ rm -rf "$sandbox"
 ```
 
 The four ordinary Actions check runs expose job names; the collector qualifies
-them with the verified workflow name/path. Governance is a legacy commit status:
+them only after fetching and verifying the exact `CI` or `Security` workflow
+display name and path. Governance is a legacy commit status:
 the collector follows its Actions target URL, verifies the current-head
-Governance run and definition, and requires a job in that run from the expected
-GitHub Actions App.
+`Governance` run and trusted-base definition, verifies the latest status record's
+concrete `github-actions[bot]` publisher identity, and corroborates it with a job
+in that run from the expected GitHub Actions App. Older pending, failed, or
+successful status-history entries do not invalidate a later successful rerun;
+the latest record is selected by its numeric status ID.
 
 ## Complete scenario matrix
 

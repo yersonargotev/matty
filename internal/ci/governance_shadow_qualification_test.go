@@ -72,7 +72,9 @@ func TestGovernanceShadowQualificationFailsClosed(t *testing.T) {
 	t.Run("wrong ordinary source fails", func(t *testing.T) { run(t, qualificationHead, "wrong-check-source", false) })
 	t.Run("wrong Governance source fails", func(t *testing.T) { run(t, qualificationHead, "wrong-governance-source", false) })
 	t.Run("missing Governance status fails", func(t *testing.T) { run(t, qualificationHead, "missing-governance", false) })
-	t.Run("duplicate Governance status fails", func(t *testing.T) { run(t, qualificationHead, "duplicate-governance", false) })
+	t.Run("historical Governance reruns use latest", func(t *testing.T) { run(t, qualificationHead, "historical-governance", true) })
+	t.Run("forged Governance publisher fails", func(t *testing.T) { run(t, qualificationHead, "forged-status-creator", false) })
+	t.Run("renamed workflow fails", func(t *testing.T) { run(t, qualificationHead, "renamed-workflow", false) })
 	t.Run("missing current check fails", func(t *testing.T) { run(t, qualificationHead, "missing-check", false) })
 	t.Run("duplicate current check fails", func(t *testing.T) { run(t, qualificationHead, "duplicate-check", false) })
 	t.Run("closed PR fails", func(t *testing.T) { run(t, qualificationHead, "closed-pr", false) })
@@ -83,8 +85,8 @@ func TestGovernanceShadowQualificationFailsClosed(t *testing.T) {
 	if strings.Contains(log, "--method") || strings.Contains(log, " -X ") {
 		t.Fatalf("collector made a method-bearing request:\n%s", log)
 	}
-	if !strings.Contains(log, "/commits/"+qualificationHead+"/status --jq") || strings.Contains(log, "/statuses") {
-		t.Fatalf("collector did not use the combined latest-status endpoint:\n%s", log)
+	if !strings.Contains(log, "/commits/"+qualificationHead+"/statuses?per_page=100 --jq") {
+		t.Fatalf("collector did not read projected status history:\n%s", log)
 	}
 	if !strings.Contains(log, "/contents/.github/workflows/governance.yml?ref="+qualificationBase) {
 		t.Fatalf("collector did not bind Governance definition to the trusted base:\n%s", log)
@@ -115,18 +117,22 @@ case "$endpoint" in
 [{"name":"Validate Packy-owned code","status":"completed","conclusion":"success","details_url":"https://github.com/x/actions/runs/101/job/1","app":{"id":15368,"slug":"$slug"}},{"name":"Claude 2.1.203 package smoke","status":"completed","conclusion":"success","details_url":"https://github.com/x/actions/runs/102/job/2","app":{"id":15368,"slug":"github-actions"}},{"name":"CodeQL","status":"completed","conclusion":"success","details_url":"https://github.com/x/actions/runs/104/job/4","app":{"id":15368,"slug":"github-actions"}},{"name":"Dependency review","status":"completed","conclusion":"success","details_url":"https://github.com/x/actions/runs/105/job/5","app":{"id":15368,"slug":"github-actions"}}]
 JSON
     ;;
-  *commits/*/status)
+  *commits/*/statuses*)
     case "${FIXTURE_MODE:-valid}" in
       missing-governance) printf '[]\n' ;;
-      duplicate-governance) printf '[{"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103"},{"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103"}]\n' ;;
-      *) printf '[{"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103"}]\n' ;;
+      historical-governance) printf '[{"id":7,"context":"Governance / Validate authorization","state":"failure","target_url":"https://github.com/x/actions/runs/99","creator":{"login":"github-actions[bot]","id":41898282,"type":"Bot","html_url":"https://github.com/apps/github-actions"}},{"id":9,"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103","creator":{"login":"github-actions[bot]","id":41898282,"type":"Bot","html_url":"https://github.com/apps/github-actions"}}]\n' ;;
+      forged-status-creator) printf '[{"id":9,"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103","creator":{"login":"attacker[bot]","id":1,"type":"Bot","html_url":"https://github.com/apps/attacker"}}]\n' ;;
+      *) printf '[{"id":9,"context":"Governance / Validate authorization","state":"success","target_url":"https://github.com/x/actions/runs/103","creator":{"login":"github-actions[bot]","id":41898282,"type":"Bot","html_url":"https://github.com/apps/github-actions","avatar_url":"https://avatars.githubusercontent.com/in/15368?v=4"}}]\n' ;;
     esac ;;
-  */actions/runs/101|*/actions/runs/102) printf '{"id":%s,"path":".github/workflows/ci.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"success"}\n' "${endpoint##*/}" ;;
+  */actions/runs/101|*/actions/runs/102)
+    name=CI
+    [[ "${FIXTURE_MODE:-valid}" == renamed-workflow ]] && name='Renamed CI'
+    printf '{"id":%s,"name":"%s","path":".github/workflows/ci.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"success"}\n' "${endpoint##*/}" "$name" ;;
   */actions/runs/103)
     conclusion=success
     [[ "${FIXTURE_MODE:-valid}" == failed-run ]] && conclusion=failure
-    printf '{"id":103,"path":".github/workflows/governance.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"%s","check_suite_id":999}\n' "$conclusion" ;;
-  */actions/runs/104|*/actions/runs/105) printf '{"id":%s,"path":".github/workflows/security-pr.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"success"}\n' "${endpoint##*/}" ;;
+    printf '{"id":103,"name":"Governance","path":".github/workflows/governance.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"%s","check_suite_id":999}\n' "$conclusion" ;;
+  */actions/runs/104|*/actions/runs/105) printf '{"id":%s,"name":"Security","path":".github/workflows/security-pr.yml","head_sha":"` + qualificationHead + `","status":"completed","conclusion":"success"}\n' "${endpoint##*/}" ;;
   */check-suites/999/check-runs*)
     slug=github-actions
     [[ "${FIXTURE_MODE:-valid}" == wrong-governance-source ]] && slug=untrusted
