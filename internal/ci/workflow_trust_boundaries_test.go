@@ -454,16 +454,19 @@ var trustedExecutionMarkers = map[string][]string{
 		"github.repository == 'yersonargotev/packy'",
 		"refs/heads/main",
 		"inputs.dry_run == false",
+		"environment: release",
 	},
 	".github/workflows/release.yml|publish-github": {
 		"github.repository == 'yersonargotev/packy'",
 		"refs/heads/main",
 		"inputs.dry_run == false",
+		"environment: release",
 	},
 	".github/workflows/release.yml|homebrew": {
 		"github.repository == 'yersonargotev/packy'",
 		"refs/heads/main",
 		"inputs.dry_run == false",
+		"environment: homebrew",
 	},
 	".github/workflows/security.yml|codeql": {
 		"github.repository == 'yersonargotev/packy'",

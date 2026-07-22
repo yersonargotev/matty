@@ -455,6 +455,7 @@ jobs:
     needs: [build, inspect-release]
     if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
       id-token: write
@@ -576,6 +577,7 @@ jobs:
     needs: [build, validate-release-evidence, inspect-release, attest]
     if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     outputs:
@@ -730,6 +732,7 @@ jobs:
     needs: [build, validate-release-evidence, publish-github]
     if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && inputs.dry_run == false && needs.publish-github.outputs.published == 'true'
     runs-on: ubuntu-latest
+    environment: homebrew
     permissions:
       contents: read
     steps:

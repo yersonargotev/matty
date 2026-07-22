@@ -204,11 +204,19 @@ Build, evidence validation, attestation, GitHub publication, and Homebrew are
 separate jobs with separate authority:
 
 - build, validation, inspection, and dry-run use read-only repository access;
+- attestation and GitHub publication wait on Owner approval in the protected
+  `release` environment;
+- Homebrew publication waits separately on Owner approval in the protected
+  `homebrew` environment;
 - only the attestation job receives `id-token: write` and
   `attestations: write`;
 - only GitHub draft/publication receives `contents: write`; and
 - only the Homebrew job receives `HOMEBREW_TAP_TOKEN`, after exact published
   GitHub bytes have been read back and verified.
+
+The read-only build, validation, inspection, and dry-run jobs do not reference
+either publication environment. Environment approval therefore gates only the
+destination authority that the approved job is about to exercise.
 
 The OIDC bundle is verified against the exact repository, fully-qualified signer
 workflow, protected-main source ref, source commit, signer commit, and every

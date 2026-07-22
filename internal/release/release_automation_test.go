@@ -143,6 +143,17 @@ func TestReleaseWorkflowKeepsDryRunAndDestinationAuthoritySeparate(t *testing.T)
 	attest := releaseWorkflowJob(t, text, "attest")
 	github := releaseWorkflowJob(t, text, "publish-github")
 	homebrew := releaseWorkflowJob(t, text, "homebrew")
+	for _, job := range []string{"build", "claude-smoke", "validate-release-evidence", "dry-run", "inspect-release"} {
+		if strings.Contains(releaseWorkflowJob(t, text, job), "environment:") {
+			t.Fatalf("read-only release job %s must not wait on a protected publication environment", job)
+		}
+	}
+	if !strings.Contains(attest, "environment: release") || !strings.Contains(github, "environment: release") {
+		t.Fatal("attestation and GitHub publication must use the protected release environment")
+	}
+	if !strings.Contains(homebrew, "environment: homebrew") {
+		t.Fatal("Homebrew publication must use the protected homebrew environment")
+	}
 
 	for _, want := range []string{
 		"if: inputs.dry_run == true",
