@@ -87,6 +87,34 @@ This sign-off completes #173. It makes #174 eligible for its own authorization;
 it does not authorize #174 implicitly. Credential values, fragments, hashes,
 recovery material, and provider-side identifiers remain prohibited evidence.
 
+### Post-baseline #174 protected-main enforcement
+
+On `2026-07-23`, the human Owner applied classic branch protection to `main`
+and changed the repository merge settings. Sanitized REST and GraphQL queries
+then agreed on the effective state:
+
+- [x] Every `main` update must use a pull request, including updates performed
+  by Admins; the branch must be current with its base and all conversations
+  must be resolved.
+- [x] `Validate Packy-owned code`, `Claude 2.1.203 package smoke`,
+  `Governance / Validate authorization`, `CodeQL`, and `Dependency review` are
+  required from GitHub Actions App ID `15368` on the current head.
+- [x] Force pushes and branch deletion are disabled, and there is no push
+  restriction or standing bypass actor.
+- [x] Native CODEOWNER approval remains disabled and the provisional sole-Admin
+  rule requires zero native approvals while dismissing stale review evidence.
+- [x] Merge commits are the only enabled merge method; squash, rebase, and
+  auto-merge are disabled, and merged work branches are deleted automatically.
+- [x] No repository ruleset was added; the classic `main` protection rule is
+  the enforcement object and retains its object-level rollback boundary.
+
+The protected pull request delivering this addendum is the positive integration
+fixture for #174. Its exact-head checks, conversation-resolution gate, merge
+commit, and post-merge branch cleanup are durable GitHub evidence. The qualified
+fail-closed matrices from #172 remain the non-destructive evidence for stale,
+missing, failed, wrong-source, and unauthorized check scenarios; destructive
+force-push or deletion probes against `main` are not performed.
+
 ## Verified baseline
 
 | Surface | Current state | Independent evidence | Consequence |
