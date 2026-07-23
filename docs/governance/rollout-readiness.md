@@ -87,6 +87,42 @@ This sign-off completes #173. It makes #174 eligible for its own authorization;
 it does not authorize #174 implicitly. Credential values, fragments, hashes,
 recovery material, and provider-side identifiers remain prohibited evidence.
 
+### Post-baseline #174 protected-main enforcement
+
+On `2026-07-23`, the human Owner applied classic branch protection to `main`
+and changed the repository merge settings. Sanitized REST and GraphQL queries
+then agreed on the effective state:
+
+- [x] Every `main` update must use a pull request, including updates performed
+  by Admins; the branch must be current with its base and all conversations
+  must be resolved.
+- [x] `Validate Packy-owned code`, `Claude 2.1.203 package smoke`,
+  `Governance / Validate authorization`, `CodeQL`, and `Dependency review` are
+  required from GitHub Actions App ID `15368` on the current head.
+- [x] Force pushes and branch deletion are disabled, and there is no push
+  restriction or standing bypass actor.
+- [x] Native CODEOWNER approval remains disabled and the provisional sole-Admin
+  rule requires zero native approvals while dismissing stale review evidence.
+  GitHub cannot express an author-role-dependent approval count in one classic
+  rule, so no Maintain actor may be added while this provisional count remains
+  zero. Before granting Maintain, the Owner must require one Admin approval or
+  introduce an equivalently qualified gate and repeat enforcement verification.
+- [x] Merge commits are the only enabled merge method; squash, rebase, and
+  auto-merge are disabled, and merged work branches are deleted automatically.
+- [x] No repository ruleset was added; the classic `main` protection rule is
+  the enforcement object and retains its object-level rollback boundary.
+
+The protected pull request delivering this addendum is designated as the
+positive integration fixture for #174. This addendum does not claim its pending
+exact-head checks, conversation-resolution gate, merge commit, or post-merge
+branch cleanup; #174 retains those results after they are observed. The
+qualified fail-closed matrices from #172 remain the non-destructive evidence for
+stale, missing, failed, wrong-source, and unauthorized check scenarios. A real
+disposable direct-update denial and unresolved-conversation denial are exercised
+through the fixture PR. Matching REST and GraphQL protection flags are the
+approved non-destructive substitutes for force-push and deletion denial; no
+destructive probe targets `main`.
+
 ## Verified baseline
 
 | Surface | Current state | Independent evidence | Consequence |
