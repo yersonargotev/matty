@@ -99,6 +99,29 @@ func TestGateReturnsDecisionAndErrorForAffectedDrift(t *testing.T) {
 	}
 }
 
+func TestClassifyCommentsUsesExactDomainPolicy(t *testing.T) {
+	root := t.TempDir()
+	digest := "sha256:" + strings.Repeat("a", 64)
+	comments := writeFixture(t, root, "comments.json", `[
+  {
+    "author_association": "OWNER",
+    "body": "<!-- packy-governance-classification\n`+
+		`evidence: `+digest+`\nclassification: reviewed\n-->"
+  }
+]`)
+	var output bytes.Buffer
+	if err := run([]string{
+		"--mode", "classify-comments",
+		"--comments", comments,
+		"--evidence-digest", digest,
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"classified": true`) {
+		t.Fatalf("classification output = %s", output.String())
+	}
+}
+
 func writeFixture(t *testing.T, root, name, content string) string {
 	t.Helper()
 	path := filepath.Join(root, name)

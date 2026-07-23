@@ -117,7 +117,7 @@ type Finding struct {
 	State      EvaluationState `json:"state"`
 	Boundaries []Boundary      `json:"boundaries"`
 	Expected   SanitizedValue  `json:"expected"`
-	Observed   *SanitizedValue `json:"observed,omitempty"`
+	Observed   SanitizedValue  `json:"observed"`
 	Detail     string          `json:"detail,omitempty"`
 }
 
@@ -160,15 +160,17 @@ func Evaluate(contract Contract, observation Observation) (Evaluation, error) {
 			finding.State = StateCollectionFailure
 			if ok {
 				finding.Detail = item.Detail
+				finding.Observed = observedState(item.State, item.Detail)
 			} else {
 				finding.Detail = "control was not collected"
+				finding.Observed = observedState("missing-control", finding.Detail)
 			}
 		case item.State == ObservationUnclassifiable:
 			finding.State, finding.Detail = StateUnclassifiableDrift, item.Detail
+			finding.Observed = observedState(item.State, item.Detail)
 		case item.Actual != control.Expected:
 			finding.State, finding.Detail = StateConfirmedDrift, item.Detail
-			observed := item.Actual
-			finding.Observed = &observed
+			finding.Observed = item.Actual
 		default:
 			continue
 		}
@@ -184,6 +186,15 @@ func Evaluate(contract Contract, observation Observation) (Evaluation, error) {
 		return result.Findings[i].ControlID < result.Findings[j].ControlID
 	})
 	return result, nil
+}
+
+func observedState(state any, detail string) SanitizedValue {
+	raw, _ := json.Marshal(struct {
+		State  any    `json:"state"`
+		Detail string `json:"detail"`
+	}{State: state, Detail: detail})
+	value, _ := NewSanitizedValue(raw)
+	return value
 }
 
 func validateContract(contract Contract) error {
@@ -387,15 +398,8 @@ func validateEvaluation(evaluation Evaluation) error {
 		if _, err := NewSanitizedValue([]byte(finding.Expected)); err != nil {
 			return fmt.Errorf("finding %s expected value: %w", finding.ControlID, err)
 		}
-		if finding.State == StateConfirmedDrift {
-			if finding.Observed == nil {
-				return fmt.Errorf("finding %s confirmed drift has no observed value", finding.ControlID)
-			}
-			if _, err := NewSanitizedValue([]byte(*finding.Observed)); err != nil {
-				return fmt.Errorf("finding %s observed value: %w", finding.ControlID, err)
-			}
-		} else if finding.Observed != nil {
-			return fmt.Errorf("finding %s state %s cannot have an observed value", finding.ControlID, finding.State)
+		if _, err := NewSanitizedValue([]byte(finding.Observed)); err != nil {
+			return fmt.Errorf("finding %s observed value: %w", finding.ControlID, err)
 		}
 		seen := map[Boundary]bool{}
 		for _, boundary := range finding.Boundaries {
@@ -428,6 +432,47 @@ type ExistingIssue struct {
 	EvidenceDigest               string `json:"evidence_digest"`
 	ExactEvidenceHumanClassified bool   `json:"exact_evidence_human_classified"`
 }
+
+// ClassificationComment is the sanitized, read-only projection of an issue
+// comment needed to classify exact governance-drift evidence.
+type ClassificationComment struct {
+	AuthorAssociation string `json:"author_association"`
+	Body              string `json:"body"`
+}
+
+// ExactEvidenceHumanClassified reports whether an OWNER supplied the exact
+// canonical classification marker for evidenceDigest. The digest must be a
+// lowercase sha256 digest with the "sha256:" prefix.
+func ExactEvidenceHumanClassified(evidenceDigest string, comments []ClassificationComment) (bool, error) {
+	if !validEvidenceDigest(evidenceDigest) {
+		return false, errors.New("evidence digest must be sha256 followed by 64 lowercase hexadecimal characters")
+	}
+	marker := "<!-- packy-governance-classification\n" +
+		"evidence: " + evidenceDigest + "\n" +
+		"classification: reviewed\n-->"
+	for _, comment := range comments {
+		if comment.AuthorAssociation == "OWNER" && comment.Body == marker {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func validEvidenceDigest(digest string) bool {
+	const prefix = "sha256:"
+	return strings.HasPrefix(digest, prefix) &&
+		len(digest) == len(prefix)+sha256.Size*2 &&
+		fullHex(digest[len(prefix):], sha256.Size*2)
+}
+
+func fullHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == strings.ToLower(value)
+}
+
 type IssueRequest struct {
 	CanonicalKey string
 	Evaluation   Evaluation

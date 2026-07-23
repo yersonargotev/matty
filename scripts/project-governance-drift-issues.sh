@@ -43,9 +43,13 @@ while IFS= read -r issue; do
   classified=false
   if [[ "$state" == OPEN && "$canonical_key" == packy-governance-drift-v1 && -n "$evidence_digest" ]]; then
     "$GH_BIN" api "repos/$repo/issues/$number/comments?per_page=100" --paginate \
-      --jq '[.[]|{body,author_association}]' >"$tmp/comments-$number.json"
-    marker="$(printf '<!-- packy-governance-classification\nevidence: %s\nclassification: reviewed\n-->' "$evidence_digest")"
-    classified="$(jq --arg marker "$marker" 'any(.[]; .author_association=="OWNER" and .body==$marker)' "$tmp/comments-$number.json")"
+      --slurp --jq 'add | [.[]|{body,author_association}]' >"$tmp/comments-$number.json"
+    go run ./internal/tools/governancedrift \
+      --mode classify-comments \
+      --comments "$tmp/comments-$number.json" \
+      --evidence-digest "$evidence_digest" \
+      --output "$tmp/classification-$number.json"
+    classified="$(jq -r .classified "$tmp/classification-$number.json")"
   fi
 
   jq -cn \

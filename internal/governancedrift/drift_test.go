@@ -83,12 +83,12 @@ func TestEvaluateFindingsCarrySanitizedExpectedAndObservedValues(t *testing.T) {
 	}
 	confirmed := got.Findings[0]
 	if confirmed.Expected != value(t, `{"actors":["owner"],"required":true}`) ||
-		confirmed.Observed == nil ||
-		*confirmed.Observed != value(t, `{"actors":[],"required":false}`) {
+		confirmed.Observed != value(t, `{"actors":[],"required":false}`) {
 		t.Fatalf("confirmed finding values=%+v", confirmed)
 	}
 	unclassifiable := got.Findings[1]
-	if unclassifiable.Expected != value(t, `{"reviewers":1}`) || unclassifiable.Observed != nil {
+	if unclassifiable.Expected != value(t, `{"reviewers":1}`) ||
+		unclassifiable.Observed != value(t, `{"detail":"API shape changed","state":"unclassifiable"}`) {
 		t.Fatalf("unclassifiable finding values=%+v", unclassifiable)
 	}
 
@@ -100,8 +100,18 @@ func TestEvaluateFindingsCarrySanitizedExpectedAndObservedValues(t *testing.T) {
 	}
 	if len(collection.Findings) != 1 ||
 		collection.Findings[0].Expected != value(t, `{"reviewers":1}`) ||
-		collection.Findings[0].Observed != nil {
+		collection.Findings[0].Observed != value(t, `{"detail":"control was not collected","state":"missing-control"}`) {
 		t.Fatalf("collection finding values=%+v", collection.Findings)
+	}
+
+	_, failed := fixture(t)
+	failed.Controls[1] = ObservedControl{ID: "release-environment", State: ObservationCollectionFailure, Detail: "permission denied"}
+	failure, err := Evaluate(c, failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failure.Findings[0].Observed != value(t, `{"detail":"permission denied","state":"collection-failure"}`) {
+		t.Fatalf("failure finding values=%+v", failure.Findings)
 	}
 }
 
@@ -144,16 +154,44 @@ func TestGateFailsClosedOnMalformedEvaluation(t *testing.T) {
 	base := GateRequest{Boundary: BoundaryPromotion, Repository: o.Identity.Repository, Ref: o.Identity.Ref, CommitSHA: shaA, WorkflowSHA: shaB, Now: now.Add(time.Minute), MaxAge: time.Hour}
 	tests := []Evaluation{
 		{Identity: o.Identity, State: "forged"},
-		{Identity: o.Identity, State: StateClean, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}, Expected: value(t, `true`)}}},
+		{Identity: o.Identity, State: StateClean, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}, Expected: value(t, `true`), Observed: value(t, `false`)}}},
 		{Identity: o.Identity, State: StateConfirmedDrift},
 		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}, Expected: value(t, `true`)}}},
-		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{"unknown"}, Expected: value(t, `true`)}}},
+		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{"unknown"}, Expected: value(t, `true`), Observed: value(t, `false`)}}},
 	}
 	for _, evaluation := range tests {
 		base.Evaluations = []Evaluation{evaluation}
 		if got := Gate(base); got.Allowed || !strings.Contains(strings.Join(got.Reasons, ","), "invalid") && !strings.Contains(strings.Join(got.Reasons, ","), "no findings") {
 			t.Fatalf("malformed evaluation allowed: %+v => %+v", evaluation, got)
 		}
+	}
+}
+
+func TestExactEvidenceHumanClassification(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	marker := "<!-- packy-governance-classification\n" +
+		"evidence: " + digest + "\n" +
+		"classification: reviewed\n-->"
+	tests := []struct {
+		name     string
+		digest   string
+		comments []ClassificationComment
+		want     bool
+		wantErr  bool
+	}{
+		{"owner exact marker", digest, []ClassificationComment{{AuthorAssociation: "OWNER", Body: marker}}, true, false},
+		{"non-owner", digest, []ClassificationComment{{AuthorAssociation: "MEMBER", Body: marker}}, false, false},
+		{"stale digest", digest, []ClassificationComment{{AuthorAssociation: "OWNER", Body: strings.Replace(marker, digest, "sha256:"+strings.Repeat("b", 64), 1)}}, false, false},
+		{"extra text", digest, []ClassificationComment{{AuthorAssociation: "OWNER", Body: marker + "\nreviewed"}}, false, false},
+		{"invalid digest", strings.Repeat("a", 64), nil, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ExactEvidenceHumanClassified(tt.digest, tt.comments)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("classified=%v err=%v", got, err)
+			}
+		})
 	}
 }
 

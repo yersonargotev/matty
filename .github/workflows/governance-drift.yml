@@ -140,7 +140,7 @@ jobs:
             jq -r '.findings[]? |
               "- `\(.control_id)`: \(.state); boundaries: \(.boundaries | join(", "))\n" +
               "  - Expected: `\(.expected | tojson)`\n" +
-              "  - Observed: `" + (if has("observed") then (.observed | tojson) else "unavailable" end) + "`\n" +
+              "  - Observed: `\(.observed | tojson)`\n" +
               "  - Detail: \(.detail // "none")"
             ' "$evaluation"
             echo

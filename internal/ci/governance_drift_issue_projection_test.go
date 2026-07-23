@@ -22,12 +22,20 @@ JSON
   exit 0
 fi
 if [[ "$1" == api ]]; then
-  cat <<'JSON' | jq -c "$5"
+  [[ "$3" == --paginate && "$4" == --slurp && "$5" == --jq ]] || exit 2
+  filter="$6"
+  {
+  cat <<'JSON'
 [
-  {"author_association":"CONTRIBUTOR","body":"<!-- packy-governance-classification\nevidence: `+digest+`\nclassification: reviewed\n-->"},
+  {"author_association":"CONTRIBUTOR","body":"<!-- packy-governance-classification\nevidence: `+digest+`\nclassification: reviewed\n-->"}
+]
+JSON
+  cat <<'JSON'
+[
   {"author_association":"OWNER","body":"<!-- packy-governance-classification\nevidence: `+digest+`\nclassification: reviewed\n-->"}
 ]
 JSON
+  } | jq -s -c "$filter"
   exit 0
 fi
 exit 1

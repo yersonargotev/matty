@@ -23,7 +23,7 @@ func main() {
 func run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("governancedrift", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	mode := flags.String("mode", "", "evaluate, gate, or issue-decision")
+	mode := flags.String("mode", "", "evaluate, gate, issue-decision, or classify-comments")
 	contractPath := flags.String("contract", "", "expected-state contract JSON")
 	observationPath := flags.String("observation", "", "sanitized observation JSON")
 	evaluationPath := flags.String("evaluation", "", "evaluation JSON")
@@ -38,6 +38,8 @@ func run(args []string, stdout io.Writer) error {
 	nowText := flags.String("now", "", "gate time in RFC3339")
 	maxAgeText := flags.String("max-age", "192h", "maximum evidence age")
 	canonicalKey := flags.String("canonical-key", "", "canonical drift issue key")
+	commentsPath := flags.String("comments", "", "sanitized issue comments JSON")
+	evidenceDigest := flags.String("evidence-digest", "", "sha256 digest for exact evidence classification")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -115,8 +117,20 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		result = decision
+	case "classify-comments":
+		var comments []governancedrift.ClassificationComment
+		if err := readStrict(*commentsPath, &comments); err != nil {
+			return fmt.Errorf("read comments: %w", err)
+		}
+		classified, err := governancedrift.ExactEvidenceHumanClassified(*evidenceDigest, comments)
+		if err != nil {
+			return err
+		}
+		result = struct {
+			Classified bool `json:"classified"`
+		}{Classified: classified}
 	default:
-		return errors.New("--mode must be evaluate, gate, or issue-decision")
+		return errors.New("--mode must be evaluate, gate, issue-decision, or classify-comments")
 	}
 	return writeJSON(*outputPath, stdout, result)
 }
