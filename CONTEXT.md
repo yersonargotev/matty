@@ -26,6 +26,9 @@ The user-owned Packy checkout initialized for package-installed operation. It is
 ### Capability pack
 A named, composable set of AI workflow capabilities that can remain available while being activated or deactivated as a unit. A capability pack may contribute skills, memory, tools, agents, rules, or other host-supported behavior; it is not a runtime configuration profile.
 
+### Selectable pack catalog
+The Packy-owned set of current capability-pack versions advertised by `packy pack list` and available for fresh activation or update. Bundled or historical pack artifacts are not selectable merely because their bytes exist in the distribution.
+
 ### Pack resource
 One host-independent intent contributed by a capability pack. A CLI-surface adapter may realize one pack resource as multiple host-specific artifacts; host-native schemas, paths, and package formats are projections rather than pack resources.
 
