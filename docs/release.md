@@ -47,8 +47,8 @@ Publication is manual-only. The workflow must be dispatched from protected
    ```
 2. Review `docs/release-notes/next.md` for this exact candidate. It must contain
    exactly one `{{TAG}}` placeholder.
-3. Confirm `HOMEBREW_TAP_TOKEN` has write access only to
-   `yersonargotev/homebrew-tap`.
+3. Confirm the protected `homebrew` environment's `HOMEBREW_TAP_TOKEN` has
+   write access only to `yersonargotev/homebrew-tap`.
 4. Create and push the exact tag through the repository's authorized process.
 5. In **Actions → Release → Run workflow**, select `main`, enter the tag, and
    leave **dry_run** enabled.
@@ -91,15 +91,17 @@ that recovery path may continue to the independently verified Homebrew stage.
 
 The release workflow cannot use this repository's `GITHUB_TOKEN` to push to the
 separate tap repository. Maintainers must create a token that can write to
-`yersonargotev/homebrew-tap` and store it as this repository secret:
-`HOMEBREW_TAP_TOKEN`.
+`yersonargotev/homebrew-tap` and store it as the `HOMEBREW_TAP_TOKEN`
+environment secret in the protected `homebrew` environment.
 
 The token should have the narrowest practical scope that allows checkout and
-push access to `yersonargotev/homebrew-tap`. Configure it under this repository's
-**Settings → Secrets and variables → Actions → Repository secrets**. The token is
-not exposed until the exact GitHub Release is published and independently read
-back. If it is missing, only the tap stage fails; rerunning the same version
-revalidates the immutable published release before retrying Homebrew.
+push access to `yersonargotev/homebrew-tap`. Configure it under this
+repository's **Settings → Environments → homebrew → Environment secrets**.
+Do not create a repository-level fallback secret. The token is not exposed
+until the exact GitHub Release is published, independently read back, and the
+Owner approves the `homebrew` deployment. If it is missing, only the tap stage
+fails; rerunning the same version revalidates the immutable published release
+before retrying Homebrew.
 
 ## Release artifact contract
 
@@ -268,7 +270,8 @@ packy doctor
 - [ ] The candidate passed `./scripts/validate-packy.sh` on protected `main`.
 - [ ] The exact `v0.x.y` tag, workflow checkout, and freshly fetched
       `origin/main` resolve to one commit.
-- [ ] `HOMEBREW_TAP_TOKEN` is configured only for the dedicated tap.
+- [ ] The protected `homebrew` environment's `HOMEBREW_TAP_TOKEN` is configured
+      only for the dedicated tap, with no repository-level fallback secret.
 - [ ] A default dry-run completed and reported the planned external mutations
       without requesting OIDC or changing tag, release, attestation, or tap state.
 - [ ] Exact Claude `2.1.203` and recorded-current-stable evidence is green for

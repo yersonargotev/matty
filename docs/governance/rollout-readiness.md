@@ -51,6 +51,42 @@ The remaining credential gap blocks #173 and any credential-consuming
 promotion. The absent/unproven checks block enforcement. Neither gap is treated
 as implied approval merely because repository prerequisite work may proceed.
 
+### Post-baseline #173 migration status
+
+This dated addendum preserves the issue-168 point-in-time baseline above while
+recording the later protected-environment rollout. It does not rewrite or
+invalidate the snapshot bound under `evidence/issue-168/`.
+
+Observed on `2026-07-23` through sanitized GitHub API, workflow, release, and
+tap queries:
+
+- [x] `release`, `homebrew`, and `github-pages` allow only `main`, require Owner
+  review, disable Admin bypass, and keep self-review available for the sole
+  Owner.
+- [x] Only `homebrew` contains the environment secret
+  `HOMEBREW_TAP_TOKEN`; `release` and `github-pages` contain no environment
+  secrets.
+- [x] Release run
+  [`29962496797`](https://github.com/yersonargotev/packy/actions/runs/29962496797)
+  published `v0.1.9` from commit
+  `1e67158641ad34e271e28297cb1af6d8645c16d3` after the separate `release` and
+  `homebrew` approvals.
+- [x] The Homebrew job updated `Formula/packy.rb` in tap commit
+  [`803e0fd8557685eca0c8b046beb1627892a5781c`](https://github.com/yersonargotev/homebrew-tap/commit/803e0fd8557685eca0c8b046beb1627892a5781c).
+- [x] With explicit Owner authorization, the predecessor GitHub CLI OAuth
+  authorization was revoked on `2026-07-23`; the previously captured
+  credential then returned HTTP `401` from GitHub's authenticated-user
+  endpoint. No credential material or identifier was recorded.
+- [x] Packy's repository-level `HOMEBREW_TAP_TOKEN` was deleted on
+  `2026-07-23`. A sanitized re-query showed no repository Actions secrets while
+  the protected `homebrew` environment retained `HOMEBREW_TAP_TOKEN`.
+- [x] On `2026-07-23`, the human Owner independently confirmed the sanitized
+  final state and explicitly authorized closing #173.
+
+This sign-off completes #173. It makes #174 eligible for its own authorization;
+it does not authorize #174 implicitly. Credential values, fragments, hashes,
+recovery material, and provider-side identifiers remain prohibited evidence.
+
 ## Verified baseline
 
 | Surface | Current state | Independent evidence | Consequence |
