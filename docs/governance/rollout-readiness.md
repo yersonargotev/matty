@@ -123,6 +123,27 @@ through the fixture PR. Matching REST and GraphQL protection flags are the
 approved non-destructive substitutes for force-push and deletion denial; no
 destructive probe targets `main`.
 
+### Post-baseline #175–#176 publication and drift controls
+
+Issue #175 subsequently enabled the active `Protect immutable version tags`
+ruleset and repository immutable releases. Release `v0.1.10` is the first
+seven-asset immutable publication under that policy. Historical releases remain
+unchanged point-in-time evidence rather than being rewritten.
+
+Issue #176 adds the versioned
+[`expected-state.v1.json`](expected-state.v1.json) contract, weekly/manual
+read-only observation, one canonical drift issue, and fresh affected-boundary
+gates for Release and pack-source synchronization. Human-only installed-App and
+residual Owner authority are represented by the time-bounded sanitized
+[`owner-attestation.json`](evidence/issue-176/owner-attestation.json). The
+recurring and immediate review procedure is
+[`reverification.md`](reverification.md).
+
+These addenda do not rewrite the issue-168 snapshot. Any confirmed,
+unclassifiable, collection-failed, missing, stale, or exact-evidence
+unclassified signal stops only its named boundary. Automation has no
+self-correction authority.
+
 ## Verified baseline
 
 | Surface | Current state | Independent evidence | Consequence |

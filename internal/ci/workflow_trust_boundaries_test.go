@@ -304,11 +304,11 @@ var minimumJobPermissions = map[string]map[string]map[string]string{
 		"validate-authorization": {"actions": "read", "contents": "read", "issues": "read", "pull-requests": "read", "statuses": "write"},
 	},
 	".github/workflows/governance-drift.yml": {
-		"observe": {"actions": "read", "contents": "read"},
+		"observe": {"actions": "read", "contents": "read", "deployments": "read"},
 		"report":  {"actions": "read", "contents": "read", "issues": "write"},
 	},
 	".github/workflows/release.yml": {
-		"governance-drift":          {"actions": "read", "contents": "read", "deployments": "read"},
+		"governance-drift":          {"actions": "read", "contents": "read", "deployments": "read", "issues": "read"},
 		"build":                     {"contents": "read"},
 		"claude-smoke":              {"contents": "read"},
 		"validate-release-evidence": {"contents": "read"},
@@ -326,7 +326,7 @@ var minimumJobPermissions = map[string]map[string]map[string]string{
 		"dependency-review": {"contents": "read"},
 	},
 	".github/workflows/sync-pack-source.yml": {
-		"governance-drift": {"actions": "read", "contents": "read", "deployments": "read"},
+		"governance-drift": {"actions": "read", "contents": "read", "deployments": "read", "issues": "read"},
 		"inspect":          {"contents": "read"},
 		"classify":         {"contents": "read", "models": "read"},
 		"validate":         {"contents": "read"},

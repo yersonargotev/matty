@@ -28,6 +28,7 @@ func run(args []string, stdout io.Writer) error {
 	observationPath := flags.String("observation", "", "sanitized observation JSON")
 	evaluationPath := flags.String("evaluation", "", "evaluation JSON")
 	existingPath := flags.String("existing-issues", "", "canonical issue projections JSON")
+	blockingIssuesPath := flags.String("blocking-issues", "", "open blocking issue projections JSON")
 	outputPath := flags.String("output", "", "output JSON path; stdout when omitted")
 	boundary := flags.String("boundary", "", "promotion or publication")
 	repository := flags.String("repository", "", "expected owner/repository")
@@ -62,8 +63,12 @@ func run(args []string, stdout io.Writer) error {
 		result = evaluation
 	case "gate":
 		var evaluation governancedrift.Evaluation
+		var blockingIssues []governancedrift.OpenBlockingIssue
 		if err := readStrict(*evaluationPath, &evaluation); err != nil {
 			return fmt.Errorf("read evaluation: %w", err)
+		}
+		if err := readStrict(*blockingIssuesPath, &blockingIssues); err != nil {
+			return fmt.Errorf("read blocking issues: %w", err)
 		}
 		now, err := time.Parse(time.RFC3339, *nowText)
 		if err != nil {
@@ -82,6 +87,7 @@ func run(args []string, stdout io.Writer) error {
 			Now:         now,
 			MaxAge:      maxAge,
 			Evaluations: []governancedrift.Evaluation{evaluation},
+			OpenIssues:  blockingIssues,
 		})
 		result = decision
 		if err := writeJSON(*outputPath, stdout, result); err != nil {

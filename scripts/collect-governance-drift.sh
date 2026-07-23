@@ -18,6 +18,7 @@ done
 }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 GH_BIN="${GH_BIN:-gh}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 controls="$tmp/controls.jsonl"
@@ -112,6 +113,27 @@ fi
 control immutable-releases "repos/$repo/immutable-releases" 'if type=="object" and (.enabled|type)=="boolean" and (.enforced_by_owner|type)=="boolean" then {valid:true,actual:{enabled,enforced_by_owner}} else {valid:false,actual:null} end'
 control workflow-identities "repos/$repo/actions/workflows?per_page=100" 'if type=="object" and (.workflows|type)=="array" then {valid:true,actual:[.workflows[]|{name,path,state}]|sort_by(.path,.name)} else {valid:false,actual:null} end'
 control latest-release "repos/$repo/releases/latest" 'if type=="object" and (.tag_name|type)=="string" and (.draft|type)=="boolean" and (.prerelease|type)=="boolean" then {valid:true,actual:{tag_name,draft,prerelease,immutable:(.immutable//false),published_at,author:(.author.login//null),asset_count:(.assets//[]|length)}} else {valid:false,actual:null} end'
+
+attestation="$root/docs/governance/evidence/issue-176/owner-attestation.json"
+if [[ ! -f "$attestation" ]] || ! jq -e '
+  .schema_version==1 and
+  (.reviewed_at|type)=="string" and
+  (.review_due|type)=="string" and
+  (.owner|type)=="string" and
+  (.installed_app_authority|type)=="object" and
+  (.residual_owner_authority|type)=="object"
+' "$attestation" >/dev/null 2>&1; then
+  unclassifiable installed-app-authority
+  unclassifiable residual-owner-authority
+elif [[ "$(jq -r .review_due "$attestation")" < "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+  jq -cn --arg id installed-app-authority '{id:$id,state:"unclassifiable",detail:"Owner attestation review is overdue"}' >>"$controls"
+  jq -cn --arg id residual-owner-authority '{id:$id,state:"unclassifiable",detail:"Owner attestation review is overdue"}' >>"$controls"
+else
+  jq -S '{owner,reviewed_at,review_due,authority:.installed_app_authority}' "$attestation" >"$tmp/installed-app-authority.json"
+  observed installed-app-authority "$tmp/installed-app-authority.json"
+  jq -S '{owner,reviewed_at,review_due,authority:.residual_owner_authority}' "$attestation" >"$tmp/residual-owner-authority.json"
+  observed residual-owner-authority "$tmp/residual-owner-authority.json"
+fi
 
 mkdir -p "$(dirname "$output")"
 jq -nS --arg repository "$repo" --arg ref "$ref" --arg commit "$commit" \

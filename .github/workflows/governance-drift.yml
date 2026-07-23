@@ -19,6 +19,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      deployments: read
     steps:
       - name: Check out protected main
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -91,6 +92,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/governance-drift"
@@ -98,15 +100,16 @@ jobs:
           canonical_key=packy-governance-drift-v1
           title='Packy governance drift detected'
 
-          gh issue list --repo "$GITHUB_REPOSITORY" --state all \
-            --search "\"$title\" in:title" --limit 100 \
-            --json number,state,body \
-            --jq '[.[] | {
-              number,
-              open:(.state=="OPEN"),
-              canonical_key:((.body | capture("key: (?<value>[^\\n]+)")?.value) // ""),
-              evidence_digest:((.body | capture("evidence: (?<value>sha256:[0-9a-f]{64})")?.value) // "")
-            }]' >"$evidence/existing-issues.json"
+          ./scripts/project-governance-drift-issues.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --output "$evidence/canonical-issues.json"
+          jq '[.[]|{
+            number,
+            canonical_key,
+            open,
+            evidence_digest,
+            exact_evidence_human_classified
+          }]' "$evidence/canonical-issues.json" >"$evidence/existing-issues.json"
 
           go run ./internal/tools/governancedrift \
             --mode issue-decision \
@@ -119,15 +122,36 @@ jobs:
           digest="$(jq -r .evidence_digest "$evidence/issue-decision.json")"
           primary="$(jq -r '.primary_number // 0' "$evidence/issue-decision.json")"
           state="$(jq -r .state "$evaluation")"
+          boundaries="$(jq -r '[.findings[].boundaries[]] | unique | join(",")' "$evaluation")"
           {
-            printf '<!-- packy-governance-drift\nkey: %s\nevidence: %s\n-->\n\n' "$canonical_key" "$digest"
+            printf '<!-- packy-governance-drift\nkey: %s\nevidence: %s\nboundaries: %s\nclassification: unclassified\nowner: yersonargotev\n-->\n\n' "$canonical_key" "$digest" "$boundaries"
             printf 'The current sanitized governance evaluation is **%s**.\n\n' "$state"
             printf 'Durable evidence: [%s](%s)\n\n' "$RUN_URL" "$RUN_URL"
+            echo '## Evidence identity'
+            jq -r --arg actor "$ACTOR" '
+              "- Actor: `\($actor)`",
+              "- UTC: `\(.identity.collected_at)`",
+              "- Repository/ref/commit: `\(.identity.repository)` / `\(.identity.ref)` / `\(.identity.commit_sha)`",
+              "- Workflow definition SHA: `\(.identity.workflow_sha)`",
+              "- Rerun result: `\(.state)`"
+            ' "$evaluation"
+            echo
             echo '## Affected controls'
-            jq -r '.findings[]? | "- `\(.control_id)`: \(.state); boundaries: \(.boundaries | join(\", \"))"' "$evaluation"
+            jq -r '.findings[]? |
+              "- `\(.control_id)`: \(.state); boundaries: \(.boundaries | join(", "))\n" +
+              "  - Expected: `\(.expected | tojson)`\n" +
+              "  - Observed: `" + (if has("observed") then (.observed | tojson) else "unavailable" end) + "`\n" +
+              "  - Detail: \(.detail // "none")"
+            ' "$evaluation"
+            echo
+            echo '## Collection and ownership'
+            echo '- Commands/APIs: `scripts/collect-governance-drift.sh`, projected GitHub REST GETs, and `internal/tools/governancedrift`.'
+            echo '- Classification: **unclassified**.'
+            echo '- Owner: `yersonargotev`.'
+            printf '%s\n' "- Blocking scope: \`${boundaries:-unknown}\`."
             echo
             echo 'Automation did not change repository settings, refs, environments, credentials, Apps, releases, packages, Pages, workflows, or protection rules.'
-            echo 'Human classification and a clean current rerun are required before affected promotion or publication resumes.'
+            echo 'The Owner must comment with the exact classification marker for this evidence digest; a later clean current rerun is also required before the affected boundary resumes.'
           } >"$evidence/issue-body.md"
 
           case "$action" in
@@ -140,6 +164,10 @@ jobs:
                 --body-file "$evidence/issue-body.md"
               gh issue comment "$primary" --repo "$GITHUB_REPOSITORY" \
                 --body "A current rerun produced **$state**. Evidence: $RUN_URL"
+              ;;
+            await-classification)
+              gh issue comment "$primary" --repo "$GITHUB_REPOSITORY" \
+                --body "A current rerun is clean, but the exact prior drift evidence still awaits Owner classification. Evidence: $RUN_URL"
               ;;
             resolve)
               ;;
@@ -156,7 +184,7 @@ jobs:
             [[ "$number" == 0 ]] && continue
             if [[ "$action" == resolve ]]; then
               gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
-                --comment "A current governance rerun is clean. Evidence: $RUN_URL"
+                --comment "A current governance rerun is clean after exact-evidence Owner classification. Evidence: $RUN_URL"
             else
               gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
                 --comment "Deduplicated into #$primary. Evidence: $RUN_URL"

@@ -30,6 +30,7 @@ func TestEvaluateAndGateCleanCurrentEvidence(t *testing.T) {
   "controls": [{"id":"main","state":"observed","actual":{"protected":true}}]
 }`)
 	evaluation := filepath.Join(root, "evaluation.json")
+	blockingIssues := writeFixture(t, root, "blocking-issues.json", `[]`)
 	if err := run([]string{
 		"--mode", "evaluate",
 		"--contract", contract,
@@ -42,6 +43,7 @@ func TestEvaluateAndGateCleanCurrentEvidence(t *testing.T) {
 	if err := run([]string{
 		"--mode", "gate",
 		"--evaluation", evaluation,
+		"--blocking-issues", blockingIssues,
 		"--boundary", "promotion",
 		"--repository", "yersonargotev/packy",
 		"--ref", "refs/heads/main",
@@ -74,13 +76,17 @@ func TestGateReturnsDecisionAndErrorForAffectedDrift(t *testing.T) {
   "findings": [{
     "control_id": "release",
     "state": "confirmed-drift",
-    "boundaries": ["publication"]
+    "boundaries": ["publication"],
+    "expected": {"immutable":true},
+    "observed": {"immutable":false}
   }]
 }`)
+	blockingIssues := writeFixture(t, root, "blocking-issues.json", `[]`)
 	var output bytes.Buffer
 	err := run([]string{
 		"--mode", "gate",
 		"--evaluation", evaluation,
+		"--blocking-issues", blockingIssues,
 		"--boundary", "publication",
 		"--repository", "yersonargotev/packy",
 		"--ref", "refs/heads/main",

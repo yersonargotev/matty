@@ -6,6 +6,11 @@ and direct GitHub Release installs distribute the binary only; first-run users
 must run `packy init` so the binary can clone the Packy Source of Truth into the
 default Installed Source at `~/.local/share/packy`.
 
+Release starts with the current read-only governance publication gate described
+in [`governance/reverification.md`](governance/reverification.md). Missing,
+stale, failed, unclassifiable, confirmed, or exact-evidence-unclassified drift
+stops before build or publication authority is used.
+
 ## User install path
 
 The [README quickstart](../README.md#quickstart) is the canonical user-facing

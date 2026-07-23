@@ -63,8 +63,8 @@ printf '%s\n' "$raw" | jq -c "$filter"
 	}
 	clean := run(t, false)
 	controls := clean["controls"].([]any)
-	if len(controls) != 10 {
-		t.Fatalf("controls=%d want 10", len(controls))
+	if len(controls) != 12 {
+		t.Fatalf("controls=%d want 12", len(controls))
 	}
 	for _, raw := range controls {
 		if raw.(map[string]any)["state"] != "observed" {

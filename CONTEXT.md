@@ -70,19 +70,16 @@ The subagent orchestration behaviour Packy exposes, including read-only explorat
 
 ### Governance expected-state contract
 The versioned, reviewable description of Packy's accepted repository and
-publication controls. It contains only sanitized values and names the promotion
-or publication boundaries affected when one control cannot be proved current.
+publication controls and the promotion or publication boundaries they protect.
 
 ### Governance observation
 One read-only, sanitized projection of the effective controls bound to a
 repository, protected ref, commit, workflow definition, and UTC collection
-time. Collection failure and unclassifiable state remain evidence rather than
-being treated as an empty or safe value.
+time.
 
 ### Governance drift
 A confirmed, unclassifiable, missing, failed, or stale disagreement between the
-governance expected-state contract and a governance observation. Drift blocks
-only its named affected boundary and is never repaired automatically.
+governance expected-state contract and a governance observation.
 
 ### Installer/configurator
 Packy's v0 product shape: a tool that installs and configures Codex/OpenCode with the right skills, Engram memory hooks, and delegation conventions, rather than an active runtime orchestrator present in every agent session.

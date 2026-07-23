@@ -321,6 +321,7 @@ func TestCodeownersMatchesAcceptedSensitivePathPolicy(t *testing.T) {
 		"/go.mod",
 		"/go.sum",
 		"/bundle/sources.json",
+		"/docs/governance/",
 		"/internal/ci/",
 		"/internal/release/",
 		"/internal/claudesmoke/",

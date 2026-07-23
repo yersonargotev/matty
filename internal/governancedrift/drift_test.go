@@ -69,6 +69,42 @@ func TestEvaluateStates(t *testing.T) {
 	}
 }
 
+func TestEvaluateFindingsCarrySanitizedExpectedAndObservedValues(t *testing.T) {
+	c, o := fixture(t)
+	o.Controls[0].Actual = value(t, `{"required":false,"actors":[]}`)
+	o.Controls[1] = ObservedControl{ID: "release-environment", State: ObservationUnclassifiable, Detail: "API shape changed"}
+
+	got, err := Evaluate(c, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != 2 {
+		t.Fatalf("findings=%+v", got.Findings)
+	}
+	confirmed := got.Findings[0]
+	if confirmed.Expected != value(t, `{"actors":["owner"],"required":true}`) ||
+		confirmed.Observed == nil ||
+		*confirmed.Observed != value(t, `{"actors":[],"required":false}`) {
+		t.Fatalf("confirmed finding values=%+v", confirmed)
+	}
+	unclassifiable := got.Findings[1]
+	if unclassifiable.Expected != value(t, `{"reviewers":1}`) || unclassifiable.Observed != nil {
+		t.Fatalf("unclassifiable finding values=%+v", unclassifiable)
+	}
+
+	_, missing := fixture(t)
+	missing.Controls = missing.Controls[:1]
+	collection, err := Evaluate(c, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collection.Findings) != 1 ||
+		collection.Findings[0].Expected != value(t, `{"reviewers":1}`) ||
+		collection.Findings[0].Observed != nil {
+		t.Fatalf("collection finding values=%+v", collection.Findings)
+	}
+}
+
 func TestGateAffectedAndUnaffectedPaths(t *testing.T) {
 	c, o := fixture(t)
 	o.Controls[0].Actual = value(t, `{"required":false}`)
@@ -108,9 +144,10 @@ func TestGateFailsClosedOnMalformedEvaluation(t *testing.T) {
 	base := GateRequest{Boundary: BoundaryPromotion, Repository: o.Identity.Repository, Ref: o.Identity.Ref, CommitSHA: shaA, WorkflowSHA: shaB, Now: now.Add(time.Minute), MaxAge: time.Hour}
 	tests := []Evaluation{
 		{Identity: o.Identity, State: "forged"},
-		{Identity: o.Identity, State: StateClean, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}}}},
+		{Identity: o.Identity, State: StateClean, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}, Expected: value(t, `true`)}}},
 		{Identity: o.Identity, State: StateConfirmedDrift},
-		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{"unknown"}}}},
+		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{BoundaryPromotion}, Expected: value(t, `true`)}}},
+		{Identity: o.Identity, State: StateConfirmedDrift, Findings: []Finding{{ControlID: "x", State: StateConfirmedDrift, Boundaries: []Boundary{"unknown"}, Expected: value(t, `true`)}}},
 	}
 	for _, evaluation := range tests {
 		base.Evaluations = []Evaluation{evaluation}
@@ -134,7 +171,10 @@ func TestIssueLifecycleDeduplicatesAndResolves(t *testing.T) {
 	if create.Action != IssueCreate {
 		t.Fatalf("create=%+v", create)
 	}
-	existing := []ExistingIssue{{Number: 9, CanonicalKey: "governance-drift", Open: true, EvidenceDigest: create.EvidenceDigest}, {Number: 4, CanonicalKey: "governance-drift", Open: true, EvidenceDigest: create.EvidenceDigest}}
+	existing := []ExistingIssue{
+		{Number: 9, CanonicalKey: "governance-drift", Open: true, EvidenceDigest: create.EvidenceDigest, ExactEvidenceHumanClassified: true},
+		{Number: 4, CanonicalKey: "governance-drift", Open: true, EvidenceDigest: create.EvidenceDigest, ExactEvidenceHumanClassified: true},
+	}
 	dedupe, err := DecideIssue(IssueRequest{CanonicalKey: "governance-drift", Evaluation: e, Existing: existing})
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +193,64 @@ func TestIssueLifecycleDeduplicatesAndResolves(t *testing.T) {
 	}
 	if resolve.Action != IssueResolve || len(resolve.CloseNumbers) != 2 {
 		t.Fatalf("resolve=%+v", resolve)
+	}
+}
+
+func TestCleanEvidenceAwaitsClassificationThenResolves(t *testing.T) {
+	c, o := fixture(t)
+	clean, err := Evaluate(c, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := []ExistingIssue{
+		{Number: 9, CanonicalKey: "governance-drift", Open: true},
+		{Number: 4, CanonicalKey: "governance-drift", Open: true, ExactEvidenceHumanClassified: true},
+	}
+	await, err := DecideIssue(IssueRequest{CanonicalKey: "governance-drift", Evaluation: clean, Existing: existing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if await.Action != IssueAwaitClassification || await.PrimaryNumber != 4 || len(await.CloseNumbers) != 0 {
+		t.Fatalf("await=%+v", await)
+	}
+
+	existing[0].ExactEvidenceHumanClassified = true
+	resolve, err := DecideIssue(IssueRequest{CanonicalKey: "governance-drift", Evaluation: clean, Existing: existing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolve.Action != IssueResolve || resolve.PrimaryNumber != 4 ||
+		len(resolve.CloseNumbers) != 2 || resolve.CloseNumbers[0] != 4 || resolve.CloseNumbers[1] != 9 {
+		t.Fatalf("resolve=%+v", resolve)
+	}
+}
+
+func TestGateCleanEvidenceBindsUnclassifiedIssuesToAffectedBoundaries(t *testing.T) {
+	c, o := fixture(t)
+	clean, err := Evaluate(c, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := GateRequest{
+		Repository: o.Identity.Repository, Ref: o.Identity.Ref,
+		CommitSHA: shaA, WorkflowSHA: shaB, Now: now.Add(time.Minute),
+		MaxAge: time.Hour, Evaluations: []Evaluation{clean},
+		OpenIssues: []OpenBlockingIssue{{
+			Number: 7, Boundaries: []Boundary{BoundaryPromotion},
+		}},
+	}
+	request.Boundary = BoundaryPromotion
+	if got := Gate(request); got.Allowed || !strings.Contains(strings.Join(got.Reasons, ","), "awaits human classification") {
+		t.Fatalf("unclassified affected issue did not block: %+v", got)
+	}
+	request.Boundary = BoundaryPublication
+	if got := Gate(request); !got.Allowed {
+		t.Fatalf("issue blocked unaffected boundary: %+v", got)
+	}
+	request.Boundary = BoundaryPromotion
+	request.OpenIssues[0].ExactEvidenceHumanClassified = true
+	if got := Gate(request); !got.Allowed {
+		t.Fatalf("classified issue blocked clean evidence: %+v", got)
 	}
 }
 

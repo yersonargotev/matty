@@ -52,6 +52,32 @@
       }
     },
     {
+      "id": "installed-app-authority",
+      "boundaries": ["promotion", "publication"],
+      "expected": {
+        "owner": "yersonargotev",
+        "reviewed_at": "2026-07-22T03:47:49Z",
+        "review_due": "2026-10-22T03:47:49Z",
+        "authority": {
+          "repository_selection": "all-current-and-future-personal-repositories",
+          "pending_expansions_approved": false,
+          "apps": [
+            {"name": "AWS Amplify (us-east-1)", "authority_class": "code-checks-pulls-hooks-write", "pending_expansion": true},
+            {"name": "AWS Amplify (us-west-2)", "authority_class": "code-checks-pulls-hooks-write", "pending_expansion": false},
+            {"name": "Claude", "authority_class": "code-issues-pulls-workflows-write", "pending_expansion": true},
+            {"name": "Cloudflare Workers and Pages", "authority_class": "administration-code-deployments-write", "pending_expansion": false},
+            {"name": "Google AI Studio", "authority_class": "administration-code-pulls-write", "pending_expansion": true},
+            {"name": "Google Cloud Build", "authority_class": "checks-statuses-write", "pending_expansion": false},
+            {"name": "Google Labs Jules", "authority_class": "actions-code-issues-pulls-workflows-write", "pending_expansion": true},
+            {"name": "Linear", "authority_class": "issues-pulls-write", "pending_expansion": false},
+            {"name": "Railway App", "authority_class": "administration-code-deployments-workflows-write", "pending_expansion": false},
+            {"name": "Render", "authority_class": "administration-code-deployments-issues-workflows-write", "pending_expansion": false},
+            {"name": "Vercel", "authority_class": "administration-code-deployments-issues-workflows-write", "pending_expansion": false}
+          ]
+        }
+      }
+    },
+    {
       "id": "latest-release",
       "boundaries": ["publication"],
       "expected": {
@@ -173,6 +199,21 @@
         "delete_branch_on_merge": true,
         "visibility": "public",
         "web_commit_signoff_required": false
+      }
+    },
+    {
+      "id": "residual-owner-authority",
+      "boundaries": ["publication"],
+      "expected": {
+        "owner": "yersonargotev",
+        "reviewed_at": "2026-07-22T03:47:49Z",
+        "review_due": "2026-10-22T03:47:49Z",
+        "authority": {
+          "editable_release_title_and_notes": true,
+          "whole_release_deletion": "owner-only-break-glass-burns-tag",
+          "automation_may_move_or_delete_published_tags": false,
+          "automation_may_reopen_or_replace_published_releases": false
+        }
       }
     },
     {

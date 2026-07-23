@@ -116,6 +116,8 @@ type Finding struct {
 	ControlID  string          `json:"control_id"`
 	State      EvaluationState `json:"state"`
 	Boundaries []Boundary      `json:"boundaries"`
+	Expected   SanitizedValue  `json:"expected"`
+	Observed   *SanitizedValue `json:"observed,omitempty"`
 	Detail     string          `json:"detail,omitempty"`
 }
 
@@ -148,7 +150,11 @@ func Evaluate(contract Contract, observation Observation) (Evaluation, error) {
 	result := Evaluation{Identity: observation.Identity, State: StateClean, Findings: []Finding{}}
 	for _, control := range contract.Controls {
 		item, ok := seen[control.ID]
-		finding := Finding{ControlID: control.ID, Boundaries: append([]Boundary(nil), control.Boundaries...)}
+		finding := Finding{
+			ControlID:  control.ID,
+			Boundaries: append([]Boundary(nil), control.Boundaries...),
+			Expected:   control.Expected,
+		}
 		switch {
 		case !ok || item.State == ObservationCollectionFailure:
 			finding.State = StateCollectionFailure
@@ -161,6 +167,8 @@ func Evaluate(contract Contract, observation Observation) (Evaluation, error) {
 			finding.State, finding.Detail = StateUnclassifiableDrift, item.Detail
 		case item.Actual != control.Expected:
 			finding.State, finding.Detail = StateConfirmedDrift, item.Detail
+			observed := item.Actual
+			finding.Observed = &observed
 		default:
 			continue
 		}
@@ -274,6 +282,16 @@ type GateRequest struct {
 	Now         time.Time
 	MaxAge      time.Duration
 	Evaluations []Evaluation
+	OpenIssues  []OpenBlockingIssue
+}
+
+// OpenBlockingIssue is the read-only projection needed by Gate. Its
+// classification flag applies to the exact drift evidence recorded by the
+// issue, rather than merely to the issue in general.
+type OpenBlockingIssue struct {
+	Number                       int        `json:"number"`
+	Boundaries                   []Boundary `json:"boundaries"`
+	ExactEvidenceHumanClassified bool       `json:"exact_evidence_human_classified"`
 }
 type GateDecision struct {
 	Allowed bool     `json:"allowed"`
@@ -308,6 +326,27 @@ func Gate(request GateRequest) GateDecision {
 	}
 	if !matched {
 		reasons = append(reasons, "matching evidence is missing")
+	}
+	for _, issue := range request.OpenIssues {
+		if issue.Number <= 0 || len(issue.Boundaries) == 0 {
+			reasons = append(reasons, "projected open issue is invalid")
+			continue
+		}
+		valid := true
+		seen := map[Boundary]bool{}
+		for _, boundary := range issue.Boundaries {
+			if !validBoundary(boundary) || seen[boundary] {
+				valid = false
+			}
+			seen[boundary] = true
+		}
+		if !valid {
+			reasons = append(reasons, "projected open issue is invalid")
+			continue
+		}
+		if !issue.ExactEvidenceHumanClassified && affects(issue.Boundaries, request.Boundary) {
+			reasons = append(reasons, fmt.Sprintf("open issue #%d awaits human classification", issue.Number))
+		}
 	}
 	sort.Strings(reasons)
 	return GateDecision{Allowed: len(reasons) == 0, Reasons: reasons}
@@ -345,6 +384,19 @@ func validateEvaluation(evaluation Evaluation) error {
 		if len(finding.Boundaries) == 0 {
 			return fmt.Errorf("finding %s has no affected boundary", finding.ControlID)
 		}
+		if _, err := NewSanitizedValue([]byte(finding.Expected)); err != nil {
+			return fmt.Errorf("finding %s expected value: %w", finding.ControlID, err)
+		}
+		if finding.State == StateConfirmedDrift {
+			if finding.Observed == nil {
+				return fmt.Errorf("finding %s confirmed drift has no observed value", finding.ControlID)
+			}
+			if _, err := NewSanitizedValue([]byte(*finding.Observed)); err != nil {
+				return fmt.Errorf("finding %s observed value: %w", finding.ControlID, err)
+			}
+		} else if finding.Observed != nil {
+			return fmt.Errorf("finding %s state %s cannot have an observed value", finding.ControlID, finding.State)
+		}
 		seen := map[Boundary]bool{}
 		for _, boundary := range finding.Boundaries {
 			if !validBoundary(boundary) || seen[boundary] {
@@ -370,10 +422,11 @@ func affects(boundaries []Boundary, target Boundary) bool {
 }
 
 type ExistingIssue struct {
-	Number         int    `json:"number"`
-	CanonicalKey   string `json:"canonical_key"`
-	Open           bool   `json:"open"`
-	EvidenceDigest string `json:"evidence_digest"`
+	Number                       int    `json:"number"`
+	CanonicalKey                 string `json:"canonical_key"`
+	Open                         bool   `json:"open"`
+	EvidenceDigest               string `json:"evidence_digest"`
+	ExactEvidenceHumanClassified bool   `json:"exact_evidence_human_classified"`
 }
 type IssueRequest struct {
 	CanonicalKey string
@@ -383,11 +436,12 @@ type IssueRequest struct {
 type IssueAction string
 
 const (
-	IssueNoop        IssueAction = "noop"
-	IssueCreate      IssueAction = "create"
-	IssueUpdate      IssueAction = "update"
-	IssueDeduplicate IssueAction = "deduplicate"
-	IssueResolve     IssueAction = "resolve"
+	IssueNoop                IssueAction = "noop"
+	IssueCreate              IssueAction = "create"
+	IssueUpdate              IssueAction = "update"
+	IssueDeduplicate         IssueAction = "deduplicate"
+	IssueResolve             IssueAction = "resolve"
+	IssueAwaitClassification IssueAction = "await-classification"
 )
 
 type IssueDecision struct {
@@ -415,6 +469,13 @@ func DecideIssue(request IssueRequest) (IssueDecision, error) {
 	decision := IssueDecision{Action: IssueNoop, CloseNumbers: []int{}, EvidenceDigest: digest}
 	if request.Evaluation.State == StateClean {
 		if len(open) > 0 {
+			decision.PrimaryNumber = open[0].Number
+			for _, i := range open {
+				if !i.ExactEvidenceHumanClassified {
+					decision.Action = IssueAwaitClassification
+					return decision, nil
+				}
+			}
 			decision.Action = IssueResolve
 			for _, i := range open {
 				decision.CloseNumbers = append(decision.CloseNumbers, i.Number)
@@ -438,6 +499,9 @@ func DecideIssue(request IssueRequest) (IssueDecision, error) {
 	return decision, nil
 }
 func evaluationDigest(e Evaluation) (string, error) {
+	if err := validateEvaluation(e); err != nil {
+		return "", fmt.Errorf("invalid evaluation: %w", err)
+	}
 	raw, err := json.Marshal(e)
 	if err != nil {
 		return "", err

@@ -42,9 +42,18 @@ go run ./internal/tools/governancedrift \
   --contract docs/governance/expected-state.v1.json \
   --observation "$output_dir/observation.json" \
   --output "$output_dir/evaluation.json"
+./scripts/project-governance-drift-issues.sh \
+  --repo "$repo" \
+  --output "$output_dir/canonical-issues.json"
+jq '[.[]|select(.open)|{
+  number,
+  boundaries,
+  exact_evidence_human_classified
+}]' "$output_dir/canonical-issues.json" >"$output_dir/blocking-issues.json"
 go run ./internal/tools/governancedrift \
   --mode gate \
   --evaluation "$output_dir/evaluation.json" \
+  --blocking-issues "$output_dir/blocking-issues.json" \
   --boundary "$boundary" \
   --repository "$repo" \
   --ref "$ref" \

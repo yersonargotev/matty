@@ -26,10 +26,12 @@ func TestGovernanceDriftContractAndSeededStates(t *testing.T) {
 		"actions-policy",
 		"credential-metadata",
 		"immutable-releases",
+		"installed-app-authority",
 		"latest-release",
 		"main-protection",
 		"protected-environments",
 		"repository-settings",
+		"residual-owner-authority",
 		"tag-rules",
 		"workflow-identities",
 		"workflow-policy",
@@ -130,11 +132,15 @@ func TestGovernanceDriftWorkflowSeparatesObservationReportingAndGates(t *testing
 func TestGovernanceDriftAdaptersContainNoSelfCorrectionPath(t *testing.T) {
 	root := repositoryRoot(t)
 	content := readFile(t, filepath.Join(root, "scripts", "collect-governance-drift.sh")) +
-		readFile(t, filepath.Join(root, "scripts", "gate-governance-drift.sh"))
+		readFile(t, filepath.Join(root, "scripts", "gate-governance-drift.sh")) +
+		readFile(t, filepath.Join(root, "scripts", "project-governance-drift-issues.sh"))
 	for _, forbidden := range []string{
 		"--method",
 		" api --input",
-		"gh issue",
+		" issue create",
+		" issue edit",
+		" issue close",
+		" issue comment",
 		"gh secret",
 		"gh release",
 		"gh variable",
