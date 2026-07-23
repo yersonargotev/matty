@@ -80,12 +80,12 @@ tap queries:
 - [x] Packy's repository-level `HOMEBREW_TAP_TOKEN` was deleted on
   `2026-07-23`. A sanitized re-query showed no repository Actions secrets while
   the protected `homebrew` environment retained `HOMEBREW_TAP_TOKEN`.
-- [ ] The human Owner must record final #173 sign-off after independently
-  verifying the sanitized final state.
+- [x] On `2026-07-23`, the human Owner independently confirmed the sanitized
+  final state and explicitly authorized closing #173.
 
-Until the remaining Owner sign-off is recorded, this addendum does not authorize
-closing #173 or beginning #174. Credential values, fragments, hashes, recovery
-material, and provider-side identifiers remain prohibited evidence.
+This sign-off completes #173. It makes #174 eligible for its own authorization;
+it does not authorize #174 implicitly. Credential values, fragments, hashes,
+recovery material, and provider-side identifiers remain prohibited evidence.
 
 ## Verified baseline
 
