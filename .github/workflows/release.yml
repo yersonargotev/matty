@@ -16,8 +16,48 @@ on:
 permissions: {}
 
 jobs:
+  governance-drift:
+    name: Verify governance publication boundary
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fail closed on current affected drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/gate-governance-drift.sh \
+            --boundary publication \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF" \
+            --commit "$GITHUB_SHA" \
+            --workflow .github/workflows/release.yml \
+            --output-dir "$RUNNER_TEMP/governance-drift"
+      - name: Retain publication gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-governance-drift-${{ github.run_id }}
+          path: ${{ runner.temp }}/governance-drift/
+          if-no-files-found: error
+          retention-days: 90
+
   build:
     name: Validate main and build once
+    needs: governance-drift
     if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

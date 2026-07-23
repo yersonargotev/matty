@@ -115,7 +115,7 @@ func TestWorkflowTrustBoundaryMutationsFailClosed(t *testing.T) {
 func TestWorkflowActorRefPermissionMatrix(t *testing.T) {
 	root := repositoryRoot(t)
 	workflows := make(map[string]workflowDocument)
-	for _, name := range []string{"ci.yml", "claude-canary.yml", "governance.yml", "release.yml", "security.yml", "security-pr.yml", "sync-pack-source.yml"} {
+	for _, name := range []string{"ci.yml", "claude-canary.yml", "governance.yml", "governance-drift.yml", "release.yml", "security.yml", "security-pr.yml", "sync-pack-source.yml"} {
 		workflows[name] = readWorkflowDocument(t, root, filepath.Join(root, ".github", "workflows", name))
 	}
 
@@ -303,7 +303,12 @@ var minimumJobPermissions = map[string]map[string]map[string]string{
 		"targets":                {"actions": "read", "contents": "read", "issues": "read", "pull-requests": "read"},
 		"validate-authorization": {"actions": "read", "contents": "read", "issues": "read", "pull-requests": "read", "statuses": "write"},
 	},
+	".github/workflows/governance-drift.yml": {
+		"observe": {"actions": "read", "contents": "read"},
+		"report":  {"actions": "read", "contents": "read", "issues": "write"},
+	},
 	".github/workflows/release.yml": {
+		"governance-drift":          {"actions": "read", "contents": "read", "deployments": "read"},
 		"build":                     {"contents": "read"},
 		"claude-smoke":              {"contents": "read"},
 		"validate-release-evidence": {"contents": "read"},
@@ -321,10 +326,11 @@ var minimumJobPermissions = map[string]map[string]map[string]string{
 		"dependency-review": {"contents": "read"},
 	},
 	".github/workflows/sync-pack-source.yml": {
-		"inspect":  {"contents": "read"},
-		"classify": {"contents": "read", "models": "read"},
-		"validate": {"contents": "read"},
-		"publish":  {"contents": "write", "pull-requests": "write"},
+		"governance-drift": {"actions": "read", "contents": "read", "deployments": "read"},
+		"inspect":          {"contents": "read"},
+		"classify":         {"contents": "read", "models": "read"},
+		"validate":         {"contents": "read"},
+		"publish":          {"contents": "write", "pull-requests": "write"},
 	},
 }
 
@@ -449,6 +455,10 @@ var trustedExecutionMarkers = map[string][]string{
 	".github/workflows/governance.yml|validate-authorization": {
 		"github.repository == 'yersonargotev/packy'",
 		"ref: ${{ github.sha }}",
+	},
+	".github/workflows/governance-drift.yml|report": {
+		"github.repository == 'yersonargotev/packy'",
+		"refs/heads/main",
 	},
 	".github/workflows/release.yml|attest": {
 		"github.repository == 'yersonargotev/packy'",

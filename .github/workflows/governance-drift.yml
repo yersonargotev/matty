@@ -1,0 +1,164 @@
+name: Governance drift
+
+on:
+  schedule:
+    - cron: '43 8 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: governance-drift
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Observe expected governance state
+    if: github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Collect and evaluate sanitized read-only state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/governance-drift"
+          mkdir -p "$evidence"
+          workflow_sha="$(git rev-parse HEAD:.github/workflows/governance-drift.yml)"
+          ./scripts/collect-governance-drift.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF" \
+            --commit "$GITHUB_SHA" \
+            --workflow-sha "$workflow_sha" \
+            --output "$evidence/observation.json"
+          go run ./internal/tools/governancedrift \
+            --mode evaluate \
+            --contract docs/governance/expected-state.v1.json \
+            --observation "$evidence/observation.json" \
+            --output "$evidence/evaluation.json"
+
+      - name: Retain durable governance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: governance-drift-${{ github.run_id }}
+          path: ${{ runner.temp }}/governance-drift/
+          if-no-files-found: error
+          retention-days: 90
+
+  report:
+    name: Maintain canonical drift issue
+    needs: observe
+    if: always() && needs.observe.result != 'skipped' && github.repository == 'yersonargotev/packy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download current observation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: governance-drift-${{ github.run_id }}
+          path: ${{ runner.temp }}/governance-drift
+
+      - name: Create, update, deduplicate, or resolve the canonical issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/governance-drift"
+          evaluation="$evidence/evaluation.json"
+          canonical_key=packy-governance-drift-v1
+          title='Packy governance drift detected'
+
+          gh issue list --repo "$GITHUB_REPOSITORY" --state all \
+            --search "\"$title\" in:title" --limit 100 \
+            --json number,state,body \
+            --jq '[.[] | {
+              number,
+              open:(.state=="OPEN"),
+              canonical_key:((.body | capture("key: (?<value>[^\\n]+)")?.value) // ""),
+              evidence_digest:((.body | capture("evidence: (?<value>sha256:[0-9a-f]{64})")?.value) // "")
+            }]' >"$evidence/existing-issues.json"
+
+          go run ./internal/tools/governancedrift \
+            --mode issue-decision \
+            --evaluation "$evaluation" \
+            --existing-issues "$evidence/existing-issues.json" \
+            --canonical-key "$canonical_key" \
+            --output "$evidence/issue-decision.json"
+
+          action="$(jq -r .action "$evidence/issue-decision.json")"
+          digest="$(jq -r .evidence_digest "$evidence/issue-decision.json")"
+          primary="$(jq -r '.primary_number // 0' "$evidence/issue-decision.json")"
+          state="$(jq -r .state "$evaluation")"
+          {
+            printf '<!-- packy-governance-drift\nkey: %s\nevidence: %s\n-->\n\n' "$canonical_key" "$digest"
+            printf 'The current sanitized governance evaluation is **%s**.\n\n' "$state"
+            printf 'Durable evidence: [%s](%s)\n\n' "$RUN_URL" "$RUN_URL"
+            echo '## Affected controls'
+            jq -r '.findings[]? | "- `\(.control_id)`: \(.state); boundaries: \(.boundaries | join(\", \"))"' "$evaluation"
+            echo
+            echo 'Automation did not change repository settings, refs, environments, credentials, Apps, releases, packages, Pages, workflows, or protection rules.'
+            echo 'Human classification and a clean current rerun are required before affected promotion or publication resumes.'
+          } >"$evidence/issue-body.md"
+
+          case "$action" in
+            create)
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+                --label bug --body-file "$evidence/issue-body.md"
+              ;;
+            update|deduplicate)
+              gh issue edit "$primary" --repo "$GITHUB_REPOSITORY" \
+                --body-file "$evidence/issue-body.md"
+              gh issue comment "$primary" --repo "$GITHUB_REPOSITORY" \
+                --body "A current rerun produced **$state**. Evidence: $RUN_URL"
+              ;;
+            resolve)
+              ;;
+            noop)
+              exit 0
+              ;;
+            *)
+              echo "unsupported issue decision: $action" >&2
+              exit 1
+              ;;
+          esac
+
+          while read -r number; do
+            [[ "$number" == 0 ]] && continue
+            if [[ "$action" == resolve ]]; then
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "A current governance rerun is clean. Evidence: $RUN_URL"
+            else
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "Deduplicated into #$primary. Evidence: $RUN_URL"
+            fi
+          done < <(jq -r '.close_numbers[]' "$evidence/issue-decision.json")

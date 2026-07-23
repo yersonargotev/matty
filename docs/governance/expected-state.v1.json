@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "controls": [
+    {
+      "id": "actions-policy",
+      "boundaries": ["promotion", "publication"],
+      "expected": {
+        "allowed_actions": "all",
+        "enabled": true,
+        "sha_pinning_required": false
+      }
+    },
+    {
+      "id": "credential-metadata",
+      "boundaries": ["publication"],
+      "expected": {
+        "environments": [
+          {
+            "name": "github-pages",
+            "secrets": [],
+            "total_count": 0
+          },
+          {
+            "name": "homebrew",
+            "secrets": [
+              {
+                "created_at": "2026-07-22T20:28:02Z",
+                "name": "HOMEBREW_TAP_TOKEN",
+                "updated_at": "2026-07-22T20:28:02Z"
+              }
+            ],
+            "total_count": 1
+          },
+          {
+            "name": "release",
+            "secrets": [],
+            "total_count": 0
+          }
+        ],
+        "repository_actions": {
+          "secrets": [],
+          "total_count": 0
+        }
+      }
+    },
+    {
+      "id": "immutable-releases",
+      "boundaries": ["publication"],
+      "expected": {
+        "enabled": true,
+        "enforced_by_owner": false
+      }
+    },
+    {
+      "id": "latest-release",
+      "boundaries": ["publication"],
+      "expected": {
+        "asset_count": 7,
+        "author": "github-actions[bot]",
+        "draft": false,
+        "immutable": true,
+        "prerelease": false,
+        "published_at": "2026-07-23T04:34:23Z",
+        "tag_name": "v0.1.10"
+      }
+    },
+    {
+      "id": "main-protection",
+      "boundaries": ["promotion", "publication"],
+      "expected": {
+        "allow_deletions": false,
+        "allow_force_pushes": false,
+        "enforce_admins": true,
+        "required_conversation_resolution": true,
+        "required_pull_request_reviews": {
+          "dismiss_stale_reviews": true,
+          "require_code_owner_reviews": false,
+          "require_last_push_approval": false,
+          "required_approving_review_count": 0
+        },
+        "required_status_checks": {
+          "checks": [
+            {
+              "app_id": 15368,
+              "context": "Claude 2.1.203 package smoke"
+            },
+            {
+              "app_id": 15368,
+              "context": "CodeQL"
+            },
+            {
+              "app_id": 15368,
+              "context": "Dependency review"
+            },
+            {
+              "app_id": 15368,
+              "context": "Governance / Validate authorization"
+            },
+            {
+              "app_id": 15368,
+              "context": "Validate Packy-owned code"
+            }
+          ],
+          "strict": true
+        },
+        "restrictions": null
+      }
+    },
+    {
+      "id": "protected-environments",
+      "boundaries": ["publication"],
+      "expected": [
+        {
+          "branch_policies": [{"name": "main", "type": "branch"}],
+          "can_admins_bypass": false,
+          "deployment_branch_policy": {
+            "custom_branch_policies": true,
+            "protected_branches": false
+          },
+          "name": "github-pages",
+          "reviewers": [
+            {
+              "login": "yersonargotev",
+              "prevent_self_review": false,
+              "type": "User"
+            }
+          ]
+        },
+        {
+          "branch_policies": [{"name": "main", "type": "branch"}],
+          "can_admins_bypass": false,
+          "deployment_branch_policy": {
+            "custom_branch_policies": true,
+            "protected_branches": false
+          },
+          "name": "homebrew",
+          "reviewers": [
+            {
+              "login": "yersonargotev",
+              "prevent_self_review": false,
+              "type": "User"
+            }
+          ]
+        },
+        {
+          "branch_policies": [{"name": "main", "type": "branch"}],
+          "can_admins_bypass": false,
+          "deployment_branch_policy": {
+            "custom_branch_policies": true,
+            "protected_branches": false
+          },
+          "name": "release",
+          "reviewers": [
+            {
+              "login": "yersonargotev",
+              "prevent_self_review": false,
+              "type": "User"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repository-settings",
+      "boundaries": ["promotion", "publication"],
+      "expected": {
+        "allow_auto_merge": false,
+        "allow_merge_commit": true,
+        "allow_rebase_merge": false,
+        "allow_squash_merge": false,
+        "archived": false,
+        "default_branch": "main",
+        "delete_branch_on_merge": true,
+        "visibility": "public",
+        "web_commit_signoff_required": false
+      }
+    },
+    {
+      "id": "tag-rules",
+      "boundaries": ["publication"],
+      "expected": [
+        {
+          "bypass_actors": [],
+          "conditions": {
+            "ref_name": {
+              "exclude": [],
+              "include": ["refs/tags/v*"]
+            }
+          },
+          "enforcement": "active",
+          "name": "Protect immutable version tags",
+          "rules": [{"type": "deletion"}, {"type": "update"}],
+          "target": "tag"
+        }
+      ]
+    },
+    {
+      "id": "workflow-identities",
+      "boundaries": ["promotion", "publication"],
+      "expected": [
+        {"name": "CI", "path": ".github/workflows/ci.yml", "state": "active"},
+        {
+          "name": "Claude stable canary",
+          "path": ".github/workflows/claude-canary.yml",
+          "state": "active"
+        },
+        {
+          "name": "Governance drift",
+          "path": ".github/workflows/governance-drift.yml",
+          "state": "active"
+        },
+        {
+          "name": "Governance",
+          "path": ".github/workflows/governance.yml",
+          "state": "active"
+        },
+        {
+          "name": "Release",
+          "path": ".github/workflows/release.yml",
+          "state": "active"
+        },
+        {
+          "name": "Security",
+          "path": ".github/workflows/security-pr.yml",
+          "state": "active"
+        },
+        {
+          "name": "Security",
+          "path": ".github/workflows/security.yml",
+          "state": "active"
+        },
+        {
+          "name": "Synchronize pack source",
+          "path": ".github/workflows/sync-pack-source.yml",
+          "state": "active"
+        },
+        {
+          "name": "pages-build-deployment",
+          "path": "dynamic/pages/pages-build-deployment",
+          "state": "active"
+        }
+      ]
+    },
+    {
+      "id": "workflow-policy",
+      "boundaries": ["promotion", "publication"],
+      "expected": {
+        "can_approve_pull_request_reviews": true,
+        "default_workflow_permissions": "read"
+      }
+    }
+  ]
+}

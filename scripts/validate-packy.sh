@@ -20,6 +20,7 @@ readonly packages=(
   ./internal/corelifecycle
   ./internal/engrambin
   ./internal/governanceauth
+  ./internal/governancedrift
   ./internal/localprojection
   ./internal/opencode
   ./internal/ownedcontainer
@@ -33,6 +34,7 @@ readonly packages=(
   ./internal/skillbundle
   ./internal/tools/claudesmoke
   ./internal/tools/governanceauth
+  ./internal/tools/governancedrift
   ./internal/tools/syncpacksource
   ./internal/version
   ./internal/workstation
