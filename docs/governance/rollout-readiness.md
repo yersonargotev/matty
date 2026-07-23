@@ -103,17 +103,25 @@ then agreed on the effective state:
   restriction or standing bypass actor.
 - [x] Native CODEOWNER approval remains disabled and the provisional sole-Admin
   rule requires zero native approvals while dismissing stale review evidence.
+  GitHub cannot express an author-role-dependent approval count in one classic
+  rule, so no Maintain actor may be added while this provisional count remains
+  zero. Before granting Maintain, the Owner must require one Admin approval or
+  introduce an equivalently qualified gate and repeat enforcement verification.
 - [x] Merge commits are the only enabled merge method; squash, rebase, and
   auto-merge are disabled, and merged work branches are deleted automatically.
 - [x] No repository ruleset was added; the classic `main` protection rule is
   the enforcement object and retains its object-level rollback boundary.
 
-The protected pull request delivering this addendum is the positive integration
-fixture for #174. Its exact-head checks, conversation-resolution gate, merge
-commit, and post-merge branch cleanup are durable GitHub evidence. The qualified
-fail-closed matrices from #172 remain the non-destructive evidence for stale,
-missing, failed, wrong-source, and unauthorized check scenarios; destructive
-force-push or deletion probes against `main` are not performed.
+The protected pull request delivering this addendum is designated as the
+positive integration fixture for #174. This addendum does not claim its pending
+exact-head checks, conversation-resolution gate, merge commit, or post-merge
+branch cleanup; #174 retains those results after they are observed. The
+qualified fail-closed matrices from #172 remain the non-destructive evidence for
+stale, missing, failed, wrong-source, and unauthorized check scenarios. A real
+disposable direct-update denial and unresolved-conversation denial are exercised
+through the fixture PR. Matching REST and GraphQL protection flags are the
+approved non-destructive substitutes for force-push and deletion denial; no
+destructive probe targets `main`.
 
 ## Verified baseline
 
