@@ -45,6 +45,78 @@ func TestValidateReleaseEvidenceMatrixUsesCanonicalEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateReleaseAddyQualificationMatrixRequiresOneSyntheticRun(t *testing.T) {
+	root := t.TempDir()
+	version := "v0.99.0"
+	sha := strings.Repeat("a", 40)
+	sample := validAddyQualification()
+	trust := AddyReleaseTrust{
+		Repository: sample.Repository, Workflow: sample.Workflow,
+		WorkflowDigest: sample.WorkflowDigest, RunID: sample.RunID,
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, selector := range []string{ExactFloor, "stable"} {
+			qualification := validAddyQualification()
+			qualification.Synthetic, qualification.Tag, qualification.Commit = true, version, sha
+			qualification.InstalledSourceCommit = sha
+			qualification.Smoke.PackyVersion, qualification.Smoke.PackyRef = version, version
+			qualification.Smoke.PackySHA, qualification.Smoke.InstalledSourceSHA = sha, sha
+			qualification.Smoke.OS, qualification.Smoke.Arch = "darwin", arch
+			qualification.Smoke.RequestedClaudeVersion = selector
+			path := filepath.Join(root, arch+"-"+selector, "addy-qualification.json")
+			data, err := CanonicalAddyQualificationJSON(qualification)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, trust, false); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*AddyReleaseTrust){
+		"repository":      func(t *AddyReleaseTrust) { t.Repository = "other/repository" },
+		"workflow":        func(t *AddyReleaseTrust) { t.Workflow = ".github/workflows/other.yml" },
+		"workflow digest": func(t *AddyReleaseTrust) { t.WorkflowDigest = strings.Repeat("b", 64) },
+		"run":             func(t *AddyReleaseTrust) { t.RunID = "other-run" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := trust
+			mutate(&changed)
+			if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, changed, false); err == nil {
+				t.Fatal("release matrix accepted evidence outside the trusted workflow run")
+			}
+		})
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, trust, true); err == nil {
+		t.Fatal("synthetic pre-candidate matrix crossed the production boundary")
+	}
+
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, selector := range []string{ExactFloor, "stable"} {
+			path := filepath.Join(root, arch+"-"+selector, "addy-qualification.json")
+			var changed AddyQualification
+			data, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(data, &changed) != nil {
+				t.Fatal(err)
+			}
+			changed.RunID = "stale-run"
+			data, _ = CanonicalAddyQualificationJSON(changed)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, trust, false); err == nil {
+		t.Fatal("mutually consistent stale-run Addy release qualification accepted")
+	}
+}
+
 func writeReleaseEvidence(t *testing.T, path string, evidence Evidence) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

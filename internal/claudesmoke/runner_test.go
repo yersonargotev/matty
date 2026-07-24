@@ -3,6 +3,7 @@ package claudesmoke
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,25 @@ func TestSandboxBoundaryAllowsOnlyConfiguredRootWrites(t *testing.T) {
 	}
 }
 
+func TestSandboxBoundaryDeniesCheckoutReads(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	root := t.TempDir()
+	checkout := t.TempDir()
+	secret := filepath.Join(checkout, "fixture")
+	if err := os.WriteFile(secret, []byte("must-not-be-read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := sandboxCommandDenyReads(context.Background(), root, checkout, "/bin/cat", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("checkout fixture escaped read boundary: %s", output)
+	}
+}
+
 func TestSandboxOutputKeepsSuccessDiagnosticsOutOfStructuredStdout(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("sandbox-exec is macOS-specific")
@@ -178,6 +198,107 @@ func TestSandboxOutputKeepsSuccessDiagnosticsOutOfStructuredStdout(t *testing.T)
 	}
 	if out != `{"version":"2.1.203"}` {
 		t.Fatalf("structured stdout was contaminated: %q", out)
+	}
+}
+
+func TestObserveAddyQualificationAcquiresInstalledSourceState(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("sandbox-exec is macOS-specific")
+	}
+	sandbox := t.TempDir()
+	layout := newSandboxLayout(sandbox)
+	for _, path := range append(layout.writableDirectories(), layout.SourceRepository) {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitHome, gitConfig := t.TempDir(), t.TempDir()
+	gitEnv := []string{
+		"HOME=" + gitHome, "XDG_CONFIG_HOME=" + gitConfig,
+		"PATH=" + filepath.Dir(gitExecutable) + ":/usr/bin:/bin",
+		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+	}
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(gitExecutable, args...)
+		cmd.Dir = layout.InstalledSource
+		cmd.Env = gitEnv
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init")
+	runGit("config", "user.name", "Smoke Test")
+	runGit("config", "user.email", "smoke@example.invalid")
+	if err := os.WriteFile(filepath.Join(layout.InstalledSource, "README"), []byte("proved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "README")
+	runGit("commit", "-m", "proved source")
+	commit := runGit("rev-parse", "HEAD")
+
+	packy := filepath.Join(t.TempDir(), "packy")
+	if err := writeStub(packy, "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	checkout := t.TempDir()
+	evidence := Evidence{
+		InstalledSourceSHA: commit,
+		Commands: []CommandEvidence{
+			{Name: "claude", Args: []string{"--version"}, ExitCode: 0},
+			{Name: "packy", Args: []string{"version"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"version"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"mcp-add"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"mcp-remove"}, ExitCode: 0},
+		},
+		Safety: SafetyEvidence{CredentialsScrubbed: true, WriteBoundaryEnforced: true},
+	}
+	observation, err := observeAddyQualification(context.Background(), sandbox, checkout, packy, "", restrictedEnv(sandbox, filepath.Dir(gitExecutable)), layout, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observation.InstalledSourceClean || observation.InstalledSourceCommit != commit {
+		t.Fatalf("clean Installed Source observation = %#v", observation)
+	}
+	if observation.WritableRoots.ClaudeConfig != layout.Home {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", observation.WritableRoots.ClaudeConfig, layout.Home)
+	}
+	if !observation.Safety.NoAuthentication || !observation.Safety.NoModelInvocation || !observation.Safety.NoPrint ||
+		!observation.Safety.NoREPL || !observation.Safety.NoUpstreamExecute {
+		t.Fatalf("safe direct and normalized Claude observations were rejected: %#v", observation.Safety)
+	}
+	evidence.Sandbox, evidence.Qualification = sandbox, observation
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Evidence
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := BindAddyQualification(AddyQualification{}, decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.InstalledSourceCommit != commit || bound.WritableRoots.ClaudeConfig != layout.Home {
+		t.Fatalf("serialized observation was not bound: %#v", bound)
+	}
+
+	if err := os.WriteFile(filepath.Join(layout.InstalledSource, "untracked"), []byte("dirty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := observeAddyQualification(context.Background(), sandbox, checkout, packy, "", restrictedEnv(sandbox, filepath.Dir(gitExecutable)), layout, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirty.InstalledSourceClean {
+		t.Fatal("dirty Installed Source was certified clean")
 	}
 }
 

@@ -18,6 +18,9 @@ func TestPullRequestsBlockOnExactClaudeFloorAndRetainEvidence(t *testing.T) {
 		"--packy-ref \"$GITHUB_SHA\"",
 		"actions/upload-artifact@",
 		"if-no-files-found: error",
+		"retention-days: 90",
+		"--addy-qualification synthetic",
+		"--addy-workflow .github/workflows/ci.yml",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("pull-request workflow missing %q", want)
@@ -35,7 +38,7 @@ func TestClaudeSmokeWrapperIsSyntacticallyValidAndPinsSafeSelectors(t *testing.T
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"2.1.203", `"stable"`, "--packy-binary", "internal/tools/claudesmoke", `--source-ref "$packy_ref"`, `--evidence "$evidence_dir/evidence.json"`} {
+	for _, want := range []string{"2.1.203", `"stable"`, "--packy-binary", `go build -trimpath -o "$build_root/claudesmoke" ./internal/tools/claudesmoke`, `"$build_root/claudesmoke"`, `--source-ref "$packy_ref"`, `--evidence "$evidence_dir/evidence.json"`, "qualify-addy", "--addy-qualification", "--addy-workflow"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("smoke wrapper missing %q", want)
 		}
@@ -91,6 +94,12 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 		`[[ "$head" == "$main" && "$head" == "$tag_commit" ]]`,
 		"Create or resume exact draft and publish once",
 		"actions/upload-artifact@",
+		"Gate exact-tag Addy promotion evidence",
+		"./scripts/gate-addy-release.sh",
+		"retention-days: 90",
+		"--addy-qualification synthetic",
+		"--addy-workflow .github/workflows/release.yml",
+		"--addy-tag \"${{ needs.build.outputs.tag }}\"",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release workflow missing %q", want)
@@ -102,6 +111,35 @@ func TestReleaseBlocksPublicationOnBothClaudeVariantsAndDarwinArchitectures(t *t
 	publication := text[strings.LastIndex(text, "  publish-github:"):]
 	if strings.Contains(publication, "scripts/build-release-artifacts.sh") {
 		t.Fatal("publication must consume the proved candidate instead of rebuilding artifacts")
+	}
+}
+
+func TestExactTagAddyGateRejectsMissingOrForeignEvidence(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "scripts", "gate-addy-release.sh")
+	if output, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
+		t.Fatalf("bash -n: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"exact release tag and candidate commit diverge",
+		"exact-tag Addy promotion requires same-run evidence",
+		"--tag=\"$tag\"",
+		"--run-id=\"${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}\"",
+		"--workflow-digest=\"$workflow_digest\"",
+		"promotion evidence must be a regular same-run artifact",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("exact-tag Addy gate missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"gh release", "git push", "npm publish"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("exact-tag Addy gate contains publishing effect %q", forbidden)
+		}
 	}
 }
 

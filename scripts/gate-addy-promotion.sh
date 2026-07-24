@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if (($# != 2)); then
-  echo "usage: $0 <base-ref> <head-ref>" >&2
+if (($# < 2 || $# > 3)); then
+  echo "usage: $0 <base-ref> <head-ref> [same-run-promotion-evidence]" >&2
   exit 2
 fi
 
@@ -66,8 +66,15 @@ args=(
   --workflow-digest="$workflow_digest"
   --run-id="${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
 )
-if [[ "$promotion_change" == true && -n "${ADDY_PROMOTION_EVIDENCE:-}" ]]; then
-  args+=(--evidence="$ADDY_PROMOTION_EVIDENCE")
+if [[ "$promotion_change" == true && -n "${3:-}" ]]; then
+  [[ -f "$3" && ! -L "$3" ]] || {
+    echo "promotion evidence must be a regular same-run artifact" >&2
+    exit 1
+  }
+  args+=(--evidence="$3")
+elif [[ "$promotion_change" == false && -n "${3:-}" ]]; then
+  echo "candidate evidence is not accepted for a non-promotion change" >&2
+  exit 1
 fi
 
 go run ./internal/tools/addypromotiongate "${args[@]}"

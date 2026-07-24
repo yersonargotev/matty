@@ -232,6 +232,48 @@ func TestAddyPromotionGateHasStableNonPublishingIdentity(t *testing.T) {
 	}
 }
 
+func TestAddyPromotionMainReplayIsEffectFreeAndRetained(t *testing.T) {
+	root := repositoryRoot(t)
+	workflow := readFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
+	start := strings.Index(workflow, "  addy-promotion-main-replay:")
+	if start < 0 {
+		t.Fatal("Addy main replay job is missing")
+	}
+	replay := workflow[start:]
+	for _, required := range []string{
+		"name: Replay Addy promotion gate effect-free",
+		"if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+		"permissions:\n      contents: read",
+		"fetch-depth: 0",
+		"persist-credentials: false",
+		"./scripts/replay-addy-promotion.sh",
+		"retention-days: 90",
+	} {
+		if !strings.Contains(replay, required) {
+			t.Fatalf("Addy main replay missing %q", required)
+		}
+	}
+	scriptPath := filepath.Join(root, "scripts", "replay-addy-promotion.sh")
+	if output, err := exec.Command("bash", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("bash -n replay: %v\n%s", err, output)
+	}
+	script := readFile(t, scriptPath)
+	for _, required := range []string{
+		"internal/addyacceptance/harness.go", "GITHUB_REPOSITORY", "GITHUB_RUN_ID",
+		"zero_checkout_mutation", "production_admissible:false",
+		"./scripts/validate-addy-acceptance.sh",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("Addy replay script missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"git push", "gh release", "contents: write", "id-token: write"} {
+		if strings.Contains(replay+script, forbidden) {
+			t.Fatalf("Addy replay contains publishing authority %q", forbidden)
+		}
+	}
+}
+
 func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	sourceRoot := repositoryRoot(t)
 	root := t.TempDir()
@@ -336,7 +378,6 @@ func runAddyGate(root, base, head string) ([]byte, error) {
 		"GITHUB_PR_NUMBER=201",
 		"GITHUB_SHA="+head,
 		"GITHUB_RUN_ID=12345",
-		"ADDY_PROMOTION_EVIDENCE=",
 	)
 	return cmd.CombinedOutput()
 }
