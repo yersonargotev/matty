@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/bundletransaction"
@@ -553,11 +552,8 @@ func compareSemanticVersions(left, right string) int {
 	leftVersion := parseSemanticVersion(left)
 	rightVersion := parseSemanticVersion(right)
 	for i := range leftVersion.core {
-		if leftVersion.core[i] < rightVersion.core[i] {
-			return -1
-		}
-		if leftVersion.core[i] > rightVersion.core[i] {
-			return 1
+		if compared := compareSemanticVersionNumbers(leftVersion.core[i], rightVersion.core[i]); compared != 0 {
+			return compared
 		}
 	}
 	switch {
@@ -569,13 +565,13 @@ func compareSemanticVersions(left, right string) int {
 	for i := 0; i < len(leftVersion.prerelease) && i < len(rightVersion.prerelease); i++ {
 		leftIdentifier := leftVersion.prerelease[i]
 		rightIdentifier := rightVersion.prerelease[i]
-		leftNumber, leftNumeric := semanticVersionNumber(leftIdentifier)
-		rightNumber, rightNumeric := semanticVersionNumber(rightIdentifier)
+		leftNumeric := isSemanticVersionNumber(leftIdentifier)
+		rightNumeric := isSemanticVersionNumber(rightIdentifier)
 		switch {
-		case leftNumeric && rightNumeric && leftNumber < rightNumber:
-			return -1
-		case leftNumeric && rightNumeric && leftNumber > rightNumber:
-			return 1
+		case leftNumeric && rightNumeric:
+			if compared := compareSemanticVersionNumbers(leftIdentifier, rightIdentifier); compared != 0 {
+				return compared
+			}
 		case leftNumeric && !rightNumeric:
 			return -1
 		case !leftNumeric && rightNumeric:
@@ -596,7 +592,7 @@ func compareSemanticVersions(left, right string) int {
 }
 
 type semanticVersion struct {
-	core       [3]int
+	core       [3]string
 	prerelease []string
 }
 
@@ -606,7 +602,7 @@ func parseSemanticVersion(value string) semanticVersion {
 	parts := strings.Split(core, ".")
 	version := semanticVersion{}
 	for i := range version.core {
-		version.core[i], _ = strconv.Atoi(parts[i])
+		version.core[i] = parts[i]
 	}
 	if prerelease != "" {
 		version.prerelease = strings.Split(prerelease, ".")
@@ -614,14 +610,23 @@ func parseSemanticVersion(value string) semanticVersion {
 	return version
 }
 
-func semanticVersionNumber(value string) (int, bool) {
+func isSemanticVersionNumber(value string) bool {
 	for _, character := range value {
 		if character < '0' || character > '9' {
-			return 0, false
+			return false
 		}
 	}
-	number, err := strconv.Atoi(value)
-	return number, err == nil
+	return true
+}
+
+func compareSemanticVersionNumbers(left, right string) int {
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return strings.Compare(left, right)
 }
 
 func containsString(values []string, target string) bool {

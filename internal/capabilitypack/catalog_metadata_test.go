@@ -156,12 +156,16 @@ func TestCatalogMetadataUsesSemanticVersionPrecedenceForCanonicalOrder(t *testin
 			"1.9.0",
 			"1.10.0-alpha.2",
 			"1.10.0-alpha.10",
+			"1.10.0-alpha.999999999999999999999999999999",
 			"1.10.0",
+			"999999999999999999999999999999.0.0",
 		},
 		UpdateRoutes: []UpdateRoute{
 			{FromVersion: "1.9.0", ToVersion: "1.10.0-alpha.2", ExistingSurfaces: []Surface{SurfaceCodex}},
 			{FromVersion: "1.10.0-alpha.2", ToVersion: "1.10.0-alpha.10", ExistingSurfaces: []Surface{SurfaceCodex}},
-			{FromVersion: "1.10.0-alpha.10", ToVersion: "1.10.0", ExistingSurfaces: []Surface{SurfaceCodex}},
+			{FromVersion: "1.10.0-alpha.10", ToVersion: "1.10.0-alpha.999999999999999999999999999999", ExistingSurfaces: []Surface{SurfaceCodex}},
+			{FromVersion: "1.10.0-alpha.999999999999999999999999999999", ToVersion: "1.10.0", ExistingSurfaces: []Surface{SurfaceCodex}},
+			{FromVersion: "1.10.0", ToVersion: "999999999999999999999999999999.0.0", ExistingSurfaces: []Surface{SurfaceCodex}},
 		},
 	}
 	if err := validateCatalogMetadata(entry); err != nil {
