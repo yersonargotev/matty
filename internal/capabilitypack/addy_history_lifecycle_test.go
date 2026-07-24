@@ -114,12 +114,20 @@ func TestWithdrawnAddyIsHiddenAndRejectsFreshActivationAndUpdateWithoutEffects(t
 
 func TestWithdrawnAddyActiveHistoricalIntentRemainsOperable(t *testing.T) {
 	catalog, _ := addyLifecycleCatalog(t, true)
+	catalog.deferSourceValidation = true
 	intent := ActivationIntent{PackID: "addy", Surface: SurfaceCodex, Version: "1.0.0", Active: true, Revision: 3}
 	store := &fakeActivationStore{state: ActivationState{Intent: intent, Intents: []ActivationIntent{intent}}}
 	adapter := &fakeSurfaceAdapter{inspect: func(transition SurfaceTransition) SurfaceInspection {
 		return completeAddyObservation(transition.Desired, SurfaceCodex, "missing")
 	}}
 	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+	current, err := catalog.catalogMetadata("addy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(catalog.bundleRoot, filepath.FromSlash(current.Resources[0].Source))); err != nil {
+		t.Fatal(err)
+	}
 
 	if report, err := facade.Status(context.Background(), StatusRequest{PackID: "addy", Surface: SurfaceCodex}); err != nil || len(report.Entries) != 1 || report.Entries[0].Intent.Version != "1.0.0" {
 		t.Fatalf("withdrawn pinned status = %#v err=%v", report, err)
@@ -135,6 +143,34 @@ func TestWithdrawnAddyActiveHistoricalIntentRemainsOperable(t *testing.T) {
 	}
 	if len(adapter.actions) != 0 || len(store.saves) != 0 || !store.state.Intent.Active {
 		t.Fatalf("withdrawn previews mutated state: actions=%d saves=%d state=%#v", len(adapter.actions), len(store.saves), store.state)
+	}
+}
+
+func TestWithdrawnAddyInterruptedUpdateRemainsRecoverable(t *testing.T) {
+	catalog, _ := addyLifecycleCatalog(t, true)
+	intent := ActivationIntent{PackID: "addy", Surface: SurfaceCodex, Version: "1.1.0", Active: true, Revision: 6}
+	journal := ApplyingJournal{
+		PlanID: "interrupted-update", PlanDigest: "old-digest", Operation: OperationUpdate,
+		Surface: SurfaceCodex, PackID: "addy", Outcome: AttemptRecoveryRequired,
+		Actions: []string{"instruction:addy-routing"}, FailedAction: "instruction:addy-routing",
+	}
+	store := &fakeActivationStore{state: ActivationState{
+		Intent: intent, Intents: []ActivationIntent{intent}, Journal: &journal,
+	}}
+	adapter := &fakeSurfaceAdapter{inspect: func(transition SurfaceTransition) SurfaceInspection {
+		return completeAddyObservation(transition.Desired, SurfaceCodex, "missing")
+	}}
+	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+
+	plan, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "addy", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatalf("withdrawn interrupted update recovery: %v", err)
+	}
+	if !plan.Recovery() || plan.HistoricalAttempt() == nil || plan.HistoricalAttempt().PlanID != journal.PlanID {
+		t.Fatalf("withdrawn recovery plan = %#v", plan.JSONReport(true))
+	}
+	if len(store.saves) != 0 || len(adapter.actions) != 0 {
+		t.Fatalf("recovery preview crossed effect boundary: actions=%d saves=%d", len(adapter.actions), len(store.saves))
 	}
 }
 

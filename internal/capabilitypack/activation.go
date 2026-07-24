@@ -544,13 +544,13 @@ func (f Facade) PreviewUpdate(ctx context.Context, request UpdateRequest) (Recon
 }
 
 func (f Facade) previewUpdate(ctx context.Context, request UpdateRequest) (ReconciliationPlan, error) {
-	if f.catalog.withdrawn(request.PackID) {
-		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is withdrawn and cannot be updated", request.PackID)
-	}
 	activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface, Aliases: request.Aliases}
 	_, _, state, err := f.activationInputsForOperation(ctx, activation, OperationUpdate)
 	if err != nil {
 		return ReconciliationPlan{}, err
+	}
+	if f.catalog.withdrawn(request.PackID) && !recoveryAttempt(state, OperationUpdate, request.PackID, request.Surface) {
+		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is withdrawn and cannot be updated", request.PackID)
 	}
 	intent, ok := intentForPack(state, request.PackID, request.Surface)
 	if !ok || !intent.Active {

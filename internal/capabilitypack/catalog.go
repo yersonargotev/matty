@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/yersonargotev/packy/internal/bundletransaction"
@@ -513,14 +514,13 @@ func validateCatalogMetadata(entry catalogEntry) error {
 		if versions[version] {
 			return fmt.Errorf("historical version %q is duplicated", version)
 		}
-		if i > 0 && entry.HistoricalVersions[i-1] >= version {
+		if i > 0 && compareSemanticVersions(entry.HistoricalVersions[i-1], version) >= 0 {
 			return fmt.Errorf("historical versions must be in ascending canonical order")
 		}
 		versions[version] = true
 	}
 	routeKeys := make(map[string]bool, len(entry.UpdateRoutes))
-	previous := ""
-	for _, route := range entry.UpdateRoutes {
+	for i, route := range entry.UpdateRoutes {
 		if !validSemver(route.FromVersion) || !validSemver(route.ToVersion) || route.FromVersion == route.ToVersion {
 			return fmt.Errorf("update route %q -> %q is malformed", route.FromVersion, route.ToVersion)
 		}
@@ -534,13 +534,94 @@ func validateCatalogMetadata(entry catalogEntry) error {
 		if routeKeys[key] {
 			return fmt.Errorf("update route %q -> %q is duplicated", route.FromVersion, route.ToVersion)
 		}
-		if previous != "" && previous >= key {
+		if i > 0 && compareUpdateRoutes(entry.UpdateRoutes[i-1], route) >= 0 {
 			return fmt.Errorf("update routes must be in ascending canonical order")
 		}
 		routeKeys[key] = true
-		previous = key
 	}
 	return nil
+}
+
+func compareUpdateRoutes(left, right UpdateRoute) int {
+	if compared := compareSemanticVersions(left.FromVersion, right.FromVersion); compared != 0 {
+		return compared
+	}
+	return compareSemanticVersions(left.ToVersion, right.ToVersion)
+}
+
+func compareSemanticVersions(left, right string) int {
+	leftVersion := parseSemanticVersion(left)
+	rightVersion := parseSemanticVersion(right)
+	for i := range leftVersion.core {
+		if leftVersion.core[i] < rightVersion.core[i] {
+			return -1
+		}
+		if leftVersion.core[i] > rightVersion.core[i] {
+			return 1
+		}
+	}
+	switch {
+	case len(leftVersion.prerelease) == 0 && len(rightVersion.prerelease) > 0:
+		return 1
+	case len(leftVersion.prerelease) > 0 && len(rightVersion.prerelease) == 0:
+		return -1
+	}
+	for i := 0; i < len(leftVersion.prerelease) && i < len(rightVersion.prerelease); i++ {
+		leftIdentifier := leftVersion.prerelease[i]
+		rightIdentifier := rightVersion.prerelease[i]
+		leftNumber, leftNumeric := semanticVersionNumber(leftIdentifier)
+		rightNumber, rightNumeric := semanticVersionNumber(rightIdentifier)
+		switch {
+		case leftNumeric && rightNumeric && leftNumber < rightNumber:
+			return -1
+		case leftNumeric && rightNumeric && leftNumber > rightNumber:
+			return 1
+		case leftNumeric && !rightNumeric:
+			return -1
+		case !leftNumeric && rightNumeric:
+			return 1
+		case !leftNumeric && !rightNumeric && leftIdentifier < rightIdentifier:
+			return -1
+		case !leftNumeric && !rightNumeric && leftIdentifier > rightIdentifier:
+			return 1
+		}
+	}
+	if len(leftVersion.prerelease) < len(rightVersion.prerelease) {
+		return -1
+	}
+	if len(leftVersion.prerelease) > len(rightVersion.prerelease) {
+		return 1
+	}
+	return strings.Compare(left, right)
+}
+
+type semanticVersion struct {
+	core       [3]int
+	prerelease []string
+}
+
+func parseSemanticVersion(value string) semanticVersion {
+	withoutBuild, _, _ := strings.Cut(value, "+")
+	core, prerelease, _ := strings.Cut(withoutBuild, "-")
+	parts := strings.Split(core, ".")
+	version := semanticVersion{}
+	for i := range version.core {
+		version.core[i], _ = strconv.Atoi(parts[i])
+	}
+	if prerelease != "" {
+		version.prerelease = strings.Split(prerelease, ".")
+	}
+	return version
+}
+
+func semanticVersionNumber(value string) (int, bool) {
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return 0, false
+		}
+	}
+	number, err := strconv.Atoi(value)
+	return number, err == nil
 }
 
 func containsString(values []string, target string) bool {

@@ -149,6 +149,32 @@ func TestCatalogMetadataRejectsNonCanonicalHistoryAndRoutes(t *testing.T) {
 	}
 }
 
+func TestCatalogMetadataUsesSemanticVersionPrecedenceForCanonicalOrder(t *testing.T) {
+	entry := catalogEntry{
+		ID: "engram",
+		HistoricalVersions: []string{
+			"1.9.0",
+			"1.10.0-alpha.2",
+			"1.10.0-alpha.10",
+			"1.10.0",
+		},
+		UpdateRoutes: []UpdateRoute{
+			{FromVersion: "1.9.0", ToVersion: "1.10.0-alpha.2", ExistingSurfaces: []Surface{SurfaceCodex}},
+			{FromVersion: "1.10.0-alpha.2", ToVersion: "1.10.0-alpha.10", ExistingSurfaces: []Surface{SurfaceCodex}},
+			{FromVersion: "1.10.0-alpha.10", ToVersion: "1.10.0", ExistingSurfaces: []Surface{SurfaceCodex}},
+		},
+	}
+	if err := validateCatalogMetadata(entry); err != nil {
+		t.Fatalf("semantic canonical order rejected: %v", err)
+	}
+
+	entry.HistoricalVersions = []string{"1.10.0", "1.10.0-alpha.10"}
+	entry.UpdateRoutes = nil
+	if err := validateCatalogMetadata(entry); err == nil || !strings.Contains(err.Error(), "canonical order") {
+		t.Fatalf("release-before-prerelease order error = %v", err)
+	}
+}
+
 func TestCatalogMetadataRequiresCurrentVersionInImmutableHistory(t *testing.T) {
 	bundle := writeCatalogFixture(t)
 	_, err := discoverCatalog(bundle, []catalogEntry{{
