@@ -34,11 +34,11 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if len(first.Versions) != 2 || first.Versions[0].Version != "1.0.0" || first.Versions[1].Version != "1.1.0" {
 		t.Fatalf("immutable versions = %#v", first.Versions)
 	}
-	if first.Versions[0].SnapshotSHA256 != first.Versions[1].SnapshotSHA256 {
-		t.Fatal("synthetic 1.1.0 history changed selected Addy source bytes")
+	if first.Versions[0].SnapshotSHA256 == first.Versions[1].SnapshotSHA256 {
+		t.Fatal("synthetic 1.1.0 candidate did not register its strict adapter-ready source bytes")
 	}
-	if !reflect.DeepEqual(first.Versions[0].Files, first.Versions[1].Files) {
-		t.Fatal("synthetic 1.1.0 history changed selected Addy file inventory or content")
+	if len(first.Versions[0].Files) != len(first.Versions[1].Files) {
+		t.Fatal("synthetic 1.1.0 candidate changed the Addy file inventory")
 	}
 	for _, version := range first.Versions {
 		root := materializePromotionVersion(t, version)
@@ -67,6 +67,51 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	evidence.Proof.DiffSHA256 = evidence.PackageCandidate
 	if err := ValidatePromotionEvidence(evidence, context); err == nil || !strings.Contains(err.Error(), "independent reconstruction") {
 		t.Fatalf("candidate self-authorization was accepted: %v", err)
+	}
+}
+
+func TestCanonicalPromotionCurrentIsDetachedAndWritesExactSnapshot(t *testing.T) {
+	current := CanonicalPromotionCurrent()
+	var registered ImmutableVersionFixture
+	for _, version := range CanonicalPromotionHistory().Versions {
+		if version.Version == "1.1.0" {
+			registered = version
+		}
+	}
+	if !reflect.DeepEqual(current, registered) {
+		t.Fatal("current adapter fixture diverges from the exact registered 1.1.0 artifact")
+	}
+	if current.Version != "1.1.0" || current.SchemaVersion != 3 ||
+		!reflect.DeepEqual(current.Surfaces, []string{"claude", "codex", "opencode"}) {
+		t.Fatalf("current promotion fixture = %#v", current)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(current.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != current.Version || manifest.SchemaVersion != current.SchemaVersion || len(manifest.Resources) != 44 {
+		t.Fatalf("current manifest = %#v", manifest)
+	}
+
+	current.Manifest[0] ^= 0xff
+	current.Files[0].Content = "mutated"
+	again := CanonicalPromotionCurrent()
+	if bytes.Equal(current.Manifest, again.Manifest) || again.Files[0].Content == "mutated" {
+		t.Fatal("current promotion fixture exposed shared bytes")
+	}
+
+	root := filepath.Join(t.TempDir(), "snapshot")
+	if err := WriteCanonicalPromotionCurrent(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range again.Files {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.Path)))
+		if err != nil || string(data) != file.Content {
+			t.Fatalf("snapshot file %s = %q, %v", file.Path, data, err)
+		}
+	}
+	if err := WriteCanonicalPromotionCurrent(root); err == nil || !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("non-empty snapshot error = %v", err)
 	}
 }
 

@@ -6,7 +6,11 @@ import (
 )
 
 func TestStatusJSONDistinguishesObservedFalseFromUnknownAndSorts(t *testing.T) {
-	knownFalse := StatusEntry{Pack: Pack{ID: "z", Version: "1"}, Surface: SurfaceCodex, IntentPresent: true, Intent: IntentStatus{Revision: 2}, ReadinessObserved: ReadinessObservationStatus{Configured: true, Authorization: true}, Blockers: []string{"z", "a"}, Evidence: nil, PendingHumanActions: []string{"reload", "login"}}
+	knownFalse := StatusEntry{Pack: Pack{ID: "z", Version: "1"}, Surface: SurfaceCodex, IntentPresent: true, Intent: IntentStatus{Revision: 2}, ReadinessObserved: ReadinessObservationStatus{Configured: true, Authorization: true}, OptionalAuthorities: []OptionalAuthorityObservation{
+		{ModeID: "shipping", Authority: "deploy", State: OptionalAuthorityUnavailable, Fallback: "none"},
+		{ModeID: "browser", Authority: "network", State: OptionalAuthorityAvailable, Fallback: "static evidence"},
+		{ModeID: "browser", Authority: "browser", State: OptionalAuthorityUnknown, Fallback: "static evidence"},
+	}, Blockers: []string{"z", "a"}, Evidence: nil, PendingHumanActions: []string{"reload", "login"}}
 	unknown := StatusEntry{Pack: Pack{ID: "a", Version: "1"}, Surface: SurfaceOpenCode, ReadinessObserved: ReadinessObservationStatus{Configured: true}}
 	report := (StatusReport{Entries: []StatusEntry{knownFalse, unknown}}).JSONReport(false)
 	if report.SchemaVersion != 2 {
@@ -21,6 +25,17 @@ func TestStatusJSONDistinguishesObservedFalseFromUnknownAndSorts(t *testing.T) {
 	}
 	if entry.Readiness.Usable.State != "unknown" || entry.Readiness.Usable.Value != nil {
 		t.Fatalf("unknown lost: %#v", entry.Readiness.Usable)
+	}
+	wantAuthorities := []JSONOptionalAuthority{
+		{ModeID: "browser", Authority: "browser", State: OptionalAuthorityUnknown, Fallback: "static evidence"},
+		{ModeID: "browser", Authority: "network", State: OptionalAuthorityAvailable, Fallback: "static evidence"},
+		{ModeID: "shipping", Authority: "deploy", State: OptionalAuthorityUnavailable, Fallback: "none"},
+	}
+	if !reflect.DeepEqual(entry.OptionalAuthorities, wantAuthorities) {
+		t.Fatalf("optional authorities = %#v, want %#v", entry.OptionalAuthorities, wantAuthorities)
+	}
+	if entry.Readiness.Authorized.State != "known" || entry.Readiness.Authorized.Value == nil || *entry.Readiness.Authorized.Value {
+		t.Fatalf("optional authority availability changed readiness authorization: %#v", entry.Readiness)
 	}
 	if !reflect.DeepEqual(entry.Blockers, []string{"a", "z"}) || !reflect.DeepEqual(entry.PendingHumanActions, []string{"login", "reload"}) || entry.Evidence == nil {
 		t.Fatalf("arrays not deterministic/non-null: %#v", entry)

@@ -170,3 +170,18 @@ func TestLifecycleReportRedactsSealedExternalHostContent(t *testing.T) {
 		t.Fatalf("failure = %#v", failure)
 	}
 }
+
+func TestLifecycleReportRedactsOverlappingHostPathsDeterministically(t *testing.T) {
+	action := ProjectionAction{
+		Source:      "/tmp/packy/source",
+		Target:      "/tmp/packy/source/target",
+		Command:     "/tmp/packy/source/target/command",
+		Description: "copy /tmp/packy/source to /tmp/packy/source/target with /tmp/packy/source/target/command",
+	}
+	const want = "copy <host-path>/source to <host-path>/target with <host-path>/command"
+	for i := 0; i < 100; i++ {
+		if got := actionForReport(action).Description; got != want {
+			t.Fatalf("redacted description changed on iteration %d: got %q, want %q", i, got, want)
+		}
+	}
+}

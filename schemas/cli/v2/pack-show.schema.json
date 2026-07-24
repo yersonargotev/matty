@@ -6,14 +6,19 @@
   "required": [
     "schema_version",
     "report",
+    "catalog_state",
     "id",
     "version",
     "description",
+    "source_identity",
+    "historical_versions",
+    "update_routes",
     "surfaces",
     "provides",
     "requires",
     "conflicts",
     "resource_counts",
+    "lifecycle_availability",
     "surface_contracts"
   ],
   "properties": {
@@ -22,6 +27,12 @@
     },
     "report": {
       "const": "pack-show"
+    },
+    "catalog_state": {
+      "enum": [
+        "current",
+        "withdrawn"
+      ]
     },
     "id": {
       "type": "string",
@@ -33,6 +44,77 @@
     },
     "description": {
       "type": "string"
+    },
+    "source_identity": {
+      "type": "object",
+      "required": [
+        "pack_id",
+        "version",
+        "schema_version",
+        "limitation"
+      ],
+      "properties": {
+        "pack_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "limitation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "historical_versions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "update_routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from_version",
+          "to_version",
+          "existing_surfaces"
+        ],
+        "properties": {
+          "from_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "existing_surfaces": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "claude",
+                "codex",
+                "opencode"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "uniqueItems": true
     },
     "surfaces": {
       "type": "array",
@@ -49,7 +131,8 @@
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "uniqueItems": true
     },
     "requires": {
       "type": "object",
@@ -58,17 +141,19 @@
         "tools"
       ],
       "properties": {
-        "capabilities": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
         },
-        "tools": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
         }
       },
       "additionalProperties": false
@@ -77,10 +162,35 @@
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "uniqueItems": true
     },
     "resource_counts": {
       "$ref": "lifecycle-contract.schema.json#/$defs/counts"
+    },
+    "lifecycle_availability": {
+      "type": "object",
+      "required": [
+        "fresh_activation_available",
+        "catalog_update_available",
+        "lifecycle_verbs_available",
+        "automatic_downgrade"
+      ],
+      "properties": {
+        "fresh_activation_available": {
+          "type": "boolean"
+        },
+        "catalog_update_available": {
+          "type": "boolean"
+        },
+        "lifecycle_verbs_available": {
+          "const": true
+        },
+        "automatic_downgrade": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
     },
     "surface_contracts": {
       "type": "array",
@@ -88,7 +198,8 @@
         "type": "object",
         "required": [
           "surface",
-          "contract"
+          "contract",
+          "intent"
         ],
         "properties": {
           "surface": {
@@ -100,10 +211,92 @@
           },
           "contract": {
             "$ref": "lifecycle-contract.schema.json"
+          },
+          "intent": {
+            "type": "object",
+            "required": [
+              "state",
+              "active",
+              "revision",
+              "aliases"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "absent",
+                  "known"
+                ]
+              },
+              "active": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "version": {
+                "type": "string"
+              },
+              "revision": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "$ref": "lifecycle-contract.schema.json#/$defs/alias"
+                },
+                "uniqueItems": true
+              }
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "state": {
+                    "const": "absent"
+                  },
+                  "active": {
+                    "type": "null"
+                  },
+                  "revision": {
+                    "type": "null"
+                  }
+                },
+                "not": {
+                  "required": [
+                    "version"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "known"
+                  },
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
-      }
+      },
+      "uniqueItems": true
     }
   },
   "additionalProperties": false

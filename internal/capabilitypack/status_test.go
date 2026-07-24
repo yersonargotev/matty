@@ -3,6 +3,7 @@ package capabilitypack
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,14 @@ func TestStatusDerivesReadinessFreshlyAndNormalizesInconsistentEvidence(t *testi
 		}
 		if report.Entries[0].Readiness != want {
 			t.Fatalf("call %d readiness=%+v want=%+v", i, report.Entries[0].Readiness, want)
+		}
+		if got := report.Entries[0].ProjectionDetails[0].Target; got != "<host-path>/AGENTS.md" {
+			t.Fatalf("call %d portable target = %q", i, got)
+		}
+		for _, evidence := range report.Entries[0].Evidence {
+			if strings.Contains(evidence, "/codex/") {
+				t.Fatalf("call %d evidence leaked ambient path: %q", i, evidence)
+			}
 		}
 	}
 	if adapter.inspectCalls != 3 || len(store.saves) != 0 {

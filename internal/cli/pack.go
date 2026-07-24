@@ -16,7 +16,6 @@ import (
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/engrambin"
 	"github.com/yersonargotev/packy/internal/opencode"
-	"github.com/yersonargotev/packy/internal/reportredaction"
 	"github.com/yersonargotev/packy/internal/skillbundle"
 	"github.com/yersonargotev/packy/internal/workstation"
 )
@@ -196,6 +195,9 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(capabilitypack.JSONApplyResultFor(plan, result))
 	}
 	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
+		return err
+	}
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Apply result facts: verified=%s projections=%d\n", yesNo(result.Verified), result.Projections); err != nil {
 		return err
 	}
 	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", readinessValue(result.ReadinessObserved.Configured, result.Readiness.Configured), readinessValue(result.ReadinessObserved.Authorization, result.Readiness.Authorized), readinessValue(result.ReadinessObserved.Usability, result.Readiness.Usable)); err != nil {
@@ -496,16 +498,23 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 			return err
 		}
 	}
-	for _, phase := range plan.Phases() {
+	for _, phase := range structured.Phases {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Phase: %s (%s)\n", phase.Kind, phase.Digest); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Phase approval required: %s\n", yesNo(phase.ApprovalRequired)); err != nil {
+			return err
+		}
 		for _, action := range phase.Actions {
-			description := action.Description
-			if action.Kind == capabilitypack.ActionExternalCommand {
-				description = "run: " + strings.Join(append([]string{action.Command}, reportredaction.EnvironmentArguments(action.Args)...), " ") + " (" + action.Description + ")"
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action.Description); err != nil {
+				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", description); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"    Action facts: id=%s kind=%s consent=%s source=%s target=%s command=%s args=%s mode=%s adapter_provenance=%s\n",
+				action.ID, factOrNone(string(action.Kind)), factOrNone(string(action.Consent)), factOrNone(action.Source),
+				factOrNone(action.Target), factOrNone(action.Command), joinFacts(action.Args), factOrNone(string(action.Mode)),
+				factOrNone(action.AdapterProvenance),
+			); err != nil {
 				return err
 			}
 		}
@@ -531,34 +540,7 @@ func renderActivationPlanOutput(cmd *cobra.Command, plan capabilitypack.Reconcil
 }
 
 func renderPackContract(cmd *cobra.Command, contract capabilitypack.LifecycleContract) error {
-	if contract.CompatibilityObserved {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compatibility: %s\n", contract.Compatibility); err != nil {
-			return err
-		}
-	}
-	for _, binding := range contract.Bindings {
-		mode := binding.Mode
-		if binding.Degradation != "" {
-			mode += " (" + binding.Degradation + ")"
-		}
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Binding: %s:%s -> %s [%s]\n", binding.Kind, binding.ID, binding.Invocation, mode); err != nil {
-			return err
-		}
-	}
-	for _, exclusion := range contract.Exclusions {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Exclusion: %s — %s\n", exclusion.ID, exclusion.Reason); err != nil {
-			return err
-		}
-	}
-	for _, mode := range contract.OptionalModes {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Optional mode: %s — %s\n", mode.ID, strings.Join(mode.Authorities, ", ")); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Invocation-time prompt authority: %s\n%s\n", joinFacts(contract.PromptAuthorities), contract.AuthorityDisclosure); err != nil {
-		return err
-	}
-	return nil
+	return renderPackShowContract(cmd.OutOrStdout(), contract)
 }
 
 func joinFacts(values []string) string {
@@ -566,6 +548,13 @@ func joinFacts(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ", ")
+}
+
+func factOrNone(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return value
 }
 
 type runnerExternalExecutor struct{ runner Runner }
@@ -633,8 +622,20 @@ func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nUpdate available: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderUpdateAvailability(entry), renderAttempt(entry.LatestAttempt), readinessValue(entry.ReadinessObserved.Configured, entry.Readiness.Configured), readinessValue(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), readinessValue(entry.ReadinessObserved.Usability, entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence)); err != nil {
 		return err
 	}
+	optionalAuthorities := append([]capabilitypack.OptionalAuthorityObservation(nil), entry.OptionalAuthorities...)
+	sort.Slice(optionalAuthorities, func(i, j int) bool {
+		if optionalAuthorities[i].ModeID != optionalAuthorities[j].ModeID {
+			return optionalAuthorities[i].ModeID < optionalAuthorities[j].ModeID
+		}
+		return optionalAuthorities[i].Authority < optionalAuthorities[j].Authority
+	})
+	for _, authority := range optionalAuthorities {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Optional authority: mode=%s authority=%s state=%s fallback=%s\n", authority.ModeID, authority.Authority, authority.State, authority.Fallback); err != nil {
+			return err
+		}
+	}
 	for _, projection := range entry.ProjectionDetails {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s owner=%s health=%s contributors=%s\n", projection.ID, projection.Owner, projection.Health, joinFacts(projection.Contributors)); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s target=%s owner=%s health=%s observed=%s desired=%s contributors=%s\n", projection.ID, projection.Target, projection.Owner, projection.Health, projection.ObservedFingerprint, projection.DesiredFingerprint, joinFacts(projection.Contributors)); err != nil {
 			return err
 		}
 	}
@@ -720,33 +721,18 @@ func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver)
 	cmd := &cobra.Command{
 		Use: "show <pack>", Short: "Show a capability pack", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			catalog, err := discoverPackCatalog(opts, workstationResolver)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
-			pack, err := catalog.Show(args[0])
+			report, err := facade.Show(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 			if jsonOutput {
-				return renderPackShowJSON(cmd.OutOrStdout(), pack)
+				return renderPackShowJSON(cmd.OutOrStdout(), report)
 			}
-			counts := pack.ResourceCounts()
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDescription: %s\nSupported CLI surfaces: %s\nProvides capabilities: %s\nRequires capabilities: %s\nRequires global tools: %s\nConflicts with capabilities: %s\nResources: %d skill, %d instruction, %d mcp_server, %d lifecycle\n",
-				pack.ID, pack.Version, pack.Description, joinSurfaces(pack.Surfaces), joinOrNone(pack.Provides), joinOrNone(pack.Requires.Capabilities), joinOrNone(pack.Requires.Tools), joinOrNone(pack.Conflicts), counts.Skills, counts.Instructions, counts.MCPServers, counts.Lifecycles)
-			for _, surface := range pack.Surfaces {
-				contract := capabilitypack.LifecycleContractFor(pack, surface, nil)
-				if !contract.CompatibilityObserved {
-					continue
-				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Surface contract: %s\n", surface); err != nil {
-					return err
-				}
-				if err := renderPackContract(cmd, contract); err != nil {
-					return err
-				}
-			}
-			return nil
+			return renderPackShowHuman(cmd.OutOrStdout(), report)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,9 @@ func TestStructuredOutputV2SchemasValidateFixturesAndProducers(t *testing.T) {
 		}
 		if err := validateStructuredOutput(t, root, schemaName, fixture); err != nil {
 			t.Fatalf("fixture %s: %v", fixtureName, err)
+		}
+		if err := validateCanonicalOperatorOrder(fixture); err != nil {
+			t.Fatalf("fixture %s canonical order: %v", fixtureName, err)
 		}
 		for _, forbidden := range []string{"TOKEN=", "SECRET=", "/Users/", "foreign-document", "mixed-store"} {
 			if strings.Contains(string(fixture), forbidden) {
@@ -120,6 +124,226 @@ func TestStructuredOutputV2SchemasRejectMismatchedReadinessState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPackOperatorSchemasRejectCanonicalNegativeTwins(t *testing.T) {
+	root, _ := filepath.Abs(filepath.Join("..", ".."))
+	fixtureRoot := filepath.Join("testdata", "structured-output", "v2")
+	load := func(t *testing.T, name string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(fixtureRoot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	reject := func(t *testing.T, schema string, document map[string]any) {
+		t.Helper()
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateStructuredOutput(t, root, schema, encoded); err == nil {
+			t.Fatalf("negative twin passed %s: %s", schema, encoded)
+		}
+	}
+
+	t.Run("unknown fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		document["unknown"] = true
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("duplicate fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		surfaces := document["surfaces"].([]any)
+		document["surfaces"] = append(surfaces, surfaces[0])
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("missing fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		delete(document, "source_identity")
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("contradictory fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		intent := document["surface_contracts"].([]any)[0].(map[string]any)["intent"].(map[string]any)
+		intent["state"] = "known"
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("unredacted ambient target", func(t *testing.T) {
+		document := load(t, "pack-status.json")
+		detail := document["entries"].([]any)[0].(map[string]any)["projection_details"].([]any)[0].(map[string]any)
+		detail["target"] = "/Users/operator/.claude/skills/example"
+		reject(t, "pack-status.schema.json", document)
+	})
+	for _, test := range []struct {
+		name    string
+		fixture string
+		edit    func(map[string]any)
+	}{
+		{"nondeterministic top-level order", "pack-show.json", func(document map[string]any) {
+			values := document["surfaces"].([]any)
+			values[0], values[1] = values[1], values[0]
+		}},
+		{"nondeterministic contract order", "pack-show.json", func(document map[string]any) {
+			contract := document["surface_contracts"].([]any)[0].(map[string]any)["contract"].(map[string]any)
+			values := contract["bindings"].([]any)
+			values[0], values[1] = values[1], values[0]
+		}},
+		{"nondeterministic status order", "pack-status.json", func(document map[string]any) {
+			entry := document["entries"].([]any)[0].(map[string]any)
+			values := entry["optional_authorities"].([]any)
+			values[0], values[1] = values[1], values[0]
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			document := load(t, test.fixture)
+			test.edit(document)
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateCanonicalOperatorOrder(encoded); err == nil {
+				t.Fatalf("out-of-order canonical facts passed: %s", encoded)
+			}
+		})
+	}
+}
+
+func validateCanonicalOperatorOrder(instance []byte) error {
+	var document map[string]any
+	if err := json.Unmarshal(instance, &document); err != nil {
+		return err
+	}
+	requireOrdered := func(name string, values []any, key func(any) string) error {
+		for i := 1; i < len(values); i++ {
+			if key(values[i-1]) > key(values[i]) {
+				return fmt.Errorf("%s is not canonically ordered", name)
+			}
+		}
+		return nil
+	}
+	stringKey := func(value any) string { text, _ := value.(string); return text }
+	requireStrings := func(name string, values []any) error {
+		return requireOrdered(name, values, stringKey)
+	}
+	objectKey := func(fields ...string) func(any) string {
+		return func(value any) string {
+			object := value.(map[string]any)
+			parts := make([]string, len(fields))
+			for i, field := range fields {
+				parts[i], _ = object[field].(string)
+			}
+			return strings.Join(parts, "\x00")
+		}
+	}
+	validateAliases := func(name string, values []any) error {
+		return requireOrdered(name, values, objectKey("kind", "id", "name"))
+	}
+	validateContract := func(name string, contract map[string]any) error {
+		checks := []struct {
+			suffix string
+			values []any
+			key    func(any) string
+		}{
+			{"dependency_closure", contract["dependency_closure"].([]any), stringKey},
+			{"bindings", contract["bindings"].([]any), objectKey("kind", "id", "projection", "name")},
+			{"exclusions", contract["exclusions"].([]any), objectKey("id", "code")},
+			{"optional_modes", contract["optional_modes"].([]any), objectKey("id")},
+			{"prompt_authorities", contract["prompt_authorities"].([]any), stringKey},
+			{"aliases", contract["aliases"].([]any), objectKey("kind", "id", "name")},
+		}
+		for _, check := range checks {
+			if err := requireOrdered(name+"."+check.suffix, check.values, check.key); err != nil {
+				return err
+			}
+		}
+		for _, value := range contract["exclusions"].([]any) {
+			exclusion := value.(map[string]any)
+			if err := requireStrings(name+".exclusions.source_paths", exclusion["source_paths"].([]any)); err != nil {
+				return err
+			}
+		}
+		for _, value := range contract["optional_modes"].([]any) {
+			mode := value.(map[string]any)
+			if err := requireStrings(name+".optional_modes.authorities", mode["authorities"].([]any)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch document["report"] {
+	case "pack-show":
+		for _, field := range []string{"historical_versions", "surfaces", "provides", "conflicts"} {
+			if err := requireStrings(field, document[field].([]any)); err != nil {
+				return err
+			}
+		}
+		requires := document["requires"].(map[string]any)
+		for _, field := range []string{"capabilities", "tools"} {
+			if err := requireStrings("requires."+field, requires[field].([]any)); err != nil {
+				return err
+			}
+		}
+		routes := document["update_routes"].([]any)
+		if err := requireOrdered("update_routes", routes, objectKey("from_version", "to_version")); err != nil {
+			return err
+		}
+		for _, value := range routes {
+			route := value.(map[string]any)
+			if err := requireStrings("update_routes.existing_surfaces", route["existing_surfaces"].([]any)); err != nil {
+				return err
+			}
+		}
+		contracts := document["surface_contracts"].([]any)
+		if err := requireOrdered("surface_contracts", contracts, objectKey("surface")); err != nil {
+			return err
+		}
+		for _, value := range contracts {
+			surface := value.(map[string]any)
+			if err := validateContract("surface_contracts.contract", surface["contract"].(map[string]any)); err != nil {
+				return err
+			}
+			intent := surface["intent"].(map[string]any)
+			if err := validateAliases("surface_contracts.intent.aliases", intent["aliases"].([]any)); err != nil {
+				return err
+			}
+		}
+	case "pack-status", "pack-status-overview":
+		entries := document["entries"].([]any)
+		if err := requireOrdered("entries", entries, objectKey("pack", "surface")); err != nil {
+			return err
+		}
+		for _, value := range entries {
+			entry := value.(map[string]any)
+			if err := validateContract("entries.contract", entry["contract"].(map[string]any)); err != nil {
+				return err
+			}
+			projections := entry["projection_details"].([]any)
+			if err := requireOrdered("projection_details", projections, objectKey("id")); err != nil {
+				return err
+			}
+			for _, projectionValue := range projections {
+				projection := projectionValue.(map[string]any)
+				if err := requireStrings("projection_details.contributors", projection["contributors"].([]any)); err != nil {
+					return err
+				}
+			}
+			if err := requireOrdered("optional_authorities", entry["optional_authorities"].([]any), objectKey("mode_id", "authority")); err != nil {
+				return err
+			}
+			for _, field := range []string{"blockers", "evidence", "pending_human_actions"} {
+				if err := requireStrings(field, entry[field].([]any)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func assertStructuredOutput(t *testing.T, root, schemaName, document string) {

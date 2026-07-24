@@ -3,6 +3,7 @@ package capabilitypack
 import (
 	"errors"
 	"sort"
+	"strings"
 
 	"github.com/yersonargotev/packy/internal/reportredaction"
 )
@@ -322,8 +323,28 @@ func actionForReport(action ProjectionAction) ProjectionAction {
 	// Host effects can carry complete merged documents so an adapter can apply
 	// the sealed plan. Structured reports disclose the ordered redacted effect,
 	// never raw owned or mixed-store content.
+	originalSource, originalTarget, originalCommand := action.Source, action.Target, action.Command
 	action.Content = ""
 	action.Args = reportredaction.EnvironmentArguments(action.Args)
+	action.Source = portableProjectionTarget(action.Source)
+	action.Target = portableProjectionTarget(action.Target)
+	action.Command = portableProjectionTarget(action.Command)
+	replacements := []struct{ original, portable string }{
+		{originalSource, action.Source},
+		{originalTarget, action.Target},
+		{originalCommand, action.Command},
+	}
+	sort.SliceStable(replacements, func(i, j int) bool {
+		if len(replacements[i].original) != len(replacements[j].original) {
+			return len(replacements[i].original) > len(replacements[j].original)
+		}
+		return replacements[i].original < replacements[j].original
+	})
+	for _, replacement := range replacements {
+		if replacement.original != "" && replacement.original != replacement.portable {
+			action.Description = strings.ReplaceAll(action.Description, replacement.original, replacement.portable)
+		}
+	}
 	return action
 }
 

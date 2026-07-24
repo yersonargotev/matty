@@ -271,7 +271,9 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// Slice F intentionally deepens capability-pack lifecycle disclosure and
 	// preserves unobserved readiness as unknown. These are post-cutover product
 	// changes, not identity-cutover regressions covered by this frozen baseline.
-	value = regexp.MustCompile(`(?m)^(Binding|Exclusion|Optional mode|Invocation-time prompt authority|Activation grants only|Projection:|Expected readiness:|Observed evidence:|Pending evidence:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(Logical resources|Dependency closure|Binding|Exclusion|Optional mode|Invocation-time prompt authority|Contract aliases|Activation grants only|Projection:|Expected readiness:|Observed evidence:|Pending evidence:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(Phase approval required|Apply result facts):[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^\s+Action facts:[^\n]*\n`).ReplaceAllString(value, "")
 	value = strings.ReplaceAll(value, "authorized=unknown, usable=unknown", "authorized=no, usable=no")
 	value = strings.ReplaceAll(value, "authorized=yes, usable=unknown", "authorized=yes, usable=no")
 	value = strings.ReplaceAll(value, "authorized=no, usable=unknown", "authorized=no, usable=no")
@@ -300,6 +302,7 @@ func removeSliceFJSONFields(value any) {
 			delete(value, "evidence")
 		} else if ok && strings.HasPrefix(report, "pack-status") {
 			value["schema_version"] = float64(1)
+			delete(value, "evidence")
 		} else if ok && report == "doctor" {
 			value["schema_version"] = float64(1)
 			checks, _ := value["checks"].([]any)
@@ -331,9 +334,11 @@ func removeSliceFJSONFields(value any) {
 			value["summary"] = map[string]any{"status": status, "passes": float64(passes), "warnings": float64(warnings), "failures": float64(failures)}
 		}
 		delete(value, "contract")
+		delete(value, "evidence")
 		delete(value, "projection_details")
 		delete(value, "expected_readiness")
 		delete(value, "readiness_observed")
+		delete(value, "optional_authorities")
 		delete(value, "pending_evidence")
 		for _, child := range value {
 			removeSliceFJSONFields(child)
@@ -349,6 +354,11 @@ func normalizeSliceFJSONTranscript(transcript *identityEquivalenceTranscript) {
 	for i := range transcript.Scenarios {
 		var document any
 		if json.Unmarshal([]byte(strings.TrimSpace(transcript.Scenarios[i].Output)), &document) != nil {
+			// Issue #205 makes status evidence path-portable. The frozen rename
+			// baseline predates this output hardening, so compare the remaining
+			// behavioral facts without either absolute or portable targets.
+			transcript.Scenarios[i].Output = regexp.MustCompile(` target=[^,;\s]*`).ReplaceAllString(transcript.Scenarios[i].Output, "")
+			transcript.Scenarios[i].Output = regexp.MustCompile(`(?:\$HOME|\$XDG|\$REPOSITORY|<host-path>)/[^,;\s]+`).ReplaceAllString(transcript.Scenarios[i].Output, "<portable-path>")
 			continue
 		}
 		removeSliceFJSONFields(document)
