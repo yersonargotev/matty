@@ -49,6 +49,22 @@
       },
       "additionalProperties": false
     },
+    "optional_authority": {
+      "type": "object",
+      "required": [
+        "mode_id",
+        "authority",
+        "state",
+        "fallback"
+      ],
+      "properties": {
+        "mode_id": { "type": "string" },
+        "authority": { "type": "string" },
+        "state": { "enum": ["available", "unavailable", "unknown"] },
+        "fallback": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "entry": {
       "type": "object",
       "required": [
@@ -62,6 +78,7 @@
         "projection_details",
         "contract",
         "readiness",
+        "optional_authorities",
         "blockers",
         "evidence",
         "pending_human_actions"
@@ -189,7 +206,10 @@
                 "type": "string"
               },
               "target": {
-                "type": "string"
+                "type": "string",
+                "not": {
+                  "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                }
               },
               "owner": {
                 "type": "string"
@@ -213,11 +233,13 @@
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "uniqueItems": true
               }
             },
             "additionalProperties": false
-          }
+          },
+          "uniqueItems": true
         },
         "contract": {
           "$ref": "lifecycle-contract.schema.json"
@@ -225,23 +247,33 @@
         "readiness": {
           "$ref": "#/$defs/readiness"
         },
+        "optional_authorities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/optional_authority"
+          },
+          "uniqueItems": true
+        },
         "blockers": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "uniqueItems": true
         },
         "evidence": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "uniqueItems": true
         },
         "pending_human_actions": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "uniqueItems": true
         }
       },
       "additionalProperties": false
@@ -267,7 +299,8 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/entry"
-      }
+      },
+      "uniqueItems": true
     }
   },
   "additionalProperties": false

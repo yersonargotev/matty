@@ -300,6 +300,7 @@ func removeSliceFJSONFields(value any) {
 			delete(value, "evidence")
 		} else if ok && strings.HasPrefix(report, "pack-status") {
 			value["schema_version"] = float64(1)
+			delete(value, "evidence")
 		} else if ok && report == "doctor" {
 			value["schema_version"] = float64(1)
 			checks, _ := value["checks"].([]any)
@@ -331,9 +332,11 @@ func removeSliceFJSONFields(value any) {
 			value["summary"] = map[string]any{"status": status, "passes": float64(passes), "warnings": float64(warnings), "failures": float64(failures)}
 		}
 		delete(value, "contract")
+		delete(value, "evidence")
 		delete(value, "projection_details")
 		delete(value, "expected_readiness")
 		delete(value, "readiness_observed")
+		delete(value, "optional_authorities")
 		delete(value, "pending_evidence")
 		for _, child := range value {
 			removeSliceFJSONFields(child)
@@ -349,6 +352,10 @@ func normalizeSliceFJSONTranscript(transcript *identityEquivalenceTranscript) {
 	for i := range transcript.Scenarios {
 		var document any
 		if json.Unmarshal([]byte(strings.TrimSpace(transcript.Scenarios[i].Output)), &document) != nil {
+			// Issue #205 makes status evidence path-portable. The frozen rename
+			// baseline predates this output hardening, so compare the remaining
+			// behavioral facts without either absolute or portable targets.
+			transcript.Scenarios[i].Output = regexp.MustCompile(` target=[^,;\s]*`).ReplaceAllString(transcript.Scenarios[i].Output, "")
 			continue
 		}
 		removeSliceFJSONFields(document)

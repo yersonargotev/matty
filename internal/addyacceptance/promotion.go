@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -177,6 +179,64 @@ func CanonicalPromotionHistory() PromotionHistoryFixture {
 		},
 		Routes: []VersionRoute{{From: PackVersion, To: "1.1.0", Kind: "update", Migration: []string{}, Actions: []string{"project-complete-surface"}}},
 	}
+}
+
+// CanonicalPromotionCurrent returns a detached synthetic current Addy fixture.
+// It is derived from the immutable promotion history and does not advertise the
+// candidate in the production catalog.
+func CanonicalPromotionCurrent() ImmutableVersionFixture {
+	history := CanonicalPromotionHistory()
+	for _, version := range history.Versions {
+		if version.Version == "1.1.0" {
+			version.Surfaces = append([]string(nil), version.Surfaces...)
+			version.Manifest = append([]byte(nil), version.Manifest...)
+			version.Files = append([]SyntheticHistoryFile(nil), version.Files...)
+			for i := range version.Files {
+				file := &version.Files[i]
+				switch {
+				case strings.HasPrefix(file.Path, "agents/") && filepath.Ext(file.Path) == ".md":
+					id := strings.TrimSuffix(filepath.Base(file.Path), ".md")
+					file.Content = fmt.Sprintf("---\nname: %s\ndescription: \"Synthetic Addy %s persona\"\n---\n\n# Synthetic Addy acceptance agent\n", id, id)
+				case strings.HasPrefix(file.Path, "commands/") && filepath.Ext(file.Path) == ".toml":
+					id := strings.TrimSuffix(filepath.Base(file.Path), ".toml")
+					file.Content = fmt.Sprintf("description = \"Synthetic Addy %s command\"\nprompt = '''Run the synthetic Addy workflow with $ARGUMENTS.'''\n", id)
+				default:
+					continue
+				}
+				file.SHA256 = digest([]byte(file.Content))
+			}
+			version.SnapshotSHA256 = syntheticHistorySnapshotDigest(version.Files)
+			return version
+		}
+	}
+	panic("canonical Addy promotion history has no current 1.1.0 fixture")
+}
+
+// WriteCanonicalPromotionCurrent writes the synthetic current snapshot beneath
+// an empty disposable root.
+func WriteCanonicalPromotionCurrent(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err = os.MkdirAll(root, 0o700); err != nil {
+			return err
+		}
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("fixture root must be empty: %s", root)
+	}
+	for _, file := range CanonicalPromotionCurrent().Files {
+		target := filepath.Join(root, filepath.FromSlash(file.Path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, []byte(file.Content), os.FileMode(file.Mode)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func promotionManifestV2(fixture Fixture) []byte {

@@ -27,6 +27,13 @@ type JSONReadiness struct {
 	Usable     JSONOptionalBool `json:"usable"`
 }
 
+type JSONOptionalAuthority struct {
+	ModeID    string                 `json:"mode_id"`
+	Authority string                 `json:"authority"`
+	State     OptionalAuthorityState `json:"state"`
+	Fallback  string                 `json:"fallback"`
+}
+
 type JSONProjectionSummary struct {
 	Verified  int `json:"verified"`
 	Missing   int `json:"missing"`
@@ -46,19 +53,20 @@ type JSONProjectionStatus struct {
 }
 
 type JSONStatusEntry struct {
-	Pack                string                 `json:"pack"`
-	PackVersion         string                 `json:"pack_version"`
-	Surface             Surface                `json:"surface"`
-	Intent              JSONIntent             `json:"intent"`
-	UpdateAvailable     bool                   `json:"update_available"`
-	LatestAttempt       *JSONAttempt           `json:"latest_attempt"`
-	Projections         JSONProjectionSummary  `json:"projection_summary"`
-	ProjectionDetails   []JSONProjectionStatus `json:"projection_details"`
-	Contract            LifecycleContract      `json:"contract"`
-	Readiness           JSONReadiness          `json:"readiness"`
-	Blockers            []string               `json:"blockers"`
-	Evidence            []string               `json:"evidence"`
-	PendingHumanActions []string               `json:"pending_human_actions"`
+	Pack                string                  `json:"pack"`
+	PackVersion         string                  `json:"pack_version"`
+	Surface             Surface                 `json:"surface"`
+	Intent              JSONIntent              `json:"intent"`
+	UpdateAvailable     bool                    `json:"update_available"`
+	LatestAttempt       *JSONAttempt            `json:"latest_attempt"`
+	Projections         JSONProjectionSummary   `json:"projection_summary"`
+	ProjectionDetails   []JSONProjectionStatus  `json:"projection_details"`
+	Contract            LifecycleContract       `json:"contract"`
+	Readiness           JSONReadiness           `json:"readiness"`
+	OptionalAuthorities []JSONOptionalAuthority `json:"optional_authorities"`
+	Blockers            []string                `json:"blockers"`
+	Evidence            []string                `json:"evidence"`
+	PendingHumanActions []string                `json:"pending_human_actions"`
 }
 
 type JSONStatusReport struct {
@@ -92,8 +100,9 @@ func (report StatusReport) JSONReport(targeted bool) JSONStatusReport {
 		entries = append(entries, JSONStatusEntry{
 			Pack: entry.Pack.ID, PackVersion: entry.Pack.Version, Surface: entry.Surface,
 			Intent: intent, UpdateAvailable: entry.UpdateAvailable, LatestAttempt: attempt, Projections: JSONProjectionSummary{Verified: entry.Projections.Verified, Missing: entry.Projections.Missing, Drifted: entry.Projections.Drifted, Ambiguous: entry.Projections.Ambiguous, Unmanaged: entry.Projections.Unmanaged},
-			Readiness:         JSONReadiness{optionalBool(entry.ReadinessObserved.Configured, entry.Readiness.Configured), optionalBool(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), optionalBool(entry.ReadinessObserved.Usability, entry.Readiness.Usable)},
-			ProjectionDetails: jsonProjectionDetails(entry.ProjectionDetails), Contract: entry.Contract,
+			Readiness:           JSONReadiness{optionalBool(entry.ReadinessObserved.Configured, entry.Readiness.Configured), optionalBool(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), optionalBool(entry.ReadinessObserved.Usability, entry.Readiness.Usable)},
+			OptionalAuthorities: jsonOptionalAuthorities(entry.OptionalAuthorities),
+			ProjectionDetails:   jsonProjectionDetails(entry.ProjectionDetails), Contract: entry.Contract,
 			Blockers: sortedCopy(entry.Blockers), Evidence: sortedCopy(entry.Evidence), PendingHumanActions: sortedCopy(entry.PendingHumanActions),
 		})
 	}
@@ -104,6 +113,22 @@ func (report StatusReport) JSONReport(targeted bool) JSONStatusReport {
 		return entries[i].Surface < entries[j].Surface
 	})
 	return JSONStatusReport{SchemaVersion: StatusSchemaVersion, Report: kind, Entries: entries}
+}
+
+func jsonOptionalAuthorities(values []OptionalAuthorityObservation) []JSONOptionalAuthority {
+	result := make([]JSONOptionalAuthority, 0, len(values))
+	for _, value := range values {
+		result = append(result, JSONOptionalAuthority{
+			ModeID: value.ModeID, Authority: value.Authority, State: value.State, Fallback: value.Fallback,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ModeID != result[j].ModeID {
+			return result[i].ModeID < result[j].ModeID
+		}
+		return result[i].Authority < result[j].Authority
+	})
+	return result
 }
 
 func jsonProjectionDetails(values []ProjectionStatus) []JSONProjectionStatus {

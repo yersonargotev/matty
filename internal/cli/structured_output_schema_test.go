@@ -122,6 +122,62 @@ func TestStructuredOutputV2SchemasRejectMismatchedReadinessState(t *testing.T) {
 	}
 }
 
+func TestPackOperatorSchemasRejectCanonicalNegativeTwins(t *testing.T) {
+	root, _ := filepath.Abs(filepath.Join("..", ".."))
+	fixtureRoot := filepath.Join("testdata", "structured-output", "v2")
+	load := func(t *testing.T, name string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(fixtureRoot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	reject := func(t *testing.T, schema string, document map[string]any) {
+		t.Helper()
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateStructuredOutput(t, root, schema, encoded); err == nil {
+			t.Fatalf("negative twin passed %s: %s", schema, encoded)
+		}
+	}
+
+	t.Run("unknown fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		document["unknown"] = true
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("duplicate fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		surfaces := document["surfaces"].([]any)
+		document["surfaces"] = append(surfaces, surfaces[0])
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("missing fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		delete(document, "source_identity")
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("contradictory fact", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		intent := document["surface_contracts"].([]any)[0].(map[string]any)["intent"].(map[string]any)
+		intent["state"] = "known"
+		reject(t, "pack-show.schema.json", document)
+	})
+	t.Run("unredacted ambient target", func(t *testing.T) {
+		document := load(t, "pack-status.json")
+		detail := document["entries"].([]any)[0].(map[string]any)["projection_details"].([]any)[0].(map[string]any)
+		detail["target"] = "/Users/operator/.claude/skills/example"
+		reject(t, "pack-status.schema.json", document)
+	})
+}
+
 func assertStructuredOutput(t *testing.T, root, schemaName, document string) {
 	t.Helper()
 	if err := validateStructuredOutput(t, root, schemaName, []byte(document)); err != nil {

@@ -2,7 +2,6 @@ package capabilitypack
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,7 +23,13 @@ func TestCompleteAddyAliasesRemainSurfaceLocalAndSharedRemovalRetainsContributor
 		if resource.Kind != "command" || resource.ID != "build" {
 			continue
 		}
-		if resource.Bindings[0].Name != "addy-build" || resource.Bindings[0].Invocation != "$addy-build" || resource.Bindings[1].Name != "build" || resource.Bindings[1].Invocation != "/build" {
+		bindings := map[Surface]Binding{}
+		for _, binding := range resource.Bindings {
+			bindings[binding.Surface] = binding
+		}
+		if bindings[SurfaceCodex].Name != "addy-build" || bindings[SurfaceCodex].Invocation != "$addy-build" ||
+			bindings[SurfaceClaude].Name != "build" || bindings[SurfaceClaude].Invocation != "/build" ||
+			bindings[SurfaceOpenCode].Name != "build" || bindings[SurfaceOpenCode].Invocation != "/build" {
 			t.Fatalf("alias leaked across surfaces: %+v", resource.Bindings)
 		}
 	}
@@ -94,51 +99,63 @@ func TestCompleteAddyCollisionBlocksUntilExactSurfaceAliasReplans(t *testing.T) 
 	if !replanned.Applicable() || len(replanned.Blockers()) != 0 || replanned.Aliases()[0] != alias {
 		t.Fatalf("exact alias did not produce a fresh applicable plan: %+v", replanned.JSONReport(true))
 	}
+	if blocked.ID() == replanned.ID() || blocked.Digest() == replanned.Digest() {
+		t.Fatal("explicit alias did not require a fresh sealed plan")
+	}
 	if len(adapter.actions) != 0 || len(store.saves) != 0 {
 		t.Fatal("collision/alias previews crossed a mutation boundary")
 	}
 }
 
 func TestCompleteAddyCohortUsesTypedConsentFreshVerificationAndExactNoOp(t *testing.T) {
-	catalog := completeAddyCatalog(t)
-	pack, err := catalog.Show("addy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending := completeAddyObservation(pack, SurfaceCodex, "missing")
-	verified := completeAddyObservation(pack, SurfaceCodex, "desired")
-	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, verified, verified}}
-	store := &fakeActivationStore{}
-	facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceCodex: adapter}))
+	for _, surface := range []Surface{SurfaceClaude, SurfaceCodex, SurfaceOpenCode} {
+		t.Run(string(surface), func(t *testing.T) {
+			catalog := completeAddyCatalog(t)
+			pack, err := catalog.Show("addy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := completeAddyObservation(pack, surface, "missing")
+			verified := completeAddyObservation(pack, surface, "desired")
+			adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, verified, verified, verified}}
+			store := &fakeActivationStore{}
+			facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{surface: adapter}))
 
-	plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "addy", Surface: SurfaceCodex})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Phases()) != 1 || plan.Phases()[0].Kind != ConsentReversibleLocal || len(plan.Phases()[0].Actions) != 36 {
-		t.Fatalf("complete Addy phase = %+v", plan.Phases())
-	}
-	wrong := facade.Approve(plan, ConsentDestructiveCleanup)
-	if _, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{wrong}, Interactive: true}); !errors.Is(err, ErrApprovalMismatch) {
-		t.Fatalf("wrong typed receipt error = %v", err)
-	}
-	if len(adapter.actions) != 0 || len(store.saves) != 0 {
-		t.Fatal("rejected receipt crossed an effect boundary")
-	}
+			plan, err := facade.Preview(context.Background(), ActivationRequest{PackID: "addy", Surface: surface})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Phases()) != 1 || plan.Phases()[0].Kind != ConsentReversibleLocal || len(plan.Phases()[0].Actions) != 36 {
+				t.Fatalf("complete Addy phase = %+v", plan.Phases())
+			}
+			wrong := facade.Approve(plan, ConsentDestructiveCleanup)
+			if _, err = facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{wrong}, Interactive: true}); !errors.Is(err, ErrApprovalMismatch) {
+				t.Fatalf("wrong typed receipt error = %v", err)
+			}
+			if len(adapter.actions) != 0 || len(store.saves) != 0 {
+				t.Fatal("rejected receipt crossed an effect boundary")
+			}
 
-	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Projections != 36 || len(store.state.Ownership) != 36 {
-		t.Fatalf("verified complete Apply = actions %d ownership %d", result.Projections, len(store.state.Ownership))
-	}
-	noOp, err := facade.Preview(context.Background(), ActivationRequest{PackID: "addy", Surface: SurfaceCodex})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !noOp.NoOp() || len(noOp.Phases()) != 0 {
-		t.Fatalf("exact candidate was not a no-op: %+v", noOp.JSONReport(true))
+			result, err := facade.Apply(context.Background(), ApplyRequest{Plan: plan, Approvals: []ApprovalReceipt{facade.Approve(plan, ConsentReversibleLocal)}, Interactive: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Projections != 36 || len(store.state.Ownership) != 36 {
+				t.Fatalf("verified complete Apply = actions %d ownership %d", result.Projections, len(store.state.Ownership))
+			}
+			before := cloneActivationState(store.state)
+			saves, actions := len(store.saves), len(adapter.actions)
+			noOp, err := facade.PreviewUpdate(context.Background(), UpdateRequest{PackID: "addy", Surface: surface})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !noOp.NoOp() || len(noOp.Phases()) != 0 {
+				t.Fatalf("exact current update was not a no-op: %+v", noOp.JSONReport(true))
+			}
+			if !reflect.DeepEqual(store.state, before) || len(store.saves) != saves || len(adapter.actions) != actions {
+				t.Fatal("exact current update changed state, files, ownership, aliases, or evidence")
+			}
+		})
 	}
 }
 
@@ -177,6 +194,67 @@ func TestCompleteAddyAtomicAdapterFailureRecordsAttemptAndRequiresFreshRecoveryP
 	}
 	if !recovery.Recovery() || recovery.ID() == plan.ID() || recovery.HistoricalAttempt() == nil {
 		t.Fatalf("fresh recovery plan = %+v", recovery.JSONReport(true))
+	}
+	failed := cloneJournal(*store.state.Journal)
+	revision := store.state.Intent.Revision
+	adapter.applyErr = nil
+	adapter.inspectCalls = 0
+	verified := completeAddyObservation(pack, SurfaceCodex, "desired")
+	adapter.observations = []SurfaceInspection{pending, pending, verified}
+	recovery, err = facade.Preview(context.Background(), ActivationRequest{PackID: "addy", Surface: SurfaceCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := facade.Apply(context.Background(), ApplyRequest{Plan: recovery, Approvals: []ApprovalReceipt{facade.Approve(recovery, ConsentReversibleLocal)}, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || store.state.Journal != nil || store.state.Intent.Revision != revision || len(store.state.Ownership) != 36 ||
+		len(store.state.History) != 1 || !reflect.DeepEqual(store.state.History[0], failed) {
+		t.Fatalf("completed recovery result=%+v state=%+v", result, store.state)
+	}
+}
+
+func TestCompleteAddyDeactivationRemovesAllOwnedProjectionsOnEverySurface(t *testing.T) {
+	for _, surface := range []Surface{SurfaceClaude, SurfaceCodex, SurfaceOpenCode} {
+		t.Run(string(surface), func(t *testing.T) {
+			catalog := completeAddyCatalog(t)
+			pack, err := catalog.Show("addy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := completeAddyObservation(pack, surface, "missing")
+			verified := completeAddyObservation(pack, surface, "desired")
+			adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, verified}}
+			store := &fakeActivationStore{}
+			facade := NewFacade(catalog, WithActivation(store, map[Surface]SurfaceAdapter{surface: adapter}))
+			activation, err := facade.Preview(context.Background(), ActivationRequest{PackID: "addy", Surface: surface})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := facade.Apply(context.Background(), ApplyRequest{Plan: activation, Approvals: []ApprovalReceipt{facade.Approve(activation, ConsentReversibleLocal)}, Interactive: true}); err != nil {
+				t.Fatal(err)
+			}
+
+			present := completeAddyRemovalObservation(store.state.Ownership, true)
+			absent := completeAddyRemovalObservation(store.state.Ownership, false)
+			adapter.inspectCalls = 0
+			adapter.observations = []SurfaceInspection{present, present, absent}
+			deactivation, err := facade.PreviewDeactivate(context.Background(), DeactivationRequest{PackID: "addy", Surface: surface})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deactivation.Phases()) != 1 || deactivation.Phases()[0].Kind != ConsentDestructiveCleanup || len(deactivation.Phases()[0].Actions) != 36 {
+				t.Fatalf("complete deactivation phase = %+v", deactivation.Phases())
+			}
+			result, err := facade.Apply(context.Background(), ApplyRequest{Plan: deactivation, Approvals: []ApprovalReceipt{facade.Approve(deactivation, ConsentDestructiveCleanup)}, Interactive: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Verified || store.state.Intent.Active || len(store.state.Ownership) != 0 || store.state.Journal != nil {
+				t.Fatalf("complete deactivation result=%+v state=%+v", result, store.state)
+			}
+		})
 	}
 }
 
@@ -281,30 +359,17 @@ func (s *surfaceStateStore) Save(_ context.Context, surface Surface, expectedRev
 func completeAddyCatalog(t *testing.T) Catalog {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "bundle")
-	if err := addyacceptance.WriteSnapshot(bundle); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := json.Marshal(addyacceptance.Canonical().Manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(manifest, &document); err != nil {
-		t.Fatal(err)
-	}
-	delete(document, "surfaces")
-	manifest, err = json.Marshal(document)
-	if err != nil {
+	if err := addyacceptance.WriteCanonicalPromotionCurrent(bundle); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(bundle, "packs", "addy", "pack.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, manifest, 0o600); err != nil {
+	if err := os.WriteFile(path, addyacceptance.CanonicalPromotionCurrent().Manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := discoverCatalog(bundle, []catalogEntry{{ID: "addy", Description: "Addy acceptance cohort", Surfaces: []Surface{SurfaceCodex, SurfaceOpenCode}}})
+	catalog, err := discoverCatalog(bundle, []catalogEntry{{ID: "addy", Description: "Addy acceptance cohort"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +387,21 @@ func completeAddyObservation(pack Pack, surface Surface, observed string) Surfac
 			fingerprint := "desired"
 			inspection.Projections = append(inspection.Projections, ObservedProjection{ID: binding.Projection + ":" + binding.Name, Exists: observed == fingerprint, ObservedFingerprint: observed, DesiredFingerprint: fingerprint, Action: ProjectionAction{ID: binding.Projection + ":" + binding.Name, Description: "project " + resource.Kind + ":" + resource.ID}})
 		}
+	}
+	return inspection
+}
+
+func completeAddyRemovalObservation(ownership []ProjectionOwnership, exists bool) SurfaceInspection {
+	inspection := SurfaceInspection{Revision: "host-removal"}
+	for _, owner := range ownership {
+		observed := ""
+		if exists {
+			observed = owner.Fingerprint
+		}
+		inspection.Projections = append(inspection.Projections, ObservedProjection{
+			ID: owner.ID, Goal: ProjectionAbsent, Exists: exists, ObservedFingerprint: observed,
+			Action: ProjectionAction{ID: owner.ID, Mode: ProjectionDeleteTarget, Description: "remove " + owner.ID},
+		})
 	}
 	return inspection
 }

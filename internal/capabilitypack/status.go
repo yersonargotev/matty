@@ -3,6 +3,7 @@ package capabilitypack
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 )
 
@@ -292,7 +293,7 @@ func deriveProjectionStatus(packID string, observed []ObservedProjection, owners
 	result := make([]ProjectionStatus, 0, len(observed))
 	var summary ProjectionSummary
 	for _, p := range observed {
-		status := ProjectionStatus{ID: p.ID, Target: p.Action.Target, ObservedFingerprint: p.ObservedFingerprint, DesiredFingerprint: p.DesiredFingerprint, Contributors: c.contributorSet(p.ID)}
+		status := ProjectionStatus{ID: p.ID, Target: portableProjectionTarget(p.Action.Target), ObservedFingerprint: p.ObservedFingerprint, DesiredFingerprint: p.DesiredFingerprint, Contributors: c.contributorSet(p.ID)}
 		owner, owned := ownershipByID(ownership, p.ID)
 		if p.ExternallyManaged {
 			status.Owner = "external"
@@ -331,6 +332,13 @@ func deriveProjectionStatus(packID string, observed []ObservedProjection, owners
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, summary
+}
+
+func portableProjectionTarget(target string) string {
+	if target == "" || !filepath.IsAbs(target) {
+		return target
+	}
+	return filepath.Join("<host-path>", filepath.Base(filepath.Clean(target)))
 }
 
 func latestAttemptStatus(state ActivationState, packID string, surface Surface) *AttemptStatus {

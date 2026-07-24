@@ -70,6 +70,42 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	}
 }
 
+func TestCanonicalPromotionCurrentIsDetachedAndWritesExactSnapshot(t *testing.T) {
+	current := CanonicalPromotionCurrent()
+	if current.Version != "1.1.0" || current.SchemaVersion != 3 ||
+		!reflect.DeepEqual(current.Surfaces, []string{"claude", "codex", "opencode"}) {
+		t.Fatalf("current promotion fixture = %#v", current)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(current.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != current.Version || manifest.SchemaVersion != current.SchemaVersion || len(manifest.Resources) != 44 {
+		t.Fatalf("current manifest = %#v", manifest)
+	}
+
+	current.Manifest[0] ^= 0xff
+	current.Files[0].Content = "mutated"
+	again := CanonicalPromotionCurrent()
+	if bytes.Equal(current.Manifest, again.Manifest) || again.Files[0].Content == "mutated" {
+		t.Fatal("current promotion fixture exposed shared bytes")
+	}
+
+	root := filepath.Join(t.TempDir(), "snapshot")
+	if err := WriteCanonicalPromotionCurrent(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range again.Files {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.Path)))
+		if err != nil || string(data) != file.Content {
+			t.Fatalf("snapshot file %s = %q, %v", file.Path, data, err)
+		}
+	}
+	if err := WriteCanonicalPromotionCurrent(root); err == nil || !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("non-empty snapshot error = %v", err)
+	}
+}
+
 func TestReconstructIndependentPromotionInputsRejectsUntrustedShapes(t *testing.T) {
 	valid := ReconstructedFile{Path: "bundle/packs/addy/pack.json", Mode: 0o644, SHA256: digest([]byte("manifest"))}
 	material := IndependentPromotionMaterial{

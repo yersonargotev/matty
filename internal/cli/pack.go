@@ -633,6 +633,18 @@ func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s on %s\nIntent: %s\nUpdate available: %s\nLatest attempt: %s\nReadiness: configured=%s, authorized=%s, usable=%s\nProjections: %d verified; %d drifted; %d ambiguous; %d missing; %d unmanaged\nBlockers: %s\nPending human actions: %s\nEvidence: %s\n", entry.Pack.ID, entry.Pack.Version, entry.Surface, renderIntent(entry.Intent), renderUpdateAvailability(entry), renderAttempt(entry.LatestAttempt), readinessValue(entry.ReadinessObserved.Configured, entry.Readiness.Configured), readinessValue(entry.ReadinessObserved.Authorization, entry.Readiness.Authorized), readinessValue(entry.ReadinessObserved.Usability, entry.Readiness.Usable), entry.Projections.Verified, entry.Projections.Drifted, entry.Projections.Ambiguous, entry.Projections.Missing, entry.Projections.Unmanaged, renderPendingAction(entry.Blockers), renderPendingAction(entry.PendingHumanActions), renderPendingAction(entry.Evidence)); err != nil {
 		return err
 	}
+	optionalAuthorities := append([]capabilitypack.OptionalAuthorityObservation(nil), entry.OptionalAuthorities...)
+	sort.Slice(optionalAuthorities, func(i, j int) bool {
+		if optionalAuthorities[i].ModeID != optionalAuthorities[j].ModeID {
+			return optionalAuthorities[i].ModeID < optionalAuthorities[j].ModeID
+		}
+		return optionalAuthorities[i].Authority < optionalAuthorities[j].Authority
+	})
+	for _, authority := range optionalAuthorities {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Optional authority: mode=%s authority=%s state=%s fallback=%s\n", authority.ModeID, authority.Authority, authority.State, authority.Fallback); err != nil {
+			return err
+		}
+	}
 	for _, projection := range entry.ProjectionDetails {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s owner=%s health=%s contributors=%s\n", projection.ID, projection.Owner, projection.Health, joinFacts(projection.Contributors)); err != nil {
 			return err
@@ -720,33 +732,18 @@ func newPackShowCommand(opts Options, workstationResolver *workstation.Resolver)
 	cmd := &cobra.Command{
 		Use: "show <pack>", Short: "Show a capability pack", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			catalog, err := discoverPackCatalog(opts, workstationResolver)
+			facade, err := activationFacade(opts, workstationResolver)
 			if err != nil {
 				return err
 			}
-			pack, err := catalog.Show(args[0])
+			report, err := facade.Show(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 			if jsonOutput {
-				return renderPackShowJSON(cmd.OutOrStdout(), pack)
+				return renderPackShowJSON(cmd.OutOrStdout(), report)
 			}
-			counts := pack.ResourceCounts()
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\nDescription: %s\nSupported CLI surfaces: %s\nProvides capabilities: %s\nRequires capabilities: %s\nRequires global tools: %s\nConflicts with capabilities: %s\nResources: %d skill, %d instruction, %d mcp_server, %d lifecycle\n",
-				pack.ID, pack.Version, pack.Description, joinSurfaces(pack.Surfaces), joinOrNone(pack.Provides), joinOrNone(pack.Requires.Capabilities), joinOrNone(pack.Requires.Tools), joinOrNone(pack.Conflicts), counts.Skills, counts.Instructions, counts.MCPServers, counts.Lifecycles)
-			for _, surface := range pack.Surfaces {
-				contract := capabilitypack.LifecycleContractFor(pack, surface, nil)
-				if !contract.CompatibilityObserved {
-					continue
-				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Surface contract: %s\n", surface); err != nil {
-					return err
-				}
-				if err := renderPackContract(cmd, contract); err != nil {
-					return err
-				}
-			}
-			return nil
+			return renderPackShowHuman(cmd.OutOrStdout(), report)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable versioned JSON")
