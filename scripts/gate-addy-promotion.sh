@@ -24,7 +24,7 @@ while IFS= read -r path; do
     bundle/packs/addy/pack.json | bundle/sources/addy.lock.json | bundle/history/addy/*)
       promotion_change=true
       ;;
-    .github/workflows/ci.yml | internal/addyacceptance/promotion.go | internal/addyacceptance/promotion_test.go | internal/capabilitypack/catalog.go | internal/capabilitypack/manifest_v3_test.go | internal/ci/validation_test.go | internal/ci/workflow_trust_boundaries_test.go | internal/claudecode/surface.go | internal/claudecode/capabilitypack_runtime_test.go | internal/tools/addypromotiongate/* | scripts/gate-addy-promotion.sh | scripts/validate-addy-acceptance.sh)
+    .github/workflows/ci.yml | internal/addyacceptance/* | internal/capabilitypack/* | internal/ci/* | internal/claudecode/* | internal/tools/addypromotiongate/* | scripts/gate-addy-promotion.sh | scripts/validate-addy-acceptance.sh)
       if [[ "$base_has_promotion_gate" == true ]]; then
         foundation_change=true
       fi

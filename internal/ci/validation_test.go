@@ -290,10 +290,10 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 		t.Fatalf("gate output is not canonical: %v\n%s", err, output)
 	}
 
-	promotionSource := filepath.Join(root, "internal", "addyacceptance", "promotion.go")
-	writeFile(t, promotionSource, readFile(t, promotionSource)+"\n// changed promotion oracle\n")
-	runGit(t, root, "add", promotionSource)
-	runGit(t, root, "commit", "-qm", "change promotion oracle")
+	fixtureSource := filepath.Join(root, "internal", "addyacceptance", "fixture.go")
+	writeFile(t, fixtureSource, readFile(t, fixtureSource)+"\n// changed canonical Addy fixture\n")
+	runGit(t, root, "add", fixtureSource)
+	runGit(t, root, "commit", "-qm", "change Addy fixture authority")
 	authorityHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
 	output, err = runAddyGate(root, head, authorityHead)
 	if err != nil {
@@ -321,7 +321,7 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	}
 
 	script := readFile(t, filepath.Join(root, "scripts", "gate-addy-promotion.sh"))
-	for _, classified := range []string{"bundle/packs/addy/pack.json", "bundle/history/addy/*", "bundle/sources/addy.lock.json", `ID:[[:space:]]*"addy"`} {
+	for _, classified := range []string{"bundle/packs/addy/pack.json", "bundle/history/addy/*", "bundle/sources/addy.lock.json", "internal/addyacceptance/*", "internal/capabilitypack/*", "internal/claudecode/*", `ID:[[:space:]]*"addy"`} {
 		if !strings.Contains(script, classified) {
 			t.Fatalf("promotion classifier missing %q", classified)
 		}

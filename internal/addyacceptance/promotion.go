@@ -273,7 +273,7 @@ func promotionAgentAuthority(id string) map[string]any {
 			record("network", []string{"optional-mode:browser-network:network"}, networkOutcome, networkTools, networkFallback),
 			record("package-manager", []string{"optional-mode:package-tools:package-manager"}, "native", []string{"Bash"}, "report commands without running them"),
 			record("process", []string{"optional-mode:package-tools:process", "permission:process"}, "native", []string{"Bash"}, "report commands without running them"),
-			record("subagent", []string{"optional-mode:specialist-fanout:subagent"}, "fallback", []string{}, "sequential exact-persona analysis"),
+			record("subagent", []string{"optional-mode:specialist-fanout:subagent"}, "fallback", []string{}, "sequential single-agent analysis"),
 		},
 	}
 }

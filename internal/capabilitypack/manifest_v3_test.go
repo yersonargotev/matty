@@ -153,7 +153,7 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 			agent := resource(m, "agent", "helper")
 			agent["tools"], agent["permissions"] = []any{"browser", "network"}, []any{"browser", "network"}
 			a["authorities"] = []any{
-				map[string]any{"portable": "network", "declarations": []any{"permission:network", "tool:network"}, "outcome": "native", "claude_tools": []any{"WebSearch"}, "fallback": "none"},
+				map[string]any{"portable": "network", "declarations": []any{"permission:network", "tool:network"}, "outcome": "native", "claude_tools": []any{"WebFetch", "WebSearch"}, "fallback": "none"},
 				record(a),
 			}
 		}},
@@ -216,6 +216,25 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 		{"network guarded", "does not allow guarded outcome", func(m map[string]any) {
 			setSingleAuthority(m, "network", "guarded", []any{"WebSearch"}, "none")
 		}},
+		{"network native missing WebSearch", "requires exact claude_tools", func(m map[string]any) {
+			setSingleAuthority(m, "network", "native", []any{"WebFetch"}, "none")
+		}},
+		{"network altered declared fallback", "fallback must exactly match declared fallback", func(m map[string]any) {
+			addMultiAuthorityOptionalMode(m)
+			records := authority(m)["authorities"].([]any)
+			records[1].(map[string]any)["fallback"] = "Altered fallback"
+		}},
+		{"process altered declared fallback", "fallback must exactly match declared fallback", func(m map[string]any) {
+			setSingleAuthority(m, "process", "native", []any{"Bash"}, "Altered fallback")
+			addOptionalModeForPortable(m, "process-mode", "process", "Use the declared process fallback")
+		}},
+		{"conflicting declared fallbacks", "conflicting declared fallbacks", func(m map[string]any) {
+			setSingleAuthority(m, "process", "native", []any{"Bash"}, "First fallback")
+			m["contract"].(map[string]any)["optional_modes"] = []any{
+				map[string]any{"id": "first-mode", "authorities": []any{"process"}, "fallback": "First fallback"},
+				map[string]any{"id": "second-mode", "authorities": []any{"process"}, "fallback": "Second fallback"},
+			}
+		}},
 		{"filesystem fallback", "does not allow fallback outcome", func(m map[string]any) {
 			setSingleAuthority(m, "filesystem", "fallback", []any{}, "Continue without filesystem access")
 		}},
@@ -227,9 +246,9 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 			r := record(authority(m))
 			r["outcome"], r["claude_tools"] = "native", []any{}
 		}},
-		{"fallback with tools", "fallback outcome", func(m map[string]any) {
+		{"fallback with tools", "requires exact claude_tools", func(m map[string]any) {
 			r := record(authority(m))
-			r["portable"], r["declarations"], r["claude_tools"] = "network", []any{"permission:network", "tool:network"}, []any{"WebSearch"}
+			r["portable"], r["declarations"], r["claude_tools"] = "network", []any{"permission:network", "tool:network"}, []any{"WebFetch", "WebSearch"}
 			agent := resource(m, "agent", "helper")
 			agent["tools"], agent["permissions"] = []any{"network"}, []any{"network"}
 		}},
@@ -271,13 +290,21 @@ func setSingleAuthority(manifest map[string]any, portable, outcome string, claud
 	record["outcome"], record["claude_tools"], record["fallback"] = outcome, claudeTools, fallback
 }
 
+func addOptionalModeForPortable(manifest map[string]any, id, portable, fallback string) {
+	manifest["contract"].(map[string]any)["optional_modes"] = []any{map[string]any{
+		"id": id, "authorities": []any{portable}, "fallback": fallback,
+	}}
+	record := resource(manifest, "agent", "helper")["bindings"].([]any)[0].(map[string]any)["agent_authority"].(map[string]any)["authorities"].([]any)[0].(map[string]any)
+	record["declarations"] = []any{"optional-mode:" + id + ":" + portable, "permission:" + portable, "tool:" + portable}
+}
+
 func TestManifestV3AcceptsNativeAuthorityWithNonNoneFallback(t *testing.T) {
 	bundle, path, manifest := writeManifestV3Fixture(t)
 	agent := resource(manifest, "agent", "helper")
 	agent["tools"], agent["permissions"] = []any{"network"}, []any{"network"}
 	record := agent["bindings"].([]any)[0].(map[string]any)["agent_authority"].(map[string]any)["authorities"].([]any)[0].(map[string]any)
 	record["portable"], record["declarations"] = "network", []any{"permission:network", "tool:network"}
-	record["outcome"], record["claude_tools"], record["fallback"] = "native", []any{"WebSearch"}, "Use configured network integration"
+	record["outcome"], record["claude_tools"], record["fallback"] = "native", []any{"WebFetch", "WebSearch"}, "Use configured network integration"
 	data, _ := json.Marshal(manifest)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -303,8 +330,8 @@ func addMultiAuthorityOptionalMode(manifest map[string]any) {
 			"portable":     "network",
 			"declarations": []any{"optional-mode:browser-network:network"},
 			"outcome":      "native",
-			"claude_tools": []any{"WebFetch"},
-			"fallback":     "none",
+			"claude_tools": []any{"WebFetch", "WebSearch"},
+			"fallback":     "Continue without browser research",
 		},
 	}
 }

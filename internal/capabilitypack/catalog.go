@@ -1024,6 +1024,15 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 			expected[declaration] = portable
 		}
 	}
+	declaredFallbacks := map[string]string{}
+	for _, mode := range optionalModes {
+		for _, portable := range mode.Authorities {
+			if fallback, exists := declaredFallbacks[portable]; exists && fallback != mode.Fallback {
+				return fmt.Errorf("agent_authority portable authority %q has conflicting declared fallbacks", portable)
+			}
+			declaredFallbacks[portable] = mode.Fallback
+		}
+	}
 
 	approvedClaudeTools := map[string]bool{
 		"Bash": true, "Edit": true, "Glob": true, "Grep": true, "Read": true,
@@ -1087,12 +1096,32 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 		if !allowedOutcomes[record.Portable][record.Outcome] {
 			return fmt.Errorf("agent_authority portable authority %q does not allow %s outcome", record.Portable, record.Outcome)
 		}
+		if fallback, exists := declaredFallbacks[record.Portable]; exists && record.Fallback != fallback {
+			return fmt.Errorf("agent_authority portable authority %q fallback must exactly match declared fallback %q", record.Portable, fallback)
+		}
 		for _, tool := range record.ClaudeTools {
 			if !approvedClaudeTools[tool] {
 				return fmt.Errorf("agent_authority Claude tool %q is unsupported", tool)
 			}
 			if !compatibleClaudeTools[record.Portable][tool] {
 				return fmt.Errorf("agent_authority Claude tool %q is incompatible with portable authority %q", tool, record.Portable)
+			}
+		}
+		exactTools := map[string][]string{
+			"network": {"WebFetch", "WebSearch"}, "process": {"Bash"},
+			"package-manager": {"Bash"}, "commit": {"Bash"}, "deploy": {"Bash"},
+			"browser": {}, "subagent": {},
+		}
+		if want, exact := exactTools[record.Portable]; exact {
+			if record.Outcome == "fallback" && record.Portable == "network" {
+				want = []string{}
+			}
+			matches := len(record.ClaudeTools) == len(want)
+			for i := 0; matches && i < len(record.ClaudeTools); i++ {
+				matches = matches && record.ClaudeTools[i] == want[i]
+			}
+			if !matches {
+				return fmt.Errorf("agent_authority portable authority %q requires exact claude_tools %v", record.Portable, want)
 			}
 		}
 		switch record.Outcome {
