@@ -367,7 +367,7 @@ func observeAddyQualification(ctx context.Context, sandbox, repo, packy, checkou
 		case "packy":
 			// ValidateEvidence owns the exact Packy argv sequence.
 		case "claude":
-			if len(command.Args) != 1 || (command.Args[0] != "version" && command.Args[0] != "mcp-add" && command.Args[0] != "mcp-remove") {
+			if len(command.Args) != 1 || (command.Args[0] != "--version" && command.Args[0] != "version" && command.Args[0] != "mcp-add" && command.Args[0] != "mcp-remove") {
 				observedProcessesSafe = false
 			}
 		default:

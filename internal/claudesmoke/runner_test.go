@@ -250,8 +250,14 @@ func TestObserveAddyQualificationAcquiresInstalledSourceState(t *testing.T) {
 	checkout := t.TempDir()
 	evidence := Evidence{
 		InstalledSourceSHA: commit,
-		Commands:           []CommandEvidence{{Name: "packy", Args: []string{"version"}, ExitCode: 0}},
-		Safety:             SafetyEvidence{CredentialsScrubbed: true, WriteBoundaryEnforced: true},
+		Commands: []CommandEvidence{
+			{Name: "claude", Args: []string{"--version"}, ExitCode: 0},
+			{Name: "packy", Args: []string{"version"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"version"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"mcp-add"}, ExitCode: 0},
+			{Name: "claude", Args: []string{"mcp-remove"}, ExitCode: 0},
+		},
+		Safety: SafetyEvidence{CredentialsScrubbed: true, WriteBoundaryEnforced: true},
 	}
 	observation, err := observeAddyQualification(context.Background(), sandbox, checkout, packy, "", restrictedEnv(sandbox, filepath.Dir(gitExecutable)), layout, evidence)
 	if err != nil {
@@ -262,6 +268,10 @@ func TestObserveAddyQualificationAcquiresInstalledSourceState(t *testing.T) {
 	}
 	if observation.WritableRoots.ClaudeConfig != layout.Home {
 		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", observation.WritableRoots.ClaudeConfig, layout.Home)
+	}
+	if !observation.Safety.NoAuthentication || !observation.Safety.NoModelInvocation || !observation.Safety.NoPrint ||
+		!observation.Safety.NoREPL || !observation.Safety.NoUpstreamExecute {
+		t.Fatalf("safe direct and normalized Claude observations were rejected: %#v", observation.Safety)
 	}
 	evidence.Sandbox, evidence.Qualification = sandbox, observation
 	encoded, err := json.Marshal(evidence)
