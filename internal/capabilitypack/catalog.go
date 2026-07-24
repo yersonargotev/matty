@@ -1069,6 +1069,24 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 		if !sort.StringsAreSorted(record.ClaudeTools) || hasDuplicateStrings(record.ClaudeTools) {
 			return fmt.Errorf("agent_authority claude_tools must be sorted without duplicates")
 		}
+		switch record.Outcome {
+		case "native", "fallback", "guarded":
+		default:
+			return fmt.Errorf("agent_authority outcome %q is unsupported", record.Outcome)
+		}
+		allowedOutcomes := map[string]map[string]bool{
+			"browser":         {"fallback": true},
+			"subagent":        {"fallback": true},
+			"commit":          {"guarded": true},
+			"deploy":          {"guarded": true},
+			"process":         {"native": true},
+			"package-manager": {"native": true},
+			"filesystem":      {"native": true},
+			"network":         {"native": true, "fallback": true},
+		}
+		if !allowedOutcomes[record.Portable][record.Outcome] {
+			return fmt.Errorf("agent_authority portable authority %q does not allow %s outcome", record.Portable, record.Outcome)
+		}
 		for _, tool := range record.ClaudeTools {
 			if !approvedClaudeTools[tool] {
 				return fmt.Errorf("agent_authority Claude tool %q is unsupported", tool)
@@ -1090,8 +1108,6 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 			if len(record.ClaudeTools) == 0 || record.Fallback != "none" {
 				return fmt.Errorf("agent_authority guarded outcome requires claude_tools and fallback none")
 			}
-		default:
-			return fmt.Errorf("agent_authority outcome %q is unsupported", record.Outcome)
 		}
 	}
 	for declaration := range expected {

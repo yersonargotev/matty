@@ -256,7 +256,11 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	writeFile(t, filepath.Join(root, "bundle", "packs", "addy", "pack.json"), `{"resources":[]}`+"\n")
 	writeFile(t, filepath.Join(root, "bundle", "sources", "addy.lock.json"), "{}\n")
 	writeFile(t, filepath.Join(root, "bundle", "sources.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "scripts", "validate-addy-acceptance.sh"), "#!/bin/sh\nset -eu\nprintf 'foundation validation\\n' >&2\n")
 	if err := os.Chmod(filepath.Join(root, "scripts", "gate-addy-promotion.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "scripts", "validate-addy-acceptance.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, root, "init", "-q")
@@ -292,8 +296,16 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	runGit(t, root, "commit", "-qm", "change promotion oracle")
 	authorityHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
 	output, err = runAddyGate(root, head, authorityHead)
-	if err == nil || !strings.Contains(string(output), "promotion change requires evidence") {
-		t.Fatalf("changed promotion authority did not fail closed: err=%v\n%s", err, output)
+	if err != nil {
+		t.Fatalf("changed promotion authority failed foundation validation: err=%v\n%s", err, output)
+	}
+	jsonStart := bytes.IndexByte(output, '{')
+	if jsonStart < 0 {
+		t.Fatalf("foundation validation emitted no canonical decision:\n%s", output)
+	}
+	foundation, err := addyacceptance.DecodePromotionEvidence(output[jsonStart:])
+	if err != nil || foundation.Disposition != addyacceptance.PromotionFoundation {
+		t.Fatalf("foundation disposition = %q, err=%v\n%s", foundation.Disposition, err, output)
 	}
 
 	if err := os.MkdirAll(filepath.Join(root, "bundle", "history", "addy"), 0o755); err != nil {

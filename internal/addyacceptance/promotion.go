@@ -20,6 +20,7 @@ const (
 	PromotionCheckName      = "Addy 1.1.0 promotion gate"
 
 	PromotionNotApplicable = "not_applicable"
+	PromotionFoundation    = "foundation_validated"
 	PromotionApplicable    = "applicable"
 	PromotionPassed        = "passed"
 )
@@ -145,6 +146,7 @@ type PromotionEvidence struct {
 // facts. It is intentionally separate from the candidate-controlled evidence.
 type PromotionValidationContext struct {
 	PromotionChange   bool
+	FoundationChange  bool
 	Repository        string
 	PullRequest       int
 	BaseSHA           string
@@ -329,9 +331,17 @@ func validDigest(value string) bool {
 }
 
 func NewNotApplicablePromotionEvidence(context PromotionValidationContext) PromotionEvidence {
+	return newEmptyPromotionEvidence(context, PromotionNotApplicable)
+}
+
+func NewFoundationPromotionEvidence(context PromotionValidationContext) PromotionEvidence {
+	return newEmptyPromotionEvidence(context, PromotionFoundation)
+}
+
+func newEmptyPromotionEvidence(context PromotionValidationContext, disposition string) PromotionEvidence {
 	return PromotionEvidence{
 		Schema:            PromotionEvidenceSchema,
-		Disposition:       PromotionNotApplicable,
+		Disposition:       disposition,
 		Repository:        context.Repository,
 		PullRequest:       context.PullRequest,
 		BaseSHA:           context.BaseSHA,
@@ -414,16 +424,19 @@ func ValidatePromotionEvidence(e PromotionEvidence, context PromotionValidationC
 	if e.Rows == nil || e.ClaudeIdentities == nil {
 		return errors.New("promotion evidence arrays must be non-null")
 	}
-	if e.Disposition == PromotionNotApplicable {
-		if context.PromotionChange {
-			return errors.New("promotion change cannot be not_applicable")
+	if e.Disposition == PromotionNotApplicable || e.Disposition == PromotionFoundation {
+		if e.Disposition == PromotionNotApplicable && (context.PromotionChange || context.FoundationChange) {
+			return errors.New("promotion or foundation change cannot be not_applicable")
+		}
+		if e.Disposition == PromotionFoundation && (!context.FoundationChange || context.PromotionChange) {
+			return errors.New("foundation_validated requires a non-promotion foundation change")
 		}
 		if len(e.Rows) != 0 || e.PackageCandidate != "" || len(e.ClaudeIdentities) != 0 || e.AtomicitySHA256 != "" {
 			return errors.New("not_applicable promotion evidence contains applicable-only facts")
 		}
 		return nil
 	}
-	if e.Disposition != PromotionApplicable || !context.PromotionChange {
+	if e.Disposition != PromotionApplicable || !context.PromotionChange || context.FoundationChange {
 		return errors.New("promotion evidence disposition is missing or ambiguous")
 	}
 	if (e.PullRequest > 0) == (e.Tag != "") || e.PullRequest > 0 && e.EvaluatedMergeSHA == "" {
@@ -462,6 +475,9 @@ func ValidatePromotionEvidence(e PromotionEvidence, context PromotionValidationC
 }
 
 func validatePromotionContext(context PromotionValidationContext) error {
+	if context.PromotionChange && context.FoundationChange {
+		return errors.New("trusted promotion context cannot classify one change as both promotion and foundation")
+	}
 	if strings.TrimSpace(context.Repository) == "" || context.Workflow == "" || !validSHA256(context.WorkflowDigest) ||
 		context.MatrixVersion != PromotionMatrixVersion || context.RunID == "" || context.Now.IsZero() || context.MaxAge <= 0 {
 		return errors.New("trusted promotion validation context is incomplete")

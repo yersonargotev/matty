@@ -193,7 +193,7 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 			record(authority(m))["claude_tools"] = []any{"WebSearch", "WebSearch"}
 		}},
 		{"unknown claude tool", "Claude tool", func(m map[string]any) { record(authority(m))["claude_tools"] = []any{"Future"} }},
-		{"browser native WebSearch", "incompatible with portable authority", func(m map[string]any) {
+		{"browser native WebSearch", "does not allow native outcome", func(m map[string]any) {
 			r := record(authority(m))
 			r["outcome"], r["claude_tools"], r["fallback"] = "native", []any{"WebSearch"}, "none"
 		}},
@@ -203,6 +203,24 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 			agent := resource(m, "agent", "helper")
 			agent["tools"], agent["permissions"] = []any{"process"}, []any{"process"}
 			r["outcome"], r["claude_tools"], r["fallback"] = "native", []any{"Read"}, "none"
+		}},
+		{"commit native", "does not allow native outcome", func(m map[string]any) {
+			setSingleAuthority(m, "commit", "native", []any{"Bash"}, "none")
+		}},
+		{"deploy native", "does not allow native outcome", func(m map[string]any) {
+			setSingleAuthority(m, "deploy", "native", []any{"Bash"}, "none")
+		}},
+		{"process guarded", "does not allow guarded outcome", func(m map[string]any) {
+			setSingleAuthority(m, "process", "guarded", []any{"Bash"}, "none")
+		}},
+		{"network guarded", "does not allow guarded outcome", func(m map[string]any) {
+			setSingleAuthority(m, "network", "guarded", []any{"WebSearch"}, "none")
+		}},
+		{"filesystem fallback", "does not allow fallback outcome", func(m map[string]any) {
+			setSingleAuthority(m, "filesystem", "fallback", []any{}, "Continue without filesystem access")
+		}},
+		{"subagent native", "does not allow native outcome", func(m map[string]any) {
+			setSingleAuthority(m, "subagent", "native", []any{}, "none")
 		}},
 		{"unknown outcome", "outcome", func(m map[string]any) { record(authority(m))["outcome"] = "magic" }},
 		{"native without tools", "native outcome", func(m map[string]any) {
@@ -242,6 +260,15 @@ func TestManifestV3FailsClosedOnInvalidAgentAuthorityContracts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setSingleAuthority(manifest map[string]any, portable, outcome string, claudeTools []any, fallback string) {
+	agent := resource(manifest, "agent", "helper")
+	agent["tools"], agent["permissions"] = []any{portable}, []any{portable}
+	record := agent["bindings"].([]any)[0].(map[string]any)["agent_authority"].(map[string]any)["authorities"].([]any)[0].(map[string]any)
+	record["portable"] = portable
+	record["declarations"] = []any{"permission:" + portable, "tool:" + portable}
+	record["outcome"], record["claude_tools"], record["fallback"] = outcome, claudeTools, fallback
 }
 
 func TestManifestV3AcceptsNativeAuthorityWithNonNoneFallback(t *testing.T) {

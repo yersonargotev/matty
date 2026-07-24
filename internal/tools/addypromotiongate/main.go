@@ -14,6 +14,7 @@ func main() {
 	var context addyacceptance.PromotionValidationContext
 	var evidencePath string
 	flag.BoolVar(&context.PromotionChange, "promotion-change", false, "whether the evaluated diff changes Addy promotion state")
+	flag.BoolVar(&context.FoundationChange, "foundation-change", false, "whether the evaluated diff changes established Addy promotion authority")
 	flag.StringVar(&context.Repository, "repository", "", "trusted repository identity")
 	flag.IntVar(&context.PullRequest, "pull-request", 0, "trusted pull request number")
 	flag.StringVar(&context.BaseSHA, "base-sha", "", "trusted base commit SHA")
@@ -47,6 +48,11 @@ func main() {
 		if err != nil {
 			fatalf("validate canonical promotion evidence: %v", err)
 		}
+	} else if context.FoundationChange {
+		if evidencePath != "" {
+			fatalf("candidate evidence is not accepted for a foundation-only change")
+		}
+		evidence = addyacceptance.NewFoundationPromotionEvidence(context)
 	} else {
 		if evidencePath != "" {
 			fatalf("evidence is not accepted for a non-promotion change")

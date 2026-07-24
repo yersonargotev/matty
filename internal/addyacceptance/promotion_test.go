@@ -221,6 +221,20 @@ func TestAddyPromotionNotApplicableIsCanonicalAndFailsClosed(t *testing.T) {
 	if err := ValidatePromotionEvidence(decoded, context); err == nil || !strings.Contains(err.Error(), "cannot be not_applicable") {
 		t.Fatalf("promotion change used not_applicable: %v", err)
 	}
+
+	context.PromotionChange = false
+	context.FoundationChange = true
+	foundation := NewFoundationPromotionEvidence(context)
+	foundationJSON, _ := foundation.CanonicalJSON()
+	if !bytes.Contains(foundationJSON, []byte(`"disposition": "foundation_validated"`)) {
+		t.Fatalf("foundation output = %s", foundationJSON)
+	}
+	if _, err := ValidateCanonicalPromotionEvidence(foundationJSON, context); err != nil {
+		t.Fatalf("foundation evidence rejected: %v", err)
+	}
+	if err := ValidatePromotionEvidence(decoded, context); err == nil || !strings.Contains(err.Error(), "cannot be not_applicable") {
+		t.Fatalf("foundation change used not_applicable: %v", err)
+	}
 }
 
 func applicablePromotionContext() PromotionValidationContext {
