@@ -293,9 +293,10 @@ func permissionBlock(lines []string, indent int) (map[string]string, string) {
 
 var minimumJobPermissions = map[string]map[string]map[string]string{
 	".github/workflows/ci.yml": {
-		"addy-promotion-gate": {"contents": "read"},
-		"validate":            {"contents": "read"},
-		"claude-floor-smoke":  {"contents": "read"},
+		"addy-promotion-gate":        {"contents": "read"},
+		"validate":                   {"contents": "read"},
+		"claude-floor-smoke":         {"contents": "read"},
+		"addy-promotion-main-replay": {"contents": "read"},
 	},
 	".github/workflows/claude-canary.yml": {
 		"stable-smoke": {"contents": "read", "issues": "write"},

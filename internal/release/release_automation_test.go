@@ -368,7 +368,7 @@ fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit} {
+	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "run ./internal/tools/claudesmoke verify-addy-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit} {
 		if !strings.Contains(string(invocation), want) {
 			t.Fatalf("release verifier did not delegate %q to the canonical owner:\n%s", want, invocation)
 		}

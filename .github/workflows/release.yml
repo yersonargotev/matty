@@ -123,7 +123,7 @@ jobs:
           name: packy-release-${{ steps.release.outputs.tag }}
           path: dist
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   claude-smoke:
     name: Claude ${{ matrix.claude }} smoke (${{ matrix.arch }})
@@ -169,7 +169,10 @@ jobs:
             --claude-version "${{ matrix.claude }}" \
             --packy-ref "${{ needs.build.outputs.commit }}" \
             --packy-binary "$RUNNER_TEMP/dist/packy_${{ needs.build.outputs.tag }}_darwin_${{ matrix.arch }}" \
-            --evidence-dir "$RUNNER_TEMP/claude-release-evidence"
+            --evidence-dir "$RUNNER_TEMP/claude-release-evidence" \
+            --addy-qualification synthetic \
+            --addy-workflow .github/workflows/release.yml \
+            --addy-tag "${{ needs.build.outputs.tag }}"
       - name: Retain release smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -177,6 +180,7 @@ jobs:
           name: claude-release-${{ matrix.claude }}-darwin-${{ matrix.arch }}
           path: ${{ runner.temp }}/claude-release-evidence
           if-no-files-found: error
+          retention-days: 90
 
   validate-release-evidence:
     name: Validate evidence and seal publication plan
@@ -221,6 +225,13 @@ jobs:
             --tag "${{ needs.build.outputs.tag }}" --commit "${{ needs.build.outputs.commit }}" \
             --dist dist --evidence-root claude-evidence --formula release-metadata/packy.rb \
             --notes-template docs/release-notes/next.md --notes-output release-metadata/release-notes.md
+      - name: Gate exact-tag Addy promotion evidence
+        run: |
+          set -euo pipefail
+          ./scripts/gate-addy-release.sh \
+            "${{ needs.build.outputs.tag }}" \
+            "${{ needs.build.outputs.commit }}" \
+            > release-metadata/addy-promotion-evidence.v1.json
       - name: Create immutable candidate and provenance metadata
         run: |
           set -euo pipefail
@@ -263,7 +274,7 @@ jobs:
           name: packy-release-metadata-${{ needs.build.outputs.tag }}
           path: release-metadata
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   dry-run:
     name: Report exact dry-run effects
@@ -611,7 +622,7 @@ jobs:
           name: packy-attestation-${{ needs.build.outputs.tag }}
           path: attestation
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   publish-github:
     name: Create or resume exact draft and publish once

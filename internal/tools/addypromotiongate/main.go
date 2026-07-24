@@ -20,6 +20,7 @@ func main() {
 	flag.StringVar(&context.BaseSHA, "base-sha", "", "trusted base commit SHA")
 	flag.StringVar(&context.HeadSHA, "head-sha", "", "trusted head commit SHA")
 	flag.StringVar(&context.EvaluatedMergeSHA, "evaluated-merge-sha", "", "trusted evaluated merge commit SHA")
+	flag.StringVar(&context.Tag, "tag", "", "trusted exact release tag")
 	flag.StringVar(&context.Workflow, "workflow", "", "trusted workflow path")
 	flag.StringVar(&context.WorkflowDigest, "workflow-digest", "", "trusted workflow SHA-256")
 	flag.StringVar(&context.RunID, "run-id", "", "trusted workflow run ID")

@@ -68,6 +68,7 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if err := ValidatePromotionEvidence(evidence, context); err == nil || !strings.Contains(err.Error(), "independent reconstruction") {
 		t.Fatalf("candidate self-authorization was accepted: %v", err)
 	}
+	assertSyntheticHarnessRows(t, 1, 2, 3)
 }
 
 func TestCanonicalPromotionCurrentIsDetachedAndWritesExactSnapshot(t *testing.T) {
@@ -153,6 +154,7 @@ func TestAddyPromotionAuthorityFoundations(t *testing.T) {
 			t.Fatalf("authority row %d = %#v", number, row)
 		}
 	}
+	assertSyntheticHarnessRows(t, 4, 5, 6)
 }
 
 func TestAddyPromotionLifecycleFoundations(t *testing.T) {
@@ -163,6 +165,7 @@ func TestAddyPromotionLifecycleFoundations(t *testing.T) {
 			t.Fatalf("lifecycle row %d = %#v", number, row)
 		}
 	}
+	assertSyntheticHarnessRows(t, 7, 8, 9, 10)
 }
 
 func TestAddyPromotionRealHostFoundations(t *testing.T) {
@@ -173,6 +176,7 @@ func TestAddyPromotionRealHostFoundations(t *testing.T) {
 			t.Fatalf("real-host row %d = %#v", number, row)
 		}
 	}
+	assertSyntheticHarnessRows(t, 11, 12)
 }
 
 func TestAddyPromotionEvidenceFoundations(t *testing.T) {
@@ -186,6 +190,7 @@ func TestAddyPromotionEvidenceFoundations(t *testing.T) {
 			t.Fatalf("row %d = %#v", i+1, row)
 		}
 	}
+	assertSyntheticHarnessRows(t, 13, 14)
 	rows[0].ID = "mutated"
 	if PromotionRows()[0].ID == "mutated" {
 		t.Fatal("PromotionRows returned shared storage")
@@ -220,6 +225,47 @@ func TestAddyPromotionEvidenceFoundations(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func assertSyntheticHarnessRows(t *testing.T, numbers ...int) {
+	t.Helper()
+	context := applicablePromotionContext()
+	run := func() PromotionHarnessReport {
+		report, err := (PromotionHarness{
+			Root: t.TempDir(), Context: context, Mode: PromotionHarnessSynthetic,
+			Evaluate: func(row PromotionRow, root string) (PromotionRowResult, error) {
+				return PromotionRowResult{Evidence: struct {
+					ID        string `json:"id"`
+					Synthetic bool   `json:"synthetic"`
+				}{ID: row.ID, Synthetic: true}}, nil
+			},
+		}).Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	first, second := run(), run()
+	firstJSON, err := first.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondJSON, err := second.CanonicalJSON()
+	if err != nil || !bytes.Equal(firstJSON, secondJSON) {
+		t.Fatalf("synthetic harness rerun changed: %v", err)
+	}
+	if !first.Qualified {
+		t.Fatal("synthetic promotion harness did not qualify")
+	}
+	for _, number := range numbers {
+		row := first.Rows[number-1]
+		if row.ID != PromotionRows()[number-1].ID || row.Result != PromotionPassed || row.EvidenceSHA256 == "" {
+			t.Fatalf("promotion row %d harness result = %#v", number, row)
+		}
+	}
+	if _, err := first.BuildAggregate(context, PromotionAggregateCandidate{}); err == nil {
+		t.Fatal("synthetic harness report crossed the production aggregate boundary")
 	}
 }
 

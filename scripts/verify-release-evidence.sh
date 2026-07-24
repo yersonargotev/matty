@@ -129,6 +129,10 @@ go run ./internal/tools/claudesmoke verify-release \
   --evidence-root "$evidence_root" \
   --packy-version "$tag" \
   --packy-sha "$commit"
+go run ./internal/tools/claudesmoke verify-addy-release \
+  --evidence-root "$evidence_root" \
+  --packy-version "$tag" \
+  --packy-sha "$commit"
 
 [[ -f "$notes_template" ]] || { echo "release-note template is missing" >&2; exit 1; }
 if [[ "$(grep -Fo '{{TAG}}' "$notes_template" | wc -l | tr -d ' ')" != 1 ]]; then

@@ -45,6 +45,55 @@ func TestValidateReleaseEvidenceMatrixUsesCanonicalEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateReleaseAddyQualificationMatrixRequiresOneSyntheticRun(t *testing.T) {
+	root := t.TempDir()
+	version := "v0.99.0"
+	sha := strings.Repeat("a", 40)
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, selector := range []string{ExactFloor, "stable"} {
+			qualification := validAddyQualification()
+			qualification.Synthetic, qualification.Tag, qualification.Commit = true, version, sha
+			qualification.InstalledSourceCommit = sha
+			qualification.Smoke.PackyVersion, qualification.Smoke.PackyRef = version, version
+			qualification.Smoke.PackySHA, qualification.Smoke.InstalledSourceSHA = sha, sha
+			qualification.Smoke.OS, qualification.Smoke.Arch = "darwin", arch
+			qualification.Smoke.RequestedClaudeVersion = selector
+			path := filepath.Join(root, arch+"-"+selector, "addy-qualification.json")
+			data, err := CanonicalAddyQualificationJSON(qualification)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, true); err == nil {
+		t.Fatal("synthetic pre-candidate matrix crossed the production boundary")
+	}
+
+	path := filepath.Join(root, "amd64-stable", "addy-qualification.json")
+	var changed AddyQualification
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &changed) != nil {
+		t.Fatal(err)
+	}
+	changed.RunID = "other-run"
+	data, _ = CanonicalAddyQualificationJSON(changed)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateReleaseAddyQualificationMatrix(root, version, sha, false); err == nil {
+		t.Fatal("cross-run Addy release qualification accepted")
+	}
+}
+
 func writeReleaseEvidence(t *testing.T, path string, evidence Evidence) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
