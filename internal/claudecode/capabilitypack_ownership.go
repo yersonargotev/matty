@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -84,7 +85,22 @@ func (o CapabilityPackOwnershipProvider) ObserveOwnership(ctx context.Context) (
 				contributorID = contributors[0]
 			}
 			record := OwnershipRecord{StateOwner: "capabilitypack", ContributorID: contributorID, ID: id, Fingerprint: owner.Fingerprint, Contributors: contributors, DeletionAuthorized: owner.DeletionAuthorized()}
-			if resource.Kind == "instruction" {
+			if isAddyCompositeProjection(pack, resource, *binding) {
+				composite, err := addyCompositeSkill(pack, resource, *binding, o.bundleRoot)
+				if err != nil {
+					return OwnershipSnapshot{}, err
+				}
+				expectedProvenance, err := canonicalCompositeOwnership(composite.Ownership)
+				if err != nil {
+					return OwnershipSnapshot{}, err
+				}
+				if retained && owner.AdapterProvenance != expectedProvenance {
+					return OwnershipSnapshot{}, errors.New("persisted Claude composite ownership does not match the exact Addy adapter contract")
+				}
+				record.Kind, record.Target = string(ActionSkillTree), filepath.Join(o.layout.SkillsDir, name)
+				record.Fingerprint = composite.TreeFingerprint
+				record.Composite = composite.Ownership
+			} else if resource.Kind == "instruction" {
 				record.Kind, record.Target = string(ActionInstructionContribution), o.layout.InstructionsFile
 				observation := ObserveInstructions(record.Target)
 				record.ContributorID = "pack:" + intent.PackID + ":" + resource.ID
@@ -140,7 +156,7 @@ func (o CapabilityPackOwnershipProvider) ObserveOwnership(ctx context.Context) (
 			}
 			records = append(records, record)
 			recorded[id] = true
-			if resource.Kind == "command" {
+			if resource.Kind == "command" && !isAddyCompositeProjection(pack, resource, *binding) {
 				for _, asset := range dependencyAssets(pack, resource) {
 					assetID := "asset:" + id + ":" + asset.ID
 					if recorded[assetID] {

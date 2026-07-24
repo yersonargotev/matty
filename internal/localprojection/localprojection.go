@@ -3,6 +3,7 @@ package localprojection
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,6 +24,13 @@ type stagedAction struct {
 	action       capabilitypack.ProjectionAction
 	temp, backup string
 	hadTarget    bool
+}
+
+// TreeFile is one inert regular file in a staged local projection tree.
+type TreeFile struct {
+	Path    string
+	Content []byte
+	Mode    fs.FileMode
 }
 
 // Apply stages all supported local projections before committing them and
@@ -222,4 +230,157 @@ func FingerprintTree(root string) (string, error) {
 	}
 	sort.Strings(parts)
 	return FingerprintBytes([]byte(strings.Join(parts, "\n"))), nil
+}
+
+// FingerprintTreeFiles binds every relative path, file mode, and byte sequence
+// before a composite tree reaches a host-visible path.
+func FingerprintTreeFiles(files []TreeFile) (string, error) {
+	normalized, err := normalizedTreeFiles(files)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, len(normalized))
+	for i, file := range normalized {
+		parts[i] = fmt.Sprintf("%s\x00%04o\x00%s", file.Path, file.Mode.Perm(), FingerprintBytes(file.Content))
+	}
+	return FingerprintBytes([]byte(strings.Join(parts, "\n"))), nil
+}
+
+// FingerprintExactTree rejects links and special files and binds file modes in
+// addition to the path/content facts used by legacy skill links.
+func FingerprintExactTree(root string) (string, error) {
+	var files []TreeFile
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("composite tree contains non-regular path %s", path)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, TreeFile{Path: filepath.ToSlash(rel), Content: data, Mode: info.Mode().Perm()})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return FingerprintTreeFiles(files)
+}
+
+// ReplaceTree stages and verifies one complete inert directory tree before a
+// single rename publishes it. A failed stage or verification leaves an
+// existing target byte-for-byte untouched.
+func ReplaceTree(target string, files []TreeFile, expectedFingerprint string) (err error) {
+	normalized, err := normalizedTreeFiles(files)
+	if err != nil {
+		return err
+	}
+	fingerprint, err := FingerprintTreeFiles(normalized)
+	if err != nil {
+		return err
+	}
+	if expectedFingerprint == "" || fingerprint != expectedFingerprint {
+		return errors.New("composite tree fingerprint does not match sealed projection")
+	}
+	created, err := ensureDir(filepath.Dir(target))
+	if err != nil {
+		return err
+	}
+	suffix := fingerprint[:12]
+	stage := filepath.Join(filepath.Dir(target), ".packy-tree-stage-"+suffix)
+	backup := stage + ".backup"
+	_ = os.RemoveAll(stage)
+	_ = os.RemoveAll(backup)
+	succeeded := false
+	defer func() {
+		_ = os.RemoveAll(stage)
+		if succeeded {
+			_ = os.RemoveAll(backup)
+			return
+		}
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = os.Remove(created[i])
+		}
+	}()
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		return err
+	}
+	for _, file := range normalized {
+		path := filepath.Join(stage, filepath.FromSlash(file.Path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return fmt.Errorf("stage composite tree: %w", err)
+		}
+		if err := os.WriteFile(path, file.Content, file.Mode.Perm()); err != nil {
+			return fmt.Errorf("stage composite tree: %w", err)
+		}
+		if err := os.Chmod(path, file.Mode.Perm()); err != nil {
+			return fmt.Errorf("stage composite tree mode: %w", err)
+		}
+	}
+	stagedFingerprint, err := FingerprintExactTree(stage)
+	if err != nil {
+		return fmt.Errorf("verify staged composite tree: %w", err)
+	}
+	if stagedFingerprint != expectedFingerprint {
+		return errors.New("staged composite tree fingerprint mismatch")
+	}
+	_, statErr := os.Lstat(target)
+	hadTarget := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if hadTarget {
+		if err := os.Rename(target, backup); err != nil {
+			return fmt.Errorf("backup composite tree: %w", err)
+		}
+	}
+	if err := os.Rename(stage, target); err != nil {
+		if hadTarget {
+			if restoreErr := os.Rename(backup, target); restoreErr != nil {
+				return fmt.Errorf("publish composite tree: %v; restore failed: %w", err, restoreErr)
+			}
+		}
+		return fmt.Errorf("publish composite tree: %w", err)
+	}
+	succeeded = true
+	return nil
+}
+
+func normalizedTreeFiles(files []TreeFile) ([]TreeFile, error) {
+	if len(files) == 0 {
+		return nil, errors.New("composite tree requires at least one file")
+	}
+	result := make([]TreeFile, len(files))
+	seen := map[string]bool{}
+	for i, file := range files {
+		clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(file.Path)))
+		if file.Path == "" || file.Path != clean || clean == "." || strings.HasPrefix(clean, "../") || filepath.IsAbs(filepath.FromSlash(file.Path)) || strings.Contains(file.Path, "\\") {
+			return nil, fmt.Errorf("invalid composite tree path %q", file.Path)
+		}
+		if seen[file.Path] {
+			return nil, fmt.Errorf("duplicate composite tree path %q", file.Path)
+		}
+		seen[file.Path] = true
+		mode := file.Mode.Perm()
+		if mode != 0o644 && mode != 0o755 {
+			return nil, fmt.Errorf("invalid composite tree mode %04o for %q", mode, file.Path)
+		}
+		result[i] = TreeFile{Path: file.Path, Content: append([]byte(nil), file.Content...), Mode: mode}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	return result, nil
 }
