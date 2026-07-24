@@ -130,23 +130,24 @@ type AssertionEvidence struct {
 	ForeignMCPExactAfterUninstall      bool `json:"foreign_mcp_exact_after_uninstall"`
 }
 type Evidence struct {
-	SchemaVersion          int               `json:"schema_version"`
-	PackyVersion           string            `json:"packy_version"`
-	PackyRef               string            `json:"packy_ref"`
-	PackySHA               string            `json:"packy_sha"`
-	InstalledSourceSHA     string            `json:"installed_source_sha"`
-	OS                     string            `json:"os"`
-	Arch                   string            `json:"arch"`
-	RequestedClaudeVersion string            `json:"requested_claude_version"`
-	ResolvedClaudeVersion  string            `json:"resolved_claude_version"`
-	ClaudeIntegrity        string            `json:"claude_npm_integrity"`
-	ClaudeDigest           string            `json:"claude_executable_sha256"`
-	Sandbox                string            `json:"sandbox"`
-	Commands               []CommandEvidence `json:"commands"`
-	Before                 []FileEvidence    `json:"before"`
-	After                  []FileEvidence    `json:"after"`
-	Safety                 SafetyEvidence    `json:"safety"`
-	Assertions             AssertionEvidence `json:"assertions"`
+	SchemaVersion          int                          `json:"schema_version"`
+	PackyVersion           string                       `json:"packy_version"`
+	PackyRef               string                       `json:"packy_ref"`
+	PackySHA               string                       `json:"packy_sha"`
+	InstalledSourceSHA     string                       `json:"installed_source_sha"`
+	OS                     string                       `json:"os"`
+	Arch                   string                       `json:"arch"`
+	RequestedClaudeVersion string                       `json:"requested_claude_version"`
+	ResolvedClaudeVersion  string                       `json:"resolved_claude_version"`
+	ClaudeIntegrity        string                       `json:"claude_npm_integrity"`
+	ClaudeDigest           string                       `json:"claude_executable_sha256"`
+	Sandbox                string                       `json:"sandbox"`
+	Commands               []CommandEvidence            `json:"commands"`
+	Before                 []FileEvidence               `json:"before"`
+	After                  []FileEvidence               `json:"after"`
+	Safety                 SafetyEvidence               `json:"safety"`
+	Assertions             AssertionEvidence            `json:"assertions"`
+	Qualification          AddyQualificationObservation `json:"qualification_observation,omitempty"`
 }
 
 func ResolveSelector(selector, npmOutput string) (version, integrity string, err error) {
@@ -331,6 +332,49 @@ esac
 	e.Safety.CheckoutUnchanged = status == afterStatus && strings.TrimSpace(head) == strings.TrimSpace(afterHead)
 	e.Safety.ConfiguredWritableRootsConfined = layout.valid()
 	e.Safety.EvidencePathOutsideSandbox = e.Safety.ConfiguredWritableRootsConfined && e.Safety.CheckoutUnchanged && !pathWithin(sandbox, cfg.EvidencePath)
+	installedStatus, statusErr := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "status", "--porcelain=v1", "--untracked-files=all")
+	if statusErr != nil {
+		return e, fmt.Errorf("observe Installed Source cleanliness: %w", statusErr)
+	}
+	installedHead, headErr := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "rev-parse", "HEAD")
+	if headErr != nil {
+		return e, fmt.Errorf("observe Installed Source commit: %w", headErr)
+	}
+	processJSON, err := json.Marshal(e.Commands)
+	if err != nil {
+		return e, fmt.Errorf("encode process observation: %w", err)
+	}
+	processDigest := sha256.Sum256(processJSON)
+	observedProcessesSafe := true
+	for _, command := range e.Commands {
+		switch command.Name {
+		case "packy":
+			// ValidateEvidence below owns the exact Packy argv sequence.
+		case "claude":
+			if len(command.Args) != 1 || (command.Args[0] != "version" && command.Args[0] != "mcp-add" && command.Args[0] != "mcp-remove") {
+				observedProcessesSafe = false
+			}
+		default:
+			observedProcessesSafe = false
+		}
+	}
+	e.Qualification = AddyQualificationObservation{
+		InstalledSource: layout.InstalledSource, InstalledSourceCommit: strings.TrimSpace(installedHead),
+		InstalledSourceClean: strings.TrimSpace(installedStatus) == "" && strings.TrimSpace(installedHead) == e.InstalledSourceSHA,
+		WritableRoots: AddyWritableRoots{
+			Home: layout.Home, XDGConfig: layout.Config, ClaudeConfig: layout.Home,
+			State: layout.Data, Package: layout.NPM, Repository: layout.SourceRepository, Acquisition: layout.Acquisition,
+		},
+		ProcessLogDigest: hex.EncodeToString(processDigest[:]),
+		CollectedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		Safety: AddyObservedSafety{
+			NoGoRun: filepath.IsAbs(packy) && filepath.Base(packy) != "go", NoDevelopmentPath: !pathWithin(repo, packy) && !pathWithin(repo, layout.InstalledSource),
+			NoDirectFixture: e.Safety.WriteBoundaryEnforced, NoUntrackedInput: strings.TrimSpace(status) == "",
+			NoAuthentication: observedProcessesSafe, NoModelInvocation: observedProcessesSafe, NoPrint: observedProcessesSafe, NoREPL: observedProcessesSafe,
+			NoUpstreamExecute: observedProcessesSafe, NoCredentials: e.Safety.CredentialsScrubbed,
+			NoOutsideWrite: e.Safety.WriteBoundaryEnforced,
+		},
+	}
 	e.After, err = Manifest(sandbox)
 	if err != nil {
 		return e, err

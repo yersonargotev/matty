@@ -15,9 +15,17 @@ import (
 // ValidateReleaseAddyQualificationMatrix proves that all four Addy smoke
 // qualifications came from one exact-tag workflow run. Synthetic mode
 // qualifies the pre-candidate harness but remains production-inadmissible.
-func ValidateReleaseAddyQualificationMatrix(root, packyVersion, packySHA string, production bool) error {
-	if root == "" || packyVersion == "" || len(packySHA) != 40 {
-		return errors.New("Addy release qualification root, Packy version, and full SHA are required")
+type AddyReleaseTrust struct {
+	Repository     string
+	Workflow       string
+	WorkflowDigest string
+	RunID          string
+}
+
+func ValidateReleaseAddyQualificationMatrix(root, packyVersion, packySHA string, trust AddyReleaseTrust, production bool) error {
+	if root == "" || packyVersion == "" || len(packySHA) != 40 ||
+		trust.Repository == "" || trust.Workflow == "" || !validSHA256(trust.WorkflowDigest) || trust.RunID == "" {
+		return errors.New("Addy release qualification root, Packy identity, and trusted workflow context are required")
 	}
 	var paths []string
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -41,8 +49,7 @@ func ValidateReleaseAddyQualificationMatrix(root, packyVersion, packySHA string,
 		"arm64|" + ExactFloor: true,
 		"arm64|stable":        true,
 	}
-	var identity struct{ repository, workflow, workflowDigest, runID string }
-	for i, path := range paths {
+	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", path, err)
@@ -70,12 +77,9 @@ func ValidateReleaseAddyQualificationMatrix(root, packyVersion, packySHA string,
 		if qualification.Commit != packySHA || qualification.Tag != packyVersion {
 			return fmt.Errorf("Addy release identity mismatch in %s", path)
 		}
-		if i == 0 {
-			identity.repository, identity.workflow = qualification.Repository, qualification.Workflow
-			identity.workflowDigest, identity.runID = qualification.WorkflowDigest, qualification.RunID
-		} else if qualification.Repository != identity.repository || qualification.Workflow != identity.workflow ||
-			qualification.WorkflowDigest != identity.workflowDigest || qualification.RunID != identity.runID {
-			return fmt.Errorf("Addy release qualification is cross-workflow or cross-run in %s", path)
+		if qualification.Repository != trust.Repository || qualification.Workflow != trust.Workflow ||
+			qualification.WorkflowDigest != trust.WorkflowDigest || qualification.RunID != trust.RunID {
+			return fmt.Errorf("Addy release qualification does not match the trusted workflow run in %s", path)
 		}
 		key := qualification.Smoke.Arch + "|" + qualification.Smoke.RequestedClaudeVersion
 		if !want[key] {

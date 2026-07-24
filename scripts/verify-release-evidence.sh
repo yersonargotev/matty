@@ -9,7 +9,9 @@ Verify one complete Packy release candidate before publication.
 Usage: scripts/verify-release-evidence.sh \
   --tag <v0.x.y> --commit <40-hex-sha> --dist <directory> \
   --evidence-root <directory> --formula <file> \
-  --notes-template <file> --notes-output <file>
+  --notes-template <file> --notes-output <file> \
+  --repository <owner/name> --workflow <path> \
+  --workflow-digest <64-hex-sha256> --run-id <workflow-run-id>
 EOF
 }
 
@@ -20,6 +22,10 @@ evidence_root=""
 formula=""
 notes_template=""
 notes_output=""
+repository=""
+workflow=""
+workflow_digest=""
+run_id=""
 while (($#)); do
   case "$1" in
     --tag) tag="${2:-}"; shift 2 ;;
@@ -29,6 +35,10 @@ while (($#)); do
     --formula) formula="${2:-}"; shift 2 ;;
     --notes-template) notes_template="${2:-}"; shift 2 ;;
     --notes-output) notes_output="${2:-}"; shift 2 ;;
+    --repository) repository="${2:-}"; shift 2 ;;
+    --workflow) workflow="${2:-}"; shift 2 ;;
+    --workflow-digest) workflow_digest="${2:-}"; shift 2 ;;
+    --run-id) run_id="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -48,6 +58,10 @@ for value in "$dist" "$evidence_root" "$formula" "$notes_template" "$notes_outpu
     exit 2
   fi
 done
+if [[ -z "$repository" || -z "$workflow" || -z "$run_id" || ! "$workflow_digest" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "trusted release workflow identity, digest, and run ID are required" >&2
+  exit 2
+fi
 for command in go sed grep find sort cmp; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
@@ -132,7 +146,11 @@ go run ./internal/tools/claudesmoke verify-release \
 go run ./internal/tools/claudesmoke verify-addy-release \
   --evidence-root "$evidence_root" \
   --packy-version "$tag" \
-  --packy-sha "$commit"
+  --packy-sha "$commit" \
+  --repository "$repository" \
+  --workflow "$workflow" \
+  --workflow-digest "$workflow_digest" \
+  --run-id "$run_id"
 
 [[ -f "$notes_template" ]] || { echo "release-note template is missing" >&2; exit 1; }
 if [[ "$(grep -Fo '{{TAG}}' "$notes_template" | wc -l | tr -d ' ')" != 1 ]]; then

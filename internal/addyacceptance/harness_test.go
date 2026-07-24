@@ -13,10 +13,15 @@ import (
 func TestPromotionHarnessRunsStableRowsDeterministically(t *testing.T) {
 	root := t.TempDir()
 	h := PromotionHarness{Root: root, Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
+		result, err := SyntheticPromotionRowEvaluator(nil)(row, child)
+		if err != nil {
+			return result, err
+		}
 		if err := os.WriteFile(filepath.Join(child, "evidence.json"), []byte(row.ID), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		return PromotionRowResult{Evidence: map[string]any{"id": row.ID, "ok": true}, PermittedDiff: []string{"evidence.json"}}, nil
+		result.PermittedDiff = []string{"evidence.json"}
+		return result, nil
 	}}
 	first, err := h.Run()
 	if err != nil {
@@ -48,7 +53,7 @@ func TestPromotionHarnessFailureSuppressesEveryLaterGate(t *testing.T) {
 			calls := map[int]int{}
 			h := PromotionHarness{Root: t.TempDir(), Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
 				calls[row.Gate]++
-				return PromotionRowResult{Evidence: row.ID}, nil
+				return SyntheticPromotionRowEvaluator(nil)(row, child)
 			}, Boundary: func(g int, rows []PromotionHarnessRow) error {
 				if g == gate {
 					return os.ErrInvalid
@@ -76,23 +81,17 @@ func TestPromotionHarnessFailureSuppressesEveryLaterGate(t *testing.T) {
 func TestPromotionHarnessEveryRowHasOneFactTwinAndCanonicalDiagnostic(t *testing.T) {
 	for _, twin := range PromotionRows() {
 		t.Run(twin.ID, func(t *testing.T) {
-			run := func(permitted string) PromotionHarnessReport {
-				h := PromotionHarness{Root: t.TempDir(), Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
-					if row.Number == twin.Number {
-						_ = os.WriteFile(filepath.Join(child, "fact"), []byte("x"), 0o600)
-						return PromotionRowResult{Evidence: row.ID, PermittedDiff: []string{permitted}}, nil
-					}
-					return PromotionRowResult{Evidence: row.ID}, nil
-				}}
+			run := func(overrides map[string]string) PromotionHarnessReport {
+				h := PromotionHarness{Root: t.TempDir(), Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: SyntheticPromotionRowEvaluator(overrides)}
 				r, err := h.Run()
 				if err != nil {
 					t.Fatal(err)
 				}
 				return r
 			}
-			positive, negative := run("fact"), run("other")
+			positive, negative := run(nil), run(PromotionRowNegativeTwin(twin))
 			if !positive.Qualified || negative.Qualified {
-				t.Fatal("one-fact twin did not distinguish exact permitted diff")
+				t.Fatal("one-fact twin did not distinguish its row-specific semantic proof")
 			}
 			if got := negative.Rows[twin.Number-1].Diagnostic; got != twin.BlockedDiagnostic {
 				t.Fatalf("non-canonical diagnostic %q", got)
@@ -104,7 +103,7 @@ func TestPromotionHarnessEveryRowHasOneFactTwinAndCanonicalDiagnostic(t *testing
 func TestPromotionHarnessBoundaryDiagnosticIsStable(t *testing.T) {
 	run := func(detail string) PromotionHarnessReport {
 		h := PromotionHarness{Root: t.TempDir(), Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
-			return PromotionRowResult{Evidence: row.ID}, nil
+			return SyntheticPromotionRowEvaluator(nil)(row, child)
 		}, Boundary: func(gate int, rows []PromotionHarnessRow) error {
 			if gate == 2 {
 				return errors.New(detail)
@@ -133,7 +132,7 @@ func TestPromotionHarnessRejectsNonEmptyRootAndLeavesOutsideUntouched(t *testing
 		t.Fatal(err)
 	}
 	h := PromotionHarness{Root: root, Context: harnessContext(), Mode: PromotionHarnessSynthetic, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
-		return PromotionRowResult{Evidence: row.ID}, nil
+		return SyntheticPromotionRowEvaluator(nil)(row, child)
 	}}
 	if _, err := h.Run(); err != nil {
 		t.Fatal(err)
@@ -157,7 +156,7 @@ func TestPromotionHarnessAggregateRequiresExactCandidate(t *testing.T) {
 	ctx.EvaluatedMergeSHA = strings.Repeat("d", 40)
 	run := func(mode PromotionHarnessMode) PromotionHarnessReport {
 		h := PromotionHarness{Root: t.TempDir(), Context: ctx, Mode: mode, Evaluate: func(row PromotionRow, child string) (PromotionRowResult, error) {
-			return PromotionRowResult{Evidence: row.ID}, nil
+			return SyntheticPromotionRowEvaluator(nil)(row, child)
 		}}
 		r, err := h.Run()
 		if err != nil {

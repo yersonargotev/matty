@@ -234,12 +234,7 @@ func assertSyntheticHarnessRows(t *testing.T, numbers ...int) {
 	run := func() PromotionHarnessReport {
 		report, err := (PromotionHarness{
 			Root: t.TempDir(), Context: context, Mode: PromotionHarnessSynthetic,
-			Evaluate: func(row PromotionRow, root string) (PromotionRowResult, error) {
-				return PromotionRowResult{Evidence: struct {
-					ID        string `json:"id"`
-					Synthetic bool   `json:"synthetic"`
-				}{ID: row.ID, Synthetic: true}}, nil
-			},
+			Evaluate: SyntheticPromotionRowEvaluator(nil),
 		}).Run()
 		if err != nil {
 			t.Fatal(err)

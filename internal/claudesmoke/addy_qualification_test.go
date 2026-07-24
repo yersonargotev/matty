@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validAddyQualification() AddyQualification {
@@ -14,14 +15,21 @@ func validAddyQualification() AddyQualification {
 	e.PackyRef, e.PackySHA, e.InstalledSourceSHA = commit, commit, commit
 	processLog, _ := json.Marshal(e.Commands)
 	processDigest := sha256.Sum256(processLog)
-	return AddyQualification{
+	e.Qualification = AddyQualificationObservation{
+		InstalledSource: "/sandbox/installed-source", InstalledSourceCommit: commit, InstalledSourceClean: true,
+		WritableRoots:    AddyWritableRoots{Home: "/sandbox/home", XDGConfig: "/sandbox/config", ClaudeConfig: "/sandbox/home", State: "/sandbox/data", Package: "/sandbox/npm", Repository: "/sandbox/source-repository", Acquisition: "/sandbox/acquisition"},
+		ProcessLogDigest: hex.EncodeToString(processDigest[:]), CollectedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Safety: AddyObservedSafety{NoGoRun: true, NoDevelopmentPath: true, NoDirectFixture: true, NoUntrackedInput: true, NoAuthentication: true, NoModelInvocation: true, NoPrint: true, NoREPL: true, NoUpstreamExecute: true, NoCredentials: true, NoOutsideWrite: true},
+	}
+	q, err := BindAddyQualification(AddyQualification{
 		SchemaVersion: 1, Repository: "yersonargotev/packy", Workflow: ".github/workflows/addy.yml",
 		WorkflowDigest: strings.Repeat("1", 64), RunID: "12345", Commit: commit,
 		Checkout: "/checkout", PackyExecutable: "/candidate/packy", PackyExecutableDigest: strings.Repeat("2", 64),
-		InstalledSource: "/sandbox/installed-source", InstalledSourceCommit: commit, InstalledSourceClean: true,
-		Sandbox: "/sandbox", WritableRoots: AddyWritableRoots{Home: "/sandbox/home", XDGConfig: "/sandbox/config", ClaudeConfig: "/sandbox/claude", State: "/sandbox/state", Package: "/sandbox/package", Repository: "/sandbox/repository", Acquisition: "/sandbox/acquisition"},
-		ProcessLogDigest: hex.EncodeToString(processDigest[:]), Smoke: e,
+	}, e)
+	if err != nil {
+		panic(err)
 	}
+	return q
 }
 
 func TestAddyQualificationProductionBoundary(t *testing.T) {
@@ -57,6 +65,45 @@ func TestAddyQualificationCanonicalOutput(t *testing.T) {
 	}
 }
 
+func TestBindAddyQualificationUsesInSandboxObservations(t *testing.T) {
+	q := validAddyQualification()
+	if q.WritableRoots.ClaudeConfig != "/sandbox/home" {
+		t.Fatalf("CLAUDE_CONFIG_DIR mapping was invented: %q", q.WritableRoots.ClaudeConfig)
+	}
+	if q.WritableRoots.Repository != "/sandbox/source-repository" {
+		t.Fatalf("repository root mapping was invented: %q", q.WritableRoots.Repository)
+	}
+	e := q.Smoke
+	e.Qualification.InstalledSourceClean = false
+	dirty, err := BindAddyQualification(AddyQualification{
+		SchemaVersion: 1, Repository: q.Repository, Workflow: q.Workflow,
+		WorkflowDigest: q.WorkflowDigest, RunID: q.RunID, Commit: q.Commit,
+		Checkout: q.Checkout, PackyExecutable: q.PackyExecutable, PackyExecutableDigest: q.PackyExecutableDigest,
+	}, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAddyQualification(dirty); err == nil {
+		t.Fatal("qualification adapter certified a dirty Installed Source")
+	}
+	e.Qualification = AddyQualificationObservation{}
+	if _, err := BindAddyQualification(AddyQualification{}, e); err == nil {
+		t.Fatal("qualification adapter certified absent observations")
+	}
+}
+
+func TestProductionAddyQualificationRejectsStaleCollection(t *testing.T) {
+	q := validAddyQualification()
+	q.CollectedAt = time.Now().UTC().Add(-25 * time.Hour).Format(time.RFC3339Nano)
+	q.Smoke.Qualification.CollectedAt = q.CollectedAt
+	if err := ValidateAddyQualification(q); err != nil {
+		t.Fatalf("well-formed historical qualification rejected structurally: %v", err)
+	}
+	if err := ValidateProductionAddyQualification(q); err == nil {
+		t.Fatal("stale qualification admitted to production")
+	}
+}
+
 func TestAddyQualificationRejectsOneFactSafetyFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -69,20 +116,20 @@ func TestAddyQualificationRejectsOneFactSafetyFailures(t *testing.T) {
 		{"dirty source", func(q *AddyQualification) { q.InstalledSourceClean = false }},
 		{"cross commit source", func(q *AddyQualification) { q.InstalledSourceCommit = strings.Repeat("b", 40) }},
 		{"outside writable root", func(q *AddyQualification) { q.WritableRoots.State = "/state" }},
-		{"duplicate writable root", func(q *AddyQualification) { q.WritableRoots.State = q.WritableRoots.Home }},
-		{"go run", func(q *AddyQualification) { q.UsedGoRun = true }},
-		{"development path", func(q *AddyQualification) { q.UsedDevelopmentPath = true }},
-		{"direct fixture", func(q *AddyQualification) { q.UsedDirectFixture = true }},
-		{"untracked input", func(q *AddyQualification) { q.UsedUntrackedInput = true }},
-		{"authentication", func(q *AddyQualification) { q.Authenticated = true }},
-		{"model", func(q *AddyQualification) { q.ModelInvoked = true }},
-		{"print", func(q *AddyQualification) { q.PrintInvoked = true }},
-		{"repl", func(q *AddyQualification) { q.REPLInvoked = true }},
-		{"upstream execution", func(q *AddyQualification) { q.UpstreamExecuted = true }},
-		{"credentials", func(q *AddyQualification) { q.CredentialsObserved = true }},
-		{"outside write", func(q *AddyQualification) { q.OutsideWriteObserved = true }},
+		{"go run unobserved", func(q *AddyQualification) { q.Safety.NoGoRun = false }},
+		{"development path unobserved", func(q *AddyQualification) { q.Safety.NoDevelopmentPath = false }},
+		{"direct fixture unobserved", func(q *AddyQualification) { q.Safety.NoDirectFixture = false }},
+		{"untracked input unobserved", func(q *AddyQualification) { q.Safety.NoUntrackedInput = false }},
+		{"authentication unobserved", func(q *AddyQualification) { q.Safety.NoAuthentication = false }},
+		{"model unobserved", func(q *AddyQualification) { q.Safety.NoModelInvocation = false }},
+		{"print unobserved", func(q *AddyQualification) { q.Safety.NoPrint = false }},
+		{"repl unobserved", func(q *AddyQualification) { q.Safety.NoREPL = false }},
+		{"upstream execution unobserved", func(q *AddyQualification) { q.Safety.NoUpstreamExecute = false }},
+		{"credentials unobserved", func(q *AddyQualification) { q.Safety.NoCredentials = false }},
+		{"outside write unobserved", func(q *AddyQualification) { q.Safety.NoOutsideWrite = false }},
 		{"workflow digest", func(q *AddyQualification) { q.WorkflowDigest = "bad" }},
 		{"process log", func(q *AddyQualification) { q.ProcessLogDigest = "bad" }},
+		{"malformed collection time", func(q *AddyQualification) { q.CollectedAt = "today" }},
 		{"invalid tag", func(q *AddyQualification) { q.Tag = "latest" }},
 		{"requested Claude", func(q *AddyQualification) { q.Smoke.RequestedClaudeVersion = "latest" }},
 		{"resolved Claude", func(q *AddyQualification) { q.Smoke.ResolvedClaudeVersion = "2.2.0" }},

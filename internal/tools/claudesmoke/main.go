@@ -76,25 +76,15 @@ func qualifyAddy(args []string) {
 		fmt.Fprintln(os.Stderr, "claudesmoke qualify-addy:", err)
 		os.Exit(1)
 	}
-	commandBytes, err := json.Marshal(evidence.Commands)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudesmoke qualify-addy:", err)
-		os.Exit(1)
-	}
-	commandDigest := sha256.Sum256(commandBytes)
 	qualification := claudesmoke.AddyQualification{
 		SchemaVersion: 1, Synthetic: *synthetic, Repository: *repository, Workflow: *workflow,
 		WorkflowDigest: *workflowDigest, RunID: *runID, Commit: evidence.PackySHA,
 		Checkout: *checkout, PackyExecutable: packyPath, PackyExecutableDigest: executableDigest,
-		InstalledSource: filepath.Join(evidence.Sandbox, "installed-source"), InstalledSourceCommit: evidence.InstalledSourceSHA, InstalledSourceClean: true,
-		Sandbox: evidence.Sandbox,
-		WritableRoots: claudesmoke.AddyWritableRoots{
-			Home: filepath.Join(evidence.Sandbox, "home"), XDGConfig: filepath.Join(evidence.Sandbox, "config"),
-			ClaudeConfig: filepath.Join(evidence.Sandbox, "home", ".claude"), State: filepath.Join(evidence.Sandbox, "data"),
-			Package: filepath.Join(evidence.Sandbox, "npm"), Repository: filepath.Join(evidence.Sandbox, "work"),
-			Acquisition: filepath.Join(evidence.Sandbox, "acquisition"),
-		},
-		ProcessLogDigest: hex.EncodeToString(commandDigest[:]), Smoke: evidence,
+	}
+	qualification, err = claudesmoke.BindAddyQualification(qualification, evidence)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claudesmoke qualify-addy:", err)
+		os.Exit(1)
 	}
 	if *tag != "" {
 		qualification.Tag = *tag
@@ -176,12 +166,20 @@ func verifyAddyRelease(args []string) {
 	root := flags.String("evidence-root", "", "directory containing the four Addy qualification documents")
 	version := flags.String("packy-version", "", "expected exact release tag")
 	sha := flags.String("packy-sha", "", "expected release and Installed Source SHA")
+	repository := flags.String("repository", "", "trusted repository identity")
+	workflow := flags.String("workflow", "", "trusted release workflow path")
+	workflowDigest := flags.String("workflow-digest", "", "trusted release workflow SHA-256")
+	runID := flags.String("run-id", "", "trusted release workflow run ID")
 	production := flags.Bool("production", false, "require production-admissible exact candidate qualifications")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "claudesmoke verify-addy-release:", err)
 		os.Exit(2)
 	}
-	if err := claudesmoke.ValidateReleaseAddyQualificationMatrix(*root, *version, *sha, *production); err != nil {
+	trust := claudesmoke.AddyReleaseTrust{
+		Repository: *repository, Workflow: *workflow,
+		WorkflowDigest: *workflowDigest, RunID: *runID,
+	}
+	if err := claudesmoke.ValidateReleaseAddyQualificationMatrix(*root, *version, *sha, trust, *production); err != nil {
 		fmt.Fprintln(os.Stderr, "claudesmoke verify-addy-release:", err)
 		os.Exit(1)
 	}

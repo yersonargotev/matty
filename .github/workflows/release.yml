@@ -221,10 +221,13 @@ jobs:
       - name: Verify candidate parity and render release notes
         run: |
           set -euo pipefail
+          workflow_sha="$(sha256sum .github/workflows/release.yml | awk '{print $1}')"
           scripts/verify-release-evidence.sh \
             --tag "${{ needs.build.outputs.tag }}" --commit "${{ needs.build.outputs.commit }}" \
             --dist dist --evidence-root claude-evidence --formula release-metadata/packy.rb \
-            --notes-template docs/release-notes/next.md --notes-output release-metadata/release-notes.md
+            --notes-template docs/release-notes/next.md --notes-output release-metadata/release-notes.md \
+            --repository "$GITHUB_REPOSITORY" --workflow .github/workflows/release.yml \
+            --workflow-digest "$workflow_sha" --run-id "$GITHUB_RUN_ID"
       - name: Gate exact-tag Addy promotion evidence
         run: |
           set -euo pipefail

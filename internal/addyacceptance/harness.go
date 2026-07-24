@@ -26,6 +26,16 @@ type PromotionRowResult struct {
 	PermittedDiff []string
 }
 
+// PromotionSemanticProof binds a row result to the row-specific domain fact
+// registered by the owning acceptance test. A generic success payload is not
+// promotion authority.
+type PromotionSemanticProof struct {
+	RowID    string `json:"row_id"`
+	Claim    string `json:"claim"`
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
+}
+
 type PromotionRowEvaluator func(PromotionRow, string) (PromotionRowResult, error)
 type PromotionGateBoundary func(int, []PromotionHarnessRow) error
 
@@ -154,6 +164,7 @@ func (h PromotionHarness) runRow(row PromotionRow) PromotionHarnessRow {
 		return out
 	}
 	result, evalErr := h.Evaluate(row, child)
+	semanticErr := validatePromotionSemanticProof(row, result.Evidence)
 	observed, scanErr := relativeFiles(child)
 	permitted, permitErr := canonicalPaths(result.PermittedDiff)
 	out.Proof.ObservedDiff, out.Proof.PermittedDiff = observed, permitted
@@ -165,9 +176,9 @@ func (h PromotionHarness) runRow(row PromotionRow) PromotionHarnessRow {
 		out.EvidenceSHA256 = hex.EncodeToString(sum[:])
 	}
 	_ = os.RemoveAll(child)
-	if evalErr != nil || scanErr != nil || permitErr != nil || marshalErr != nil || !out.Proof.ExactPermittedDiff {
+	if evalErr != nil || semanticErr != nil || scanErr != nil || permitErr != nil || marshalErr != nil || !out.Proof.ExactPermittedDiff {
 		out.Result = "failed"
-		cause := firstError(evalErr, scanErr, permitErr, marshalErr)
+		cause := firstError(evalErr, semanticErr, scanErr, permitErr, marshalErr)
 		if cause == nil {
 			cause = errors.New("observed diff does not exactly match permitted diff")
 		}
@@ -175,6 +186,109 @@ func (h PromotionHarness) runRow(row PromotionRow) PromotionHarnessRow {
 		out.Diagnostic = row.BlockedDiagnostic
 	}
 	return out
+}
+
+type promotionSemanticRegistration struct {
+	claim  string
+	derive func() string
+}
+
+var promotionSemanticRows = map[int]promotionSemanticRegistration{
+	1: {"source-oracle-sha256", func() string { data, _ := CanonicalJSON(); return digest(data) }},
+	2: {"immutable-history-versions", func() string {
+		h := CanonicalPromotionHistory()
+		return fmt.Sprintf("%s>%s", h.Versions[0].Version, h.Versions[1].Version)
+	}},
+	3: {"catalog-selection-withheld", func() string {
+		h := CanonicalPromotionHistory()
+		return fmt.Sprintf("%t:%s", h.CatalogAdvertised, h.CurrentVersion)
+	}},
+	4: {"strict-v3-resource-inventory", func() string {
+		c := CanonicalPromotionCurrent()
+		var manifest Manifest
+		_ = json.Unmarshal(c.Manifest, &manifest)
+		return fmt.Sprintf("%d:%d", manifest.SchemaVersion, len(manifest.Resources))
+	}},
+	5: {"complete-claude-projection", func() string {
+		var manifest Manifest
+		_ = json.Unmarshal(CanonicalPromotionCurrent().Manifest, &manifest)
+		count := 0
+		for _, r := range manifest.Resources {
+			for _, b := range r.Bindings {
+				if b.Surface == "claude" {
+					count++
+					break
+				}
+			}
+		}
+		return fmt.Sprint(count)
+	}},
+	6: {"surface-local-compatibility", func() string { return strings.Join(CanonicalPromotionCurrent().Surfaces, ",") }},
+	7: {"deterministic-history-discovery", func() string { h := CanonicalPromotionHistory(); return digest(canonicalBytes(h)) }},
+	8: {"deterministic-structured-output", func() string { h := CanonicalPromotionHistory(); return digest(canonicalBytes(h.Routes)) }},
+	9: {"snapshot-atomicity", func() string { return CanonicalPromotionCurrent().SnapshotSHA256 }},
+	10: {"collision-free-source-ownership", func() string {
+		seen := map[string]bool{}
+		for _, f := range CanonicalPromotionCurrent().Files {
+			if seen[f.Path] {
+				return "duplicate:" + f.Path
+			}
+			seen[f.Path] = true
+		}
+		return fmt.Sprintf("unique:%d", len(seen))
+	}},
+	11: {"package-candidate-is-detached", func() string {
+		h := CanonicalPromotionHistory()
+		return fmt.Sprintf("%t:%s", h.CatalogAdvertised, CanonicalPromotionCurrent().Version)
+	}},
+	12: {"real-host-authority-withheld", func() string { return "no-auth:no-model:no-upstream" }},
+	13: {"protected-merge-authority-withheld", func() string { return "synthetic-cannot-authorize-pr" }},
+	14: {"publication-authority-withheld", func() string { return "synthetic-cannot-authorize-release" }},
+}
+
+// SyntheticPromotionRowEvaluator derives every registered row fact from the
+// detached Addy fixtures. Overrides are test-only one-fact twins keyed by row
+// ID; they replace only that row's actual domain fact.
+func SyntheticPromotionRowEvaluator(overrides map[string]string) PromotionRowEvaluator {
+	return func(row PromotionRow, _ string) (PromotionRowResult, error) {
+		registration, ok := promotionSemanticRows[row.Number]
+		if !ok {
+			return PromotionRowResult{}, fmt.Errorf("promotion row %s has no semantic registration", row.ID)
+		}
+		actual := registration.derive()
+		if twin, ok := overrides[row.ID]; ok {
+			actual = twin
+		}
+		return PromotionRowResult{Evidence: PromotionSemanticProof{
+			RowID: row.ID, Claim: registration.claim,
+			Expected: registration.derive(), Actual: actual,
+		}}, nil
+	}
+}
+
+// PromotionRowNegativeTwin returns a row-specific mutation of exactly the
+// semantic fact owned by row.
+func PromotionRowNegativeTwin(row PromotionRow) map[string]string {
+	registration, ok := promotionSemanticRows[row.Number]
+	if !ok {
+		return map[string]string{row.ID: "unregistered"}
+	}
+	return map[string]string{row.ID: "mutated:" + registration.claim}
+}
+
+func validatePromotionSemanticProof(row PromotionRow, evidence any) error {
+	proof, ok := evidence.(PromotionSemanticProof)
+	if !ok {
+		return errors.New("row evidence is not a registered semantic proof")
+	}
+	registration, ok := promotionSemanticRows[row.Number]
+	if !ok || proof.RowID != row.ID || proof.Claim != registration.claim {
+		return errors.New("row semantic proof does not match its stable registration")
+	}
+	if proof.Expected != registration.derive() || proof.Actual != proof.Expected {
+		return errors.New("row semantic fact does not satisfy its owning proof")
+	}
+	return nil
 }
 
 func suppressedHarnessRow(row PromotionRow) PromotionHarnessRow {

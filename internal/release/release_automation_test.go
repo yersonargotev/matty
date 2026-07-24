@@ -349,7 +349,9 @@ fi
 	run := func(failCanonical bool) ([]byte, error) {
 		cmd := exec.Command("bash", filepath.Join(root, "scripts", "verify-release-evidence.sh"),
 			"--tag", tag, "--commit", commit, "--dist", dist, "--evidence-root", evidenceRoot,
-			"--formula", formula, "--notes-template", filepath.Join(root, "docs", "release-notes", "next.md"), "--notes-output", notes)
+			"--formula", formula, "--notes-template", filepath.Join(root, "docs", "release-notes", "next.md"), "--notes-output", notes,
+			"--repository", "yersonargotev/packy", "--workflow", ".github/workflows/release.yml",
+			"--workflow-digest", strings.Repeat("c", 64), "--run-id", "release-run")
 		cmd.Dir = root
 		fail := "0"
 		if failCanonical {
@@ -368,7 +370,7 @@ fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "run ./internal/tools/claudesmoke verify-addy-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit} {
+	for _, want := range []string{"run ./internal/tools/claudesmoke verify-release", "run ./internal/tools/claudesmoke verify-addy-release", "--evidence-root " + evidenceRoot, "--packy-version " + tag, "--packy-sha " + commit, "--repository yersonargotev/packy", "--workflow .github/workflows/release.yml", "--workflow-digest " + strings.Repeat("c", 64), "--run-id release-run"} {
 		if !strings.Contains(string(invocation), want) {
 			t.Fatalf("release verifier did not delegate %q to the canonical owner:\n%s", want, invocation)
 		}

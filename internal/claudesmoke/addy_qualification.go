@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var exactReleaseTagPattern = regexp.MustCompile(`^v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -17,35 +19,52 @@ var exactReleaseTagPattern = regexp.MustCompile(`^v0\.(0|[1-9][0-9]*)\.(0|[1-9][
 // Addy promotion gate. Synthetic qualifications exercise the harness but are
 // deliberately inadmissible as production evidence.
 type AddyQualification struct {
-	SchemaVersion         int               `json:"schema_version"`
-	Synthetic             bool              `json:"synthetic"`
-	Repository            string            `json:"repository"`
-	Workflow              string            `json:"workflow"`
-	WorkflowDigest        string            `json:"workflow_digest"`
-	RunID                 string            `json:"run_id"`
-	Commit                string            `json:"commit,omitempty"`
-	Tag                   string            `json:"tag,omitempty"`
-	Checkout              string            `json:"checkout"`
-	PackyExecutable       string            `json:"packy_executable"`
-	PackyExecutableDigest string            `json:"packy_executable_sha256"`
-	InstalledSource       string            `json:"installed_source"`
-	InstalledSourceCommit string            `json:"installed_source_commit"`
-	InstalledSourceClean  bool              `json:"installed_source_clean"`
-	Sandbox               string            `json:"sandbox"`
-	WritableRoots         AddyWritableRoots `json:"writable_roots"`
-	ProcessLogDigest      string            `json:"process_log_sha256"`
-	UsedGoRun             bool              `json:"used_go_run"`
-	UsedDevelopmentPath   bool              `json:"used_development_path"`
-	UsedDirectFixture     bool              `json:"used_direct_fixture"`
-	UsedUntrackedInput    bool              `json:"used_untracked_input"`
-	Authenticated         bool              `json:"authenticated"`
-	ModelInvoked          bool              `json:"model_invoked"`
-	PrintInvoked          bool              `json:"print_invoked"`
-	REPLInvoked           bool              `json:"repl_invoked"`
-	UpstreamExecuted      bool              `json:"upstream_executed"`
-	CredentialsObserved   bool              `json:"credentials_observed"`
-	OutsideWriteObserved  bool              `json:"outside_write_observed"`
-	Smoke                 Evidence          `json:"smoke"`
+	SchemaVersion         int                `json:"schema_version"`
+	Synthetic             bool               `json:"synthetic"`
+	Repository            string             `json:"repository"`
+	Workflow              string             `json:"workflow"`
+	WorkflowDigest        string             `json:"workflow_digest"`
+	RunID                 string             `json:"run_id"`
+	Commit                string             `json:"commit,omitempty"`
+	Tag                   string             `json:"tag,omitempty"`
+	Checkout              string             `json:"checkout"`
+	PackyExecutable       string             `json:"packy_executable"`
+	PackyExecutableDigest string             `json:"packy_executable_sha256"`
+	InstalledSource       string             `json:"installed_source"`
+	InstalledSourceCommit string             `json:"installed_source_commit"`
+	InstalledSourceClean  bool               `json:"installed_source_clean"`
+	Sandbox               string             `json:"sandbox"`
+	WritableRoots         AddyWritableRoots  `json:"writable_roots"`
+	ProcessLogDigest      string             `json:"process_log_sha256"`
+	CollectedAt           string             `json:"collected_at"`
+	Safety                AddyObservedSafety `json:"observed_safety"`
+	Smoke                 Evidence           `json:"smoke"`
+}
+
+// AddyQualificationObservation contains only facts measured by Run while its
+// disposable sandbox still exists.
+type AddyQualificationObservation struct {
+	InstalledSource       string             `json:"installed_source"`
+	InstalledSourceCommit string             `json:"installed_source_commit"`
+	InstalledSourceClean  bool               `json:"installed_source_clean"`
+	WritableRoots         AddyWritableRoots  `json:"writable_roots"`
+	ProcessLogDigest      string             `json:"process_log_sha256"`
+	CollectedAt           string             `json:"collected_at"`
+	Safety                AddyObservedSafety `json:"observed_safety"`
+}
+
+type AddyObservedSafety struct {
+	NoGoRun           bool `json:"no_go_run"`
+	NoDevelopmentPath bool `json:"no_development_path"`
+	NoDirectFixture   bool `json:"no_direct_fixture_access"`
+	NoUntrackedInput  bool `json:"no_untracked_input"`
+	NoAuthentication  bool `json:"no_authentication"`
+	NoModelInvocation bool `json:"no_model_invocation"`
+	NoPrint           bool `json:"no_print"`
+	NoREPL            bool `json:"no_repl"`
+	NoUpstreamExecute bool `json:"no_upstream_execution"`
+	NoCredentials     bool `json:"no_credentials"`
+	NoOutsideWrite    bool `json:"no_outside_write"`
 }
 
 type AddyWritableRoots struct {
@@ -68,6 +87,10 @@ func (r AddyWritableRoots) all() []string {
 func ValidateAddyQualification(q AddyQualification) error {
 	if q.SchemaVersion != 1 || q.Repository == "" || q.Workflow == "" || q.RunID == "" {
 		return errors.New("missing Addy qualification identity")
+	}
+	collectedAt, err := time.Parse(time.RFC3339Nano, q.CollectedAt)
+	if err != nil || collectedAt.Location() != time.UTC || collectedAt.Format(time.RFC3339Nano) != q.CollectedAt {
+		return errors.New("collection timestamp must be canonical UTC RFC3339")
 	}
 	for _, digest := range []struct{ name, value string }{
 		{"workflow", q.WorkflowDigest},
@@ -99,27 +122,32 @@ func ValidateAddyQualification(q AddyQualification) error {
 	if q.Tag != "" && (q.Commit == "" || !exactReleaseTagPattern.MatchString(q.Tag)) {
 		return errors.New("tag qualification requires an exact v0.x.y tag and commit")
 	}
-	seenRoots := map[string]bool{}
 	for _, root := range q.WritableRoots.all() {
 		if !cleanAbsolute(root) || root == q.Sandbox || !pathWithin(q.Sandbox, root) {
 			return errors.New("all writable roots must be beneath one disposable sandbox")
 		}
-		if seenRoots[root] {
-			return errors.New("writable roots must be distinct")
-		}
-		seenRoots[root] = true
 	}
-	if q.UsedGoRun || q.UsedDevelopmentPath || q.UsedDirectFixture || q.UsedUntrackedInput {
-		return errors.New("development or untracked inputs are not qualification evidence")
-	}
-	if q.Authenticated || q.ModelInvoked || q.PrintInvoked || q.REPLInvoked || q.UpstreamExecuted || q.CredentialsObserved || q.OutsideWriteObserved {
-		return errors.New("unsafe Claude smoke activity")
+	s := q.Safety
+	if !s.NoGoRun || !s.NoDevelopmentPath || !s.NoDirectFixture || !s.NoUntrackedInput ||
+		!s.NoAuthentication || !s.NoModelInvocation || !s.NoPrint || !s.NoREPL ||
+		!s.NoUpstreamExecute || !s.NoCredentials || !s.NoOutsideWrite {
+		return errors.New("required safety fact was not observed")
 	}
 	if err := ValidateEvidence(q.Smoke); err != nil {
 		return fmt.Errorf("invalid bound smoke evidence: %w", err)
 	}
 	if q.Smoke.PackySHA != q.InstalledSourceCommit || q.Smoke.Sandbox != q.Sandbox {
 		return errors.New("smoke evidence is not bound to candidate and sandbox")
+	}
+	bound := q.Smoke.Qualification
+	if q.InstalledSource != bound.InstalledSource ||
+		q.InstalledSourceCommit != bound.InstalledSourceCommit ||
+		q.InstalledSourceClean != bound.InstalledSourceClean ||
+		q.ProcessLogDigest != bound.ProcessLogDigest ||
+		q.CollectedAt != bound.CollectedAt ||
+		!reflect.DeepEqual(q.WritableRoots, bound.WritableRoots) ||
+		!reflect.DeepEqual(q.Safety, bound.Safety) {
+		return errors.New("qualification does not match the in-sandbox observation")
 	}
 	processLog, err := json.Marshal(q.Smoke.Commands)
 	if err != nil {
@@ -132,6 +160,26 @@ func ValidateAddyQualification(q AddyQualification) error {
 	return nil
 }
 
+// BindAddyQualification copies the runner's observations into the admission
+// document. Callers cannot manufacture safety claims after Run has removed the
+// disposable sandbox.
+func BindAddyQualification(q AddyQualification, e Evidence) (AddyQualification, error) {
+	o := e.Qualification
+	if o.InstalledSource == "" || o.ProcessLogDigest == "" {
+		return AddyQualification{}, errors.New("smoke evidence has no in-sandbox qualification observation")
+	}
+	q.InstalledSource = o.InstalledSource
+	q.InstalledSourceCommit = o.InstalledSourceCommit
+	q.InstalledSourceClean = o.InstalledSourceClean
+	q.Sandbox = e.Sandbox
+	q.WritableRoots = o.WritableRoots
+	q.ProcessLogDigest = o.ProcessLogDigest
+	q.CollectedAt = o.CollectedAt
+	q.Safety = o.Safety
+	q.Smoke = e
+	return q, nil
+}
+
 // ValidateProductionAddyQualification rejects synthetic/pre-candidate proofs
 // and requires an exact commit or exact tag identity.
 func ValidateProductionAddyQualification(q AddyQualification) error {
@@ -140,6 +188,10 @@ func ValidateProductionAddyQualification(q AddyQualification) error {
 	}
 	if q.Synthetic {
 		return errors.New("synthetic Addy qualification is not production-admissible")
+	}
+	collectedAt, _ := time.Parse(time.RFC3339Nano, q.CollectedAt)
+	if age := time.Since(collectedAt); age < -5*time.Minute || age > 24*time.Hour {
+		return errors.New("Addy qualification evidence is stale or future-dated")
 	}
 	if q.Commit == "" || (q.Tag == "" && q.Commit != q.Smoke.PackyRef) {
 		return errors.New("production qualification must bind an exact commit or tag")
