@@ -56,8 +56,26 @@ type ReadinessObservation struct {
 	Authorized            bool
 	UsabilityObserved     bool
 	Usable                bool
+	OptionalAuthorities   []OptionalAuthorityObservation
 	PendingHumanActions   []string
 	Evidence              []string
+}
+
+type OptionalAuthorityState string
+
+const (
+	OptionalAuthorityAvailable   OptionalAuthorityState = "available"
+	OptionalAuthorityUnavailable OptionalAuthorityState = "unavailable"
+	OptionalAuthorityUnknown     OptionalAuthorityState = "unknown"
+)
+
+// OptionalAuthorityObservation reports invocation-time authority separately
+// from the required configured/authorized/usable readiness dimensions.
+type OptionalAuthorityObservation struct {
+	ModeID    string
+	Authority string
+	State     OptionalAuthorityState
+	Fallback  string
 }
 
 type StatusEntry struct {
@@ -69,6 +87,7 @@ type StatusEntry struct {
 	LatestAttempt       *AttemptStatus
 	Readiness           ReadinessStatus
 	ReadinessObserved   ReadinessObservationStatus
+	OptionalAuthorities []OptionalAuthorityObservation
 	Projections         ProjectionSummary
 	ProjectionDetails   []ProjectionStatus
 	Blockers            []string
@@ -218,6 +237,7 @@ func (f Facade) statusEntry(ctx context.Context, pack Pack, surface Surface) (St
 	entry.Evidence = append(entry.Evidence, fresh.Evidence...)
 	entry.ReadinessObserved.Authorization = fresh.AuthorizationObserved
 	entry.ReadinessObserved.Usability = fresh.UsabilityObserved
+	entry.OptionalAuthorities = cloneOptionalAuthorities(fresh.OptionalAuthorities)
 	entry.Readiness.Authorized = entry.Readiness.Configured && fresh.AuthorizationObserved && fresh.Authorized
 	entry.Readiness.Usable = entry.Readiness.Authorized && fresh.UsabilityObserved && fresh.Usable
 	if entry.Readiness.Configured && len(fresh.PendingHumanActions) == 0 {

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 	"github.com/yersonargotev/packy/internal/localprojection"
 )
 
@@ -147,9 +148,14 @@ func observedHookEntries(settings SettingsObservation) []observedHookEntry {
 }
 
 type RuntimeEvidence struct{ Kind, ID, Signal, Revision string }
+type OptionalAuthorityAvailability struct {
+	ModeID, Authority string
+	State             capabilitypack.OptionalAuthorityState
+}
 type AuthorizationObservation struct {
 	PolicyObserved, ToolPermissionObserved bool
 	Disabled, Shadowed                     bool
+	OptionalAuthorities                    []OptionalAuthorityAvailability
 	Err                                    error
 }
 type AuthorizationObserver interface {

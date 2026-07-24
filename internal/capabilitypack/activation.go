@@ -1908,6 +1908,31 @@ func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition Surf
 		}
 		occupied[key] = struct{}{}
 	}
+	optionalModes := make(map[string]OptionalMode)
+	contract := transition.Desired.Contract
+	if transition.Desired.ID == "" {
+		contract = transition.Prior.Contract
+	}
+	for _, mode := range contract.OptionalModes {
+		optionalModes[mode.ID] = mode
+	}
+	optionalAuthorities := make(map[string]struct{}, len(observation.Readiness.OptionalAuthorities))
+	for _, authority := range observation.Readiness.OptionalAuthorities {
+		key := authority.ModeID + ":" + authority.Authority
+		mode, modeExists := optionalModes[authority.ModeID]
+		if authority.ModeID == "" || authority.Authority == "" || authority.Fallback == "" || !modeExists || !slices.Contains(mode.Authorities, authority.Authority) || authority.Fallback != mode.Fallback {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned malformed optional authority %q", key)
+		}
+		switch authority.State {
+		case OptionalAuthorityAvailable, OptionalAuthorityUnavailable, OptionalAuthorityUnknown:
+		default:
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned unsupported optional authority state %q for %q", authority.State, key)
+		}
+		if _, duplicate := optionalAuthorities[key]; duplicate {
+			return SurfaceInspection{}, fmt.Errorf("surface adapter returned duplicate optional authority %q", key)
+		}
+		optionalAuthorities[key] = struct{}{}
+	}
 	sort.Slice(observation.Projections, func(i, j int) bool { return observation.Projections[i].ID < observation.Projections[j].ID })
 	sort.Slice(observation.OccupiedNames, func(i, j int) bool {
 		if observation.OccupiedNames[i].Namespace != observation.OccupiedNames[j].Namespace {
@@ -1918,6 +1943,12 @@ func inspectSurface(ctx context.Context, adapter SurfaceAdapter, transition Surf
 	sort.Strings(observation.PendingHumanActions)
 	sort.Strings(observation.Readiness.PendingHumanActions)
 	sort.Strings(observation.Readiness.Evidence)
+	sort.Slice(observation.Readiness.OptionalAuthorities, func(i, j int) bool {
+		if observation.Readiness.OptionalAuthorities[i].ModeID != observation.Readiness.OptionalAuthorities[j].ModeID {
+			return observation.Readiness.OptionalAuthorities[i].ModeID < observation.Readiness.OptionalAuthorities[j].ModeID
+		}
+		return observation.Readiness.OptionalAuthorities[i].Authority < observation.Readiness.OptionalAuthorities[j].Authority
+	})
 	return observation, nil
 }
 
@@ -1950,7 +1981,12 @@ func cloneSurfaceInspection(value SurfaceInspection) SurfaceInspection {
 	value.PendingHumanActions = append([]string(nil), value.PendingHumanActions...)
 	value.Readiness.PendingHumanActions = append([]string(nil), value.Readiness.PendingHumanActions...)
 	value.Readiness.Evidence = append([]string(nil), value.Readiness.Evidence...)
+	value.Readiness.OptionalAuthorities = cloneOptionalAuthorities(value.Readiness.OptionalAuthorities)
 	return value
+}
+
+func cloneOptionalAuthorities(values []OptionalAuthorityObservation) []OptionalAuthorityObservation {
+	return append([]OptionalAuthorityObservation(nil), values...)
 }
 
 func cloneResolutions(values []ExecutableResolution) []ExecutableResolution {

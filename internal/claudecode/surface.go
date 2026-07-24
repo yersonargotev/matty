@@ -193,22 +193,31 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 			if err != nil {
 				return result, err
 			}
-			content, err = a.embedConsumerAssets(pack, r, content)
-			if err != nil {
-				return result, err
+			if pack.ID == "addy" && pack.Version == "1.1.0" {
+				content, err = renderAddyClaudeAgent(pack, r, b, content)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				content, err = a.embedConsumerAssets(pack, r, content)
+				if err != nil {
+					return result, err
+				}
 			}
 			target := filepath.Join(a.layout.AgentsDir, b.Name+".md")
 			observed, exists, err := localprojection.FingerprintPath(target)
 			if err != nil {
 				return result, err
 			}
-			if b.AgentAuthority == nil && (len(r.Tools) > 0 || len(r.Permissions) > 0) {
-				return result, fmt.Errorf("Claude agent %s is missing explicit authority translations", r.ID)
-			}
-			authority := capabilitypack.AgentAuthority{}
-			if b.AgentAuthority != nil {
-				authority = *b.AgentAuthority
-				content = []byte(claudeAgentDocument(r, b.Name, authority, content))
+			if pack.ID != "addy" || pack.Version != "1.1.0" {
+				if b.AgentAuthority == nil && (len(r.Tools) > 0 || len(r.Permissions) > 0) {
+					return result, fmt.Errorf("Claude agent %s is missing explicit authority translations", r.ID)
+				}
+				authority := capabilitypack.AgentAuthority{}
+				if b.AgentAuthority != nil {
+					authority = *b.AgentAuthority
+					content = []byte(claudeAgentDocument(r, b.Name, authority, content))
+				}
 			}
 			desired := localprojection.FingerprintBytes(content)
 			current, err := readOptional(target)
@@ -340,6 +349,14 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if a.authorization != nil {
 		auth = a.authorization.ObserveAuthorization(ctx)
 	}
+	readinessPack := pack
+	if readinessPack.ID == "" {
+		readinessPack = transition.Prior
+	}
+	optionalAuthorities, err := optionalAuthorityReadiness(readinessPack, auth)
+	if err != nil {
+		return result, err
+	}
 	authorizationObserved := versionObserved && auth.Err == nil && auth.PolicyObserved && auth.ToolPermissionObserved
 	authorized := authorizationObserved && configured && supported && !auth.Disabled && !auth.Shadowed
 	pending := []string{}
@@ -356,7 +373,7 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 	if !usabilityObserved {
 		pending = append(pending, "supply explicit current Claude Code runtime evidence for every included resource")
 	}
-	result.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: authorizationObserved, Authorized: authorized, UsabilityObserved: usabilityObserved, Usable: authorized && usable, PendingHumanActions: pending, Evidence: append([]string{"filesystem and static user MCP definitions inspected; runtime use was not invoked"}, runtimeFacts...)}
+	result.Readiness = capabilitypack.ReadinessObservation{AuthorizationObserved: authorizationObserved, Authorized: authorized, UsabilityObserved: usabilityObserved, Usable: authorized && usable, OptionalAuthorities: optionalAuthorities, PendingHumanActions: pending, Evidence: append([]string{"filesystem and static user MCP definitions inspected; runtime use was not invoked"}, runtimeFacts...)}
 	return result, nil
 }
 
@@ -932,7 +949,7 @@ func (a *SurfaceAdapter) runtimeReadiness(ctx context.Context, pack capabilitypa
 		return false, false, nil
 	}
 	evidence := a.runtimeEvidence.ObserveRuntimeEvidence(ctx)
-	policy := canonicalFingerprint(struct{ Disabled, Shadowed, Policy, Tools bool }{auth.Disabled, auth.Shadowed, auth.PolicyObserved, auth.ToolPermissionObserved})
+	policy := RuntimeEvidencePolicyFingerprint(pack, auth)
 	byID := make(map[string]RuntimeEvidence, len(evidence))
 	for _, item := range evidence {
 		byID[item.ID] = item
@@ -966,15 +983,65 @@ func (a *SurfaceAdapter) runtimeReadiness(ctx context.Context, pack capabilitypa
 }
 
 func runtimeEvidenceRevision(pack capabilitypack.Pack, projection capabilitypack.ObservedProjection, hostVersion, policy string) string {
-	return canonicalFingerprint(struct{ PackID, PackVersion, ProjectionID, Projection, Definition, HostVersion, Policy string }{pack.ID, pack.Version, projection.ID, projection.ObservedFingerprint, projection.DesiredFingerprint, hostVersion, policy})
+	return canonicalFingerprint(struct{ PackID, PackVersion, ProjectionID, Projection, Definition, Target, Kind, HostVersion, Policy string }{pack.ID, pack.Version, projection.ID, projection.ObservedFingerprint, projection.DesiredFingerprint, projection.Action.Target, string(projection.Action.Kind), hostVersion, policy})
 }
 
 func NewRuntimeEvidence(pack capabilitypack.Pack, projection capabilitypack.ObservedProjection, hostVersion string, auth AuthorizationObservation, signal string) RuntimeEvidence {
-	return RuntimeEvidence{Kind: string(projection.Action.Kind), ID: projection.ID, Signal: signal, Revision: runtimeEvidenceRevision(pack, projection, hostVersion, RuntimeEvidencePolicyFingerprint(auth))}
+	return RuntimeEvidence{Kind: string(projection.Action.Kind), ID: projection.ID, Signal: signal, Revision: runtimeEvidenceRevision(pack, projection, hostVersion, RuntimeEvidencePolicyFingerprint(pack, auth))}
 }
 
-func RuntimeEvidencePolicyFingerprint(auth AuthorizationObservation) string {
-	return canonicalFingerprint(struct{ Disabled, Shadowed, Policy, Tools bool }{auth.Disabled, auth.Shadowed, auth.PolicyObserved, auth.ToolPermissionObserved})
+func RuntimeEvidencePolicyFingerprint(pack capabilitypack.Pack, auth AuthorizationObservation) string {
+	optional, err := optionalAuthorityReadiness(pack, auth)
+	if err != nil {
+		return canonicalFingerprint(struct{ Error string }{err.Error()})
+	}
+	return canonicalFingerprint(struct {
+		Disabled, Shadowed, Policy, Tools bool
+		Optional                          []capabilitypack.OptionalAuthorityObservation
+	}{auth.Disabled, auth.Shadowed, auth.PolicyObserved, auth.ToolPermissionObserved, optional})
+}
+
+func optionalAuthorityReadiness(pack capabilitypack.Pack, auth AuthorizationObservation) ([]capabilitypack.OptionalAuthorityObservation, error) {
+	declared := make(map[string]capabilitypack.OptionalAuthorityObservation)
+	for _, mode := range pack.Contract.OptionalModes {
+		for _, authority := range mode.Authorities {
+			key := mode.ID + "\x00" + authority
+			if _, duplicate := declared[key]; duplicate {
+				return nil, fmt.Errorf("duplicate optional authority declaration %s:%s", mode.ID, authority)
+			}
+			declared[key] = capabilitypack.OptionalAuthorityObservation{ModeID: mode.ID, Authority: authority, State: capabilitypack.OptionalAuthorityUnknown, Fallback: mode.Fallback}
+		}
+	}
+	observed := make(map[string]bool, len(auth.OptionalAuthorities))
+	for _, authority := range auth.OptionalAuthorities {
+		key := authority.ModeID + "\x00" + authority.Authority
+		record, exists := declared[key]
+		if !exists {
+			return nil, fmt.Errorf("Claude authorization reported undeclared optional authority %s:%s", authority.ModeID, authority.Authority)
+		}
+		if observed[key] {
+			return nil, fmt.Errorf("Claude authorization reported duplicate optional authority %s:%s", authority.ModeID, authority.Authority)
+		}
+		switch authority.State {
+		case capabilitypack.OptionalAuthorityAvailable, capabilitypack.OptionalAuthorityUnavailable, capabilitypack.OptionalAuthorityUnknown:
+		default:
+			return nil, fmt.Errorf("Claude authorization reported unsupported optional authority state %q", authority.State)
+		}
+		record.State = authority.State
+		declared[key] = record
+		observed[key] = true
+	}
+	result := make([]capabilitypack.OptionalAuthorityObservation, 0, len(declared))
+	for _, authority := range declared {
+		result = append(result, authority)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ModeID != result[j].ModeID {
+			return result[i].ModeID < result[j].ModeID
+		}
+		return result[i].Authority < result[j].Authority
+	})
+	return result, nil
 }
 
 func claudeCommandSkill(resource capabilitypack.Resource, name string, prompt []byte) string {
