@@ -72,6 +72,27 @@ func TestCompositionAppliesOnlyExplicitSurfaceAliasToHostBinding(t *testing.T) {
 	}
 }
 
+func TestCompositionMapsAliasedProjectionToOnlyItsPortableContributor(t *testing.T) {
+	addy := Pack{ID: "addy", Version: "1.1.0", Resources: []Resource{{
+		Kind: "skill", ID: "example", Bindings: []Binding{{Surface: SurfaceClaude, Projection: "skill", Name: "example", Invocation: "/example", Mode: "native", Sharing: "exclusive"}},
+	}}}
+	unrelated := Pack{ID: "unrelated", Version: "1", Resources: []Resource{{
+		Kind: "skill", ID: "other", Bindings: []Binding{{Surface: SurfaceClaude, Projection: "skill", Name: "other", Invocation: "/other", Mode: "native", Sharing: "exclusive"}},
+	}}}
+	intents := []ActivationIntent{
+		{PackID: "addy", Surface: SurfaceClaude, Version: "1.1.0", Active: true, Aliases: []SurfaceAlias{{Kind: "skill", ID: "example", Name: "addy-example"}}},
+		{PackID: "unrelated", Surface: SurfaceClaude, Version: "1", Active: true, Aliases: []SurfaceAlias{}},
+	}
+	result, err := NewFacade(Catalog{packs: []Pack{addy, unrelated}}).compose(addy, ActivationState{Intent: intents[0], Intents: intents}, SurfaceClaude, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.contributorSet("skill:addy-example")
+	if len(got) != 1 || got[0] != "addy" {
+		t.Fatalf("aliased contributors = %v, want [addy]", got)
+	}
+}
+
 func TestPreviewIncludesInactiveTransitiveRequirementsInCanonicalComposition(t *testing.T) {
 	packs := []Pack{
 		{ID: "app", Version: "1.0.0", Surfaces: []Surface{SurfaceCodex}, Requires: Requirements{Capabilities: []string{"cap:b"}}, Resources: []Resource{{Kind: "instruction", ID: "app", Source: "app"}}},

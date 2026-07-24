@@ -76,6 +76,7 @@ type OwnershipRecord struct {
 	HookProvenance                                           string
 	HookEvent                                                string
 	Skill                                                    SkillIdentity
+	Composite                                                compositeOwnership
 	Command                                                  string
 	Args, EnvironmentKeys                                    []string
 	EnvironmentFingerprint                                   string

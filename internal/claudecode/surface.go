@@ -17,6 +17,7 @@ import (
 const (
 	ActionSkillLink               capabilitypack.ProjectionActionKind = "claude-skill-link"
 	ActionSkillFile               capabilitypack.ProjectionActionKind = "claude-skill-file"
+	ActionSkillTree               capabilitypack.ProjectionActionKind = "claude-skill-tree"
 	ActionInstructionContribution capabilitypack.ProjectionActionKind = "claude-instruction-contribution"
 	ActionAgentFile               capabilitypack.ProjectionActionKind = "claude-agent-file"
 	ActionCommandHook             capabilitypack.ProjectionActionKind = "claude-command-hook"
@@ -81,6 +82,29 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 		id := r.Kind + ":" + b.Name
 		switch b.Projection {
 		case "skill":
+			if isAddyCompositeProjection(pack, r, b) {
+				composite, err := addyCompositeSkill(pack, r, b, a.bundleRoot)
+				if err != nil {
+					return result, err
+				}
+				payload, err := canonicalCompositeSkillPayload(composite)
+				if err != nil {
+					return result, err
+				}
+				provenance, err := canonicalCompositeOwnership(composite.Ownership)
+				if err != nil {
+					return result, err
+				}
+				target := filepath.Join(a.layout.SkillsDir, b.Name)
+				observed, exists, err := observeCompositeTree(target)
+				if err != nil {
+					return result, err
+				}
+				action := capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillTree, Target: target, Content: string(payload), AdapterProvenance: provenance, Description: "write exact Addy Claude composite skill " + b.Name}
+				result.Projections = append(result.Projections, capabilitypack.ObservedProjection{ID: id, Exists: exists, ObservedFingerprint: observed, DesiredFingerprint: composite.TreeFingerprint, Action: action})
+				revision = append(revision, id+observed)
+				continue
+			}
 			if r.Kind == "command" {
 				content, err := os.ReadFile(filepath.Join(a.bundleRoot, filepath.Clean(r.Source)))
 				if err != nil {
@@ -264,7 +288,7 @@ func (a *SurfaceAdapter) InspectSurface(ctx context.Context, transition capabili
 			}
 			result.Projections = append(result.Projections, projection)
 			revision = append(revision, part)
-			if r.Kind == "command" && b.Projection == "skill" {
+			if r.Kind == "command" && b.Projection == "skill" && !isAddyCompositeProjection(transition.Prior, r, b) {
 				assets, err := a.consumerAssets(transition.Prior, r, projection.ID, filepath.Join(a.layout.SkillsDir, b.Name))
 				if err != nil {
 					return result, err
@@ -371,6 +395,11 @@ func (a *SurfaceAdapter) inspectRemoval(pack capabilitypack.Pack, r capabilitypa
 	id := r.Kind + ":" + b.Name
 	switch b.Projection {
 	case "skill":
+		if isAddyCompositeProjection(pack, r, b) {
+			target := filepath.Join(a.layout.SkillsDir, b.Name)
+			fp, exists, err := observeCompositeTree(target)
+			return capabilitypack.ObservedProjection{ID: id, Goal: capabilitypack.ProjectionAbsent, Exists: exists, ObservedFingerprint: fp, Action: capabilitypack.ProjectionAction{ID: id, Kind: ActionSkillTree, Target: target, Mode: capabilitypack.ProjectionDeleteTarget, Description: "remove exact Addy Claude composite skill " + b.Name}}, id + fp, err
+		}
 		if r.Kind == "command" {
 			target := filepath.Join(a.layout.SkillsDir, b.Name, "SKILL.md")
 			fp, exists, err := localprojection.FingerprintPath(target)
@@ -461,8 +490,34 @@ func (a *SurfaceAdapter) ApplyProjections(ctx context.Context, actions []capabil
 	if id, err := a.preflight(actions, snapshot); err != nil {
 		return &capabilitypack.ProjectionActionError{ID: id, Err: err}
 	}
+	treeChanges := make([]localprojection.TreeChange, 0)
+	for _, action := range actions {
+		if action.Kind != ActionSkillTree {
+			continue
+		}
+		change := localprojection.TreeChange{ID: action.ID, Target: action.Target, Delete: action.Mode == capabilitypack.ProjectionDeleteTarget}
+		if !change.Delete {
+			composite, err := decodeCompositeSkillPayload([]byte(action.Content))
+			if err != nil {
+				return &capabilitypack.ProjectionActionError{ID: action.ID, Err: err}
+			}
+			change.Files = compositeTreeFiles(composite)
+			change.ExpectedFingerprint = composite.TreeFingerprint
+		}
+		treeChanges = append(treeChanges, change)
+	}
+	if err := localprojection.ReplaceTrees(treeChanges); err != nil {
+		var actionErr capabilitypack.ProjectionActionError
+		if errors.As(err, &actionErr) {
+			return &actionErr
+		}
+		return &capabilitypack.ProjectionActionError{ID: firstID(actions), Err: err}
+	}
 	appliedShared := map[string]string{}
 	for _, action := range actions {
+		if action.Kind == ActionSkillTree {
+			continue
+		}
 		if action.Kind == ActionInstructionContribution || action.Kind == ActionCommandHook {
 			if content, ok := appliedShared[action.Target]; ok && content == action.Content {
 				continue
@@ -497,7 +552,32 @@ func (a *SurfaceAdapter) validateActions(actions []capabilitypack.ProjectionActi
 					return errors.New("Claude skill source must be absolute")
 				}
 			}
-			if _, ok := targets[x.Target]; ok {
+			if exclusiveSkillTargetConflict(targets, x) {
+				return errors.New("overlapping exclusive Claude skill target")
+			}
+			targets[x.Target] = x
+		case ActionSkillTree:
+			if !directChild(x.Target, a.layout.SkillsDir) {
+				return errors.New("Claude composite skill target must be a direct child of the canonical skills directory")
+			}
+			if x.Mode == capabilitypack.ProjectionDeleteTarget {
+				if x.Content != "" || x.AdapterProvenance != "" {
+					return errors.New("Claude composite skill removal must not carry replacement content")
+				}
+			} else {
+				composite, err := decodeCompositeSkillPayload([]byte(x.Content))
+				if err != nil {
+					return err
+				}
+				provenance, err := decodeCompositeOwnership(x.AdapterProvenance)
+				if err != nil {
+					return err
+				}
+				if composite.Ownership != provenance || provenance.EffectiveName != filepath.Base(x.Target) || provenance.TreeFingerprint != composite.TreeFingerprint {
+					return errors.New("Claude composite skill action identity does not match its target and payload")
+				}
+			}
+			if exclusiveSkillTargetConflict(targets, x) {
 				return errors.New("overlapping exclusive Claude skill target")
 			}
 			targets[x.Target] = x
@@ -505,7 +585,7 @@ func (a *SurfaceAdapter) validateActions(actions []capabilitypack.ProjectionActi
 			if filepath.Dir(filepath.Dir(filepath.Clean(x.Target))) != filepath.Clean(a.layout.SkillsDir) {
 				return errors.New("Claude command skill file must be beneath one canonical personal skill directory")
 			}
-			if _, ok := targets[x.Target]; ok {
+			if exclusiveSkillTargetConflict(targets, x) {
 				return errors.New("overlapping exclusive Claude skill target")
 			}
 			targets[x.Target] = x
@@ -592,6 +672,15 @@ func (a *SurfaceAdapter) apply(ctx context.Context, x capabilitypack.ProjectionA
 			return nil
 		}
 		return replaceSymlink(x.Source, x.Target)
+	case ActionSkillTree:
+		if x.Mode == capabilitypack.ProjectionDeleteTarget {
+			return removeExactTree(x.Target)
+		}
+		composite, err := decodeCompositeSkillPayload([]byte(x.Content))
+		if err != nil {
+			return err
+		}
+		return localprojection.ReplaceTree(x.Target, compositeTreeFiles(composite), composite.TreeFingerprint)
 	case ActionAgentFile, ActionSkillFile, ActionInstructionContribution, ActionCommandHook:
 		if x.Mode == capabilitypack.ProjectionDeleteTarget {
 			return removeExact(x.Target)
@@ -688,6 +777,42 @@ func (a *SurfaceAdapter) validateFreshOwnership(x capabilitypack.ProjectionActio
 				return errors.New("owned Claude command hook changed; preserving it")
 			}
 		}
+	}
+	if x.Kind == ActionSkillTree {
+		observed, exists, err := freshCompositeTreeFingerprint(x.Target)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		if record == nil {
+			return errors.New("foreign Claude composite skill collision")
+		}
+		recordProvenance, err := canonicalCompositeOwnership(record.Composite)
+		if err != nil {
+			return err
+		}
+		if _, err := decodeCompositeOwnership(recordProvenance); err != nil || record.Composite.TreeFingerprint != record.Fingerprint {
+			return errors.New("invalid Claude composite ownership identity")
+		}
+		if !fingerprintsEqual(observed, record.Fingerprint) {
+			return errors.New("owned Claude composite skill changed; preserving it")
+		}
+		if x.Mode == capabilitypack.ProjectionDeleteTarget {
+			if !record.DeletionAuthorized || len(record.Contributors) > 1 {
+				return errors.New("Claude composite skill deletion is not authorized")
+			}
+			return nil
+		}
+		next, err := decodeCompositeOwnership(x.AdapterProvenance)
+		if err != nil {
+			return err
+		}
+		if record.Composite.PackID != next.PackID || record.Composite.PortableKind != next.PortableKind || record.Composite.PortableID != next.PortableID || record.Composite.EffectiveName != next.EffectiveName || record.Composite.TargetType != next.TargetType {
+			return errors.New("Claude composite replacement changes its owned portable identity")
+		}
+		return nil
 	}
 	if x.Kind == ActionUserMCP {
 		if x.Mode == capabilitypack.ProjectionDeleteTarget && (record == nil || !record.DeletionAuthorized || len(record.Contributors) > 1) {
@@ -1061,6 +1186,83 @@ func removeExact(path string) error {
 	}
 	return err
 }
+
+func removeExactTree(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("Claude composite skill target changed type; preserving it")
+	}
+	return os.RemoveAll(path)
+}
+
+func observeCompositeTree(path string) (string, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "missing", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "type:symlink", true, nil
+	}
+	if !info.IsDir() {
+		return "type:" + info.Mode().Type().String(), true, nil
+	}
+	fingerprint, err := localprojection.FingerprintExactTree(path)
+	if err != nil {
+		return "invalid:" + Fingerprint([]byte(err.Error())), true, nil
+	}
+	return fingerprint, true, nil
+}
+
+func freshCompositeTreeFingerprint(path string) (string, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "missing", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", true, errors.New("Claude composite skill target has an unexpected path type")
+	}
+	fingerprint, err := localprojection.FingerprintExactTree(path)
+	return fingerprint, true, err
+}
+
+func isAddyCompositeProjection(pack capabilitypack.Pack, resource capabilitypack.Resource, binding capabilitypack.Binding) bool {
+	return pack.ID == "addy" && pack.Version == "1.1.0" && (resource.Kind == "skill" || resource.Kind == "command") && binding.Surface == capabilitypack.SurfaceClaude && binding.Projection == "skill"
+}
+
+func exclusiveSkillTargetConflict(targets map[string]capabilitypack.ProjectionAction, action capabilitypack.ProjectionAction) bool {
+	target := filepath.Clean(action.Target)
+	for existingTarget, existing := range targets {
+		existingTarget = filepath.Clean(existingTarget)
+		if existingTarget == target {
+			return true
+		}
+		if action.Kind != ActionSkillTree && existing.Kind != ActionSkillTree {
+			continue
+		}
+		if pathContains(target, existingTarget) || pathContains(existingTarget, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func readOptional(path string) ([]byte, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

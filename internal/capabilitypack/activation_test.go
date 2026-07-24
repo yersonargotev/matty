@@ -68,15 +68,16 @@ func TestAdapterExecutableProjectionUsesPlanBoundExternalConsent(t *testing.T) {
 	}
 }
 
-func TestApplyPersistsTypedHookMergeProvenance(t *testing.T) {
+func TestApplyPersistsTypedAdapterProvenance(t *testing.T) {
 	pack := Pack{ID: "app", Version: "1", Surfaces: []Surface{SurfaceClaude}}
-	pending := SurfaceInspection{Revision: "one", Projections: []ObservedProjection{{ID: "lifecycle:start", ObservedFingerprint: "missing", DesiredFingerprint: "hook", Action: ProjectionAction{ID: "lifecycle:start", Kind: "claude-command-hook", Source: "hooks,event", Consent: ConsentExecutableExternal}}}}
+	pending := SurfaceInspection{Revision: "one", Projections: []ObservedProjection{{ID: "lifecycle:start", ObservedFingerprint: "missing", DesiredFingerprint: "hook", Action: ProjectionAction{ID: "lifecycle:start", Kind: "claude-command-hook", Source: "hooks,event", AdapterProvenance: "hooks,event", Consent: ConsentExecutableExternal}}}}
 	verified := pending
 	verified.Revision = "two"
 	verified.Projections = append([]ObservedProjection(nil), pending.Projections...)
 	verified.Projections[0].Exists = true
 	verified.Projections[0].ObservedFingerprint = "hook"
 	verified.Projections[0].Action.Source = ""
+	verified.Projections[0].Action.AdapterProvenance = ""
 	adapter := &fakeSurfaceAdapter{observations: []SurfaceInspection{pending, pending, pending, verified}}
 	store := &fakeActivationStore{}
 	facade := NewFacade(Catalog{packs: []Pack{pack}}, WithActivation(store, map[Surface]SurfaceAdapter{SurfaceClaude: adapter}))

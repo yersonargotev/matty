@@ -224,6 +224,9 @@ func (f Facade) compose(requested Pack, state ActivationState, surface Surface, 
 			}
 			resources[key] = resource
 			result.contributors[key] = append(result.contributors[key], pack.ID)
+			if projectionID, ok := effectiveProjectionID(resolved, surface); ok && projectionID != key {
+				result.contributors[projectionID] = append(result.contributors[projectionID], pack.ID)
+			}
 			if namespace, name, ok := projectedNamespace(resolved, surface); ok {
 				projection := namespace + ":" + name
 				if prior, exists := projectedNames[projection]; exists && prior != key {
@@ -264,6 +267,15 @@ func projectedNamespace(resource Resource, surface Surface) (string, string, boo
 		}
 	}
 	return "", "", false
+}
+
+func effectiveProjectionID(resource Resource, surface Surface) (string, bool) {
+	for _, binding := range resource.Bindings {
+		if binding.Surface == surface && binding.Name != "" {
+			return resource.Kind + ":" + binding.Name, true
+		}
+	}
+	return "", false
 }
 
 func resourceWithSurfaceAlias(resource Resource, aliases []SurfaceAlias, surface Surface) Resource {

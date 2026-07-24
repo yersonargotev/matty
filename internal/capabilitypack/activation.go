@@ -136,16 +136,17 @@ type ExternalExecutor interface {
 // ProjectionAction is an adapter-produced, host-specific local projection.
 // Capability-pack policy orders and approves it; only the matching adapter executes it.
 type ProjectionAction struct {
-	ID          string               `json:"id"`
-	Description string               `json:"description"`
-	Kind        ProjectionActionKind `json:"kind,omitempty"`
-	Consent     ConsentKind          `json:"consent,omitempty"`
-	Source      string               `json:"source,omitempty"`
-	Target      string               `json:"target,omitempty"`
-	Content     string               `json:"content,omitempty"`
-	Command     string               `json:"command,omitempty"`
-	Args        []string             `json:"args,omitempty"`
-	Mode        ProjectionActionMode `json:"mode,omitempty"`
+	ID                string               `json:"id"`
+	Description       string               `json:"description"`
+	Kind              ProjectionActionKind `json:"kind,omitempty"`
+	Consent           ConsentKind          `json:"consent,omitempty"`
+	Source            string               `json:"source,omitempty"`
+	Target            string               `json:"target,omitempty"`
+	Content           string               `json:"content,omitempty"`
+	Command           string               `json:"command,omitempty"`
+	Args              []string             `json:"args,omitempty"`
+	Mode              ProjectionActionMode `json:"mode,omitempty"`
+	AdapterProvenance string               `json:"adapter_provenance,omitempty"`
 }
 
 func RemovalCandidate(projection ObservedProjection, mode ProjectionActionMode, content, description string) ObservedProjection {
@@ -1087,8 +1088,12 @@ func (f Facade) apply(ctx context.Context, request ApplyRequest) (ApplyResult, e
 		if previous, ok := ownershipByID(previousOwnership, projection.ID); ok {
 			provenance = previous.AdapterProvenance
 		}
-		if action, ok := phaseActionByID(request.Plan.phases, projection.ID); ok && action.Consent == ConsentExecutableExternal && action.Source != "" {
-			provenance = action.Source
+		if action, ok := phaseActionByID(request.Plan.phases, projection.ID); ok {
+			if action.AdapterProvenance != "" {
+				provenance = action.AdapterProvenance
+			} else if action.Consent == ConsentExecutableExternal && action.Source != "" {
+				provenance = action.Source
+			}
 		}
 		state.Ownership = append(state.Ownership, ProjectionOwnership{ID: projection.ID, Contributors: currentComposition.contributorSet(projection.ID), Fingerprint: projection.DesiredFingerprint, AdapterProvenance: provenance})
 	}
