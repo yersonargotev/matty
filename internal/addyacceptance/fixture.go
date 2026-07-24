@@ -299,12 +299,6 @@ func sourceFiles(resources []Resource) []File {
 		if r.Kind == "skill" {
 			path += "/SKILL.md"
 		}
-		if r.Kind == "agent" {
-			content = fmt.Sprintf("---\nname: %s\ndescription: \"Synthetic Addy %s persona\"\n---\n\n# Synthetic Addy acceptance agent\n", r.ID, r.ID)
-		}
-		if r.Kind == "command" {
-			content = fmt.Sprintf("description = \"Synthetic Addy %s command\"\nprompt = '''Run the synthetic Addy workflow with $ARGUMENTS.'''\n", r.ID)
-		}
 		if r.Kind == "notice" {
 			content = "MIT License\n\nCopyright (c) 2025 Addy Osmani\n\nPermission is hereby granted, free of charge, to any person obtaining a copy...\n"
 		}

@@ -59,7 +59,10 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 			Kind: "agent", ID: "reviewer", Projection: "agent", Name: alias.Name,
 			Invocation: alias.Name, Mode: "native", Sharing: "exclusive",
 		}},
-		Exclusions: []capabilitypack.LifecycleExclusion{}, OptionalModes: []capabilitypack.OptionalMode{{
+		Exclusions: []capabilitypack.LifecycleExclusion{{
+			ID: "lifecycle:cache", ResourceKind: "lifecycle", Surface: capabilitypack.SurfaceClaude,
+			Mode: "optional", Code: "unsupported", SourcePaths: []string{"hooks/cache.sh"}, Reason: "typed hook unavailable",
+		}}, OptionalModes: []capabilitypack.OptionalMode{{
 			ID: "browser-network", Authorities: []string{"browser", "network"}, Fallback: "static evidence",
 		}},
 		PromptAuthorities: []string{"browser", "network"}, Aliases: []capabilitypack.SurfaceAlias{alias},
@@ -137,6 +140,8 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 		"Resources: 24 skill, 0 instruction, 0 mcp_server, 0 lifecycle, 4 agent, 8 command, 7 asset, 1 notice",
 		"Lifecycle availability: fresh_activation=no catalog_update=no lifecycle_verbs=yes automatic_downgrade=no",
 		"Dependency closure: skill:using-agent-skills",
+		"Binding: agent:reviewer -> addy-reviewer [native]; projection=agent name=addy-reviewer sharing=exclusive",
+		"Exclusion: lifecycle:cache — typed hook unavailable; resource_kind=lifecycle surface=claude mode=optional code=unsupported source_paths=hooks/cache.sh",
 		"Optional mode: browser-network — browser, network; fallback=static evidence",
 		"Contract aliases: agent:reviewer=addy-reviewer",
 		"Surface intent: known active=yes version=1.1.0 revision=7",
@@ -153,6 +158,51 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 	}
 	if repeated.String() != structured.String() {
 		t.Fatalf("structured show is nondeterministic:\nfirst=%s\nsecond=%s", structured.String(), repeated.String())
+	}
+}
+
+func TestLifecycleAndShowHumanRenderTheSameCompleteContract(t *testing.T) {
+	contract := capabilitypack.LifecycleContract{
+		Counts:            capabilitypack.ResourceCounts{Skills: 1, Agents: 2},
+		DependencyClosure: []string{"capability:a"},
+		Bindings: []capabilitypack.LifecycleBinding{{
+			Kind: "agent", ID: "reviewer", Projection: "agent", Name: "reviewer",
+			Invocation: "@reviewer", Mode: "native", Sharing: "exclusive",
+		}},
+		Exclusions: []capabilitypack.LifecycleExclusion{{
+			ID: "hooks", SourcePaths: []string{"hooks/**"}, Reason: "inert",
+		}},
+		OptionalModes: []capabilitypack.OptionalMode{{
+			ID: "browser-network", Authorities: []string{"browser", "network"}, Fallback: "static analysis",
+		}},
+		PromptAuthorities:   []string{"browser", "network"},
+		Aliases:             []capabilitypack.SurfaceAlias{{Kind: "agent", ID: "reviewer", Name: "safe-reviewer"}},
+		AuthorityDisclosure: "Host approval remains required.",
+	}
+	var showOutput strings.Builder
+	if err := renderPackShowContract(&showOutput, contract); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycleOutput strings.Builder
+	cmd := &cobra.Command{}
+	cmd.SetOut(&lifecycleOutput)
+	if err := renderPackContract(cmd, contract); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycleOutput.String() != showOutput.String() {
+		t.Fatalf("human contract renderers diverged:\nshow:\n%s\nlifecycle:\n%s", showOutput.String(), lifecycleOutput.String())
+	}
+	for _, fact := range []string{
+		"Logical resources: 1 skill, 0 instruction, 0 mcp_server, 0 lifecycle, 2 agent",
+		"Dependency closure: capability:a",
+		"projection=agent name=reviewer sharing=exclusive",
+		"source_paths=hooks/**",
+		"fallback=static analysis",
+		"Contract aliases: agent:reviewer=safe-reviewer",
+	} {
+		if !strings.Contains(lifecycleOutput.String(), fact) {
+			t.Fatalf("complete lifecycle contract omitted %q:\n%s", fact, lifecycleOutput.String())
+		}
 	}
 }
 

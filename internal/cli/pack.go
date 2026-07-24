@@ -540,34 +540,7 @@ func renderActivationPlanOutput(cmd *cobra.Command, plan capabilitypack.Reconcil
 }
 
 func renderPackContract(cmd *cobra.Command, contract capabilitypack.LifecycleContract) error {
-	if contract.CompatibilityObserved {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compatibility: %s\n", contract.Compatibility); err != nil {
-			return err
-		}
-	}
-	for _, binding := range contract.Bindings {
-		mode := binding.Mode
-		if binding.Degradation != "" {
-			mode += " (" + binding.Degradation + ")"
-		}
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Binding: %s:%s -> %s [%s]\n", binding.Kind, binding.ID, binding.Invocation, mode); err != nil {
-			return err
-		}
-	}
-	for _, exclusion := range contract.Exclusions {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Exclusion: %s — %s\n", exclusion.ID, exclusion.Reason); err != nil {
-			return err
-		}
-	}
-	for _, mode := range contract.OptionalModes {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Optional mode: %s — %s\n", mode.ID, strings.Join(mode.Authorities, ", ")); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Invocation-time prompt authority: %s\n%s\n", joinFacts(contract.PromptAuthorities), contract.AuthorityDisclosure); err != nil {
-		return err
-	}
-	return nil
+	return renderPackShowContract(cmd.OutOrStdout(), contract)
 }
 
 func joinFacts(values []string) string {

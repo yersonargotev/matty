@@ -168,14 +168,14 @@ func CanonicalPromotionHistory() PromotionHistoryFixture {
 	fixture := Canonical()
 	base := promotionManifestV2(fixture)
 	candidate := promotionManifestV3(fixture)
-	files := syntheticHistoryFiles(fixture.Files)
-	snapshot := syntheticHistorySnapshotDigest(files)
+	baseFiles := syntheticHistoryFiles(fixture.Files)
+	candidateFiles := strictSyntheticCurrentFiles(fixture, baseFiles)
 	return PromotionHistoryFixture{
 		CatalogAdvertised: false,
 		CurrentVersion:    PackVersion,
 		Versions: []ImmutableVersionFixture{
-			{Version: PackVersion, SchemaVersion: 2, Surfaces: []string{"codex", "opencode"}, Manifest: base, Files: files, ManifestSHA256: digest(base), SnapshotSHA256: snapshot},
-			{Version: "1.1.0", SchemaVersion: 3, Surfaces: []string{"claude", "codex", "opencode"}, Manifest: candidate, Files: append([]SyntheticHistoryFile(nil), files...), ManifestSHA256: digest(candidate), SnapshotSHA256: snapshot},
+			{Version: PackVersion, SchemaVersion: 2, Surfaces: []string{"codex", "opencode"}, Manifest: base, Files: baseFiles, ManifestSHA256: digest(base), SnapshotSHA256: syntheticHistorySnapshotDigest(baseFiles)},
+			{Version: "1.1.0", SchemaVersion: 3, Surfaces: []string{"claude", "codex", "opencode"}, Manifest: candidate, Files: candidateFiles, ManifestSHA256: digest(candidate), SnapshotSHA256: syntheticHistorySnapshotDigest(candidateFiles)},
 		},
 		Routes: []VersionRoute{{From: PackVersion, To: "1.1.0", Kind: "update", Migration: []string{}, Actions: []string{"project-complete-surface"}}},
 	}
@@ -237,6 +237,32 @@ func syntheticHistoryFiles(files []File) []SyntheticHistoryFile {
 	out := make([]SyntheticHistoryFile, len(files))
 	for i, file := range files {
 		out[i] = SyntheticHistoryFile{Path: file.Path, Content: file.Content, Mode: file.Mode, SHA256: digest([]byte(file.Content))}
+	}
+	return out
+}
+
+func strictSyntheticCurrentFiles(fixture Fixture, files []SyntheticHistoryFile) []SyntheticHistoryFile {
+	out := append([]SyntheticHistoryFile(nil), files...)
+	indices := make(map[string]int, len(out))
+	for i, file := range out {
+		indices[file.Path] = i
+	}
+	for _, resource := range fixture.Manifest.Resources {
+		var content string
+		switch resource.Kind {
+		case "agent":
+			content = fmt.Sprintf("---\nname: %s\ndescription: \"Synthetic Addy %s persona\"\n---\n\n# Synthetic Addy acceptance agent\n", resource.ID, resource.ID)
+		case "command":
+			content = fmt.Sprintf("description = \"Synthetic Addy %s command\"\nprompt = '''Run the synthetic Addy workflow with $ARGUMENTS.'''\n", resource.ID)
+		default:
+			continue
+		}
+		index, ok := indices[resource.Source]
+		if !ok {
+			panic("canonical Addy promotion fixture is missing " + resource.Source)
+		}
+		out[index].Content = content
+		out[index].SHA256 = digest([]byte(content))
 	}
 	return out
 }

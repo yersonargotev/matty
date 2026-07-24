@@ -329,11 +329,20 @@ func actionForReport(action ProjectionAction) ProjectionAction {
 	action.Source = portableProjectionTarget(action.Source)
 	action.Target = portableProjectionTarget(action.Target)
 	action.Command = portableProjectionTarget(action.Command)
-	for original, portable := range map[string]string{
-		originalSource: action.Source, originalTarget: action.Target, originalCommand: action.Command,
-	} {
-		if original != "" && original != portable {
-			action.Description = strings.ReplaceAll(action.Description, original, portable)
+	replacements := []struct{ original, portable string }{
+		{originalSource, action.Source},
+		{originalTarget, action.Target},
+		{originalCommand, action.Command},
+	}
+	sort.SliceStable(replacements, func(i, j int) bool {
+		if len(replacements[i].original) != len(replacements[j].original) {
+			return len(replacements[i].original) > len(replacements[j].original)
+		}
+		return replacements[i].original < replacements[j].original
+	})
+	for _, replacement := range replacements {
+		if replacement.original != "" && replacement.original != replacement.portable {
+			action.Description = strings.ReplaceAll(action.Description, replacement.original, replacement.portable)
 		}
 	}
 	return action

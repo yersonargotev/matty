@@ -187,12 +187,17 @@ func renderPackShowContract(w io.Writer, contract capabilitypack.LifecycleContra
 		if binding.Degradation != "" {
 			mode += " (" + binding.Degradation + ")"
 		}
-		if _, err := fmt.Fprintf(w, "Binding: %s:%s -> %s [%s]\n", binding.Kind, binding.ID, binding.Invocation, mode); err != nil {
+		if _, err := fmt.Fprintf(w, "Binding: %s:%s -> %s [%s]; projection=%s name=%s sharing=%s\n",
+			binding.Kind, binding.ID, binding.Invocation, mode, binding.Projection, binding.Name, binding.Sharing); err != nil {
 			return err
 		}
 	}
 	for _, exclusion := range contract.Exclusions {
-		if _, err := fmt.Fprintf(w, "Exclusion: %s — %s\n", exclusion.ID, exclusion.Reason); err != nil {
+		if _, err := fmt.Fprintf(w,
+			"Exclusion: %s — %s; resource_kind=%s surface=%s mode=%s code=%s source_paths=%s\n",
+			exclusion.ID, exclusion.Reason, factOrNone(exclusion.ResourceKind), factOrNone(string(exclusion.Surface)),
+			factOrNone(exclusion.Mode), factOrNone(exclusion.Code), joinFacts(exclusion.SourcePaths),
+		); err != nil {
 			return err
 		}
 	}

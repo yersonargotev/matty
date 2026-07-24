@@ -21,7 +21,7 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := digest(before); got != "7a76993b3f2ea9106050e8b5250d0e71773683dd71ba416548e413127c85c892" || len(before) != 55268 {
+	if got := digest(before); got != "4f5e42be89e9c121c48abdbb77b1312d881f1207887119d50c252c316a1ff02f" || len(before) != 54507 {
 		t.Fatalf("original Addy 1.0.0 oracle changed: sha256=%s bytes=%d", got, len(before))
 	}
 	first, second := CanonicalPromotionHistory(), CanonicalPromotionHistory()
@@ -34,11 +34,11 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if len(first.Versions) != 2 || first.Versions[0].Version != "1.0.0" || first.Versions[1].Version != "1.1.0" {
 		t.Fatalf("immutable versions = %#v", first.Versions)
 	}
-	if first.Versions[0].SnapshotSHA256 != first.Versions[1].SnapshotSHA256 {
-		t.Fatal("synthetic 1.1.0 history changed selected Addy source bytes")
+	if first.Versions[0].SnapshotSHA256 == first.Versions[1].SnapshotSHA256 {
+		t.Fatal("synthetic 1.1.0 candidate did not register its strict adapter-ready source bytes")
 	}
-	if !reflect.DeepEqual(first.Versions[0].Files, first.Versions[1].Files) {
-		t.Fatal("synthetic 1.1.0 history changed selected Addy file inventory or content")
+	if len(first.Versions[0].Files) != len(first.Versions[1].Files) {
+		t.Fatal("synthetic 1.1.0 candidate changed the Addy file inventory")
 	}
 	for _, version := range first.Versions {
 		root := materializePromotionVersion(t, version)
