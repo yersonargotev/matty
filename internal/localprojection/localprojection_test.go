@@ -143,6 +143,65 @@ func TestReplaceTreesRollsBackEarlierPublicationWhenLaterPublicationFails(t *tes
 	}
 }
 
+func TestReplaceTreesRollsBackEarlierPublicationWhenCurrentRestoreFails(t *testing.T) {
+	root := t.TempDir()
+	targets := []string{filepath.Join(root, "skills", "one"), filepath.Join(root, "skills", "two")}
+	changes := make([]TreeChange, len(targets))
+	for i, target := range targets {
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files := []TreeFile{{Path: "SKILL.md", Content: []byte("new"), Mode: 0o644}}
+		fingerprint, err := FingerprintTreeFiles(files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changes[i] = TreeChange{ID: "skill:" + string(rune('1'+i)), Target: target, Files: files, ExpectedFingerprint: fingerprint}
+	}
+
+	originalRename := renameTreePath
+	t.Cleanup(func() { renameTreePath = originalRename })
+	publications := 0
+	renameTreePath = func(oldPath, newPath string) error {
+		if strings.HasPrefix(filepath.Base(oldPath), ".packy-tree-stage-") && !strings.HasSuffix(oldPath, ".backup") {
+			publications++
+			if publications == 2 {
+				return errors.New("injected second publication failure")
+			}
+		}
+		if strings.HasSuffix(oldPath, ".backup") && newPath == targets[1] {
+			return errors.New("injected current restore failure")
+		}
+		return originalRename(oldPath, newPath)
+	}
+	err := ReplaceTrees(changes)
+	if err == nil || !strings.Contains(err.Error(), "restore current target failed") {
+		t.Fatalf("error = %v, want current restore failure", err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(targets[0], "SKILL.md")); readErr != nil || string(data) != "old" {
+		t.Fatalf("earlier target after rollback = %q, want old: %v", data, readErr)
+	}
+	if _, statErr := os.Stat(targets[1]); !os.IsNotExist(statErr) {
+		t.Fatalf("unrestored current target unexpectedly present: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Dir(targets[1]))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	recoveryBackup := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".backup") {
+			recoveryBackup = true
+		}
+	}
+	if !recoveryBackup {
+		t.Fatal("failed current restore discarded its recovery backup")
+	}
+}
+
 func TestExactTreeFingerprintRejectsUnsafeOrUnexpectedEntries(t *testing.T) {
 	if _, err := FingerprintTreeFiles([]TreeFile{{Path: "../escape", Content: []byte("x"), Mode: 0o644}}); err == nil {
 		t.Fatal("traversal path was accepted")

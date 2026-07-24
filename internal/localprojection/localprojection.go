@@ -393,7 +393,10 @@ func ReplaceTrees(changes []TreeChange) error {
 		if err := renameTreePath(item.stage, item.change.Target); err != nil {
 			if item.hadTarget {
 				if restoreErr := renameTreePath(item.backup, item.change.Target); restoreErr != nil {
-					return capabilitypack.ProjectionActionError{ID: item.change.ID, Err: fmt.Errorf("publish: %v; restore failed: %w", err, restoreErr)}
+					if rollbackErr := rollbackTreeChanges(items[:committed]); rollbackErr != nil {
+						return capabilitypack.ProjectionActionError{ID: item.change.ID, Err: fmt.Errorf("publish: %v; restore current target failed: %v; rollback failed: %w", err, restoreErr, rollbackErr)}
+					}
+					return capabilitypack.ProjectionActionError{ID: item.change.ID, Err: fmt.Errorf("publish: %v; restore current target failed: %w", err, restoreErr)}
 				}
 			}
 			if rollbackErr := rollbackTreeChanges(items[:committed]); rollbackErr != nil {
