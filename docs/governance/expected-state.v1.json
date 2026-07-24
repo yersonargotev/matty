@@ -108,6 +108,10 @@
           "checks": [
             {
               "app_id": 15368,
+              "context": "Addy 1.1.0 promotion gate"
+            },
+            {
+              "app_id": 15368,
               "context": "Claude 2.1.203 package smoke"
             },
             {
