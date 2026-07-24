@@ -72,6 +72,7 @@ type lifecycleContext struct {
 	EvidencePath, Sandbox                                       string
 	Env                                                         []string
 	Packy, ClaudeInterposer, ClaudeLog, InstallRepo, InstallRef string
+	SourceCheckout                                              string
 	Foreign                                                     foreignFixture
 }
 
@@ -317,7 +318,7 @@ esac
 	e.Assertions.EngramStubProtocolVerified = probeErr == nil && engramProbe
 	e.Assertions.SensitiveFixtureRedacted = true
 	e.Safety = SafetyEvidence{DisposableSandbox: true, AllowlistEnvironment: true, CredentialsScrubbed: true, CommandAllowlist: true, NoInteractiveClaude: true, WriteBoundaryEnforced: probeErr == nil}
-	e, err = executeLifecycle(ctx, e, lifecycleContext{EvidencePath: cfg.EvidencePath, Sandbox: sandbox, Env: env, Packy: packy, ClaudeInterposer: claudeInterposer, ClaudeLog: claudeLog, InstallRepo: installRepo, InstallRef: installRef, Foreign: foreignFixture{foreignInstructionPath, foreignMCPPath, foreignInstruction, foreignMCP, foreignMCPMarker, sensitiveFixture}})
+	e, err = executeLifecycle(ctx, e, lifecycleContext{EvidencePath: cfg.EvidencePath, Sandbox: sandbox, Env: env, Packy: packy, ClaudeInterposer: claudeInterposer, ClaudeLog: claudeLog, InstallRepo: installRepo, InstallRef: installRef, SourceCheckout: repo, Foreign: foreignFixture{foreignInstructionPath, foreignMCPPath, foreignInstruction, foreignMCP, foreignMCPMarker, sensitiveFixture}})
 	if err != nil {
 		return e, err
 	}
@@ -332,24 +333,39 @@ esac
 	e.Safety.CheckoutUnchanged = status == afterStatus && strings.TrimSpace(head) == strings.TrimSpace(afterHead)
 	e.Safety.ConfiguredWritableRootsConfined = layout.valid()
 	e.Safety.EvidencePathOutsideSandbox = e.Safety.ConfiguredWritableRootsConfined && e.Safety.CheckoutUnchanged && !pathWithin(sandbox, cfg.EvidencePath)
-	installedStatus, statusErr := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "status", "--porcelain=v1", "--untracked-files=all")
-	if statusErr != nil {
-		return e, fmt.Errorf("observe Installed Source cleanliness: %w", statusErr)
+	e.Qualification, err = observeAddyQualification(ctx, sandbox, repo, packy, status, env, layout, e)
+	if err != nil {
+		return e, err
 	}
-	installedHead, headErr := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "rev-parse", "HEAD")
-	if headErr != nil {
-		return e, fmt.Errorf("observe Installed Source commit: %w", headErr)
+	e.After, err = Manifest(sandbox)
+	if err != nil {
+		return e, err
+	}
+	if err := validateAndWriteEvidence(cfg.EvidencePath, e); err != nil {
+		return e, err
+	}
+	return e, nil
+}
+
+func observeAddyQualification(ctx context.Context, sandbox, repo, packy, checkoutStatus string, env []string, layout sandboxLayout, e Evidence) (AddyQualificationObservation, error) {
+	installedStatus, err := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return AddyQualificationObservation{}, fmt.Errorf("observe Installed Source cleanliness: %w", err)
+	}
+	installedHead, err := sandboxOutput(ctx, sandbox, layout.Work, env, "git", "-C", layout.InstalledSource, "rev-parse", "HEAD")
+	if err != nil {
+		return AddyQualificationObservation{}, fmt.Errorf("observe Installed Source commit: %w", err)
 	}
 	processJSON, err := json.Marshal(e.Commands)
 	if err != nil {
-		return e, fmt.Errorf("encode process observation: %w", err)
+		return AddyQualificationObservation{}, fmt.Errorf("encode process observation: %w", err)
 	}
 	processDigest := sha256.Sum256(processJSON)
 	observedProcessesSafe := true
 	for _, command := range e.Commands {
 		switch command.Name {
 		case "packy":
-			// ValidateEvidence below owns the exact Packy argv sequence.
+			// ValidateEvidence owns the exact Packy argv sequence.
 		case "claude":
 			if len(command.Args) != 1 || (command.Args[0] != "version" && command.Args[0] != "mcp-add" && command.Args[0] != "mcp-remove") {
 				observedProcessesSafe = false
@@ -358,7 +374,7 @@ esac
 			observedProcessesSafe = false
 		}
 	}
-	e.Qualification = AddyQualificationObservation{
+	return AddyQualificationObservation{
 		InstalledSource: layout.InstalledSource, InstalledSourceCommit: strings.TrimSpace(installedHead),
 		InstalledSourceClean: strings.TrimSpace(installedStatus) == "" && strings.TrimSpace(installedHead) == e.InstalledSourceSHA,
 		WritableRoots: AddyWritableRoots{
@@ -369,20 +385,12 @@ esac
 		CollectedAt:      time.Now().UTC().Format(time.RFC3339Nano),
 		Safety: AddyObservedSafety{
 			NoGoRun: filepath.IsAbs(packy) && filepath.Base(packy) != "go", NoDevelopmentPath: !pathWithin(repo, packy) && !pathWithin(repo, layout.InstalledSource),
-			NoDirectFixture: e.Safety.WriteBoundaryEnforced, NoUntrackedInput: strings.TrimSpace(status) == "",
+			NoDirectFixture: cleanAbsolute(repo) && !pathWithin(repo, sandbox), NoUntrackedInput: strings.TrimSpace(checkoutStatus) == "",
 			NoAuthentication: observedProcessesSafe, NoModelInvocation: observedProcessesSafe, NoPrint: observedProcessesSafe, NoREPL: observedProcessesSafe,
 			NoUpstreamExecute: observedProcessesSafe, NoCredentials: e.Safety.CredentialsScrubbed,
 			NoOutsideWrite: e.Safety.WriteBoundaryEnforced,
 		},
-	}
-	e.After, err = Manifest(sandbox)
-	if err != nil {
-		return e, err
-	}
-	if err := validateAndWriteEvidence(cfg.EvidencePath, e); err != nil {
-		return e, err
-	}
-	return e, nil
+	}, nil
 }
 
 func executeLifecycle(ctx context.Context, e Evidence, lc lifecycleContext) (Evidence, error) {
@@ -415,7 +423,7 @@ func executeLifecycle(ctx context.Context, e Evidence, lc lifecycleContext) (Evi
 				return e, err
 			}
 		}
-		ce := runAllowed(ctx, sandbox, filepath.Join(sandbox, "work"), env, packy, claudeInterposer, phase.Argv)
+		ce := runRestricted(ctx, sandbox, filepath.Join(sandbox, "work"), lc.SourceCheckout, env, packy, claudeInterposer, phase.Argv)
 		e.Commands = append(e.Commands, ce)
 		if ce.ExitCode != 0 {
 			e.Commands = append(e.Commands, readClaudeInvocations(claudeLog)...)
@@ -525,6 +533,14 @@ func executeLifecycle(ctx context.Context, e Evidence, lc lifecycleContext) (Evi
 }
 
 func runAllowed(ctx context.Context, sandbox, dir string, env []string, packy, claude string, argv []string) CommandEvidence {
+	return runWithReadBoundary(ctx, sandbox, dir, "", env, packy, claude, argv)
+}
+
+func runRestricted(ctx context.Context, sandbox, dir, deniedReadRoot string, env []string, packy, claude string, argv []string) CommandEvidence {
+	return runWithReadBoundary(ctx, sandbox, dir, deniedReadRoot, env, packy, claude, argv)
+}
+
+func runWithReadBoundary(ctx context.Context, sandbox, dir, deniedReadRoot string, env []string, packy, claude string, argv []string) CommandEvidence {
 	ce := CommandEvidence{Name: filepath.Base(argv[0]), Args: append([]string(nil), argv[1:]...), ExitCode: -1}
 	if !AllowedCommand(packy, claude, argv) {
 		ce.Stderr = "forbidden command"
@@ -535,7 +551,13 @@ func runAllowed(ctx context.Context, sandbox, dir string, env []string, packy, c
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd, boundaryErr := sandboxCommand(cctx, sandbox, argv[0], argv[1:]...)
+	var cmd *exec.Cmd
+	var boundaryErr error
+	if deniedReadRoot == "" {
+		cmd, boundaryErr = sandboxCommand(cctx, sandbox, argv[0], argv[1:]...)
+	} else {
+		cmd, boundaryErr = sandboxCommandDenyReads(cctx, sandbox, deniedReadRoot, argv[0], argv[1:]...)
+	}
 	if boundaryErr != nil {
 		ce.Stderr = boundaryErr.Error()
 		return ce
@@ -962,6 +984,10 @@ func hostOutputEnv(ctx context.Context, dir string, env []string, name string, a
 	return out.String(), nil
 }
 func sandboxCommand(ctx context.Context, writableRoot, name string, args ...string) (*exec.Cmd, error) {
+	return sandboxCommandDenyReads(ctx, writableRoot, "", name, args...)
+}
+
+func sandboxCommandDenyReads(ctx context.Context, writableRoot, deniedReadRoot, name string, args ...string) (*exec.Cmd, error) {
 	if runtime.GOOS != "darwin" {
 		return nil, errors.New("enforceable smoke write boundary requires macOS sandbox-exec")
 	}
@@ -973,6 +999,16 @@ func sandboxCommand(ctx context.Context, writableRoot, name string, args ...stri
 	}
 	escaped := strings.ReplaceAll(writableRoot, "\"", "\\\"")
 	profile := `(version 1)(allow default)(deny file-write*)(allow file-write* (literal "/dev/null") (subpath "` + escaped + `"))`
+	if deniedReadRoot != "" {
+		if !filepath.IsAbs(deniedReadRoot) {
+			return nil, errors.New("sandbox denied read root must be absolute")
+		}
+		if resolved, err := filepath.EvalSymlinks(deniedReadRoot); err == nil {
+			deniedReadRoot = resolved
+		}
+		denied := strings.ReplaceAll(deniedReadRoot, "\"", "\\\"")
+		profile += `(deny file-read* (subpath "` + denied + `"))`
+	}
 	argv := append([]string{"-p", profile, name}, args...)
 	return exec.CommandContext(ctx, "/usr/bin/sandbox-exec", argv...), nil
 }
