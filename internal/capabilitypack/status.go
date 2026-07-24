@@ -116,7 +116,7 @@ func (f Facade) status(ctx context.Context, request StatusRequest) (StatusReport
 		if request.Surface == "" {
 			return StatusReport{}, fmt.Errorf("--surface is required when a pack is specified")
 		}
-		pack, err := f.catalog.Show(request.PackID)
+		pack, err := f.catalog.catalogMetadata(request.PackID)
 		if err != nil {
 			return StatusReport{}, err
 		}
