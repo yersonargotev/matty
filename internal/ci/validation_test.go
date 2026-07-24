@@ -235,7 +235,7 @@ func TestAddyPromotionGateHasStableNonPublishingIdentity(t *testing.T) {
 func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	sourceRoot := repositoryRoot(t)
 	root := t.TempDir()
-	paths := []string{"go.mod", "go.sum", ".github/workflows/ci.yml", "scripts/gate-addy-promotion.sh", "internal/tools/addypromotiongate/main.go", "internal/capabilitypack/catalog.go", "internal/addyacceptance/testdata/addy-0.6.4.tar.gz"}
+	paths := []string{"go.mod", "go.sum", ".github/workflows/ci.yml", "scripts/gate-addy-promotion.sh", "internal/tools/addypromotiongate/main.go", "internal/tools/addypromotiongate/reconstruct.go", "internal/capabilitypack/catalog.go", "internal/addyacceptance/testdata/addy-0.6.4.tar.gz"}
 	acceptanceFiles, err := filepath.Glob(filepath.Join(sourceRoot, "internal", "addyacceptance", "*.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -253,6 +253,9 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 		destination := filepath.Join(root, path)
 		writeFile(t, destination, readFile(t, filepath.Join(sourceRoot, path)))
 	}
+	writeFile(t, filepath.Join(root, "bundle", "packs", "addy", "pack.json"), `{"resources":[]}`+"\n")
+	writeFile(t, filepath.Join(root, "bundle", "sources", "addy.lock.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "bundle", "sources.json"), "{}\n")
 	if err := os.Chmod(filepath.Join(root, "scripts", "gate-addy-promotion.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -283,6 +286,16 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 		t.Fatalf("gate output is not canonical: %v\n%s", err, output)
 	}
 
+	promotionSource := filepath.Join(root, "internal", "addyacceptance", "promotion.go")
+	writeFile(t, promotionSource, readFile(t, promotionSource)+"\n// changed promotion oracle\n")
+	runGit(t, root, "add", promotionSource)
+	runGit(t, root, "commit", "-qm", "change promotion oracle")
+	authorityHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
+	output, err = runAddyGate(root, head, authorityHead)
+	if err == nil || !strings.Contains(string(output), "promotion change requires evidence") {
+		t.Fatalf("changed promotion authority did not fail closed: err=%v\n%s", err, output)
+	}
+
 	if err := os.MkdirAll(filepath.Join(root, "bundle", "history", "addy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +303,7 @@ func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
 	runGit(t, root, "add", "bundle")
 	runGit(t, root, "commit", "-qm", "promotion")
 	promotionHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
-	output, err = runAddyGate(root, head, promotionHead)
+	output, err = runAddyGate(root, authorityHead, promotionHead)
 	if err == nil || !strings.Contains(string(output), "promotion change requires evidence") {
 		t.Fatalf("promotion without evidence did not fail closed: err=%v\n%s", err, output)
 	}

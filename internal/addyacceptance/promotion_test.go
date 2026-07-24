@@ -2,11 +2,18 @@ package addyacceptance
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yersonargotev/packy/internal/capabilitypack"
 )
 
 func TestAddyPromotionIndependentInputs(t *testing.T) {
@@ -30,6 +37,23 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if first.Versions[0].SnapshotSHA256 != first.Versions[1].SnapshotSHA256 {
 		t.Fatal("synthetic 1.1.0 history changed selected Addy source bytes")
 	}
+	if !reflect.DeepEqual(first.Versions[0].Files, first.Versions[1].Files) {
+		t.Fatal("synthetic 1.1.0 history changed selected Addy file inventory or content")
+	}
+	for _, version := range first.Versions {
+		root := materializePromotionVersion(t, version)
+		pack, err := capabilitypack.LoadPortableManifest(filepath.Join(root, "pack.json"), root)
+		if err != nil {
+			t.Fatalf("strict load Addy %s: %v", version.Version, err)
+		}
+		if pack.ID != "addy" || pack.Version != version.Version || len(pack.Resources) != 44 {
+			t.Fatalf("Addy %s decoded as %#v", version.Version, pack)
+		}
+		if got := historySnapshotDigest(version.Files); got != version.SnapshotSHA256 {
+			t.Fatalf("Addy %s snapshot digest = %s, want %s", version.Version, got, version.SnapshotSHA256)
+		}
+	}
+	assertPromotionV3Contract(t, first.Versions[1])
 	after, _ := CanonicalJSON()
 	if !bytes.Equal(before, after) {
 		t.Fatal("promotion reconstruction changed the original Addy 1.0.0 oracle")
@@ -43,6 +67,36 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	evidence.Proof.DiffSHA256 = evidence.PackageCandidate
 	if err := ValidatePromotionEvidence(evidence, context); err == nil || !strings.Contains(err.Error(), "independent reconstruction") {
 		t.Fatalf("candidate self-authorization was accepted: %v", err)
+	}
+}
+
+func TestReconstructIndependentPromotionInputsRejectsUntrustedShapes(t *testing.T) {
+	valid := ReconstructedFile{Path: "bundle/packs/addy/pack.json", Mode: 0o644, SHA256: digest([]byte("manifest"))}
+	material := IndependentPromotionMaterial{
+		Base: []ReconstructedFile{valid}, Head: []ReconstructedFile{valid},
+		BaseHistory: []ReconstructedFile{}, HeadHistory: []ReconstructedFile{},
+		DiffSHA256: digest([]byte("diff")),
+	}
+	tests := []struct {
+		name string
+		edit func(*IndependentPromotionMaterial)
+	}{
+		{"nil files", func(m *IndependentPromotionMaterial) { m.Base = nil }},
+		{"unsafe path", func(m *IndependentPromotionMaterial) { m.Base[0].Path = "../pack.json" }},
+		{"unsafe mode", func(m *IndependentPromotionMaterial) { m.Base[0].Mode = 0o666 }},
+		{"invalid file digest", func(m *IndependentPromotionMaterial) { m.Base[0].SHA256 = "invalid" }},
+		{"duplicate path", func(m *IndependentPromotionMaterial) { m.Base = append(m.Base, m.Base[0]) }},
+		{"invalid diff digest", func(m *IndependentPromotionMaterial) { m.DiffSHA256 = "invalid" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := material
+			candidate.Base = append([]ReconstructedFile(nil), material.Base...)
+			test.edit(&candidate)
+			if _, err := ReconstructIndependentPromotionInputs(candidate); err == nil {
+				t.Fatal("invalid independently reconstructed material was accepted")
+			}
+		})
 	}
 }
 
@@ -184,7 +238,117 @@ func applicablePromotionContext() PromotionValidationContext {
 		RunID:             "12345",
 		Now:               now,
 		MaxAge:            time.Hour,
-		Inputs:            CanonicalIndependentPromotionInputs(),
+		Inputs:            deterministicIndependentPromotionInputs(),
+	}
+}
+
+func deterministicIndependentPromotionInputs() IndependentPromotionInputs {
+	file := func(path string, content string) ReconstructedFile {
+		return ReconstructedFile{Path: path, Mode: 0o644, SHA256: digest([]byte(content))}
+	}
+	inputs, err := ReconstructIndependentPromotionInputs(IndependentPromotionMaterial{
+		Base:        []ReconstructedFile{file("bundle/packs/addy/pack.json", "base")},
+		Head:        []ReconstructedFile{file("bundle/packs/addy/pack.json", "head")},
+		BaseHistory: []ReconstructedFile{file("bundle/history/addy/1.0.0/artifact.json", "base-history")},
+		HeadHistory: []ReconstructedFile{file("bundle/history/addy/1.0.0/artifact.json", "base-history"), file("bundle/history/addy/1.1.0/artifact.json", "head-history")},
+		DiffSHA256:  digest([]byte("independently reconstructed exact diff")),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return inputs
+}
+
+func materializePromotionVersion(t *testing.T, version ImmutableVersionFixture) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, file := range version.Files {
+		target := filepath.Join(root, filepath.FromSlash(file.Path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if digest([]byte(file.Content)) != file.SHA256 {
+			t.Fatalf("%s content digest does not match inventory", file.Path)
+		}
+		if err := os.WriteFile(target, []byte(file.Content), os.FileMode(file.Mode)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if digest(version.Manifest) != version.ManifestSHA256 {
+		t.Fatalf("%s manifest digest does not match bytes", version.Version)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.json"), version.Manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func historySnapshotDigest(files []SyntheticHistoryFile) string {
+	rows := make([]string, len(files))
+	for i, file := range files {
+		rows[i] = fmt.Sprintf("%s\x00%04o\x00%s\n", file.Path, file.Mode, file.SHA256)
+	}
+	sort.Strings(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "")))
+	return fmt.Sprintf("%x", sum)
+}
+
+func assertPromotionV3Contract(t *testing.T, version ImmutableVersionFixture) {
+	t.Helper()
+	var manifest struct {
+		Resources []struct {
+			Kind     string `json:"kind"`
+			ID       string `json:"id"`
+			Bindings []struct {
+				Surface        string                         `json:"surface"`
+				AgentAuthority *capabilitypack.AgentAuthority `json:"agent_authority"`
+			} `json:"bindings"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(version.Manifest, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	counts, projecting := map[string]int{}, 0
+	approvedTools := map[string][]string{
+		"code-reviewer":           {"Bash", "Glob", "Grep", "Read"},
+		"security-auditor":        {"Bash", "Glob", "Grep", "Read", "WebFetch", "WebSearch"},
+		"test-engineer":           {"Bash", "Edit", "Glob", "Grep", "Read", "Write"},
+		"web-performance-auditor": {"Bash", "Glob", "Grep", "Read", "WebFetch", "WebSearch"},
+	}
+	for _, resource := range manifest.Resources {
+		counts[resource.Kind]++
+		if resource.Kind == "asset" || resource.Kind == "notice" {
+			if len(resource.Bindings) != 0 {
+				t.Fatalf("%s:%s unexpectedly projects", resource.Kind, resource.ID)
+			}
+			continue
+		}
+		projecting++
+		if len(resource.Bindings) != 3 || resource.Bindings[0].Surface != "claude" || resource.Bindings[1].Surface != "codex" || resource.Bindings[2].Surface != "opencode" {
+			t.Fatalf("%s:%s bindings = %#v", resource.Kind, resource.ID, resource.Bindings)
+		}
+		if resource.Kind == "agent" && (resource.Bindings[0].AgentAuthority == nil || resource.Bindings[0].AgentAuthority.PermissionMode != "default") {
+			t.Fatalf("agent %s authority = %#v", resource.ID, resource.Bindings[0].AgentAuthority)
+		}
+		if resource.Kind == "agent" {
+			seen := map[string]bool{}
+			for _, authority := range resource.Bindings[0].AgentAuthority.Authorities {
+				for _, tool := range authority.ClaudeTools {
+					seen[tool] = true
+				}
+			}
+			var got []string
+			for tool := range seen {
+				got = append(got, tool)
+			}
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, approvedTools[resource.ID]) {
+				t.Fatalf("agent %s effective Claude tools = %v, want %v", resource.ID, got, approvedTools[resource.ID])
+			}
+		}
+	}
+	if !reflect.DeepEqual(counts, map[string]int{"skill": 24, "agent": 4, "command": 8, "asset": 7, "notice": 1}) || projecting != 36 {
+		t.Fatalf("v3 counts = %v, projecting=%d", counts, projecting)
 	}
 }
 

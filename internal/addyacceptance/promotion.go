@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -57,11 +58,20 @@ func PromotionRows() []PromotionRow {
 // ImmutableVersionFixture records reconstructed artifact bytes without making
 // either version a catalog selection.
 type ImmutableVersionFixture struct {
-	Version        string   `json:"version"`
-	SchemaVersion  int      `json:"schema_version"`
-	Surfaces       []string `json:"surfaces"`
-	ManifestSHA256 string   `json:"manifest_sha256"`
-	SnapshotSHA256 string   `json:"snapshot_sha256"`
+	Version        string                 `json:"version"`
+	SchemaVersion  int                    `json:"schema_version"`
+	Surfaces       []string               `json:"surfaces"`
+	Manifest       json.RawMessage        `json:"manifest"`
+	Files          []SyntheticHistoryFile `json:"files"`
+	ManifestSHA256 string                 `json:"manifest_sha256"`
+	SnapshotSHA256 string                 `json:"snapshot_sha256"`
+}
+
+type SyntheticHistoryFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    uint32 `json:"mode"`
+	SHA256  string `json:"sha256"`
 }
 
 type PromotionHistoryFixture struct {
@@ -79,6 +89,20 @@ type IndependentPromotionInputs struct {
 	HeadSHA256    string `json:"head_sha256"`
 	HistorySHA256 string `json:"history_sha256"`
 	DiffSHA256    string `json:"diff_sha256"`
+}
+
+type ReconstructedFile struct {
+	Path   string `json:"path"`
+	Mode   uint32 `json:"mode"`
+	SHA256 string `json:"sha256"`
+}
+
+type IndependentPromotionMaterial struct {
+	Base        []ReconstructedFile
+	Head        []ReconstructedFile
+	BaseHistory []ReconstructedFile
+	HeadHistory []ReconstructedFile
+	DiffSHA256  string
 }
 
 type PromotionRowEvidence struct {
@@ -138,39 +162,170 @@ type PromotionValidationContext struct {
 
 func CanonicalPromotionHistory() PromotionHistoryFixture {
 	fixture := Canonical()
-	base := canonicalBytes(fixture.Manifest)
-	candidate := canonicalBytes(struct {
-		SchemaVersion int      `json:"schema_version"`
-		ID            string   `json:"id"`
-		Version       string   `json:"version"`
-		Surfaces      []string `json:"surfaces"`
-		Synthetic     bool     `json:"synthetic_non_catalog_fixture"`
-	}{SchemaVersion: 3, ID: "addy", Version: "1.1.0", Surfaces: []string{"claude", "codex", "opencode"}, Synthetic: true})
+	base := promotionManifestV2(fixture)
+	candidate := promotionManifestV3(fixture)
+	files := syntheticHistoryFiles(fixture.Files)
+	snapshot := syntheticHistorySnapshotDigest(files)
 	return PromotionHistoryFixture{
 		CatalogAdvertised: false,
 		CurrentVersion:    PackVersion,
 		Versions: []ImmutableVersionFixture{
-			{Version: PackVersion, SchemaVersion: 2, Surfaces: []string{"codex", "opencode"}, ManifestSHA256: digest(base), SnapshotSHA256: fixture.Provenance.SnapshotSHA256},
-			{Version: "1.1.0", SchemaVersion: 3, Surfaces: []string{"claude", "codex", "opencode"}, ManifestSHA256: digest(candidate), SnapshotSHA256: fixture.Provenance.SnapshotSHA256},
+			{Version: PackVersion, SchemaVersion: 2, Surfaces: []string{"codex", "opencode"}, Manifest: base, Files: files, ManifestSHA256: digest(base), SnapshotSHA256: snapshot},
+			{Version: "1.1.0", SchemaVersion: 3, Surfaces: []string{"claude", "codex", "opencode"}, Manifest: candidate, Files: append([]SyntheticHistoryFile(nil), files...), ManifestSHA256: digest(candidate), SnapshotSHA256: snapshot},
 		},
 		Routes: []VersionRoute{{From: PackVersion, To: "1.1.0", Kind: "update", Migration: []string{}, Actions: []string{"project-complete-surface"}}},
 	}
 }
 
-func CanonicalIndependentPromotionInputs() IndependentPromotionInputs {
-	base, _ := CanonicalJSON()
-	history := canonicalBytes(CanonicalPromotionHistory())
-	diff := canonicalBytes(struct {
-		AddySourceChanged    bool     `json:"addy_source_changed"`
-		SyncAddyParticipated bool     `json:"sync_addy_participated"`
-		AllowedKinds         []string `json:"allowed_kinds"`
-	}{AllowedKinds: []string{"catalog-selection", "history", "manifest-v3", "promotion-gate"}, AddySourceChanged: false, SyncAddyParticipated: false})
-	return IndependentPromotionInputs{
-		BaseSHA256:    digest(base),
-		HeadSHA256:    digest(base),
-		HistorySHA256: digest(history),
-		DiffSHA256:    digest(diff),
+func promotionManifestV2(fixture Fixture) []byte {
+	var manifest map[string]any
+	if err := json.Unmarshal(canonicalBytes(fixture.Manifest), &manifest); err != nil {
+		panic(err)
 	}
+	delete(manifest, "surfaces")
+	return canonicalBytes(manifest)
+}
+
+func syntheticHistoryFiles(files []File) []SyntheticHistoryFile {
+	out := make([]SyntheticHistoryFile, len(files))
+	for i, file := range files {
+		out[i] = SyntheticHistoryFile{Path: file.Path, Content: file.Content, Mode: file.Mode, SHA256: digest([]byte(file.Content))}
+	}
+	return out
+}
+
+func syntheticHistorySnapshotDigest(files []SyntheticHistoryFile) string {
+	rows := make([]string, len(files))
+	for i, file := range files {
+		rows[i] = fmt.Sprintf("%s\x00%04o\x00%s\n", file.Path, file.Mode, digest([]byte(file.Content)))
+	}
+	sort.Strings(rows)
+	return digest([]byte(strings.Join(rows, "")))
+}
+
+func promotionManifestV3(fixture Fixture) []byte {
+	var manifest map[string]any
+	if err := json.Unmarshal(canonicalBytes(fixture.Manifest), &manifest); err != nil {
+		panic(err)
+	}
+	manifest["schema_version"] = 3
+	manifest["version"] = "1.1.0"
+	manifest["surfaces"] = []string{"claude", "codex", "opencode"}
+	resources := manifest["resources"].([]any)
+	for _, encoded := range resources {
+		resource := encoded.(map[string]any)
+		kind, id := resource["kind"].(string), resource["id"].(string)
+		if kind == "asset" || kind == "notice" {
+			resource["bindings"] = []any{}
+			resource["surface_exclusions"] = []any{}
+			continue
+		}
+		bindings := resource["bindings"].([]any)
+		claude := map[string]any{
+			"surface": "claude", "projection": kind, "name": id, "invocation": "/" + id,
+			"mode": "native", "sharing": "exclusive",
+		}
+		if kind == "command" {
+			claude["projection"] = "skill"
+		}
+		if kind == "agent" {
+			claude["invocation"] = "@" + id
+			claude["agent_authority"] = promotionAgentAuthority(id)
+		}
+		resource["bindings"] = append([]any{claude}, bindings...)
+		resource["surface_exclusions"] = []any{}
+	}
+	return canonicalBytes(manifest)
+}
+
+func promotionAgentAuthority(id string) map[string]any {
+	exactTools := map[string][]string{
+		"code-reviewer":           {"Bash", "Glob", "Grep", "Read"},
+		"security-auditor":        {"Bash", "Glob", "Grep", "Read", "WebFetch", "WebSearch"},
+		"test-engineer":           {"Bash", "Edit", "Glob", "Grep", "Read", "Write"},
+		"web-performance-auditor": {"Bash", "Glob", "Grep", "Read", "WebFetch", "WebSearch"},
+	}[id]
+	hasWeb := id == "security-auditor" || id == "web-performance-auditor"
+	fileTools := make([]string, 0, len(exactTools))
+	for _, tool := range exactTools {
+		if tool != "Bash" && tool != "WebFetch" && tool != "WebSearch" {
+			fileTools = append(fileTools, tool)
+		}
+	}
+	networkTools := []string{}
+	networkOutcome, networkFallback := "fallback", "static evidence-only analysis"
+	if hasWeb {
+		networkTools, networkOutcome = []string{"WebFetch", "WebSearch"}, "native"
+	}
+	record := func(portable string, declarations []string, outcome string, tools []string, fallback string) map[string]any {
+		sort.Strings(declarations)
+		return map[string]any{"portable": portable, "declarations": declarations, "outcome": outcome, "claude_tools": tools, "fallback": fallback}
+	}
+	return map[string]any{
+		"permission_mode": "default",
+		"authorities": []any{
+			record("browser", []string{"optional-mode:browser-network:browser", "tool:browser"}, "fallback", []string{}, "static evidence-only analysis"),
+			record("commit", []string{"optional-mode:privileged-shipping:commit"}, "guarded", []string{"Bash"}, "none"),
+			record("deploy", []string{"optional-mode:privileged-shipping:deploy"}, "guarded", []string{"Bash"}, "none"),
+			record("filesystem", []string{"permission:filesystem"}, "native", fileTools, "none"),
+			record("network", []string{"optional-mode:browser-network:network"}, networkOutcome, networkTools, networkFallback),
+			record("package-manager", []string{"optional-mode:package-tools:package-manager"}, "native", []string{"Bash"}, "report commands without running them"),
+			record("process", []string{"optional-mode:package-tools:process", "permission:process"}, "native", []string{"Bash"}, "report commands without running them"),
+			record("subagent", []string{"optional-mode:specialist-fanout:subagent"}, "fallback", []string{}, "sequential exact-persona analysis"),
+		},
+	}
+}
+
+func ReconstructIndependentPromotionInputs(material IndependentPromotionMaterial) (IndependentPromotionInputs, error) {
+	for name, files := range map[string][]ReconstructedFile{
+		"base": material.Base, "head": material.Head,
+		"base history": material.BaseHistory, "head history": material.HeadHistory,
+	} {
+		if err := validateReconstructedFiles(name, files); err != nil {
+			return IndependentPromotionInputs{}, err
+		}
+	}
+	if !validDigest(material.DiffSHA256) {
+		return IndependentPromotionInputs{}, errors.New("diff SHA-256 must be 64 lowercase hexadecimal characters")
+	}
+	return IndependentPromotionInputs{
+		BaseSHA256: digest(canonicalBytes(material.Base)),
+		HeadSHA256: digest(canonicalBytes(material.Head)),
+		HistorySHA256: digest(canonicalBytes(struct {
+			Base []ReconstructedFile `json:"base"`
+			Head []ReconstructedFile `json:"head"`
+		}{material.BaseHistory, material.HeadHistory})),
+		DiffSHA256: material.DiffSHA256,
+	}, nil
+}
+
+func validateReconstructedFiles(name string, files []ReconstructedFile) error {
+	if files == nil {
+		return fmt.Errorf("%s files must be a non-null array", name)
+	}
+	for i, file := range files {
+		if file.Path == "" || path.Clean(file.Path) != file.Path || strings.HasPrefix(file.Path, "/") || strings.HasPrefix(file.Path, "../") || strings.Contains(file.Path, "\\") {
+			return fmt.Errorf("%s file path %q is invalid", name, file.Path)
+		}
+		if file.Mode != 0o644 && file.Mode != 0o755 {
+			return fmt.Errorf("%s file %q mode %04o is invalid", name, file.Path, file.Mode)
+		}
+		if !validDigest(file.SHA256) {
+			return fmt.Errorf("%s file %q SHA-256 is invalid", name, file.Path)
+		}
+		if i > 0 && files[i-1].Path >= file.Path {
+			return fmt.Errorf("%s files must be sorted by path without duplicates", name)
+		}
+	}
+	return nil
+}
+
+func validDigest(value string) bool {
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func NewNotApplicablePromotionEvidence(context PromotionValidationContext) PromotionEvidence {

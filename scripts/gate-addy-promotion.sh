@@ -13,11 +13,20 @@ cd "$root"
 base_sha="$(git rev-parse --verify "$1^{commit}")"
 head_sha="$(git rev-parse --verify "$2^{commit}")"
 promotion_change=false
+base_has_promotion_gate=false
+if git show "$base_sha:.github/workflows/ci.yml" 2>/dev/null | grep -Fq 'addy-promotion-gate:'; then
+  base_has_promotion_gate=true
+fi
 
 while IFS= read -r path; do
   case "$path" in
     bundle/packs/addy/pack.json | bundle/sources/addy.lock.json | bundle/history/addy/*)
       promotion_change=true
+      ;;
+    .github/workflows/ci.yml | internal/addyacceptance/promotion.go | internal/addyacceptance/promotion_test.go | internal/tools/addypromotiongate/* | scripts/gate-addy-promotion.sh | scripts/validate-addy-acceptance.sh)
+      if [[ "$base_has_promotion_gate" == true ]]; then
+        promotion_change=true
+      fi
       ;;
   esac
 done < <(git diff --name-only "$base_sha" "$head_sha" --)

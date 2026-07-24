@@ -28,7 +28,11 @@ func main() {
 	context.MatrixVersion = addyacceptance.PromotionMatrixVersion
 	context.Now = time.Now().UTC()
 	context.MaxAge = 24 * time.Hour
-	context.Inputs = addyacceptance.CanonicalIndependentPromotionInputs()
+	inputs, err := reconstructPromotionInputs(context.BaseSHA, context.HeadSHA)
+	if err != nil {
+		fatalf("reconstruct trusted promotion inputs: %v", err)
+	}
+	context.Inputs = inputs
 
 	var evidence addyacceptance.PromotionEvidence
 	if context.PromotionChange {

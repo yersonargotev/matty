@@ -1029,6 +1029,13 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 		"Bash": true, "Edit": true, "Glob": true, "Grep": true, "Read": true,
 		"WebFetch": true, "WebSearch": true, "Write": true,
 	}
+	compatibleClaudeTools := map[string]map[string]bool{
+		"filesystem": {"Edit": true, "Glob": true, "Grep": true, "Read": true, "Write": true},
+		"network":    {"WebFetch": true, "WebSearch": true},
+		"process":    {"Bash": true}, "package-manager": {"Bash": true},
+		"commit": {"Bash": true}, "deploy": {"Bash": true},
+		"browser": {}, "subagent": {},
+	}
 	seenDeclarations := map[string]bool{}
 	for i, record := range authority.Authorities {
 		if !portableAuthorities[record.Portable] {
@@ -1039,6 +1046,9 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 		}
 		if record.Declarations == nil || record.ClaudeTools == nil {
 			return fmt.Errorf("agent_authority declarations and claude_tools are required non-null arrays")
+		}
+		if len(record.Declarations) == 0 {
+			return fmt.Errorf("agent_authority record %q has no declarations", record.Portable)
 		}
 		if !sort.StringsAreSorted(record.Declarations) || hasDuplicateStrings(record.Declarations) {
 			return fmt.Errorf("agent_authority declarations must be sorted without duplicates")
@@ -1063,11 +1073,14 @@ func validateAgentAuthority(authority AgentAuthority, tools, permissions []strin
 			if !approvedClaudeTools[tool] {
 				return fmt.Errorf("agent_authority Claude tool %q is unsupported", tool)
 			}
+			if !compatibleClaudeTools[record.Portable][tool] {
+				return fmt.Errorf("agent_authority Claude tool %q is incompatible with portable authority %q", tool, record.Portable)
+			}
 		}
 		switch record.Outcome {
 		case "native":
-			if len(record.ClaudeTools) == 0 || record.Fallback != "none" {
-				return fmt.Errorf("agent_authority native outcome requires claude_tools and fallback none")
+			if len(record.ClaudeTools) == 0 || strings.TrimSpace(record.Fallback) == "" {
+				return fmt.Errorf("agent_authority native outcome requires claude_tools and a nonempty fallback value")
 			}
 		case "fallback":
 			if len(record.ClaudeTools) != 0 || strings.TrimSpace(record.Fallback) == "" || record.Fallback == "none" {
