@@ -35,7 +35,10 @@ func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, targetMa
 		return nil
 	}
 	key := id + "@" + fromVersion + "->" + toVersion
-	route, ok := supportedUpdateRoutes[key]
+	route, ok := c.catalogUpdateRoute(id, fromVersion, toVersion)
+	if !ok && !c.hasCatalogUpdateRoutes(id) {
+		route, ok = supportedUpdateRoutes[key]
+	}
 	if !ok {
 		return fmt.Errorf("capability pack %s has no supported update route from %s to %s", id, fromVersion, toVersion)
 	}
@@ -45,6 +48,24 @@ func (c Catalog) validateUpdateRoute(id, fromVersion, toVersion string, targetMa
 		}
 	}
 	return fmt.Errorf("capability pack %s update route from %s to %s does not add %s intent", id, fromVersion, toVersion, surface)
+}
+
+func (c Catalog) hasCatalogUpdateRoutes(id string) bool {
+	entry, ok := c.catalogEntry(id)
+	return ok && len(entry.UpdateRoutes) > 0
+}
+
+func (c Catalog) catalogUpdateRoute(id, fromVersion, toVersion string) (supportedUpdateRoute, bool) {
+	entry, ok := c.catalogEntry(id)
+	if !ok {
+		return supportedUpdateRoute{}, false
+	}
+	for _, route := range entry.UpdateRoutes {
+		if route.FromVersion == fromVersion && route.ToVersion == toVersion {
+			return supportedUpdateRoute{ExistingSurfaces: append([]Surface(nil), route.ExistingSurfaces...)}, true
+		}
+	}
+	return supportedUpdateRoute{}, false
 }
 
 func init() {

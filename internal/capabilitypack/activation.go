@@ -544,8 +544,11 @@ func (f Facade) PreviewUpdate(ctx context.Context, request UpdateRequest) (Recon
 }
 
 func (f Facade) previewUpdate(ctx context.Context, request UpdateRequest) (ReconciliationPlan, error) {
+	if f.catalog.withdrawn(request.PackID) {
+		return ReconciliationPlan{}, fmt.Errorf("capability pack %q is withdrawn and cannot be updated", request.PackID)
+	}
 	activation := ActivationRequest{PackID: request.PackID, Surface: request.Surface, Aliases: request.Aliases}
-	_, _, state, err := f.activationInputs(ctx, activation)
+	_, _, state, err := f.activationInputsForOperation(ctx, activation, OperationUpdate)
 	if err != nil {
 		return ReconciliationPlan{}, err
 	}
@@ -1310,7 +1313,25 @@ func (f Facade) activationInputsForOperation(ctx context.Context, request Activa
 		return Pack{}, nil, ActivationState{}, err
 	}
 	intent, hasIntent := intentForPack(state, request.PackID, request.Surface)
-	usesHistory := (operation == OperationReconcile || operation == OperationDeactivate) && hasIntent && intent.Active && hasTrustedHistoricalArtifact(intent.PackID, intent.Version)
+	activationRecovery := operation == OperationActivate && recoveryAttempt(state, OperationActivate, request.PackID, request.Surface)
+	if operation == OperationActivate && hasIntent && intent.Active && intent.Version != pack.Version && !activationRecovery {
+		return Pack{}, nil, ActivationState{}, fmt.Errorf("capability pack %q is active at %s on %s; use explicit pack update to target catalog current %s", request.PackID, intent.Version, request.Surface, pack.Version)
+	}
+	if operation == OperationActivate && f.catalog.withdrawn(request.PackID) && (!hasIntent || !intent.Active) {
+		return Pack{}, nil, ActivationState{}, fmt.Errorf("capability pack %q is withdrawn and cannot be freshly activated", request.PackID)
+	}
+	historicalActivationRecovery := activationRecovery && intent.Version != pack.Version
+	historicalManagement := (operation == OperationReconcile || operation == OperationDeactivate) && hasIntent && intent.Active
+	usesHistory := (historicalManagement || historicalActivationRecovery) && hasTrustedHistoricalArtifact(intent.PackID, intent.Version)
+	if historicalActivationRecovery && !usesHistory {
+		return Pack{}, nil, ActivationState{}, fmt.Errorf("capability pack %q recovery cannot resolve exact intended version %s", request.PackID, intent.Version)
+	}
+	if historicalActivationRecovery {
+		pack, err = f.catalog.resolveIntentPack(request.PackID, intent.Version)
+		if err != nil {
+			return Pack{}, nil, ActivationState{}, err
+		}
+	}
 	if !usesHistory {
 		pack, err = f.catalog.Show(request.PackID)
 		if err != nil {

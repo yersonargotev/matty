@@ -187,9 +187,30 @@ type Catalog struct {
 }
 
 type catalogEntry struct {
-	ID          string
-	Description string
-	Surfaces    []Surface
+	ID                 string
+	Description        string
+	Surfaces           []Surface
+	Withdrawn          bool
+	HistoricalVersions []string
+	UpdateRoutes       []UpdateRoute
+}
+
+// UpdateRoute identifies one exact, supported transition between catalog
+// versions.
+type UpdateRoute struct {
+	FromVersion      string
+	ToVersion        string
+	ExistingSurfaces []Surface
+}
+
+// CatalogDetail is a detached view of a known catalog entry. Current reports
+// whether the pack is selectable; withdrawn packs remain addressable by Show.
+type CatalogDetail struct {
+	Current            bool
+	Withdrawn          bool
+	Pack               Pack
+	HistoricalVersions []string
+	UpdateRoutes       []UpdateRoute
 }
 
 var initialCatalog = []catalogEntry{
@@ -232,6 +253,9 @@ func discoverCatalogWithSourceValidation(bundleRoot string, entries []catalogEnt
 func discoverCatalogUnlocked(bundleRoot string, entries []catalogEntry, validateSources bool) (Catalog, error) {
 	packs := make([]Pack, 0, len(entries))
 	for _, entry := range entries {
+		if err := validateCatalogMetadata(entry); err != nil {
+			return Catalog{}, fmt.Errorf("catalog entry %q: %w", entry.ID, err)
+		}
 		manifestPath := filepath.Join(bundleRoot, "packs", entry.ID, "pack.json")
 		pack, err := decodeManifestWithSourceValidation(manifestPath, bundleRoot, validateSources)
 		if err != nil {
@@ -248,6 +272,9 @@ func discoverCatalogUnlocked(bundleRoot string, entries []catalogEntry, validate
 		if err := validateSurfaces(pack.Surfaces); err != nil {
 			return Catalog{}, fmt.Errorf("pack %q: %w", pack.ID, err)
 		}
+		if len(entry.HistoricalVersions) > 0 && !containsString(entry.HistoricalVersions, pack.Version) {
+			return Catalog{}, fmt.Errorf("catalog entry %q: current version %q is absent from immutable history metadata", entry.ID, pack.Version)
+		}
 		if pack.Contract.Exclusions != nil && !manifestOwnedSurfaces {
 			if err := validateBindingsForSurfaces(pack); err != nil {
 				return Catalog{}, fmt.Errorf("pack %q: %w", pack.ID, err)
@@ -256,7 +283,7 @@ func discoverCatalogUnlocked(bundleRoot string, entries []catalogEntry, validate
 		packs = append(packs, pack)
 	}
 	sort.Slice(packs, func(i, j int) bool { return packs[i].ID < packs[j].ID })
-	return Catalog{packs: packs, bundleRoot: bundleRoot, entries: append([]catalogEntry(nil), entries...), deferSourceValidation: !validateSources}, nil
+	return Catalog{packs: packs, bundleRoot: bundleRoot, entries: cloneCatalogEntries(entries), deferSourceValidation: !validateSources}, nil
 }
 
 func (c Catalog) refreshed() (Catalog, error) {
@@ -293,6 +320,46 @@ func (c Catalog) List() []Pack {
 	return packs
 }
 
+// ListDetails returns detached metadata only after every advertised current
+// pack has passed the same fresh validation as ListCurrent.
+func (c Catalog) ListDetails() ([]CatalogDetail, error) {
+	var details []CatalogDetail
+	err := c.withBundleLock(context.Background(), func(locked Catalog) error {
+		fresh, err := locked.refreshed()
+		if err != nil {
+			return err
+		}
+		details = make([]CatalogDetail, 0, len(fresh.packs))
+		for _, metadata := range fresh.packs {
+			entry, _ := fresh.catalogEntry(metadata.ID)
+			if entry.Withdrawn {
+				continue
+			}
+			pack, err := fresh.showUnlocked(metadata.ID)
+			if err != nil {
+				return err
+			}
+			details = append(details, catalogDetail(pack, entry))
+		}
+		return nil
+	})
+	return details, err
+}
+
+// ShowDetail returns detached metadata for a known pack, including a withdrawn
+// pack that is intentionally absent from normal listing.
+func (c Catalog) ShowDetail(id string) (CatalogDetail, error) {
+	pack, err := c.Show(id)
+	if err != nil {
+		return CatalogDetail{}, err
+	}
+	entry, ok := c.catalogEntry(id)
+	if !ok {
+		return CatalogDetail{}, fmt.Errorf("unknown capability pack %q; run `packy pack list` to see available packs", id)
+	}
+	return catalogDetail(pack, entry), nil
+}
+
 // ListCurrent returns only after every advertised catalog-current pack has
 // passed the same source validation as direct current selection.
 func (c Catalog) ListCurrent() ([]Pack, error) {
@@ -304,6 +371,10 @@ func (c Catalog) ListCurrent() ([]Pack, error) {
 		}
 		packs = make([]Pack, 0, len(fresh.packs))
 		for _, metadata := range fresh.packs {
+			entry, _ := fresh.catalogEntry(metadata.ID)
+			if entry.Withdrawn {
+				continue
+			}
 			pack, err := fresh.showUnlocked(metadata.ID)
 			if err != nil {
 				return err
@@ -354,6 +425,11 @@ func (c Catalog) catalogMetadata(id string) (Pack, error) {
 	return Pack{}, fmt.Errorf("unknown capability pack %q; run `packy pack list` to see available packs", id)
 }
 
+func (c Catalog) withdrawn(id string) bool {
+	entry, ok := c.catalogEntry(id)
+	return ok && entry.Withdrawn
+}
+
 func clonePack(pack Pack) Pack {
 	pack.Surfaces = append([]Surface(nil), pack.Surfaces...)
 	pack.Provides = append([]string(nil), pack.Provides...)
@@ -396,6 +472,84 @@ func clonePack(pack Pack) Pack {
 		pack.Contract.OptionalModes[i].Authorities = append([]string(nil), pack.Contract.OptionalModes[i].Authorities...)
 	}
 	return pack
+}
+
+func catalogDetail(pack Pack, entry catalogEntry) CatalogDetail {
+	return CatalogDetail{
+		Current:            !entry.Withdrawn,
+		Withdrawn:          entry.Withdrawn,
+		Pack:               clonePack(pack),
+		HistoricalVersions: append([]string(nil), entry.HistoricalVersions...),
+		UpdateRoutes:       cloneUpdateRoutes(entry.UpdateRoutes),
+	}
+}
+
+func cloneCatalogEntries(entries []catalogEntry) []catalogEntry {
+	cloned := make([]catalogEntry, len(entries))
+	for i, entry := range entries {
+		cloned[i] = entry
+		cloned[i].Surfaces = append([]Surface(nil), entry.Surfaces...)
+		cloned[i].HistoricalVersions = append([]string(nil), entry.HistoricalVersions...)
+		cloned[i].UpdateRoutes = cloneUpdateRoutes(entry.UpdateRoutes)
+	}
+	return cloned
+}
+
+func cloneUpdateRoutes(routes []UpdateRoute) []UpdateRoute {
+	cloned := make([]UpdateRoute, len(routes))
+	for i, route := range routes {
+		cloned[i] = route
+		cloned[i].ExistingSurfaces = append([]Surface(nil), route.ExistingSurfaces...)
+	}
+	return cloned
+}
+
+func validateCatalogMetadata(entry catalogEntry) error {
+	versions := make(map[string]bool, len(entry.HistoricalVersions))
+	for i, version := range entry.HistoricalVersions {
+		if !validSemver(version) {
+			return fmt.Errorf("historical version %q is not valid SemVer", version)
+		}
+		if versions[version] {
+			return fmt.Errorf("historical version %q is duplicated", version)
+		}
+		if i > 0 && entry.HistoricalVersions[i-1] >= version {
+			return fmt.Errorf("historical versions must be in ascending canonical order")
+		}
+		versions[version] = true
+	}
+	routeKeys := make(map[string]bool, len(entry.UpdateRoutes))
+	previous := ""
+	for _, route := range entry.UpdateRoutes {
+		if !validSemver(route.FromVersion) || !validSemver(route.ToVersion) || route.FromVersion == route.ToVersion {
+			return fmt.Errorf("update route %q -> %q is malformed", route.FromVersion, route.ToVersion)
+		}
+		if err := validateSurfaces(route.ExistingSurfaces); err != nil {
+			return fmt.Errorf("update route %q -> %q: %w", route.FromVersion, route.ToVersion, err)
+		}
+		if !versions[route.FromVersion] || !versions[route.ToVersion] {
+			return fmt.Errorf("update route %q -> %q references an unknown historical version", route.FromVersion, route.ToVersion)
+		}
+		key := route.FromVersion + "\x00" + route.ToVersion
+		if routeKeys[key] {
+			return fmt.Errorf("update route %q -> %q is duplicated", route.FromVersion, route.ToVersion)
+		}
+		if previous != "" && previous >= key {
+			return fmt.Errorf("update routes must be in ascending canonical order")
+		}
+		routeKeys[key] = true
+		previous = key
+	}
+	return nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 type manifest struct {
