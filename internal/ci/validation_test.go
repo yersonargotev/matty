@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/yersonargotev/packy/internal/addyacceptance"
 	"github.com/yersonargotev/packy/internal/packsync"
 	"github.com/yersonargotev/packy/internal/packsyncworkflow"
 )
@@ -46,6 +47,7 @@ var packyOwnedPackages = []string{
 	"./internal/release",
 	"./internal/setuphealth",
 	"./internal/skillbundle",
+	"./internal/tools/addypromotiongate",
 	"./internal/tools/claudesmoke",
 	"./internal/tools/governanceauth",
 	"./internal/tools/governancedrift",
@@ -206,6 +208,137 @@ func TestCIUsesOnlyTheValidationEntrypoint(t *testing.T) {
 			t.Fatalf("CI bypasses validation entrypoint with %q", unsafe)
 		}
 	}
+}
+
+func TestAddyPromotionGateHasStableNonPublishingIdentity(t *testing.T) {
+	workflow := readFile(t, filepath.Join(repositoryRoot(t), ".github", "workflows", "ci.yml"))
+	gate := workflowSection(t, workflow, "  addy-promotion-gate:", "  validate:")
+	for _, required := range []string{
+		"name: Addy 1.1.0 promotion gate",
+		"if: github.event_name == 'pull_request'",
+		"permissions:\n      contents: read",
+		"fetch-depth: 0",
+		"persist-credentials: false",
+		"./scripts/gate-addy-promotion.sh",
+	} {
+		if !strings.Contains(gate, required) {
+			t.Fatalf("Addy promotion gate missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"contents: write", "packages: write", "pull-requests: write", "id-token: write", "gh release", "git push", "npm publish", "go install"} {
+		if strings.Contains(gate, forbidden) {
+			t.Fatalf("Addy promotion gate contains publishing authority %q", forbidden)
+		}
+	}
+}
+
+func TestAddyPromotionGateClassifiesAndFailsClosed(t *testing.T) {
+	sourceRoot := repositoryRoot(t)
+	root := t.TempDir()
+	paths := []string{"go.mod", "go.sum", ".github/workflows/ci.yml", "scripts/gate-addy-promotion.sh", "internal/tools/addypromotiongate/main.go", "internal/tools/addypromotiongate/reconstruct.go", "internal/capabilitypack/catalog.go", "internal/addyacceptance/testdata/addy-0.6.4.tar.gz"}
+	acceptanceFiles, err := filepath.Glob(filepath.Join(sourceRoot, "internal", "addyacceptance", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range acceptanceFiles {
+		if !strings.HasSuffix(path, "_test.go") {
+			relative, relErr := filepath.Rel(sourceRoot, path)
+			if relErr != nil {
+				t.Fatal(relErr)
+			}
+			paths = append(paths, relative)
+		}
+	}
+	for _, path := range paths {
+		destination := filepath.Join(root, path)
+		writeFile(t, destination, readFile(t, filepath.Join(sourceRoot, path)))
+	}
+	writeFile(t, filepath.Join(root, "bundle", "packs", "addy", "pack.json"), `{"resources":[]}`+"\n")
+	writeFile(t, filepath.Join(root, "bundle", "sources", "addy.lock.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "bundle", "sources.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "scripts", "validate-addy-acceptance.sh"), "#!/bin/sh\nset -eu\nprintf 'foundation validation\\n' >&2\n")
+	if err := os.Chmod(filepath.Join(root, "scripts", "gate-addy-promotion.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "scripts", "validate-addy-acceptance.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "config", "user.email", "fixture@example.test")
+	runGit(t, root, "config", "user.name", "Fixture")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-qm", "base")
+	base := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(root, "README.md"), "foundation-only\n")
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-qm", "unrelated")
+	head := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
+
+	output, err := runAddyGate(root, base, head)
+	if err != nil {
+		t.Fatalf("unrelated gate failed: %v\n%s", err, output)
+	}
+	evidence, err := addyacceptance.DecodePromotionEvidence(output)
+	if err != nil {
+		t.Fatalf("decode not_applicable evidence: %v\n%s", err, output)
+	}
+	if evidence.Disposition != addyacceptance.PromotionNotApplicable {
+		t.Fatalf("disposition = %q, want not_applicable", evidence.Disposition)
+	}
+	canonical, err := evidence.CanonicalJSON()
+	if err != nil || !bytes.Equal(output, canonical) {
+		t.Fatalf("gate output is not canonical: %v\n%s", err, output)
+	}
+
+	fixtureSource := filepath.Join(root, "internal", "addyacceptance", "fixture.go")
+	writeFile(t, fixtureSource, readFile(t, fixtureSource)+"\n// changed canonical Addy fixture\n")
+	runGit(t, root, "add", fixtureSource)
+	runGit(t, root, "commit", "-qm", "change Addy fixture authority")
+	authorityHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
+	output, err = runAddyGate(root, head, authorityHead)
+	if err != nil {
+		t.Fatalf("changed promotion authority failed foundation validation: err=%v\n%s", err, output)
+	}
+	jsonStart := bytes.IndexByte(output, '{')
+	if jsonStart < 0 {
+		t.Fatalf("foundation validation emitted no canonical decision:\n%s", output)
+	}
+	foundation, err := addyacceptance.DecodePromotionEvidence(output[jsonStart:])
+	if err != nil || foundation.Disposition != addyacceptance.PromotionFoundation {
+		t.Fatalf("foundation disposition = %q, err=%v\n%s", foundation.Disposition, err, output)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "bundle", "history", "addy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "bundle", "history", "addy", "1.1.0.json"), "{}\n")
+	runGit(t, root, "add", "bundle")
+	runGit(t, root, "commit", "-qm", "promotion")
+	promotionHead := strings.TrimSpace(gitOutput(t, root, "rev-parse", "HEAD"))
+	output, err = runAddyGate(root, authorityHead, promotionHead)
+	if err == nil || !strings.Contains(string(output), "promotion change requires evidence") {
+		t.Fatalf("promotion without evidence did not fail closed: err=%v\n%s", err, output)
+	}
+
+	script := readFile(t, filepath.Join(root, "scripts", "gate-addy-promotion.sh"))
+	for _, classified := range []string{"bundle/packs/addy/pack.json", "bundle/history/addy/*", "bundle/sources/addy.lock.json", "internal/addyacceptance/*", "internal/capabilitypack/*", "internal/claudecode/*", `ID:[[:space:]]*"addy"`} {
+		if !strings.Contains(script, classified) {
+			t.Fatalf("promotion classifier missing %q", classified)
+		}
+	}
+}
+
+func runAddyGate(root, base, head string) ([]byte, error) {
+	cmd := exec.Command("/bin/bash", filepath.Join(root, "scripts", "gate-addy-promotion.sh"), base, head)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GITHUB_REPOSITORY=owner/repository",
+		"GITHUB_PR_NUMBER=201",
+		"GITHUB_SHA="+head,
+		"GITHUB_RUN_ID=12345",
+		"ADDY_PROMOTION_EVIDENCE=",
+	)
+	return cmd.CombinedOutput()
 }
 
 func TestGovernanceChecksKeepStableProtectedAdvisoryIdentities(t *testing.T) {
@@ -370,8 +503,27 @@ func TestAddyAcceptanceValidationKeepsStableRowsAndBatchesFreshExactTests(t *tes
 	if !reflect.DeepEqual(mappings, wantMappings) {
 		t.Fatalf("Addy acceptance mappings = %#v, want stable matrix %#v", mappings, wantMappings)
 	}
-	if len(pairs) != 29 {
-		t.Fatalf("Addy acceptance unique package/test pairs = %d, want 29", len(pairs))
+	wantPromotionMappings := []string{
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-01 ./internal/addyacceptance TestAddyPromotionIndependentInputs",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-02 ./internal/addyacceptance TestAddyPromotionIndependentInputs",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-03 ./internal/addyacceptance TestAddyPromotionIndependentInputs",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-04 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-05 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-06 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-07 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-08 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-09 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-10 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-11 ./internal/addyacceptance TestAddyPromotionRealHostFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-12 ./internal/addyacceptance TestAddyPromotionRealHostFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-13 ./internal/addyacceptance TestAddyPromotionEvidenceFoundations",
+		"map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-14 ./internal/addyacceptance TestAddyPromotionEvidenceFoundations",
+	}
+	if promotionMappings := addyPromotionMappings(script); !reflect.DeepEqual(promotionMappings, wantPromotionMappings) {
+		t.Fatalf("Addy promotion mappings = %#v, want exact matrix %#v", promotionMappings, wantPromotionMappings)
+	}
+	if len(pairs) != 34 {
+		t.Fatalf("Addy acceptance unique package/test pairs = %d, want 34", len(pairs))
 	}
 
 	result := runAddyAcceptanceValidation(t, script, nil)
@@ -1317,15 +1469,28 @@ func addyAcceptanceMappings(t *testing.T, script string) ([]string, map[string]i
 	pairs := make(map[string]int)
 	for _, line := range strings.Split(script, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 || fields[0] != "map_row" {
+		if len(fields) < 4 || fields[0] != "map_row" && fields[0] != "map_promotion_row" {
 			continue
 		}
-		mappings = append(mappings, strings.Join(fields, " "))
+		if fields[0] == "map_row" {
+			mappings = append(mappings, strings.Join(fields, " "))
+		}
 		for _, testName := range fields[3:] {
 			pairs[fields[2]+"/"+testName] = 1
 		}
 	}
 	return mappings, pairs
+}
+
+func addyPromotionMappings(script string) []string {
+	var mappings []string
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 4 && fields[0] == "map_promotion_row" {
+			mappings = append(mappings, strings.Join(fields, " "))
+		}
+	}
+	return mappings
 }
 
 func runAddyAcceptanceValidation(t *testing.T, script string, environment map[string]string) addyValidationResult {
@@ -1591,4 +1756,15 @@ func runGit(t *testing.T, root string, args ...string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
+}
+
+func gitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }

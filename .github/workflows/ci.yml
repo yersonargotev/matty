@@ -15,6 +15,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  addy-promotion-gate:
+    name: Addy 1.1.0 promotion gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate Addy promotion evidence
+        env:
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+          ADDY_PROMOTION_EVIDENCE: ${{ vars.ADDY_PROMOTION_EVIDENCE }}
+        run: ./scripts/gate-addy-promotion.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
   validate:
     name: Validate Packy-owned code
     runs-on: ubuntu-latest

@@ -861,24 +861,32 @@ func claudeCommandSkill(resource capabilitypack.Resource, name string, prompt []
 }
 
 func claudeAgentDocument(resource capabilitypack.Resource, name string, authority capabilitypack.AgentAuthority, prompt []byte) string {
-	translations := func(items []capabilitypack.AuthorityTranslation) string {
-		parts := make([]string, 0, len(items))
-		for _, item := range items {
-			parts = append(parts, item.Portable+"="+item.Claude)
+	toolSet := map[string]bool{}
+	contract := make([]string, 0, len(authority.Authorities))
+	for _, record := range authority.Authorities {
+		for _, tool := range record.ClaudeTools {
+			toolSet[tool] = true
 		}
-		sort.Strings(parts)
-		return strings.Join(parts, ", ")
+		declarations := strings.Join(record.Declarations, ", ")
+		if declarations == "" {
+			declarations = "none"
+		}
+		claudeTools := strings.Join(record.ClaudeTools, ", ")
+		if claudeTools == "" {
+			claudeTools = "none"
+		}
+		contract = append(contract, fmt.Sprintf("- %s: declarations=[%s]; outcome=%s; claude_tools=[%s]; fallback=%s", record.Portable, declarations, record.Outcome, claudeTools, record.Fallback))
 	}
-	claudeTools := make([]string, 0, len(authority.Tools))
-	for _, item := range authority.Tools {
-		claudeTools = append(claudeTools, item.Claude)
+	claudeTools := make([]string, 0, len(toolSet))
+	for tool := range toolSet {
+		claudeTools = append(claudeTools, tool)
 	}
 	sort.Strings(claudeTools)
 	tools := strings.Join(claudeTools, ", ")
 	if tools == "" {
 		tools = "[]"
 	}
-	return fmt.Sprintf("---\nname: %s\ndescription: %q\ntools: %s\n---\n\n## Packy authority translation\n\n- Tools: %s\n- Permissions: %s\n\n%s\n", name, resource.Description, tools, translations(authority.Tools), translations(authority.Permissions), strings.TrimSpace(string(prompt)))
+	return fmt.Sprintf("---\nname: %s\ndescription: %q\npermissionMode: %s\ntools: %s\n---\n\n## Packy authority contract\n\n- permission_mode: %s\n%s\n\n%s\n", name, resource.Description, authority.PermissionMode, tools, authority.PermissionMode, strings.Join(contract, "\n"), strings.TrimSpace(string(prompt)))
 }
 
 func (a *SurfaceAdapter) consumerAssets(pack capabilitypack.Pack, consumer capabilitypack.Resource, consumerID, targetDir string) ([]capabilitypack.ObservedProjection, error) {

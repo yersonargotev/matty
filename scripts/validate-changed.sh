@@ -32,6 +32,7 @@ readonly packages=(
   ./internal/release
   ./internal/setuphealth
   ./internal/skillbundle
+  ./internal/tools/addypromotiongate
   ./internal/tools/claudesmoke
   ./internal/tools/governanceauth
   ./internal/tools/governancedrift

@@ -73,14 +73,17 @@ type Binding struct {
 	Hook           *CommandHook    `json:"hook,omitempty"`
 }
 
-type AuthorityTranslation struct {
-	Portable string `json:"portable"`
-	Claude   string `json:"claude"`
+type AgentAuthority struct {
+	PermissionMode string            `json:"permission_mode"`
+	Authorities    []AuthorityRecord `json:"authorities"`
 }
 
-type AgentAuthority struct {
-	Tools       []AuthorityTranslation `json:"tools"`
-	Permissions []AuthorityTranslation `json:"permissions"`
+type AuthorityRecord struct {
+	Portable     string   `json:"portable"`
+	Declarations []string `json:"declarations"`
+	Outcome      string   `json:"outcome"`
+	ClaudeTools  []string `json:"claude_tools"`
+	Fallback     string   `json:"fallback"`
 }
 
 type CommandHook struct {
@@ -369,8 +372,11 @@ func clonePack(pack Pack) Pack {
 			binding := &pack.Resources[i].Bindings[j]
 			if binding.AgentAuthority != nil {
 				copy := *binding.AgentAuthority
-				copy.Tools = append([]AuthorityTranslation(nil), copy.Tools...)
-				copy.Permissions = append([]AuthorityTranslation(nil), copy.Permissions...)
+				copy.Authorities = append([]AuthorityRecord(nil), copy.Authorities...)
+				for k := range copy.Authorities {
+					copy.Authorities[k].Declarations = append([]string(nil), copy.Authorities[k].Declarations...)
+					copy.Authorities[k].ClaudeTools = append([]string(nil), copy.Authorities[k].ClaudeTools...)
+				}
 				binding.AgentAuthority = &copy
 			}
 			if binding.Hook != nil {
@@ -813,7 +819,7 @@ func validatePackMetadataWithContract(pack Pack, version int, contractPresent bo
 		}
 		if version == manifestSchemaV2 || version == manifestSchemaV3 {
 			if version == manifestSchemaV3 {
-				if err := validateResourceV3(resource, pack.Surfaces); err != nil {
+				if err := validateResourceV3(resource, pack.Surfaces, pack.Contract.OptionalModes); err != nil {
 					return fmt.Errorf("resource %q: %w", identity, err)
 				}
 				continue
@@ -872,7 +878,7 @@ func validateV3Surfaces(surfaces []Surface) error {
 	return nil
 }
 
-func validateResourceV3(resource Resource, surfaces []Surface) error {
+func validateResourceV3(resource Resource, surfaces []Surface, optionalModes []OptionalMode) error {
 	if resource.Requires == nil || resource.Bindings == nil || resource.SurfaceExclusions == nil {
 		return fmt.Errorf("requires, bindings, and surface_exclusions are required non-null arrays")
 	}
@@ -926,7 +932,7 @@ func validateResourceV3(resource Resource, surfaces []Surface) error {
 			return fmt.Errorf("duplicate or contradictory surface outcome %q", binding.Surface)
 		}
 		seen[binding.Surface] = true
-		if err := validateBindingV3(resource, binding); err != nil {
+		if err := validateBindingV3(resource, binding, optionalModes); err != nil {
 			return err
 		}
 	}
@@ -961,7 +967,7 @@ func validateResourceV3(resource Resource, surfaces []Surface) error {
 	return nil
 }
 
-func validateBindingV3(resource Resource, binding Binding) error {
+func validateBindingV3(resource Resource, binding Binding, optionalModes []OptionalMode) error {
 	kind := resource.Kind
 	if binding.Surface != SurfaceClaude && binding.Surface != SurfaceCodex && binding.Surface != SurfaceOpenCode {
 		return fmt.Errorf("binding surface %q is unsupported", binding.Surface)
@@ -989,7 +995,7 @@ func validateBindingV3(resource Resource, binding Binding) error {
 		return fmt.Errorf("typed Claude binding field does not match %s projection", kind)
 	}
 	if binding.AgentAuthority != nil {
-		return validateAgentAuthority(*binding.AgentAuthority, resource.Tools, resource.Permissions)
+		return validateAgentAuthority(*binding.AgentAuthority, resource.Tools, resource.Permissions, optionalModes)
 	}
 	if binding.Hook != nil {
 		return validateCommandHook(*binding.Hook)
@@ -997,28 +1003,145 @@ func validateBindingV3(resource Resource, binding Binding) error {
 	return nil
 }
 
-func validateAgentAuthority(authority AgentAuthority, tools, permissions []string) error {
-	if authority.Tools == nil || authority.Permissions == nil {
-		return fmt.Errorf("agent_authority tools and permissions are required arrays")
+func validateAgentAuthority(authority AgentAuthority, tools, permissions []string, optionalModes []OptionalMode) error {
+	if authority.PermissionMode != "default" {
+		return fmt.Errorf("agent_authority permission_mode must be default")
 	}
-	for name, values := range map[string][]AuthorityTranslation{"tools": authority.Tools, "permissions": authority.Permissions} {
-		for i, v := range values {
-			if !idPattern.MatchString(v.Portable) || strings.TrimSpace(v.Claude) == "" || i > 0 && values[i-1].Portable >= v.Portable {
-				return fmt.Errorf("agent_authority %s must be sorted translations with portable and claude ids", name)
+	if authority.Authorities == nil {
+		return fmt.Errorf("agent_authority authorities is a required non-null array")
+	}
+
+	expected := map[string]string{}
+	for _, tool := range tools {
+		expected["tool:"+tool] = tool
+	}
+	for _, permission := range permissions {
+		expected["permission:"+permission] = permission
+	}
+	for _, mode := range optionalModes {
+		for _, portable := range mode.Authorities {
+			declaration := "optional-mode:" + mode.ID + ":" + portable
+			expected[declaration] = portable
+		}
+	}
+	declaredFallbacks := map[string]string{}
+	for _, mode := range optionalModes {
+		for _, portable := range mode.Authorities {
+			if fallback, exists := declaredFallbacks[portable]; exists && fallback != mode.Fallback {
+				return fmt.Errorf("agent_authority portable authority %q has conflicting declared fallbacks", portable)
+			}
+			declaredFallbacks[portable] = mode.Fallback
+		}
+	}
+
+	approvedClaudeTools := map[string]bool{
+		"Bash": true, "Edit": true, "Glob": true, "Grep": true, "Read": true,
+		"WebFetch": true, "WebSearch": true, "Write": true,
+	}
+	compatibleClaudeTools := map[string]map[string]bool{
+		"filesystem": {"Edit": true, "Glob": true, "Grep": true, "Read": true, "Write": true},
+		"network":    {"WebFetch": true, "WebSearch": true},
+		"process":    {"Bash": true}, "package-manager": {"Bash": true},
+		"commit": {"Bash": true}, "deploy": {"Bash": true},
+		"browser": {}, "subagent": {},
+	}
+	seenDeclarations := map[string]bool{}
+	for i, record := range authority.Authorities {
+		if !portableAuthorities[record.Portable] {
+			return fmt.Errorf("agent_authority portable authority %q is unsupported", record.Portable)
+		}
+		if i > 0 && authority.Authorities[i-1].Portable >= record.Portable {
+			return fmt.Errorf("agent_authority authorities must be sorted by portable without duplicates")
+		}
+		if record.Declarations == nil || record.ClaudeTools == nil {
+			return fmt.Errorf("agent_authority declarations and claude_tools are required non-null arrays")
+		}
+		if len(record.Declarations) == 0 {
+			return fmt.Errorf("agent_authority record %q has no declarations", record.Portable)
+		}
+		if !sort.StringsAreSorted(record.Declarations) || hasDuplicateStrings(record.Declarations) {
+			return fmt.Errorf("agent_authority declarations must be sorted without duplicates")
+		}
+		for _, declaration := range record.Declarations {
+			portable, exists := expected[declaration]
+			if !exists {
+				return fmt.Errorf("agent_authority declaration %q is dangling or unknown", declaration)
+			}
+			if portable != record.Portable {
+				return fmt.Errorf("agent_authority declaration %q belongs to portable authority %q", declaration, portable)
+			}
+			if seenDeclarations[declaration] {
+				return fmt.Errorf("agent_authority declaration %q is duplicated", declaration)
+			}
+			seenDeclarations[declaration] = true
+		}
+		if !sort.StringsAreSorted(record.ClaudeTools) || hasDuplicateStrings(record.ClaudeTools) {
+			return fmt.Errorf("agent_authority claude_tools must be sorted without duplicates")
+		}
+		switch record.Outcome {
+		case "native", "fallback", "guarded":
+		default:
+			return fmt.Errorf("agent_authority outcome %q is unsupported", record.Outcome)
+		}
+		allowedOutcomes := map[string]map[string]bool{
+			"browser":         {"fallback": true},
+			"subagent":        {"fallback": true},
+			"commit":          {"guarded": true},
+			"deploy":          {"guarded": true},
+			"process":         {"native": true},
+			"package-manager": {"native": true},
+			"filesystem":      {"native": true},
+			"network":         {"native": true, "fallback": true},
+		}
+		if !allowedOutcomes[record.Portable][record.Outcome] {
+			return fmt.Errorf("agent_authority portable authority %q does not allow %s outcome", record.Portable, record.Outcome)
+		}
+		if fallback, exists := declaredFallbacks[record.Portable]; exists && record.Fallback != fallback {
+			return fmt.Errorf("agent_authority portable authority %q fallback must exactly match declared fallback %q", record.Portable, fallback)
+		}
+		for _, tool := range record.ClaudeTools {
+			if !approvedClaudeTools[tool] {
+				return fmt.Errorf("agent_authority Claude tool %q is unsupported", tool)
+			}
+			if !compatibleClaudeTools[record.Portable][tool] {
+				return fmt.Errorf("agent_authority Claude tool %q is incompatible with portable authority %q", tool, record.Portable)
+			}
+		}
+		exactTools := map[string][]string{
+			"network": {"WebFetch", "WebSearch"}, "process": {"Bash"},
+			"package-manager": {"Bash"}, "commit": {"Bash"}, "deploy": {"Bash"},
+			"browser": {}, "subagent": {},
+		}
+		if want, exact := exactTools[record.Portable]; exact {
+			if record.Outcome == "fallback" && record.Portable == "network" {
+				want = []string{}
+			}
+			matches := len(record.ClaudeTools) == len(want)
+			for i := 0; matches && i < len(record.ClaudeTools); i++ {
+				matches = matches && record.ClaudeTools[i] == want[i]
+			}
+			if !matches {
+				return fmt.Errorf("agent_authority portable authority %q requires exact claude_tools %v", record.Portable, want)
+			}
+		}
+		switch record.Outcome {
+		case "native":
+			if len(record.ClaudeTools) == 0 || strings.TrimSpace(record.Fallback) == "" {
+				return fmt.Errorf("agent_authority native outcome requires claude_tools and a nonempty fallback value")
+			}
+		case "fallback":
+			if len(record.ClaudeTools) != 0 || strings.TrimSpace(record.Fallback) == "" || record.Fallback == "none" {
+				return fmt.Errorf("agent_authority fallback outcome requires no claude_tools and a non-none fallback")
+			}
+		case "guarded":
+			if len(record.ClaudeTools) == 0 || record.Fallback != "none" {
+				return fmt.Errorf("agent_authority guarded outcome requires claude_tools and fallback none")
 			}
 		}
 	}
-	for name, pair := range map[string]struct {
-		translations []AuthorityTranslation
-		declared     []string
-	}{"tools": {authority.Tools, tools}, "permissions": {authority.Permissions, permissions}} {
-		if len(pair.translations) != len(pair.declared) {
-			return fmt.Errorf("agent_authority %s must translate every declared portable id", name)
-		}
-		for i := range pair.declared {
-			if pair.translations[i].Portable != pair.declared[i] {
-				return fmt.Errorf("agent_authority %s has a missing or dangling translation", name)
-			}
+	for declaration := range expected {
+		if !seenDeclarations[declaration] {
+			return fmt.Errorf("agent_authority declaration %q is missing", declaration)
 		}
 	}
 	return nil

@@ -5,7 +5,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-declare -a mapping_rows=() mapping_packages=() mapping_tests=() packages=()
+declare -a mapping_rows=() mapping_packages=() mapping_tests=()
+declare -a promotion_rows=() promotion_packages=() promotion_tests=() packages=()
 
 map_row() {
   local row="${1-}" package="${2-}"
@@ -24,6 +25,22 @@ map_row() {
     mapping_packages+=("$package")
     mapping_tests+=("$test")
   done
+  for existing in "${packages[@]-}"; do
+    [[ "$existing" == "$package" ]] && return 0
+  done
+  packages+=("$package")
+}
+
+map_promotion_row() {
+  local row="${1-}" package="${2-}" test="${3-}"
+  if [[ ! "$row" =~ ^ADDY-CLAUDE-PROMOTION-ROW-[0-9]{2}$ || ! "$package" =~ ^\./internal/[A-Za-z0-9_./-]+$ || ! "$test" =~ ^Test[A-Za-z0-9_]+$ || "$#" -ne 3 ]]; then
+    echo "malformed Addy promotion mapping: row=${row:-<empty>} package=${package:-<empty>} test=${test:-<empty>}" >&2
+    return 1
+  fi
+  promotion_rows+=("$row")
+  promotion_packages+=("$package")
+  promotion_tests+=("$test")
+  local existing
   for existing in "${packages[@]-}"; do
     [[ "$existing" == "$package" ]] && return 0
   done
@@ -59,6 +76,24 @@ map_row 24 ./internal/packsync TestCheckRejectsRegistrationWithExistingSourceOrB
 map_row 24 ./internal/tools/syncpacksource TestAddyRegistrationTracerProvesExactEndToEndAdmission
 map_row 24 ./internal/ci TestPackSourceV2RegistrationSemanticAndNullArrayValidation TestSyncWorkflowIsManualPinnedLeastPrivilegeAndPhaseSeparated
 
+# These identities are the immutable Addy 1.1.0 promotion matrix. Their
+# semantics live in internal/addyacceptance; this adapter only provides the
+# stable reverse trace to exact top-level tests.
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-01 ./internal/addyacceptance TestAddyPromotionIndependentInputs
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-02 ./internal/addyacceptance TestAddyPromotionIndependentInputs
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-03 ./internal/addyacceptance TestAddyPromotionIndependentInputs
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-04 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-05 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-06 ./internal/addyacceptance TestAddyPromotionAuthorityFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-07 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-08 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-09 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-10 ./internal/addyacceptance TestAddyPromotionLifecycleFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-11 ./internal/addyacceptance TestAddyPromotionRealHostFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-12 ./internal/addyacceptance TestAddyPromotionRealHostFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-13 ./internal/addyacceptance TestAddyPromotionEvidenceFoundations
+map_promotion_row ADDY-CLAUDE-PROMOTION-ROW-14 ./internal/addyacceptance TestAddyPromotionEvidenceFoundations
+
 rows_for_package() {
   local package="$1" result="" i row
   for ((i = 0; i < ${#mapping_rows[@]}; i++)); do
@@ -86,6 +121,20 @@ tests_for_package() {
     test="${mapping_tests[i]}"
     [[ "|$result|" == *"|$test|"* ]] || result="${result:+$result|}$test"
   done
+  for ((i = 0; i < ${#promotion_tests[@]}; i++)); do
+    [[ "${promotion_packages[i]}" == "$package" ]] || continue
+    test="${promotion_tests[i]}"
+    [[ "|$result|" == *"|$test|"* ]] || result="${result:+$result|}$test"
+  done
+  printf '%s' "$result"
+}
+
+promotion_rows_for_test() {
+  local package="$1" test="$2" result="" i
+  for ((i = 0; i < ${#promotion_rows[@]}; i++)); do
+    [[ "${promotion_packages[i]}" == "$package" && "${promotion_tests[i]}" == "$test" ]] || continue
+    [[ "|$result|" == *"|${promotion_rows[i]}|"* ]] || result="${result:+$result|}${promotion_rows[i]}"
+  done
   printf '%s' "$result"
 }
 
@@ -103,7 +152,13 @@ for package in "${packages[@]}"; do
   tests="$(tests_for_package "$package")"
   while IFS= read -r test; do
     grep -Fxq "$test" <<<"$available" && continue
-    echo "Addy acceptance mapping references missing exact test $package/$test (rows $(rows_for_test "$package" "$test"))" >&2
+    rows="$(rows_for_test "$package" "$test")"
+    promotion="$(promotion_rows_for_test "$package" "$test")"
+    if [[ -n "$rows" ]]; then
+      echo "Addy acceptance mapping references missing exact test $package/$test (rows $rows)" >&2
+    else
+      echo "Addy promotion mapping references missing exact test $package/$test (promotion ${promotion//|/, })" >&2
+    fi
     validation_failed=1
   done < <(tr '|' '\n' <<<"$tests")
 done
@@ -121,7 +176,13 @@ for package in "${packages[@]}"; do
   failed_tests="$(printf '%s\n' "$output" | sed -n 's/^--- FAIL: \(Test[A-Za-z0-9_]*\) .*/\1/p' | sort -u)"
   if [[ -n "$failed_tests" ]]; then
     while IFS= read -r test; do
-      echo "Addy acceptance test failed: $package/$test (rows $(rows_for_test "$package" "$test"))" >&2
+      rows="$(rows_for_test "$package" "$test")"
+      promotion="$(promotion_rows_for_test "$package" "$test")"
+      if [[ -n "$rows" ]]; then
+        echo "Addy acceptance test failed: $package/$test (rows $rows)" >&2
+      else
+        echo "Addy promotion test failed: $package/$test (promotion ${promotion//|/, })" >&2
+      fi
     done <<<"$failed_tests"
   else
     echo "Addy acceptance package execution failed for $package (rows $(rows_for_package "$package"))" >&2

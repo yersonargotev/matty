@@ -57,9 +57,17 @@ func TestClaudeCommandAndAgentRenderingCarryNativeContracts(t *testing.T) {
 		t.Fatal(got)
 	}
 	agent := capabilitypack.Resource{ID: "reviewer", Description: "Review changes"}
-	authority := capabilitypack.AgentAuthority{Tools: []capabilitypack.AuthorityTranslation{{Portable: "shell", Claude: "Bash"}}, Permissions: []capabilitypack.AuthorityTranslation{{Portable: "write", Claude: "Edit"}}}
+	authority := capabilitypack.AgentAuthority{PermissionMode: "default", Authorities: []capabilitypack.AuthorityRecord{
+		{Portable: "filesystem", Declarations: []string{"permission:filesystem"}, Outcome: "guarded", ClaudeTools: []string{"Edit", "Read"}, Fallback: "none"},
+		{Portable: "process", Declarations: []string{"tool:process"}, Outcome: "native", ClaudeTools: []string{"Bash"}, Fallback: "none"},
+	}}
 	got := claudeAgentDocument(agent, "aliased-reviewer", authority, []byte("Review."))
-	if !strings.Contains(got, "name: aliased-reviewer") || !strings.Contains(got, "tools: Bash") || !strings.Contains(got, "shell=Bash") || !strings.Contains(got, "write=Edit") || strings.Contains(got, "\npermissions:") {
+	if !strings.Contains(got, "name: aliased-reviewer") ||
+		!strings.Contains(got, "permissionMode: default") ||
+		!strings.Contains(got, "tools: Bash, Edit, Read") ||
+		!strings.Contains(got, "- filesystem: declarations=[permission:filesystem]; outcome=guarded; claude_tools=[Edit, Read]; fallback=none") ||
+		!strings.Contains(got, "- process: declarations=[tool:process]; outcome=native; claude_tools=[Bash]; fallback=none") ||
+		strings.Contains(got, "\npermissions:") {
 		t.Fatal(got)
 	}
 }
