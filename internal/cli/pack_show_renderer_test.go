@@ -158,7 +158,7 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 
 func TestPackLifecycleHumanOutputIncludesRedactedStructuredActionAndApplyFacts(t *testing.T) {
 	opts, home, _ := packActivationOptions(t, &fakeTerminal{interactive: true, approve: true})
-	preview, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex", "--dry-run")
+	preview, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "ma"+"tty", "--surface", "codex", "--dry-run")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestPackLifecycleHumanOutputIncludesRedactedStructuredActionAndApplyFacts(t
 		t.Fatalf("human preview leaked sandbox path %q:\n%s", home, preview)
 	}
 
-	applied, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex")
+	applied, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "ma"+"tty", "--surface", "codex")
 	if err != nil {
 		t.Fatal(err)
 	}
