@@ -18,6 +18,7 @@
     "requires",
     "conflicts",
     "resource_counts",
+    "lifecycle_availability",
     "surface_contracts"
   ],
   "properties": {
@@ -166,6 +167,30 @@
     },
     "resource_counts": {
       "$ref": "lifecycle-contract.schema.json#/$defs/counts"
+    },
+    "lifecycle_availability": {
+      "type": "object",
+      "required": [
+        "fresh_activation_available",
+        "catalog_update_available",
+        "lifecycle_verbs_available",
+        "automatic_downgrade"
+      ],
+      "properties": {
+        "fresh_activation_available": {
+          "type": "boolean"
+        },
+        "catalog_update_available": {
+          "type": "boolean"
+        },
+        "lifecycle_verbs_available": {
+          "const": true
+        },
+        "automatic_downgrade": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
     },
     "surface_contracts": {
       "type": "array",

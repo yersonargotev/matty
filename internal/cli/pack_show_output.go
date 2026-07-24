@@ -30,6 +30,13 @@ type packShowIntentJSON struct {
 	Aliases  []capabilitypack.SurfaceAlias `json:"aliases"`
 }
 
+type packShowLifecycleAvailabilityJSON struct {
+	FreshActivationAvailable bool `json:"fresh_activation_available"`
+	CatalogUpdateAvailable   bool `json:"catalog_update_available"`
+	LifecycleVerbsAvailable  bool `json:"lifecycle_verbs_available"`
+	AutomaticDowngrade       bool `json:"automatic_downgrade"`
+}
+
 type packShowSurfaceJSON struct {
 	Surface  capabilitypack.Surface           `json:"surface"`
 	Contract capabilitypack.LifecycleContract `json:"contract"`
@@ -42,21 +49,22 @@ type packShowRequirementsJSON struct {
 }
 
 type packShowJSON struct {
-	SchemaVersion      int                           `json:"schema_version"`
-	Report             string                        `json:"report"`
-	CatalogState       string                        `json:"catalog_state"`
-	ID                 string                        `json:"id"`
-	Version            string                        `json:"version"`
-	Description        string                        `json:"description"`
-	SourceIdentity     packShowSourceIdentityJSON    `json:"source_identity"`
-	HistoricalVersions []string                      `json:"historical_versions"`
-	UpdateRoutes       []packShowRouteJSON           `json:"update_routes"`
-	Surfaces           []capabilitypack.Surface      `json:"surfaces"`
-	Provides           []string                      `json:"provides"`
-	Requires           packShowRequirementsJSON      `json:"requires"`
-	Conflicts          []string                      `json:"conflicts"`
-	ResourceCounts     capabilitypack.ResourceCounts `json:"resource_counts"`
-	SurfaceContracts   []packShowSurfaceJSON         `json:"surface_contracts"`
+	SchemaVersion         int                               `json:"schema_version"`
+	Report                string                            `json:"report"`
+	CatalogState          string                            `json:"catalog_state"`
+	ID                    string                            `json:"id"`
+	Version               string                            `json:"version"`
+	Description           string                            `json:"description"`
+	SourceIdentity        packShowSourceIdentityJSON        `json:"source_identity"`
+	HistoricalVersions    []string                          `json:"historical_versions"`
+	UpdateRoutes          []packShowRouteJSON               `json:"update_routes"`
+	Surfaces              []capabilitypack.Surface          `json:"surfaces"`
+	Provides              []string                          `json:"provides"`
+	Requires              packShowRequirementsJSON          `json:"requires"`
+	Conflicts             []string                          `json:"conflicts"`
+	ResourceCounts        capabilitypack.ResourceCounts     `json:"resource_counts"`
+	LifecycleAvailability packShowLifecycleAvailabilityJSON `json:"lifecycle_availability"`
+	SurfaceContracts      []packShowSurfaceJSON             `json:"surface_contracts"`
 }
 
 func packShowDocument(report capabilitypack.ShowReport) packShowJSON {
@@ -92,7 +100,14 @@ func packShowDocument(report capabilitypack.ShowReport) packShowJSON {
 		Requires: packShowRequirementsJSON{
 			Capabilities: sortedStrings(pack.Requires.Capabilities), Tools: sortedStrings(pack.Requires.Tools),
 		},
-		Conflicts: sortedStrings(pack.Conflicts), ResourceCounts: report.ResourceCounts, SurfaceContracts: contracts,
+		Conflicts: sortedStrings(pack.Conflicts), ResourceCounts: report.ResourceCounts,
+		LifecycleAvailability: packShowLifecycleAvailabilityJSON{
+			FreshActivationAvailable: report.LifecycleAvailability.FreshActivationAvailable,
+			CatalogUpdateAvailable:   report.LifecycleAvailability.CatalogUpdateAvailable,
+			LifecycleVerbsAvailable:  report.LifecycleAvailability.LifecycleVerbsAvailable,
+			AutomaticDowngrade:       report.LifecycleAvailability.AutomaticDowngrade,
+		},
+		SurfaceContracts: contracts,
 	}
 }
 
@@ -112,7 +127,7 @@ func renderPackShowJSON(w io.Writer, report capabilitypack.ShowReport) error {
 func renderPackShowHuman(w io.Writer, report capabilitypack.ShowReport) error {
 	document := packShowDocument(report)
 	if _, err := fmt.Fprintf(w,
-		"%s %s\nCatalog state: %s\nDescription: %s\nSource identity: pack=%s version=%s schema=%d\nSource limitation: %s\nHistorical versions: %s\nSupported CLI surfaces: %s\nProvides capabilities: %s\nRequires capabilities: %s\nRequires global tools: %s\nConflicts with capabilities: %s\nResources: %d skill, %d instruction, %d mcp_server, %d lifecycle, %d agent, %d command, %d asset, %d notice\n",
+		"%s %s\nCatalog state: %s\nDescription: %s\nSource identity: pack=%s version=%s schema=%d\nSource limitation: %s\nHistorical versions: %s\nSupported CLI surfaces: %s\nProvides capabilities: %s\nRequires capabilities: %s\nRequires global tools: %s\nConflicts with capabilities: %s\nResources: %d skill, %d instruction, %d mcp_server, %d lifecycle, %d agent, %d command, %d asset, %d notice\nLifecycle availability: fresh_activation=%s catalog_update=%s lifecycle_verbs=%s automatic_downgrade=%s\n",
 		document.ID, document.Version, document.CatalogState, document.Description,
 		document.SourceIdentity.PackID, document.SourceIdentity.Version, document.SourceIdentity.SchemaVersion,
 		document.SourceIdentity.Limitation, joinOrNone(document.HistoricalVersions), joinSurfaces(document.Surfaces),
@@ -120,6 +135,8 @@ func renderPackShowHuman(w io.Writer, report capabilitypack.ShowReport) error {
 		joinOrNone(document.Conflicts), document.ResourceCounts.Skills, document.ResourceCounts.Instructions,
 		document.ResourceCounts.MCPServers, document.ResourceCounts.Lifecycles, document.ResourceCounts.Agents,
 		document.ResourceCounts.Commands, document.ResourceCounts.Assets, document.ResourceCounts.Notices,
+		yesNo(document.LifecycleAvailability.FreshActivationAvailable), yesNo(document.LifecycleAvailability.CatalogUpdateAvailable),
+		yesNo(document.LifecycleAvailability.LifecycleVerbsAvailable), yesNo(document.LifecycleAvailability.AutomaticDowngrade),
 	); err != nil {
 		return err
 	}

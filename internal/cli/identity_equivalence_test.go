@@ -272,6 +272,8 @@ func normalizeIdentityEvidence(value, product string, roots map[string]string) s
 	// preserves unobserved readiness as unknown. These are post-cutover product
 	// changes, not identity-cutover regressions covered by this frozen baseline.
 	value = regexp.MustCompile(`(?m)^(Binding|Exclusion|Optional mode|Invocation-time prompt authority|Activation grants only|Projection:|Expected readiness:|Observed evidence:|Pending evidence:|Contract diff:|Migration:)[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^(Phase approval required|Apply result facts):[^\n]*\n`).ReplaceAllString(value, "")
+	value = regexp.MustCompile(`(?m)^\s+Action facts:[^\n]*\n`).ReplaceAllString(value, "")
 	value = strings.ReplaceAll(value, "authorized=unknown, usable=unknown", "authorized=no, usable=no")
 	value = strings.ReplaceAll(value, "authorized=yes, usable=unknown", "authorized=yes, usable=no")
 	value = strings.ReplaceAll(value, "authorized=no, usable=unknown", "authorized=no, usable=no")
@@ -356,6 +358,7 @@ func normalizeSliceFJSONTranscript(transcript *identityEquivalenceTranscript) {
 			// baseline predates this output hardening, so compare the remaining
 			// behavioral facts without either absolute or portable targets.
 			transcript.Scenarios[i].Output = regexp.MustCompile(` target=[^,;\s]*`).ReplaceAllString(transcript.Scenarios[i].Output, "")
+			transcript.Scenarios[i].Output = regexp.MustCompile(`(?:\$HOME|\$XDG|\$REPOSITORY|<host-path>)/[^,;\s]+`).ReplaceAllString(transcript.Scenarios[i].Output, "<portable-path>")
 			continue
 		}
 		removeSliceFJSONFields(document)

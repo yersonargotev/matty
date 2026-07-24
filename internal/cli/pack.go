@@ -16,7 +16,6 @@ import (
 	"github.com/yersonargotev/packy/internal/codex"
 	"github.com/yersonargotev/packy/internal/engrambin"
 	"github.com/yersonargotev/packy/internal/opencode"
-	"github.com/yersonargotev/packy/internal/reportredaction"
 	"github.com/yersonargotev/packy/internal/skillbundle"
 	"github.com/yersonargotev/packy/internal/workstation"
 )
@@ -196,6 +195,9 @@ func applyPackPlan(cmd *cobra.Command, opts Options, facade capabilitypack.Facad
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(capabilitypack.JSONApplyResultFor(plan, result))
 	}
 	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Verified plan %s: %d %s projections owned by %s\n", result.PlanID, result.Projections, surfaceName(plan.Surface()), plan.Pack().ID); err != nil {
+		return err
+	}
+	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Apply result facts: verified=%s projections=%d\n", yesNo(result.Verified), result.Projections); err != nil {
 		return err
 	}
 	if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Readiness: configured=%s, authorized=%s, usable=%s\n", readinessValue(result.ReadinessObserved.Configured, result.Readiness.Configured), readinessValue(result.ReadinessObserved.Authorization, result.Readiness.Authorized), readinessValue(result.ReadinessObserved.Usability, result.Readiness.Usable)); err != nil {
@@ -496,16 +498,23 @@ func renderActivationPlan(cmd *cobra.Command, plan capabilitypack.Reconciliation
 			return err
 		}
 	}
-	for _, phase := range plan.Phases() {
+	for _, phase := range structured.Phases {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Phase: %s (%s)\n", phase.Kind, phase.Digest); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Phase approval required: %s\n", yesNo(phase.ApprovalRequired)); err != nil {
+			return err
+		}
 		for _, action := range phase.Actions {
-			description := action.Description
-			if action.Kind == capabilitypack.ActionExternalCommand {
-				description = "run: " + strings.Join(append([]string{action.Command}, reportredaction.EnvironmentArguments(action.Args)...), " ") + " (" + action.Description + ")"
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", action.Description); err != nil {
+				return err
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", description); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"    Action facts: id=%s kind=%s consent=%s source=%s target=%s command=%s args=%s mode=%s adapter_provenance=%s\n",
+				action.ID, factOrNone(string(action.Kind)), factOrNone(string(action.Consent)), factOrNone(action.Source),
+				factOrNone(action.Target), factOrNone(action.Command), joinFacts(action.Args), factOrNone(string(action.Mode)),
+				factOrNone(action.AdapterProvenance),
+			); err != nil {
 				return err
 			}
 		}
@@ -566,6 +575,13 @@ func joinFacts(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ", ")
+}
+
+func factOrNone(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return value
 }
 
 type runnerExternalExecutor struct{ runner Runner }
@@ -646,7 +662,7 @@ func renderPackStatusDetail(cmd *cobra.Command, entry capabilitypack.StatusEntry
 		}
 	}
 	for _, projection := range entry.ProjectionDetails {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s owner=%s health=%s contributors=%s\n", projection.ID, projection.Owner, projection.Health, joinFacts(projection.Contributors)); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Projection: %s target=%s owner=%s health=%s observed=%s desired=%s contributors=%s\n", projection.ID, projection.Target, projection.Owner, projection.Health, projection.ObservedFingerprint, projection.DesiredFingerprint, joinFacts(projection.Contributors)); err != nil {
 			return err
 		}
 	}

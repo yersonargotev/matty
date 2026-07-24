@@ -23,6 +23,11 @@ func TestPackStatusDetailRendersOrderedOptionalAuthorityFacts(t *testing.T) {
 			{ModeID: "browser-network", Authority: "network", State: capabilitypack.OptionalAuthorityAvailable, Fallback: "static evidence-only analysis"},
 			{ModeID: "browser-network", Authority: "browser", State: capabilitypack.OptionalAuthorityUnknown, Fallback: "static evidence-only analysis"},
 		},
+		ProjectionDetails: []capabilitypack.ProjectionStatus{{
+			ID: "agent:reviewer", Target: "<host-path>/reviewer.md", Owner: "packy",
+			Health: capabilitypack.ProjectionVerified, ObservedFingerprint: "sha256:observed",
+			DesiredFingerprint: "sha256:desired", Contributors: []string{"addy"},
+		}},
 	}
 	if err := renderPackStatusDetail(cmd, entry); err != nil {
 		t.Fatal(err)
@@ -36,6 +41,9 @@ func TestPackStatusDetailRendersOrderedOptionalAuthorityFacts(t *testing.T) {
 	}
 	if !strings.Contains(got, "Readiness: configured=unknown, authorized=unknown, usable=unknown") {
 		t.Fatalf("optional authority facts changed readiness rendering:\n%s", got)
+	}
+	if !strings.Contains(got, "Projection: agent:reviewer target=<host-path>/reviewer.md owner=packy health=verified observed=sha256:observed desired=sha256:desired contributors=addy") {
+		t.Fatalf("human status omitted structured projection facts:\n%s", got)
 	}
 }
 
@@ -76,6 +84,9 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 			Limitation: "Upstream provenance is unavailable.",
 		},
 		ResourceCounts: counts,
+		LifecycleAvailability: capabilitypack.ShowLifecycleAvailability{
+			LifecycleVerbsAvailable: true,
+		},
 		Surfaces: []capabilitypack.ShowSurfaceReport{{
 			Surface: capabilitypack.SurfaceClaude, Contract: contract,
 			Intent: capabilitypack.ShowIntent{
@@ -108,6 +119,7 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 		document.SurfaceContracts[0].Intent.Active == nil ||
 		!*document.SurfaceContracts[0].Intent.Active ||
 		len(document.SurfaceContracts[0].Intent.Aliases) != 1 ||
+		document.LifecycleAvailability != (packShowLifecycleAvailabilityJSON{LifecycleVerbsAvailable: true}) ||
 		document.ResourceCounts != counts {
 		t.Fatalf("structured show facts = %#v", document)
 	}
@@ -123,6 +135,7 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 		"Historical versions: 1.0.0, 1.1.0",
 		"Update route: 1.0.0 -> 1.1.0 on codex, opencode",
 		"Resources: 24 skill, 0 instruction, 0 mcp_server, 0 lifecycle, 4 agent, 8 command, 7 asset, 1 notice",
+		"Lifecycle availability: fresh_activation=no catalog_update=no lifecycle_verbs=yes automatic_downgrade=no",
 		"Dependency closure: skill:using-agent-skills",
 		"Optional mode: browser-network — browser, network; fallback=static evidence",
 		"Contract aliases: agent:reviewer=addy-reviewer",
@@ -140,5 +153,29 @@ func TestPackShowRenderersExposeTheSameWithdrawnHistoryRouteAndIntentFacts(t *te
 	}
 	if repeated.String() != structured.String() {
 		t.Fatalf("structured show is nondeterministic:\nfirst=%s\nsecond=%s", structured.String(), repeated.String())
+	}
+}
+
+func TestPackLifecycleHumanOutputIncludesRedactedStructuredActionAndApplyFacts(t *testing.T) {
+	opts, home, _ := packActivationOptions(t, &fakeTerminal{interactive: true, approve: true})
+	preview, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fact := range []string{"Phase approval required: yes", "Action facts: id=", "target=<host-path>/", "adapter_provenance="} {
+		if !strings.Contains(preview, fact) {
+			t.Fatalf("human preview omitted %q:\n%s", fact, preview)
+		}
+	}
+	if strings.Contains(preview, home) {
+		t.Fatalf("human preview leaked sandbox path %q:\n%s", home, preview)
+	}
+
+	applied, err := executeCommand(t, NewRootCommand(opts), "pack", "activate", "matty", "--surface", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(applied, "Apply result facts: verified=yes projections=25") {
+		t.Fatalf("human apply omitted structured result facts:\n%s", applied)
 	}
 }

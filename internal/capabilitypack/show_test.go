@@ -97,6 +97,9 @@ func TestFacadeShowReturnsDetachedCanonicalCatalogContractsAndIntents(t *testing
 	if first.ResourceCounts.Skills != 1 {
 		t.Fatalf("resource counts = %#v", first.ResourceCounts)
 	}
+	if first.LifecycleAvailability != (ShowLifecycleAvailability{LifecycleVerbsAvailable: true}) {
+		t.Fatalf("withdrawn lifecycle availability = %#v", first.LifecycleAvailability)
+	}
 	wantSurfaces := []Surface{SurfaceClaude, SurfaceCodex, SurfaceOpenCode}
 	for i, surface := range wantSurfaces {
 		if first.Surfaces[i].Surface != surface {

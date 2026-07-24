@@ -37,10 +37,20 @@ type ShowSurfaceReport struct {
 
 // ShowReport is the detached domain result used by pack show renderers.
 type ShowReport struct {
-	Detail         CatalogDetail
-	SourceIdentity PackSourceIdentity
-	ResourceCounts ResourceCounts
-	Surfaces       []ShowSurfaceReport
+	Detail                CatalogDetail
+	SourceIdentity        PackSourceIdentity
+	ResourceCounts        ResourceCounts
+	LifecycleAvailability ShowLifecycleAvailability
+	Surfaces              []ShowSurfaceReport
+}
+
+// ShowLifecycleAvailability makes withdrawal remediation explicit without
+// conflating catalog selection with lifecycle access for existing intents.
+type ShowLifecycleAvailability struct {
+	FreshActivationAvailable bool
+	CatalogUpdateAvailable   bool
+	LifecycleVerbsAvailable  bool
+	AutomaticDowngrade       bool
 }
 
 // Show returns catalog metadata, portable per-surface contracts, and durable
@@ -70,7 +80,13 @@ func (f Facade) show(ctx context.Context, id string) (ShowReport, error) {
 			Limitation:    packSourceIdentityLimitation,
 		},
 		ResourceCounts: pack.ResourceCounts(),
-		Surfaces:       make([]ShowSurfaceReport, 0, len(pack.Surfaces)),
+		LifecycleAvailability: ShowLifecycleAvailability{
+			FreshActivationAvailable: !detail.Withdrawn,
+			CatalogUpdateAvailable:   !detail.Withdrawn && len(detail.UpdateRoutes) > 0,
+			LifecycleVerbsAvailable:  true,
+			AutomaticDowngrade:       false,
+		},
+		Surfaces: make([]ShowSurfaceReport, 0, len(pack.Surfaces)),
 	}
 	surfaces := append([]Surface(nil), pack.Surfaces...)
 	sort.Slice(surfaces, func(i, j int) bool { return surfaces[i] < surfaces[j] })

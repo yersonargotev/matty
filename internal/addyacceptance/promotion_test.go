@@ -21,7 +21,7 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := digest(before); got != "4f5e42be89e9c121c48abdbb77b1312d881f1207887119d50c252c316a1ff02f" || len(before) != 54507 {
+	if got := digest(before); got != "7a76993b3f2ea9106050e8b5250d0e71773683dd71ba416548e413127c85c892" || len(before) != 55268 {
 		t.Fatalf("original Addy 1.0.0 oracle changed: sha256=%s bytes=%d", got, len(before))
 	}
 	first, second := CanonicalPromotionHistory(), CanonicalPromotionHistory()
@@ -72,6 +72,15 @@ func TestAddyPromotionIndependentInputs(t *testing.T) {
 
 func TestCanonicalPromotionCurrentIsDetachedAndWritesExactSnapshot(t *testing.T) {
 	current := CanonicalPromotionCurrent()
+	var registered ImmutableVersionFixture
+	for _, version := range CanonicalPromotionHistory().Versions {
+		if version.Version == "1.1.0" {
+			registered = version
+		}
+	}
+	if !reflect.DeepEqual(current, registered) {
+		t.Fatal("current adapter fixture diverges from the exact registered 1.1.0 artifact")
+	}
 	if current.Version != "1.1.0" || current.SchemaVersion != 3 ||
 		!reflect.DeepEqual(current.Surfaces, []string{"claude", "codex", "opencode"}) {
 		t.Fatalf("current promotion fixture = %#v", current)

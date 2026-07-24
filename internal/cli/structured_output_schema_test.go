@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,9 @@ func TestStructuredOutputV2SchemasValidateFixturesAndProducers(t *testing.T) {
 		}
 		if err := validateStructuredOutput(t, root, schemaName, fixture); err != nil {
 			t.Fatalf("fixture %s: %v", fixtureName, err)
+		}
+		if err := validateCanonicalOperatorOrder(fixture); err != nil {
+			t.Fatalf("fixture %s canonical order: %v", fixtureName, err)
 		}
 		for _, forbidden := range []string{"TOKEN=", "SECRET=", "/Users/", "foreign-document", "mixed-store"} {
 			if strings.Contains(string(fixture), forbidden) {
@@ -176,6 +180,69 @@ func TestPackOperatorSchemasRejectCanonicalNegativeTwins(t *testing.T) {
 		detail["target"] = "/Users/operator/.claude/skills/example"
 		reject(t, "pack-status.schema.json", document)
 	})
+	t.Run("nondeterministic order", func(t *testing.T) {
+		document := load(t, "pack-show.json")
+		surfaces := document["surfaces"].([]any)
+		surfaces[0], surfaces[1] = surfaces[1], surfaces[0]
+		encoded, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCanonicalOperatorOrder(encoded); err == nil {
+			t.Fatalf("out-of-order canonical facts passed: %s", encoded)
+		}
+	})
+}
+
+func validateCanonicalOperatorOrder(instance []byte) error {
+	var document map[string]any
+	if err := json.Unmarshal(instance, &document); err != nil {
+		return err
+	}
+	requireOrdered := func(name string, values []any, key func(any) string) error {
+		for i := 1; i < len(values); i++ {
+			if key(values[i-1]) > key(values[i]) {
+				return fmt.Errorf("%s is not canonically ordered", name)
+			}
+		}
+		return nil
+	}
+	stringKey := func(value any) string { text, _ := value.(string); return text }
+	switch document["report"] {
+	case "pack-show":
+		if err := requireOrdered("surfaces", document["surfaces"].([]any), stringKey); err != nil {
+			return err
+		}
+		contracts := document["surface_contracts"].([]any)
+		return requireOrdered("surface_contracts", contracts, func(value any) string {
+			surface, _ := value.(map[string]any)["surface"].(string)
+			return surface
+		})
+	case "pack-status", "pack-status-overview":
+		entries := document["entries"].([]any)
+		if err := requireOrdered("entries", entries, func(value any) string {
+			entry := value.(map[string]any)
+			return fmt.Sprint(entry["pack"], "\x00", entry["surface"])
+		}); err != nil {
+			return err
+		}
+		for _, value := range entries {
+			entry := value.(map[string]any)
+			if err := requireOrdered("projection_details", entry["projection_details"].([]any), func(value any) string {
+				id, _ := value.(map[string]any)["id"].(string)
+				return id
+			}); err != nil {
+				return err
+			}
+			if err := requireOrdered("optional_authorities", entry["optional_authorities"].([]any), func(value any) string {
+				authority := value.(map[string]any)
+				return fmt.Sprint(authority["mode_id"], "\x00", authority["authority"])
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func assertStructuredOutput(t *testing.T, root, schemaName, document string) {
