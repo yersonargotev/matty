@@ -414,6 +414,8 @@ async function main() {
       "dist/application/child-pi-runtime.js",
       "dist/application/explorer-delegation.d.ts",
       "dist/application/explorer-delegation.js",
+      "dist/application/inspection-role-delegation.d.ts",
+      "dist/application/inspection-role-delegation.js",
       "dist/application/register-matty.d.ts",
       "dist/application/register-matty.js",
       "dist/domain/capability-contract.d.ts",

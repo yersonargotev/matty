@@ -13,12 +13,17 @@ import {
   MATTY_RULES_END,
   MATTY_RULES_START,
 } from "../src/domain/matty-rules.ts";
+import { INSPECTION_TOOLS } from "../src/domain/capability-contract.ts";
 
 function createExtensionHarness() {
   const handlers = new Map<string, Array<(...args: never[]) => unknown>>();
   const tools: Array<{
     name: string;
     promptGuidelines?: string[];
+    parameters?: {
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
     execute?: (...args: never[]) => Promise<{
       details?: unknown;
     }>;
@@ -33,6 +38,10 @@ function createExtensionHarness() {
     registerTool(tool: {
       name: string;
       promptGuidelines?: string[];
+      parameters?: {
+        required?: string[];
+        properties?: Record<string, unknown>;
+      };
       execute?: (...args: never[]) => Promise<{ details?: unknown }>;
     }) {
       tools.push(tool);
@@ -45,7 +54,7 @@ function createExtensionHarness() {
   return { pi, handlers, tools, commands };
 }
 
-test("parent registration injects one rules block and exposes one explorer tool", async () => {
+test("parent registration exposes explicit inspection roles", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {});
 
@@ -60,8 +69,9 @@ test("parent registration injects one rules block and exposes one explorer tool"
   assert.deepEqual(harness.tools.map((tool) => tool.name), ["subagent"]);
   assert.match(
     harness.tools[0]?.promptGuidelines?.join("\n") ?? "",
-    /\{"task": string\}/,
+    /\{"role": "explorer"\|"designer"\|"reviewer", "task": string\}/,
   );
+  assert.deepEqual(harness.tools[0]?.parameters?.required, ["role", "task"]);
   assert.deepEqual(harness.commands, ["matty"]);
 });
 
@@ -94,6 +104,36 @@ test("explorer child registration blocks mutating bash and does not recurse", as
   assert.equal(allowed, undefined);
 });
 
+test("designer blocks gh while reviewer allows read-only gh and blocks mutation", async () => {
+  const designer = createExtensionHarness();
+  registerPiMatty(designer.pi, { MATTY_CHILD_ROLE: "designer" });
+  const designerGuard = designer.handlers.get("tool_call")?.[0];
+  assert.ok(designerGuard);
+  assert.ok(await designerGuard({
+    type: "tool_call",
+    toolCallId: "call-designer",
+    toolName: "bash",
+    input: { command: "gh issue view 9" },
+  } satisfies ToolCallEvent as never, {} as never));
+
+  const reviewer = createExtensionHarness();
+  registerPiMatty(reviewer.pi, { MATTY_CHILD_ROLE: "reviewer" });
+  const reviewerGuard = reviewer.handlers.get("tool_call")?.[0];
+  assert.ok(reviewerGuard);
+  assert.equal(await reviewerGuard({
+    type: "tool_call",
+    toolCallId: "call-reviewer-view",
+    toolName: "bash",
+    input: { command: "gh issue view 9" },
+  } satisfies ToolCallEvent as never, {} as never), undefined);
+  assert.ok(await reviewerGuard({
+    type: "tool_call",
+    toolCallId: "call-reviewer-comment",
+    toolName: "bash",
+    input: { command: "gh issue comment 9 --body changed" },
+  } satisfies ToolCallEvent as never, {} as never));
+});
+
 test("a direct Matty Rules conflict blocks only delegation with a diagnostic", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {});
@@ -108,7 +148,7 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
   assert.ok(execute);
   const result = await execute(
     "call-1" as never,
-    { task: "Inspect" } as never,
+    { role: "designer", task: "Inspect" } as never,
     undefined as never,
     undefined as never,
     {} as never,
@@ -116,11 +156,13 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
   assert.deepEqual(result.details, {
     contract: {
       schemaVersion: 1,
-      id: "delegate-explorer",
-      role: "explorer",
+      id: "delegate-designer",
+      role: "designer",
       tools: ["read", "grep", "find", "ls", "bash"],
       writeAuthority: "none",
+      mutationPolicy: "inspection-guard",
       web: "absent",
+      github: "absent",
       cardinality: { min: 1, max: 1 },
       concurrency: { maxActive: 1 },
       independence: "required",
@@ -130,7 +172,7 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
       status: "blocked",
       diagnostic: {
         kind: "capability-preflight",
-        contractId: "delegate-explorer",
+        contractId: "delegate-designer",
         unmet: [
           "Matty Rules conflict: project instructions attempt to disable Matty Rules",
         ],
@@ -139,12 +181,16 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
   });
 });
 
-test("the explorer Capability Contract permits only one active invocation", async () => {
+test("each inspection Capability Contract permits only one active invocation", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
     invocation: {
       command: process.execPath,
-      arguments: ["test/fixtures/child-pi-fixture.mjs"],
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
     },
   });
 
@@ -168,7 +214,7 @@ test("the explorer Capability Contract permits only one active invocation", asyn
 
   const first = execute(
     "call-1" as never,
-    { task: "hold" } as never,
+    { role: "explorer", task: "hold" } as never,
     controller.signal as never,
     ((update: { details?: { type?: string } }) => {
       if (update.details?.type === "started") {
@@ -183,7 +229,10 @@ test("the explorer Capability Contract permits only one active invocation", asyn
   try {
     const blocked = await execute(
       "call-2" as never,
-      { task: "Inspect while the first explorer is active" } as never,
+      {
+        role: "explorer",
+        task: "Inspect while the first explorer is active",
+      } as never,
       undefined as never,
       undefined as never,
       context as never,
@@ -206,5 +255,98 @@ test("the explorer Capability Contract permits only one active invocation", asyn
   assert.equal(
     (firstResult.details as { outcome: { status: string } }).outcome.status,
     "cancelled",
+  );
+});
+
+test("reviewer gh preflight blocks before spawning and returns a diagnostic", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+    async reviewerGithubPreflight() {
+      return { available: true, authenticated: false };
+    },
+  });
+
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const result = await execute(
+    "call-reviewer" as never,
+    { role: "reviewer", task: "Review issue 9" } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+
+  assert.deepEqual(
+    (result.details as { outcome: unknown }).outcome,
+    {
+      status: "blocked",
+      diagnostic: {
+        kind: "capability-preflight",
+        contractId: "delegate-reviewer",
+        unmet: ["GitHub CLI authentication is unavailable"],
+      },
+    },
+  );
+});
+
+test("spawn preflight rejects tools outside the selected contract", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        [...INSPECTION_TOOLS, "write"].join(","),
+      ],
+    },
+  });
+
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const result = await execute(
+    "call-designer" as never,
+    { role: "designer", task: "Design" } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+
+  assert.deepEqual(
+    (result.details as { outcome: unknown }).outcome,
+    {
+      status: "blocked",
+      diagnostic: {
+        kind: "capability-preflight",
+        contractId: "delegate-designer",
+        unmet: ["unapproved tool is available: write"],
+      },
+    },
   );
 });

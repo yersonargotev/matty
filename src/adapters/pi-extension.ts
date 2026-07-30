@@ -4,6 +4,8 @@ import {
   type ExtensionContext,
   type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -12,18 +14,22 @@ import {
   type PiThinkingLevel,
 } from "../application/child-pi-runtime.ts";
 import {
-  blockedExplorerDelegation,
-  runExplorerDelegation,
-} from "../application/explorer-delegation.ts";
+  blockedInspectionDelegation,
+  runInspectionDelegation,
+} from "../application/inspection-role-delegation.ts";
 import {
   registerMatty,
   type MattyHost,
 } from "../application/register-matty.ts";
 import {
-  EXPLORER_CAPABILITY_CONTRACT,
-  EXPLORER_TOOLS,
+  INSPECTION_TOOLS,
+  INSPECTION_ROLE_INPUT_GUIDANCE,
+  INSPECTION_ROLES,
+  inspectionCapabilityContract,
+  isInspectionRole,
+  type InspectionRole,
 } from "../domain/capability-contract.ts";
-import { inspectExplorerCommand } from "../domain/inspection-guard.ts";
+import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
 import {
   detectMattyRulesConflict,
   injectMattyRules,
@@ -36,7 +42,13 @@ export interface PiMattyRegistrationOptions {
   invocation?: PiInvocation;
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
+  reviewerGithubPreflight?: () => Promise<{
+    available: boolean;
+    authenticated: boolean;
+  }>;
 }
+
+const execFileAsync = promisify(execFile);
 
 function createPiHost(pi: ExtensionAPI): MattyHost {
   return {
@@ -73,15 +85,33 @@ function currentPiInvocation(): PiInvocation | undefined {
       "-e",
       fileURLToPath(import.meta.url),
       "--tools",
-      EXPLORER_TOOLS.join(","),
+      INSPECTION_TOOLS.join(","),
     ],
   };
+}
+
+function invocationTools(invocation: PiInvocation | undefined): string[] {
+  if (!invocation) {
+    return [];
+  }
+  const arguments_ = invocation.arguments ?? [];
+  const inline = arguments_.find((argument) =>
+    argument.startsWith("--tools=")
+  );
+  if (inline) {
+    return inline.slice("--tools=".length).split(",").filter(Boolean);
+  }
+  const index = arguments_.lastIndexOf("--tools");
+  return index >= 0
+    ? (arguments_[index + 1] ?? "").split(",").filter(Boolean)
+    : [];
 }
 
 function childEnvironment(
   environment: NodeJS.ProcessEnv,
   authenticationEnvironment: Readonly<Record<string, string>> | undefined,
   additions: NodeJS.ProcessEnv | undefined,
+  role: InspectionRole,
 ): NodeJS.ProcessEnv {
   const inheritedNames = [
     "PATH",
@@ -103,8 +133,30 @@ function childEnvironment(
     ...inherited,
     ...authenticationEnvironment,
     ...additions,
-    MATTY_CHILD_ROLE: "explorer",
+    MATTY_CHILD_ROLE: role,
   };
+}
+
+async function reviewerGithubPreflight(
+  environment: NodeJS.ProcessEnv,
+): Promise<{ available: boolean; authenticated: boolean }> {
+  try {
+    await execFileAsync("gh", ["--version"], {
+      env: environment,
+      timeout: 5_000,
+    });
+  } catch {
+    return { available: false, authenticated: false };
+  }
+  try {
+    await execFileAsync("gh", ["auth", "status"], {
+      env: environment,
+      timeout: 5_000,
+    });
+    return { available: true, authenticated: true };
+  } catch {
+    return { available: true, authenticated: false };
+  }
 }
 
 function thinkingLevel(value: string | undefined): PiThinkingLevel {
@@ -121,13 +173,14 @@ function thinkingLevel(value: string | undefined): PiThinkingLevel {
 }
 
 function blockedToolCall(
+  role: InspectionRole,
   event: ToolCallEvent,
 ): { block: true; reason: string } | undefined {
   if (event.toolName === "edit" || event.toolName === "write") {
     return {
       block: true,
       reason:
-        "Inspection Guard blocked recognized filesystem mutation; explorer tools are inspection-only",
+        `Inspection Guard blocked recognized filesystem mutation; ${role} tools are inspection-only`,
     };
   }
   if (event.toolName !== "bash") {
@@ -138,10 +191,10 @@ function blockedToolCall(
     return {
       block: true,
       reason:
-        "Inspection Guard blocked malformed explorer bash input",
+        `Inspection Guard blocked malformed ${role} bash input`,
     };
   }
-  const decision = inspectExplorerCommand(command);
+  const decision = inspectInspectionCommand(role, command);
   return decision.allowed
     ? undefined
     : { block: true, reason: decision.reason };
@@ -152,8 +205,9 @@ export function registerPiMatty(
   environment: NodeJS.ProcessEnv = process.env,
   options: PiMattyRegistrationOptions = {},
 ): void {
-  const childRole =
-    environment.MATTY_CHILD_ROLE === "explorer" ? "explorer" : undefined;
+  const childRole = isInspectionRole(environment.MATTY_CHILD_ROLE)
+    ? environment.MATTY_CHILD_ROLE
+    : undefined;
   let rulesConflict: string | undefined;
   pi.on("before_agent_start", (event) => {
     rulesConflict = detectMattyRulesConflict(event.systemPrompt);
@@ -166,43 +220,51 @@ export function registerPiMatty(
   });
 
   if (childRole) {
-    pi.on("tool_call", (event) => blockedToolCall(event));
+    pi.on("tool_call", (event) => blockedToolCall(childRole, event));
   } else {
-    let activeExplorerInvocations = 0;
+    const activeInvocations = Object.fromEntries(
+      INSPECTION_ROLES.map((role) => [role, 0]),
+    ) as Record<InspectionRole, number>;
     const invocation = options.invocation ?? currentPiInvocation();
     const independentRuntimeAvailable =
       options.independentRuntimeAvailable ?? invocation !== undefined;
     const parameters = {
       type: "object",
       properties: {
+        role: {
+          type: "string",
+          enum: [...INSPECTION_ROLES],
+          description: "The least-privilege inspection role.",
+        },
         task: {
           type: "string",
           minLength: 1,
           description: "One bounded codebase-inspection assignment.",
         },
       },
-      required: ["task"],
+      required: ["role", "task"],
       additionalProperties: false,
     };
 
     pi.registerTool({
       name: "subagent",
-      label: "Explorer",
+      label: "Inspection role",
       description:
-        "Run one independent, inspection-only explorer through the Matty Subagent Runtime.",
+        "Run one independent explorer, designer, or reviewer through the Matty Subagent Runtime.",
       promptSnippet:
-        "Delegate one bounded codebase inspection to an independent explorer.",
+        "Delegate one bounded inspection task to a named Matty Role.",
       promptGuidelines: [
-        'Call subagent with exactly {"task": string}.',
-        "This v1 path runs exactly one independent explorer with read, grep, find, ls, and guarded bash.",
+        `Call subagent with exactly ${INSPECTION_ROLE_INPUT_GUIDANCE}.`,
+        "Each call runs exactly one independent inspection role with read, grep, find, ls, and guarded bash.",
+        "Only reviewer may perform read-only gh inspection after availability and authentication preflight.",
         "Progress and the terminal success, failure, cancellation, or preflight diagnostic are structured.",
-        "The Inspection Guard is best-effort and blocks recognized local and remote mutation.",
+        "The Inspection Guard is a best-effort command policy, not a security sandbox.",
       ],
       parameters: parameters as never,
       executionMode: "parallel",
       async execute(
         _toolCallId: string,
-        params: { task: string },
+        params: { role: InspectionRole; task: string },
         signal: AbortSignal | undefined,
         onUpdate:
           | ((update: {
@@ -212,8 +274,27 @@ export function registerPiMatty(
           | undefined,
         ctx: ExtensionContext,
       ) {
+        if (!isInspectionRole(params.role)) {
+          const terminal = {
+            contract: null,
+            outcome: {
+              status: "blocked" as const,
+              diagnostic: {
+                kind: "capability-preflight" as const,
+                contractId: "delegate-invalid",
+                unmet: ["unsupported inspection role"],
+              },
+            },
+          };
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(terminal) }],
+            details: terminal,
+            isError: true,
+          };
+        }
+        const role = params.role;
         if (rulesConflict) {
-          const terminal = blockedExplorerDelegation([
+          const terminal = blockedInspectionDelegation(role, [
             `Matty Rules conflict: ${rulesConflict}`,
           ]);
           return {
@@ -239,16 +320,22 @@ export function registerPiMatty(
             `parent authentication is unavailable: ${authentication.error}`,
           );
         }
+        const github = role === "reviewer"
+          ? await (
+            options.reviewerGithubPreflight ??
+              (() => reviewerGithubPreflight(environment))
+          )()
+          : { available: false, authenticated: false };
+        const contract = inspectionCapabilityContract(role);
         if (
-          activeExplorerInvocations >=
-            EXPLORER_CAPABILITY_CONTRACT.concurrency.maxActive
+          activeInvocations[role] >= contract.concurrency.maxActive
         ) {
           unmet.push(
-            `explorer concurrency limit reached: ${activeExplorerInvocations} active`,
+            `${role} concurrency limit reached: ${activeInvocations[role]} active`,
           );
         }
         if (unmet.length > 0 || !ctx.model || !invocation) {
-          const terminal = blockedExplorerDelegation(unmet);
+          const terminal = blockedInspectionDelegation(role, unmet);
           return {
             content: [{ type: "text" as const, text: JSON.stringify(terminal) }],
             details: terminal,
@@ -256,15 +343,17 @@ export function registerPiMatty(
           };
         }
 
-        activeExplorerInvocations += 1;
+        activeInvocations[role] += 1;
         try {
-          const terminal = await runExplorerDelegation(
+          const terminal = await runInspectionDelegation(
+            role,
             params.task,
             {
               availability: {
-                availableTools: EXPLORER_TOOLS,
+                availableTools: invocationTools(invocation),
                 independentRuntime: independentRuntimeAvailable,
                 inspectionGuard: true,
+                github,
               },
               createRunner() {
                 return createChildPiRunner({
@@ -283,6 +372,7 @@ export function registerPiMatty(
                         ? authentication.env
                         : undefined,
                       options.childEnvironment,
+                      role,
                     ),
                   },
                 });
@@ -311,7 +401,7 @@ export function registerPiMatty(
             isError: terminal.outcome.status !== "succeeded",
           };
         } finally {
-          activeExplorerInvocations -= 1;
+          activeInvocations[role] -= 1;
         }
       },
     } as never);

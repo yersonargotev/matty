@@ -1,59 +1,30 @@
-import type {
-  DelegatedTaskOutcome,
-  DelegatedTaskProgress,
-  DelegatedTaskRunner,
-} from "./child-pi-runtime.ts";
 import {
-  EXPLORER_CAPABILITY_CONTRACT,
-  createCapabilityPreflightDiagnostic,
-  preflightCapability,
-  type CapabilityAvailability,
-  type CapabilityPreflightDiagnostic,
-  type ExplorerCapabilityContract,
-} from "../domain/capability-contract.ts";
+  blockedInspectionDelegation,
+  runInspectionDelegation,
+  type BlockedInspectionOutcome,
+  type InspectionDelegationExecution,
+  type InspectionDelegationOptions,
+  type InspectionDelegationTerminal,
+} from "./inspection-role-delegation.ts";
+import type { ExplorerCapabilityContract } from "../domain/capability-contract.ts";
 
-export interface ExplorerDelegationExecution {
-  availability: CapabilityAvailability;
-  createRunner(): DelegatedTaskRunner;
-}
-
-export interface ExplorerDelegationOptions {
-  signal?: AbortSignal;
-  onProgress?: (progress: DelegatedTaskProgress) => void;
-}
-
-export interface BlockedExplorerOutcome {
-  status: "blocked";
-  diagnostic: CapabilityPreflightDiagnostic;
-}
-
-export interface ExplorerDelegationTerminal {
+export type ExplorerDelegationExecution = InspectionDelegationExecution;
+export type ExplorerDelegationOptions = InspectionDelegationOptions;
+export type BlockedExplorerOutcome = BlockedInspectionOutcome;
+export type ExplorerDelegationTerminal = Omit<
+  InspectionDelegationTerminal,
+  "contract"
+> & {
   contract: ExplorerCapabilityContract;
-  outcome: DelegatedTaskOutcome | BlockedExplorerOutcome;
-}
+};
 
 export function blockedExplorerDelegation(
   unmet: string[],
 ): ExplorerDelegationTerminal {
-  return {
-    contract: EXPLORER_CAPABILITY_CONTRACT,
-    outcome: {
-      status: "blocked",
-      diagnostic: createCapabilityPreflightDiagnostic(
-        EXPLORER_CAPABILITY_CONTRACT.id,
-        unmet,
-      ),
-    },
-  };
-}
-
-function explorerTask(task: string): string {
-  return [
-    "Explorer assignment:",
-    task.trim(),
-    "",
-    "Inspect only. Use read, grep, find, ls, or guarded bash for local Git, CodeGraph, shell, and diagnostics. Do not mutate local or remote state. Return concise evidence to the parent.",
-  ].join("\n");
+  return blockedInspectionDelegation(
+    "explorer",
+    unmet,
+  ) as ExplorerDelegationTerminal;
 }
 
 export async function runExplorerDelegation(
@@ -61,18 +32,10 @@ export async function runExplorerDelegation(
   execution: ExplorerDelegationExecution,
   options: ExplorerDelegationOptions = {},
 ): Promise<ExplorerDelegationTerminal> {
-  const preflight = preflightCapability(
-    EXPLORER_CAPABILITY_CONTRACT,
-    execution.availability,
-  );
-  if (!preflight.ok) {
-    return blockedExplorerDelegation(preflight.diagnostic.unmet);
-  }
-
-  const runner = execution.createRunner();
-  const outcome = await runner.run(explorerTask(task), options);
-  return {
-    contract: preflight.contract,
-    outcome,
-  };
+  return await runInspectionDelegation(
+    "explorer",
+    task,
+    execution,
+    options,
+  ) as ExplorerDelegationTerminal;
 }

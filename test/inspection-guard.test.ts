@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   inspectExplorerCommand,
+  inspectInspectionCommand,
   type InspectionMutationClass,
 } from "../src/domain/inspection-guard.ts";
 
@@ -60,5 +61,49 @@ test("recognizes mutation commands after pipes and shell separators", () => {
     "git diff --output=changed.patch",
   ]) {
     assert.equal(inspectExplorerCommand(command).allowed, false, command);
+  }
+});
+
+test("allows reviewer read-only gh inspection after role preflight", () => {
+  for (const command of [
+    "gh auth status",
+    "gh issue view 9 --comments",
+    "gh pr diff 42",
+    "gh api repos/yersonargotev/matty/issues/9",
+  ]) {
+    assert.deepEqual(inspectInspectionCommand("reviewer", command), {
+      allowed: true,
+    });
+  }
+});
+
+test("blocks gh for designer and recognized GitHub mutations for reviewer", () => {
+  assert.equal(
+    inspectInspectionCommand("designer", "gh issue view 9").allowed,
+    false,
+  );
+  for (const command of [
+    "gh issue create --title changed",
+    "gh issue comment 9 --body changed",
+    "gh pr merge 42",
+    "gh api --method POST repos/yersonargotev/matty/issues/9/comments",
+    "gh api -X PATCH repos/yersonargotev/matty/issues/9",
+    "gh api -XPOST repos/yersonargotev/matty/issues",
+    "gh api -Ftitle=changed repos/yersonargotev/matty/issues",
+    "gh repo delete yersonargotev/matty",
+    "gh auth login",
+    "gh auth token",
+    "gh extension install owner/extension",
+    "gh codespace create",
+    "gh cache delete 123",
+    "gh repo set-default owner/repo",
+    "gh ssh-key add key.pub",
+    "gh made-up inspect",
+  ]) {
+    const result = inspectInspectionCommand("reviewer", command);
+    assert.equal(result.allowed, false, command);
+    if (!result.allowed) {
+      assert.equal(result.mutationClass, "github", command);
+    }
   }
 });

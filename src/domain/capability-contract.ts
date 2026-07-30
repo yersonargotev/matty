@@ -1,4 +1,4 @@
-export const EXPLORER_TOOLS = [
+export const INSPECTION_TOOLS = [
   "read",
   "grep",
   "find",
@@ -6,13 +6,30 @@ export const EXPLORER_TOOLS = [
   "bash",
 ] as const;
 
-export interface ExplorerCapabilityContract {
+export const EXPLORER_TOOLS = INSPECTION_TOOLS;
+
+export const INSPECTION_ROLES = [
+  "explorer",
+  "designer",
+  "reviewer",
+] as const;
+
+export type InspectionRole = (typeof INSPECTION_ROLES)[number];
+
+export const INSPECTION_ROLE_INPUT_GUIDANCE =
+  `{"role": ${
+    INSPECTION_ROLES.map((role) => JSON.stringify(role)).join("|")
+  }, "task": string}`;
+
+export interface InspectionCapabilityContract {
   schemaVersion: 1;
-  id: "delegate-explorer";
-  role: "explorer";
+  id: `delegate-${InspectionRole}`;
+  role: InspectionRole;
   tools: readonly string[];
   writeAuthority: "none";
+  mutationPolicy: "inspection-guard";
   web: "absent";
+  github: "absent" | "required-readonly";
   cardinality: {
     min: 1;
     max: 1;
@@ -24,23 +41,49 @@ export interface ExplorerCapabilityContract {
   failureBehavior: "fail-invocation";
 }
 
-export const EXPLORER_CAPABILITY_CONTRACT: ExplorerCapabilityContract = {
-  schemaVersion: 1,
-  id: "delegate-explorer",
-  role: "explorer",
-  tools: [...EXPLORER_TOOLS],
-  writeAuthority: "none",
-  web: "absent",
-  cardinality: { min: 1, max: 1 },
-  concurrency: { maxActive: 1 },
-  independence: "required",
-  failureBehavior: "fail-invocation",
+export type ExplorerCapabilityContract = InspectionCapabilityContract & {
+  id: "delegate-explorer";
+  role: "explorer";
+  github: "absent";
 };
+
+function inspectionContract(
+  role: InspectionRole,
+  github: InspectionCapabilityContract["github"],
+): InspectionCapabilityContract {
+  return {
+    schemaVersion: 1,
+    id: `delegate-${role}`,
+    role,
+    tools: [...INSPECTION_TOOLS],
+    writeAuthority: "none",
+    mutationPolicy: "inspection-guard",
+    web: "absent",
+    github,
+    cardinality: { min: 1, max: 1 },
+    concurrency: { maxActive: 1 },
+    independence: "required",
+    failureBehavior: "fail-invocation",
+  };
+}
+
+export const EXPLORER_CAPABILITY_CONTRACT =
+  inspectionContract("explorer", "absent") as ExplorerCapabilityContract;
+export const DESIGNER_CAPABILITY_CONTRACT =
+  inspectionContract("designer", "absent");
+export const REVIEWER_CAPABILITY_CONTRACT =
+  inspectionContract("reviewer", "required-readonly");
+
+export const INSPECTION_CAPABILITY_CONTRACTS = {
+  explorer: EXPLORER_CAPABILITY_CONTRACT,
+  designer: DESIGNER_CAPABILITY_CONTRACT,
+  reviewer: REVIEWER_CAPABILITY_CONTRACT,
+} as const satisfies Record<InspectionRole, InspectionCapabilityContract>;
 
 export type CapabilityContractValidation =
   | {
       ok: true;
-      contract: ExplorerCapabilityContract;
+      contract: InspectionCapabilityContract;
     }
   | {
       ok: false;
@@ -51,6 +94,10 @@ export interface CapabilityAvailability {
   availableTools: readonly string[];
   independentRuntime: boolean;
   inspectionGuard: boolean;
+  github?: {
+    available: boolean;
+    authenticated: boolean;
+  };
 }
 
 export interface CapabilityPreflightDiagnostic {
@@ -59,10 +106,10 @@ export interface CapabilityPreflightDiagnostic {
   unmet: string[];
 }
 
-export type CapabilityPreflight =
+export type CapabilityPreflight<T extends InspectionCapabilityContract> =
   | {
       ok: true;
-      contract: ExplorerCapabilityContract;
+      contract: T;
     }
   | {
       ok: false;
@@ -80,6 +127,16 @@ export function createCapabilityPreflightDiagnostic(
   };
 }
 
+export function isInspectionRole(value: unknown): value is InspectionRole {
+  return INSPECTION_ROLES.some((role) => role === value);
+}
+
+export function inspectionCapabilityContract(
+  role: InspectionRole,
+): InspectionCapabilityContract {
+  return INSPECTION_CAPABILITY_CONTRACTS[role];
+}
+
 export function validateCapabilityContract(
   value: unknown,
 ): CapabilityContractValidation {
@@ -87,20 +144,24 @@ export function validateCapabilityContract(
     return { ok: false, errors: ["contract must be an object"] };
   }
 
-  const candidate = value as Partial<ExplorerCapabilityContract>;
+  const candidate = value as Partial<InspectionCapabilityContract>;
   const errors: string[] = [];
+  const expected = isInspectionRole(candidate.role)
+    ? inspectionCapabilityContract(candidate.role)
+    : undefined;
   if (
+    !expected ||
     candidate.schemaVersion !== 1 ||
-    candidate.id !== "delegate-explorer" ||
-    candidate.role !== "explorer" ||
+    candidate.id !== expected.id ||
     candidate.web !== "absent" ||
+    candidate.github !== expected.github ||
     candidate.independence !== "required" ||
     candidate.failureBehavior !== "fail-invocation" ||
     candidate.cardinality?.min !== 1 ||
     candidate.cardinality.max !== 1 ||
     candidate.concurrency?.maxActive !== 1
   ) {
-    errors.push("contract does not match the explorer v1 operation");
+    errors.push("contract does not match an inspection role v1 operation");
   }
 
   if (!Array.isArray(candidate.tools)) {
@@ -114,15 +175,18 @@ export function validateCapabilityContract(
       errors.push("tools must be unique");
     }
     if (
-      tools.length !== EXPLORER_TOOLS.length ||
-      EXPLORER_TOOLS.some((tool) => !tools.includes(tool))
+      tools.length !== INSPECTION_TOOLS.length ||
+      INSPECTION_TOOLS.some((tool) => !tools.includes(tool))
     ) {
-      errors.push("explorer tools must match the package-owned allowlist");
+      errors.push("inspection tools must match the package-owned allowlist");
     }
   }
 
   if (candidate.writeAuthority !== "none") {
-    errors.push("explorer write authority must be none");
+    errors.push("inspection role write authority must be none");
+  }
+  if (candidate.mutationPolicy !== "inspection-guard") {
+    errors.push("inspection role mutation policy must be Inspection Guard");
   }
 
   if (errors.length > 0) {
@@ -130,14 +194,14 @@ export function validateCapabilityContract(
   }
   return {
     ok: true,
-    contract: value as ExplorerCapabilityContract,
+    contract: value as InspectionCapabilityContract,
   };
 }
 
-export function preflightCapability(
-  contract: ExplorerCapabilityContract,
+export function preflightCapability<T extends InspectionCapabilityContract>(
+  contract: T,
   availability: CapabilityAvailability,
-): CapabilityPreflight {
+): CapabilityPreflight<T> {
   const validation = validateCapabilityContract(contract);
   const unmet: string[] = [];
   if (!validation.ok) {
@@ -148,6 +212,11 @@ export function preflightCapability(
       unmet.push(`required tool is unavailable: ${tool}`);
     }
   }
+  for (const tool of availability.availableTools) {
+    if (!contract.tools.includes(tool)) {
+      unmet.push(`unapproved tool is available: ${tool}`);
+    }
+  }
   if (
     contract.independence === "required" &&
     !availability.independentRuntime
@@ -156,6 +225,14 @@ export function preflightCapability(
   }
   if (!availability.inspectionGuard) {
     unmet.push("Inspection Guard is unavailable");
+  }
+  if (contract.github === "required-readonly") {
+    if (!availability.github?.available) {
+      unmet.push("GitHub CLI is unavailable");
+    }
+    if (!availability.github?.authenticated) {
+      unmet.push("GitHub CLI authentication is unavailable");
+    }
   }
 
   if (unmet.length > 0) {

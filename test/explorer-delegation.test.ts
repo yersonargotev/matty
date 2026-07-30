@@ -62,6 +62,9 @@ test("runs one explorer through the delegated task runner with structured output
   assert.equal(terminal.contract.id, "delegate-explorer");
   assert.equal(terminal.contract.role, "explorer");
   assert.equal(terminal.outcome.status, "succeeded");
+  if (terminal.outcome.status === "succeeded") {
+    assert.equal(terminal.outcome.output, "explorer findings");
+  }
 });
 
 test("an unmet preflight blocks only that invocation and is diagnosable", async () => {

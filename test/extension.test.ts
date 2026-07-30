@@ -78,6 +78,8 @@ test("a compatible host activates Matty Core", async () => {
       "Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
       "Activation active · compatible",
+      "Roles explorer, designer, reviewer",
+      "Inspection Guard best-effort · not a security sandbox",
     ].join("\n"),
   );
 

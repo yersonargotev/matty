@@ -18,7 +18,10 @@ test("injects exactly one marked Matty Rules block", () => {
   assert.equal(occurrences(prompt, MATTY_RULES_START), 1);
   assert.equal(occurrences(prompt, MATTY_RULES_END), 1);
   assert.match(prompt, /Base host instructions/);
-  assert.match(prompt, /subagent accepts exactly \{"task": string\}/);
+  assert.match(
+    prompt,
+    /subagent accepts exactly \{"role": "explorer"\|"designer"\|"reviewer", "task": string\}/,
+  );
 });
 
 test("replaces duplicate and stray markers with one child rules block", () => {
@@ -54,6 +57,12 @@ test("removes inline and unmatched markers before injecting the block", () => {
 test("detects a direct project instruction conflict outside marked rules", () => {
   assert.equal(
     detectMattyRulesConflict(
+      "Project policy: reviewers may mutate GitHub state.",
+    ),
+    "project instructions grant inspection-role mutation authority",
+  );
+  assert.equal(
+    detectMattyRulesConflict(
       "Project policy: explorers may edit files when convenient.",
     ),
     "project instructions grant explorer write authority",
@@ -66,9 +75,21 @@ test("detects a direct project instruction conflict outside marked rules", () =>
   );
 });
 
-test("rules describe only the currently exposed explorer path", () => {
+test("rules describe only the currently exposed inspection roles", () => {
   const prompt = injectMattyRules("Base", "parent");
 
-  assert.match(prompt, /currently exposed path selects explorer/);
+  assert.match(prompt, /exposes explorer, designer, and reviewer/);
+  assert.match(prompt, /best-effort command policy, not a security sandbox/);
   assert.doesNotMatch(prompt, /Worker Guard|eight tasks|four children/);
+});
+
+test("injects the selected designer and reviewer child role", () => {
+  assert.match(
+    injectMattyRules("Base", "designer"),
+    /Active child role: designer/,
+  );
+  assert.match(
+    injectMattyRules("Base", "reviewer"),
+    /Active child role: reviewer/,
+  );
 });

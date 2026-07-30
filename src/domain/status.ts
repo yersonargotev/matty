@@ -2,6 +2,10 @@ import {
   CERTIFIED_PI_VERSIONS,
   CERTIFIED_TARGETS,
 } from "./package-contract.ts";
+import {
+  INSPECTION_ROLES,
+  type InspectionRole,
+} from "./capability-contract.ts";
 
 export interface RuntimeFacts {
   packageVersion: string;
@@ -31,6 +35,13 @@ export interface StatusDiagnostic {
   activation: {
     state: "active" | "degraded";
     reason: "compatible" | "unsupported-host";
+  };
+  roles: {
+    available: InspectionRole[];
+  };
+  inspectionGuard: {
+    state: "best-effort";
+    securityBoundary: false;
   };
 }
 
@@ -73,6 +84,13 @@ export function createStatusSnapshot(
       state: compatibleHost ? "active" : "degraded",
       reason: compatibleHost ? "compatible" : "unsupported-host",
     },
+    roles: {
+      available: [...INSPECTION_ROLES],
+    },
+    inspectionGuard: {
+      state: "best-effort",
+      securityBoundary: false,
+    },
   };
 }
 
@@ -82,6 +100,8 @@ export function renderStatusHuman(snapshot: StatusDiagnostic): string {
     `Pi ${snapshot.pi.version} · ${snapshot.pi.state}`,
     `Target ${snapshot.target.platform}/${snapshot.target.arch} · ${snapshot.target.state}`,
     `Activation ${snapshot.activation.state} · ${snapshot.activation.reason}`,
+    `Roles ${snapshot.roles.available.join(", ")}`,
+    "Inspection Guard best-effort · not a security sandbox",
   ].join("\n");
 }
 

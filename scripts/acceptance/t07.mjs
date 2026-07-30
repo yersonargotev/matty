@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   realpath,
@@ -132,6 +133,7 @@ const project = join(sandbox, "project");
 const host = join(sandbox, "host");
 const artifacts = join(sandbox, "artifacts");
 const npmCache = join(sandbox, "npm-cache");
+const bin = join(sandbox, "bin");
 const extension = join(sandbox, "t07-extension.ts");
 const guardReady = join(sandbox, "network-guard.ready");
 const guardViolation = join(sandbox, "network-guard.violation");
@@ -143,15 +145,30 @@ for (const directory of [
   host,
   artifacts,
   npmCache,
+  bin,
 ]) {
   await mkdir(directory, { recursive: true });
 }
 await writeFile(join(project, "README.md"), "# acceptance\n");
+const gh = join(bin, "gh");
+await writeFile(
+  gh,
+  `#!/bin/sh
+case "$1 $2" in
+  "--version ") echo "gh version controlled" ;;
+  "auth status") echo "authenticated" ;;
+  "issue view") echo '{"number":9,"title":"inspection role acceptance"}' ;;
+  *) exit 91 ;;
+esac
+`,
+);
+await chmod(gh, 0o755);
 
 const isolatedEnv = {
-  PATH:
+  PATH: `${bin}:${
     process.env.PATH ??
-    "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  }`,
   HOME: home,
   XDG_CONFIG_HOME: join(home, ".config"),
   PI_CODING_AGENT_DIR: agentDir,
@@ -246,7 +263,9 @@ try {
 import { registerPiMatty } from ${JSON.stringify(mattyExtension)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
-const childMode = process.env.MATTY_CHILD_ROLE === "explorer";
+const childRole = process.env.MATTY_CHILD_ROLE;
+const childMode = ["explorer", "designer", "reviewer"].includes(childRole);
+const requestedRole = process.env.MATTY_T07_ROLE ?? "explorer";
 const startMarker = "<!-- matty:rules -->";
 const endMarker = "<!-- /matty:rules -->";
 let parentRules = { start: 0, end: 0 };
@@ -295,6 +314,7 @@ export default function t07Acceptance(pi) {
     childEnvironment: {
       MATTY_T07_PI: process.env.MATTY_T07_PI,
       MATTY_T07_EXTENSION: process.env.MATTY_T07_EXTENSION,
+      MATTY_T07_ROLE: requestedRole,
       MATTY_NETWORK_GUARD_READY:
         process.env.MATTY_NETWORK_GUARD_READY,
       MATTY_NETWORK_GUARD_VIOLATION:
@@ -352,7 +372,10 @@ export default function t07Acceptance(pi) {
             type: "toolCall",
             id: "parent-subagent",
             name: "subagent",
-            arguments: { task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family." },
+            arguments: {
+              role: requestedRole,
+              task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family.",
+            },
           }], "toolUse")));
         } else {
           queueMicrotask(() => stream.end(assistant(
@@ -364,20 +387,34 @@ export default function t07Acceptance(pi) {
       }
 
       if (results.length === 0) {
-        queueMicrotask(() => stream.end(assistant(model, toolCalls([
+        const allowedCommands = [
           ["allowed-git", "git status --short"],
           ["allowed-codegraph", "codegraph status"],
           ["allowed-shell", "pwd"],
           ["allowed-diagnostic", "node --version"],
-        ]), "toolUse")));
+          ...(childRole === "reviewer"
+            ? [["allowed-github", "gh issue view 9"]]
+            : []),
+        ];
+        queueMicrotask(() => stream.end(assistant(
+          model,
+          toolCalls(allowedCommands),
+          "toolUse",
+        )));
         return stream;
       }
-      if (results.length === 4) {
+      const allowedCount = childRole === "reviewer" ? 5 : 4;
+      if (results.length === allowedCount) {
         queueMicrotask(() => stream.end(assistant(model, toolCalls([
           ["blocked-filesystem", "touch forbidden.txt"],
           ["blocked-shell", "echo changed > forbidden.txt"],
           ["blocked-git", "git commit --allow-empty -m forbidden"],
-          ["blocked-github", "gh issue view 8"],
+          [
+            "blocked-github",
+            childRole === "reviewer"
+              ? "gh issue comment 9 --body forbidden"
+              : "gh issue view 9",
+          ],
           ["blocked-network", "curl https://example.com"],
         ]), "toolUse")));
         return stream;
@@ -389,6 +426,7 @@ export default function t07Acceptance(pi) {
         "allowed-codegraph",
         "allowed-shell",
         "allowed-diagnostic",
+        ...(childRole === "reviewer" ? ["allowed-github"] : []),
       ];
       const blockedIds = [
         "blocked-filesystem",
@@ -415,7 +453,13 @@ export default function t07Acceptance(pi) {
       };
       queueMicrotask(() => stream.end(assistant(
         model,
-        [{ type: "text", text: JSON.stringify(payload) }],
+        [{
+          type: "text",
+          text: JSON.stringify({
+            summary: childRole + " inspection completed",
+            evidence: [payload],
+          }),
+        }],
       )));
       return stream;
     },
@@ -424,7 +468,7 @@ export default function t07Acceptance(pi) {
 `,
   );
 
-  async function execute(blockRuntime) {
+  async function execute(role, blockRuntime) {
     const activeRpc = startRpc(pi, extension, canonicalProject, {
       ...isolatedEnv,
       NODE_OPTIONS: `--import=${networkGuard}`,
@@ -432,6 +476,7 @@ export default function t07Acceptance(pi) {
       MATTY_NETWORK_GUARD_VIOLATION: guardViolation,
       MATTY_T07_PI: pi,
       MATTY_T07_EXTENSION: extension,
+      MATTY_T07_ROLE: role,
       ...(blockRuntime ? { MATTY_T07_BLOCK_RUNTIME: "1" } : {}),
     });
     rpc = activeRpc;
@@ -482,7 +527,7 @@ export default function t07Acceptance(pi) {
     };
   }
 
-  const success = await execute(false);
+  const success = await execute("explorer", false);
   assert.deepEqual(success.parentRules, { start: 1, end: 1 });
   assert.equal(success.terminal.contract.role, "explorer");
   assert.equal(
@@ -509,13 +554,28 @@ export default function t07Acceptance(pi) {
       "message",
     ],
   );
-  const observed = JSON.parse(success.terminal.outcome.output);
+  const observed = success.terminal.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });
   assert.ok(Object.values(observed.allowed).every(Boolean));
   assert.ok(Object.values(observed.blocked).every(Boolean));
   await assert.rejects(access(forbidden));
 
-  const blocked = await execute(true);
+  for (const role of ["designer", "reviewer"]) {
+    const roleResult = await execute(role, false);
+    assert.equal(roleResult.terminal.contract.role, role);
+    assert.equal(
+      roleResult.terminal.outcome.status,
+      "succeeded",
+      JSON.stringify(roleResult.terminal),
+    );
+    const roleObserved = roleResult.terminal.outcome.output.evidence[0];
+    assert.deepEqual(roleObserved.rules, { start: 1, end: 1 });
+    assert.ok(Object.values(roleObserved.allowed).every(Boolean));
+    assert.ok(Object.values(roleObserved.blocked).every(Boolean));
+    await assert.rejects(access(forbidden));
+  }
+
+  const blocked = await execute("explorer", true);
   assert.equal(blocked.terminal.outcome.status, "blocked");
   assert.deepEqual(blocked.terminal.outcome.diagnostic, {
     kind: "capability-preflight",
@@ -531,12 +591,14 @@ export default function t07Acceptance(pi) {
   );
   process.stdout.write(
     [
-      "T07 production explorer delegation acceptance passed",
+      "T07/T08 production inspection-role delegation acceptance passed",
       `artifact: ${metadata.filename}`,
       "parent/child Matty Rules: exactly one",
       "Capability Contract/preflight: validated and diagnosable",
       "real Subagent Runtime: structured progress and terminal output",
       "Git/CodeGraph/shell/diagnostics: inspected",
+      "designer: gh blocked",
+      "reviewer: gh availability/auth/read inspection passed; mutation blocked",
       "filesystem/shell/Git/GitHub/network mutations: blocked",
     ].join("\n") + "\n",
   );

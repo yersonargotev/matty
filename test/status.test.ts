@@ -37,6 +37,13 @@ test("status activates on a certified host", () => {
       state: "active",
       reason: "compatible",
     },
+    roles: {
+      available: ["explorer", "designer", "reviewer"],
+    },
+    inspectionGuard: {
+      state: "best-effort",
+      securityBoundary: false,
+    },
   });
 
   assert.equal(
@@ -46,6 +53,8 @@ test("status activates on a certified host", () => {
       "Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
       "Activation active · compatible",
+      "Roles explorer, designer, reviewer",
+      "Inspection Guard best-effort · not a security sandbox",
     ].join("\n"),
   );
   assert.deepEqual(JSON.parse(renderStatusJson(snapshot)), snapshot);

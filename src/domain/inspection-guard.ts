@@ -1,3 +1,5 @@
+import type { InspectionRole } from "./capability-contract.ts";
+
 export type InspectionMutationClass =
   | "filesystem"
   | "shell"
@@ -127,6 +129,24 @@ const SUDO_OPTIONS_WITH_VALUES = new Set([
   "--other-user",
 ]);
 const TIME_OPTIONS_WITH_VALUES = new Set(["-f", "-o", "--format", "--output"]);
+const GH_GLOBAL_OPTIONS_WITH_VALUES = new Set([
+  "-R",
+  "--repo",
+  "--hostname",
+]);
+const GH_READ_ONLY_COMMANDS = new Map<string, ReadonlySet<string>>([
+  ["auth", new Set(["status"])],
+  ["issue", new Set(["list", "status", "view"])],
+  ["pr", new Set(["checks", "diff", "list", "status", "view"])],
+  ["repo", new Set(["list", "view"])],
+  ["release", new Set(["list", "view"])],
+  ["run", new Set(["list", "view"])],
+  ["workflow", new Set(["list", "view"])],
+  ["gist", new Set(["list", "view"])],
+  ["label", new Set(["list"])],
+  ["project", new Set(["field-list", "item-list", "list", "view"])],
+  ["ruleset", new Set(["check", "list", "view"])],
+]);
 
 function shellTokens(segment: string): string[] {
   return (
@@ -217,23 +237,79 @@ function gitSubcommand(tokens: string[]): string | undefined {
   return undefined;
 }
 
+function githubInspectionAllowed(tokens: string[]): boolean {
+  const arguments_ = tokens.slice(1);
+  if (arguments_.length === 1 && arguments_[0] === "--version") {
+    return true;
+  }
+  consumeOptions(arguments_, GH_GLOBAL_OPTIONS_WITH_VALUES);
+  const command = arguments_.shift()?.toLowerCase();
+  if (!command) {
+    return false;
+  }
+  if (command === "status") {
+    return arguments_.length === 0;
+  }
+  if (command === "search") {
+    return true;
+  }
+  if (command === "api") {
+    const methodIndex = arguments_.findIndex((token) =>
+      token === "-X" || token === "--method"
+    );
+    const methodFromPair =
+      methodIndex >= 0 ? arguments_[methodIndex + 1]?.toUpperCase() : undefined;
+    const methodFromEquals = arguments_
+      .find((token) => token.startsWith("--method="))
+      ?.slice("--method=".length)
+      .toUpperCase();
+    const methodFromCompact = arguments_
+      .find((token) => token.startsWith("-X") && token.length > 2)
+      ?.slice(2)
+      .toUpperCase();
+    return !(
+      (methodFromPair !== undefined && methodFromPair !== "GET") ||
+      (methodFromEquals !== undefined && methodFromEquals !== "GET") ||
+      (methodFromCompact !== undefined && methodFromCompact !== "GET") ||
+      arguments_.some((token) =>
+        token === "-f" ||
+        (token.startsWith("-f") && token.length > 2) ||
+        token === "-F" ||
+        (token.startsWith("-F") && token.length > 2) ||
+        token === "--field" ||
+        token.startsWith("--field=") ||
+        token === "--raw-field" ||
+        token.startsWith("--raw-field=") ||
+        token === "--input" ||
+        token.startsWith("--input=")
+      )
+    );
+  }
+  return GH_READ_ONLY_COMMANDS.get(command)?.has(
+    arguments_[0]?.toLowerCase() ?? "",
+  ) ??
+    false;
+}
+
 function blocked(
   mutationClass: InspectionMutationClass,
+  role: InspectionRole,
 ): InspectionDecision {
   return {
     allowed: false,
     mutationClass,
     reason:
       `Inspection Guard blocked recognized ${mutationClass} ` +
-      "mutation; explorer shell access is inspection-only",
+      `mutation; ${role} shell access is inspection-only`,
   };
 }
 
-export function inspectExplorerCommand(
+export function inspectInspectionCommand(
+  role: InspectionRole,
   command: string,
 ): InspectionDecision {
   if (/(?:^|[^<])(?:[0-9]*>{1,2})/.test(command)) {
-    return blocked("shell");
+    return blocked("shell", role);
   }
   if (
     command.includes("$(") ||
@@ -241,7 +317,7 @@ export function inspectExplorerCommand(
     command.includes("<(") ||
     command.includes(">(")
   ) {
-    return blocked("shell");
+    return blocked("shell", role);
   }
   for (const segment of command.split(/[;&|\r\n]+/)) {
     const tokens = commandTokens(segment);
@@ -250,13 +326,16 @@ export function inspectExplorerCommand(
       continue;
     }
     if (SHELL_CONTROL_FLOW.has(head)) {
-      return blocked("shell");
+      return blocked("shell", role);
     }
     if (head === "gh") {
-      return blocked("github");
+      if (role !== "reviewer" || !githubInspectionAllowed(tokens)) {
+        return blocked("github", role);
+      }
+      continue;
     }
     if (NETWORK_COMMANDS.has(head)) {
-      return blocked("network");
+      return blocked("network", role);
     }
     if (
       head === "git" &&
@@ -267,26 +346,32 @@ export function inspectExplorerCommand(
         )
       )
     ) {
-      return blocked("git");
+      return blocked("git", role);
     }
     if (FILESYSTEM_MUTATIONS.has(head)) {
-      return blocked("filesystem");
+      return blocked("filesystem", role);
     }
     if (SHELL_MUTATIONS.has(head)) {
-      return blocked("shell");
+      return blocked("shell", role);
     }
     if (
       ["node", "python", "python3", "ruby", "perl"].includes(head) &&
       tokens.slice(1).some((token) => token === "-e" || token === "-c")
     ) {
-      return blocked("shell");
+      return blocked("shell", role);
     }
     if (
       head === "find" &&
       tokens.some((token) => token === "-delete" || token === "-exec")
     ) {
-      return blocked("filesystem");
+      return blocked("filesystem", role);
     }
   }
   return { allowed: true };
+}
+
+export function inspectExplorerCommand(
+  command: string,
+): InspectionDecision {
+  return inspectInspectionCommand("explorer", command);
 }
