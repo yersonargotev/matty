@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      bootstrap:
+        description: One-time publish of @yargote/matty@0.1.0
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
             ${{ steps.certify.outputs.checksum }}
 
   stage:
-    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage
+    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage && !inputs.bootstrap
     needs: certify
     runs-on: ubuntu-latest
     environment: npm-stage
@@ -91,3 +96,52 @@ jobs:
         id: verify
       - name: Stage certified release candidate
         run: npm stage publish "${{ steps.verify.outputs.tarball }}"
+
+  bootstrap:
+    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.bootstrap && !inputs.stage
+    needs: certify
+    runs-on: ubuntu-latest
+    environment: npm-bootstrap
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.18.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: certified-release-candidate
+          path: ${{ runner.temp }}/certified-release-candidate
+      - name: Verify bootstrap release candidate
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/certified-release-candidate
+        run: |
+          shopt -s nullglob
+          tarballs=("$ARTIFACT_DIR"/*.tgz)
+          checksums=("$ARTIFACT_DIR"/SHA256SUMS)
+          if [[ ${#tarballs[@]} -ne 1 || ${#checksums[@]} -ne 1 ]]; then
+            echo "Expected exactly one tarball and its SHA256 evidence" >&2
+            exit 1
+          fi
+          (
+            cd "$ARTIFACT_DIR"
+            shasum -a 256 -c SHA256SUMS
+          )
+          identity="$(
+            tar -xOf "${tarballs[0]}" package/package.json |
+              node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(`${p.name}@${p.version}`);'
+          )"
+          if [[ "$identity" != "@yargote/matty@0.1.0" ]]; then
+            echo "Bootstrap is restricted to @yargote/matty@0.1.0" >&2
+            exit 1
+          fi
+          echo "tarball=${tarballs[0]}" >> "$GITHUB_OUTPUT"
+        id: verify-bootstrap
+      - name: Bootstrap publish Matty Core 0.1.0
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: npm publish "${{ steps.verify-bootstrap.outputs.tarball }}" --provenance --access public
