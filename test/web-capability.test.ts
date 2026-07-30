@@ -30,7 +30,6 @@ test("derives available, degraded, and unavailable local web states", () => {
 
   for (const registeredTools of [
     ["web_search"],
-    [...WEB_CAPABILITY_TOOLS, "other"],
     [...WEB_CAPABILITY_TOOLS, "web_search"],
   ]) {
     assert.equal(
@@ -41,6 +40,13 @@ test("derives available, degraded, and unavailable local web states", () => {
       "degraded",
     );
   }
+  assert.equal(
+    deriveWebCapabilityState({
+      registeredTools: [...WEB_CAPABILITY_TOOLS, "provider_owned_tool"],
+      initializationSucceeded: true,
+    }),
+    "available",
+  );
 
   assert.equal(
     deriveWebCapabilityState({

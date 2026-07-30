@@ -33,18 +33,21 @@ export function deriveWebCapabilityState(input: {
   initializationSucceeded: boolean;
 }): WebCapabilityState {
   const registeredTools = [...input.registeredTools];
-  if (registeredTools.length === 0) {
+  const certifiedTools = registeredTools.filter((tool) =>
+    WEB_CAPABILITY_TOOLS.some((certified) => certified === tool)
+  );
+  if (certifiedTools.length === 0) {
     return "unavailable";
   }
 
-  const canonical =
+  const hasExactCertifiedToolSet =
     input.initializationSucceeded &&
-    registeredTools.length === WEB_CAPABILITY_TOOLS.length &&
-    registeredTools.every(
+    certifiedTools.length === WEB_CAPABILITY_TOOLS.length &&
+    certifiedTools.every(
       (tool, index) => tool === WEB_CAPABILITY_TOOLS[index],
     );
 
-  return canonical ? "available" : "degraded";
+  return hasExactCertifiedToolSet ? "available" : "degraded";
 }
 
 export function createParentWebCapabilityContract(

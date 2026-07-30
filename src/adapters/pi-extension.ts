@@ -71,6 +71,7 @@ import {
   deriveWebCapabilityState,
   preflightWebCapability,
   runWebCapabilityOperation,
+  type WebCapabilityContract,
   type WebCapabilityState,
 } from "../domain/web-capability.ts";
 
@@ -79,6 +80,7 @@ export interface PiMattyRegistrationOptions {
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
   registerWebExtension?: (pi: ExtensionAPI) => void;
+  webContract?: WebCapabilityContract;
   reviewerGithubPreflight?: () => Promise<{
     available: boolean;
     authenticated: boolean;
@@ -432,15 +434,19 @@ export function registerPiMatty(
   let webInitializationSucceeded = false;
   if (!childRole && options.registerWebExtension) {
     const certifiedTools = new Set<string>(WEB_CAPABILITY_TOOLS);
-    const requiredContract = createParentWebCapabilityContract("required");
-    const blockedWebResult = (resolution: unknown) => ({
+    const webContract = options.webContract ??
+      createParentWebCapabilityContract("required");
+    const webPolicyResult = (resolution: {
+      status: string;
+      disclosure?: string;
+    }) => ({
       content: [{
         type: "text" as const,
-        text:
+        text: resolution.disclosure ??
           "Required web operation failed. No web research was completed; model knowledge is not web research.",
       }],
       details: resolution,
-      isError: true,
+      isError: resolution.status === "blocked",
     });
     const webApi = new Proxy(pi, {
       get(target, property) {
@@ -449,9 +455,12 @@ export function registerPiMatty(
             name: string;
             execute?: (...args: never[]) => Promise<{ isError?: boolean }>;
           }) => {
+            if (!certifiedTools.has(tool.name)) {
+              return;
+            }
             registeredWebTools.push(tool.name);
             if (
-              certifiedTools.has(tool.name) &&
+              webContract.requirement !== "none" &&
               registeredWebTools.indexOf(tool.name) ===
                 registeredWebTools.lastIndexOf(tool.name)
             ) {
@@ -462,31 +471,31 @@ export function registerPiMatty(
                   ? {
                     async execute(...args: never[]) {
                       const preflight = preflightWebCapability(
-                        requiredContract,
+                        webContract,
                         webState,
                       );
-                      if (preflight.status === "blocked") {
-                        return blockedWebResult(preflight);
+                      if (preflight.status !== "ready") {
+                        return webPolicyResult(preflight);
                       }
                       try {
                         const result = await upstreamExecute(...args);
                         if (result.isError) {
-                          return blockedWebResult(
+                          return webPolicyResult(
                             runWebCapabilityOperation(
-                              requiredContract,
+                              webContract,
                               { ok: false },
                             ),
                           );
                         }
-                        runWebCapabilityOperation(requiredContract, {
+                        runWebCapabilityOperation(webContract, {
                           ok: true,
                           source: "web-tool",
                         });
                         return result;
                       } catch {
-                        return blockedWebResult(
+                        return webPolicyResult(
                           runWebCapabilityOperation(
-                            requiredContract,
+                            webContract,
                             { ok: false },
                           ),
                         );

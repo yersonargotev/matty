@@ -20,6 +20,9 @@ import {
   INSPECTION_TOOLS,
   WORKER_TOOLS,
 } from "../src/domain/capability-contract.ts";
+import {
+  createParentWebCapabilityContract,
+} from "../src/domain/web-capability.ts";
 
 function createExtensionHarness() {
   const handlers = new Map<string, Array<(...args: never[]) => unknown>>();
@@ -196,6 +199,50 @@ test("worker child permits bounded writes and blocks parent-owned mutations", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("parent web contracts disclose optional failure and suppress none policy", async () => {
+  function registerFailingWebExtension(pi: ExtensionAPI) {
+    for (
+      const name of [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ]
+    ) {
+      pi.registerTool({
+        name,
+        async execute() {
+          return { isError: true };
+        },
+      } as never);
+    }
+  }
+
+  const optional = createExtensionHarness();
+  registerPiMatty(optional.pi, {}, {
+    registerWebExtension: registerFailingWebExtension,
+    webContract: createParentWebCapabilityContract("optional"),
+  });
+  const optionalSearch = optional.tools.find((tool) =>
+    tool.name === "web_search"
+  );
+  const disclosed = await optionalSearch?.execute?.() as unknown as {
+    content: Array<{ text: string }>;
+    details: { status: string };
+    isError: boolean;
+  };
+  assert.equal(disclosed.isError, false);
+  assert.equal(disclosed.details.status, "disclosed-continuation");
+  assert.match(disclosed.content[0]?.text ?? "", /Model knowledge is not web research/);
+
+  const none = createExtensionHarness();
+  registerPiMatty(none.pi, {}, {
+    registerWebExtension: registerFailingWebExtension,
+    webContract: createParentWebCapabilityContract("none"),
+  });
+  assert.deepEqual(none.tools.map((tool) => tool.name), ["subagent"]);
 });
 
 test("explorer child registration blocks mutating bash and does not recurse", async () => {
