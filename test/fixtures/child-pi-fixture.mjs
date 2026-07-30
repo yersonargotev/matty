@@ -39,6 +39,24 @@ if (task === "malformed-message") {
   setInterval(() => {}, 1_000);
 } else {
   const failed = task === "failure";
+  if (task === "tool-progress") {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+      })}\n`,
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tool-2",
+        toolName: "bash",
+        isError: false,
+      })}\n`,
+    );
+  }
   process.stdout.write(
     `${JSON.stringify({
       type: "message_end",

@@ -147,3 +147,18 @@ test("returns malformed assistant events as protocol failure data", async () => 
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.failure.kind, "protocol-failed");
 });
+
+test("reports real Pi tool execution completion as ordered progress", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("tool-progress", {
+    onProgress(event) {
+      progress.push(event);
+    },
+  });
+
+  assert.equal(outcome.status, "succeeded");
+  assert.deepEqual(
+    progress.map((event) => event.type),
+    ["started", "identified", "tool-result", "tool-result", "message"],
+  );
+});

@@ -28,7 +28,7 @@
     "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json && node scripts/build/validate-skill-catalog.mjs",
     "typecheck": "tsgo -p tsconfig.json",
     "test": "node --test test/*.test.ts",
-    "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs",
+    "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs && node scripts/acceptance/t07.mjs",
     "check": "npm run typecheck && npm test && npm run test:acceptance"
   },
   "devDependencies": {

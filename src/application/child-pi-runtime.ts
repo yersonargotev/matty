@@ -422,7 +422,8 @@ async function superviseChild(
       if (
         typeof event === "object" &&
         event !== null &&
-        (event as { type?: string }).type === "tool_result_end" &&
+        ((event as { type?: string }).type === "tool_result_end" ||
+          (event as { type?: string }).type === "tool_execution_end") &&
         identity
       ) {
         sequence += 1;
