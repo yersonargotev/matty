@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Matty"
+  short_description: "Stage and approve verified Matty releases"
+  default_prompt: "Use $release-matty to prepare, stage, verify, and record the next Matty release."
