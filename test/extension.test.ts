@@ -57,6 +57,15 @@ test("a compatible host activates Matty Core", async () => {
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
+    web: {
+      state: "available",
+      registeredTools: [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ],
+    },
   });
 
   assert.deepEqual([...harness.commands.keys()], ["matty"]);
@@ -81,6 +90,7 @@ test("a compatible host activates Matty Core", async () => {
       "Roles explorer, designer, reviewer, worker",
       "Inspection Guard best-effort · not a security sandbox",
       "Worker Guard best-effort · Single Writer · not a security sandbox",
+      "Web available · web_search, source_check, fetch_content, get_search_content",
     ].join("\n"),
   );
 
@@ -100,6 +110,10 @@ test("an unsupported host stays diagnosable and replaces the active hint", async
     piVersion: "0.84.0",
     platform: "linux",
     arch: "x64",
+    web: {
+      state: "unavailable",
+      registeredTools: [],
+    },
   });
 
   await harness.handlers.get("session_start")?.({ reason: "startup" });

@@ -13,6 +13,15 @@ test("status activates on a certified host", () => {
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
+    web: {
+      state: "available",
+      registeredTools: [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ],
+    },
   });
 
   assert.deepEqual(snapshot, {
@@ -49,6 +58,15 @@ test("status activates on a certified host", () => {
       securityBoundary: false,
       singleWriter: true,
     },
+    web: {
+      state: "available",
+      tools: [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ],
+    },
   });
 
   assert.equal(
@@ -61,6 +79,7 @@ test("status activates on a certified host", () => {
       "Roles explorer, designer, reviewer, worker",
       "Inspection Guard best-effort · not a security sandbox",
       "Worker Guard best-effort · Single Writer · not a security sandbox",
+      "Web available · web_search, source_check, fetch_content, get_search_content",
     ].join("\n"),
   );
   assert.deepEqual(JSON.parse(renderStatusJson(snapshot)), snapshot);
@@ -72,6 +91,10 @@ test("status degrades on an unsupported host", () => {
     piVersion: "0.84.0",
     platform: "linux",
     arch: "x64",
+    web: {
+      state: "unavailable",
+      registeredTools: [],
+    },
   });
 
   assert.deepEqual(snapshot.activation, {
@@ -80,4 +103,27 @@ test("status degrades on an unsupported host", () => {
   });
   assert.equal(snapshot.pi.state, "unsupported");
   assert.equal(snapshot.target.state, "unsupported");
+  assert.deepEqual(snapshot.web, {
+    state: "unavailable",
+    tools: [],
+  });
+});
+
+test("status reports a locally derived degraded Web Capability", () => {
+  const snapshot = createStatusSnapshot({
+    packageVersion: "0.1.0",
+    piVersion: "0.83.0",
+    platform: "darwin",
+    arch: "arm64",
+    web: {
+      state: "degraded",
+      registeredTools: ["fetch_content", "get_search_content"],
+    },
+  });
+
+  assert.deepEqual(snapshot.web, {
+    state: "degraded",
+    tools: ["fetch_content", "get_search_content"],
+  });
+  assert.match(renderStatusHuman(snapshot), /Web degraded/);
 });

@@ -432,6 +432,8 @@ async function main() {
       "dist/domain/package-contract.js",
       "dist/domain/status.d.ts",
       "dist/domain/status.js",
+      "dist/domain/web-capability.d.ts",
+      "dist/domain/web-capability.js",
       "dist/domain/worker-guard.d.ts",
       "dist/domain/worker-guard.js",
     ];
@@ -492,6 +494,27 @@ async function main() {
         "pi-extension.js",
       ),
     );
+    const installedMattyRoot = join(
+      homeRoot,
+      ".pi",
+      "agent",
+      "npm",
+      "node_modules",
+    );
+    const installedMattyPackage = JSON.parse(
+      await readFile(
+        join(installedMattyRoot, "@yargote", "matty", "package.json"),
+        "utf8",
+      ),
+    );
+    const installedWebPackage = JSON.parse(
+      await readFile(
+        join(installedMattyRoot, "pi-web-access", "package.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(installedMattyPackage.dependencies["pi-web-access"], "0.15.0");
+    assert.equal(installedWebPackage.version, "0.15.0");
 
     await writeFile(
       join(homeRoot, ".pi", "agent", "auth.json"),
@@ -562,6 +585,10 @@ async function main() {
         humanNotification.message,
         /Activation active · compatible/,
       );
+      assert.match(
+        humanNotification.message,
+        /Web available · web_search, source_check, fetch_content, get_search_content/,
+      );
 
       rpc.send({
         id: "json-status",
@@ -602,6 +629,15 @@ async function main() {
       assert.deepEqual(jsonStatus.activation, {
         state: "active",
         reason: "compatible",
+      });
+      assert.deepEqual(jsonStatus.web, {
+        state: "available",
+        tools: [
+          "web_search",
+          "source_check",
+          "fetch_content",
+          "get_search_content",
+        ],
       });
       assert.equal("catalog" in jsonStatus, false);
     } catch (error) {
@@ -672,6 +708,7 @@ async function main() {
         "Pi: 0.83.0",
         "target: darwin/arm64",
         "activation: active",
+        "Web Capability: available (pi-web-access 0.15.0)",
         "network during startup/status: denied",
         "project writes during startup/status: none",
       ].join("\n") + "\n",

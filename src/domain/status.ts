@@ -6,12 +6,17 @@ import {
   MATTY_ROLES,
   type MattyRole,
 } from "./capability-contract.ts";
+import type { WebCapabilityState } from "./web-capability.ts";
 
 export interface RuntimeFacts {
   packageVersion: string;
   piVersion: string;
   platform: NodeJS.Platform;
   arch: string;
+  web: {
+    state: WebCapabilityState;
+    registeredTools: readonly string[];
+  };
 }
 
 export interface StatusDiagnostic {
@@ -47,6 +52,10 @@ export interface StatusDiagnostic {
     state: "best-effort";
     securityBoundary: false;
     singleWriter: true;
+  };
+  web: {
+    state: WebCapabilityState;
+    tools: string[];
   };
 }
 
@@ -101,6 +110,10 @@ export function createStatusSnapshot(
       securityBoundary: false,
       singleWriter: true,
     },
+    web: {
+      state: facts.web.state,
+      tools: [...facts.web.registeredTools],
+    },
   };
 }
 
@@ -113,6 +126,11 @@ export function renderStatusHuman(snapshot: StatusDiagnostic): string {
     `Roles ${snapshot.roles.available.join(", ")}`,
     "Inspection Guard best-effort · not a security sandbox",
     "Worker Guard best-effort · Single Writer · not a security sandbox",
+    `Web ${snapshot.web.state} · ${
+      snapshot.web.tools.length > 0
+        ? snapshot.web.tools.join(", ")
+        : "no certified tools"
+    }`,
   ].join("\n");
 }
 

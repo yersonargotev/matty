@@ -32,6 +32,7 @@ function renderMattyRules(role: MattyPromptRole): string {
     "- Worker receives read, write, edit, grep, find, ls, and bash; writes are limited to the trusted working tree and validated temporary paths.",
     "- Single Writer permits at most one active worker per repository; parallel-writer contracts fail preflight.",
     "- This path accepts one task and runs one child; required capability failure is explicit and never falls back to inline parent work.",
+    "- Model knowledge is never reported as completed web research; required web failure blocks, and optional web failure is disclosed.",
     "- The Inspection Guard is a best-effort command policy, not a security sandbox.",
     "- The Worker Guard is a best-effort command and path policy, not a security sandbox.",
     "- The parent owns commits, pushes, pull requests, reviews, merges, releases, and other external-state mutation.",

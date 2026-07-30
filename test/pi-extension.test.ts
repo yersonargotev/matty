@@ -62,7 +62,30 @@ function createExtensionHarness() {
 
 test("parent registration exposes explicit delegated roles", async () => {
   const harness = createExtensionHarness();
-  registerPiMatty(harness.pi, {});
+  registerPiMatty(harness.pi, {}, {
+    registerWebExtension(pi) {
+      for (
+        const name of [
+          "web_search",
+          "source_check",
+          "fetch_content",
+          "get_search_content",
+          "clone_github",
+        ]
+      ) {
+        pi.registerTool({
+          name,
+          ...(name === "web_search"
+            ? {
+              async execute() {
+                throw new Error("provider secret must not escape");
+              },
+            }
+            : {}),
+        } as never);
+      }
+    },
+  });
 
   const inject = harness.handlers.get("before_agent_start")?.[0];
   assert.ok(inject);
@@ -72,21 +95,42 @@ test("parent registration exposes explicit delegated roles", async () => {
 
   assert.equal(result.systemPrompt.split(MATTY_RULES_START).length - 1, 1);
   assert.equal(result.systemPrompt.split(MATTY_RULES_END).length - 1, 1);
-  assert.deepEqual(harness.tools.map((tool) => tool.name), ["subagent"]);
+  assert.deepEqual(harness.tools.map((tool) => tool.name), [
+    "web_search",
+    "source_check",
+    "fetch_content",
+    "get_search_content",
+    "subagent",
+  ]);
+  const subagent = harness.tools.find((tool) => tool.name === "subagent");
   assert.match(
-    harness.tools[0]?.promptGuidelines?.join("\n") ?? "",
+    subagent?.promptGuidelines?.join("\n") ?? "",
     /\{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
   );
   assert.deepEqual(
     (
-      harness.tools[0]?.parameters?.properties?.role as {
+      subagent?.parameters?.properties?.role as {
         enum?: string[];
       }
     )?.enum,
     ["explorer", "designer", "reviewer", "worker"],
   );
-  assert.deepEqual(harness.tools[0]?.parameters?.required, ["role", "task"]);
+  assert.deepEqual(subagent?.parameters?.required, ["role", "task"]);
   assert.deepEqual(harness.commands, ["matty"]);
+
+  const webSearch = harness.tools.find((tool) => tool.name === "web_search");
+  const failedSearch = await webSearch?.execute?.() as unknown as {
+    content: Array<{ text: string }>;
+    details: { status: string };
+    isError: boolean;
+  };
+  assert.equal(failedSearch.isError, true);
+  assert.equal(failedSearch.details.status, "blocked");
+  assert.match(failedSearch.content[0]?.text ?? "", /No web research was completed/);
+  assert.doesNotMatch(
+    JSON.stringify(failedSearch),
+    /provider secret must not escape/,
+  );
 });
 
 test("worker child permits bounded writes and blocks parent-owned mutations", async () => {

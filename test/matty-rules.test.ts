@@ -22,6 +22,10 @@ test("injects exactly one marked Matty Rules block", () => {
     prompt,
     /subagent accepts exactly \{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
   );
+  assert.match(
+    prompt,
+    /Model knowledge is never reported as completed web research/,
+  );
 });
 
 test("replaces duplicate and stray markers with one child rules block", () => {

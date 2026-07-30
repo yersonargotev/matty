@@ -4,12 +4,17 @@ import {
   type ExtensionContext,
   type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import * as piCodingAgent from "@earendil-works/pi-coding-agent";
+import * as piAiCompat from "@earendil-works/pi-ai/compat";
+import * as piTui from "@earendil-works/pi-tui";
+import * as typebox from "typebox";
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 
 import {
   createChildPiRunner,
@@ -60,11 +65,20 @@ import {
 import {
   MATTY_PACKAGE_VERSION,
 } from "../domain/package-contract.ts";
+import {
+  WEB_CAPABILITY_TOOLS,
+  createParentWebCapabilityContract,
+  deriveWebCapabilityState,
+  preflightWebCapability,
+  runWebCapabilityOperation,
+  type WebCapabilityState,
+} from "../domain/web-capability.ts";
 
 export interface PiMattyRegistrationOptions {
   invocation?: PiInvocation;
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
+  registerWebExtension?: (pi: ExtensionAPI) => void;
   reviewerGithubPreflight?: () => Promise<{
     available: boolean;
     authenticated: boolean;
@@ -72,6 +86,7 @@ export interface PiMattyRegistrationOptions {
 }
 
 const execFileAsync = promisify(execFile);
+const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
 
 function createPiHost(pi: ExtensionAPI): MattyHost {
   return {
@@ -412,6 +427,93 @@ export function registerPiMatty(
   const childRole = isMattyRole(environment.MATTY_CHILD_ROLE)
     ? environment.MATTY_CHILD_ROLE
     : undefined;
+  const registeredWebTools: string[] = [];
+  let webState: WebCapabilityState = "unavailable";
+  let webInitializationSucceeded = false;
+  if (!childRole && options.registerWebExtension) {
+    const certifiedTools = new Set<string>(WEB_CAPABILITY_TOOLS);
+    const requiredContract = createParentWebCapabilityContract("required");
+    const blockedWebResult = (resolution: unknown) => ({
+      content: [{
+        type: "text" as const,
+        text:
+          "Required web operation failed. No web research was completed; model knowledge is not web research.",
+      }],
+      details: resolution,
+      isError: true,
+    });
+    const webApi = new Proxy(pi, {
+      get(target, property) {
+        if (property === "registerTool") {
+          return (tool: {
+            name: string;
+            execute?: (...args: never[]) => Promise<{ isError?: boolean }>;
+          }) => {
+            registeredWebTools.push(tool.name);
+            if (
+              certifiedTools.has(tool.name) &&
+              registeredWebTools.indexOf(tool.name) ===
+                registeredWebTools.lastIndexOf(tool.name)
+            ) {
+              const upstreamExecute = tool.execute;
+              target.registerTool({
+                ...tool,
+                ...(upstreamExecute
+                  ? {
+                    async execute(...args: never[]) {
+                      const preflight = preflightWebCapability(
+                        requiredContract,
+                        webState,
+                      );
+                      if (preflight.status === "blocked") {
+                        return blockedWebResult(preflight);
+                      }
+                      try {
+                        const result = await upstreamExecute(...args);
+                        if (result.isError) {
+                          return blockedWebResult(
+                            runWebCapabilityOperation(
+                              requiredContract,
+                              { ok: false },
+                            ),
+                          );
+                        }
+                        runWebCapabilityOperation(requiredContract, {
+                          ok: true,
+                          source: "web-tool",
+                        });
+                        return result;
+                      } catch {
+                        return blockedWebResult(
+                          runWebCapabilityOperation(
+                            requiredContract,
+                            { ok: false },
+                          ),
+                        );
+                      }
+                    },
+                  }
+                  : {}),
+              } as never);
+            }
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    try {
+      options.registerWebExtension(webApi);
+      webInitializationSucceeded = true;
+    } catch {
+      // Keep Matty diagnostics available. Status reports the local integration
+      // as degraded or unavailable without exposing the provider-owned error.
+    }
+    webState = deriveWebCapabilityState({
+      registeredTools: registeredWebTools,
+      initializationSucceeded: webInitializationSucceeded,
+    });
+  }
   let rulesConflict: string | undefined;
   pi.on("before_agent_start", (event) => {
     rulesConflict = detectMattyRulesConflict(event.systemPrompt);
@@ -703,9 +805,36 @@ export function registerPiMatty(
     piVersion: PI_VERSION,
     platform: process.platform,
     arch: process.arch,
+    web: {
+      state: webState,
+      registeredTools: registeredWebTools.filter((tool) =>
+        WEB_CAPABILITY_TOOLS.some((certified) => certified === tool)
+      ),
+    },
   });
 }
 
-export default function mattyExtension(pi: ExtensionAPI): void {
-  registerPiMatty(pi);
+export default async function mattyExtension(pi: ExtensionAPI): Promise<void> {
+  let registerWebExtension: ((api: ExtensionAPI) => void) | undefined;
+  try {
+    const jiti = createJiti(import.meta.url, {
+      moduleCache: false,
+      tryNative: false,
+      virtualModules: {
+        "@earendil-works/pi-coding-agent": piCodingAgent,
+        "@earendil-works/pi-ai/compat": piAiCompat,
+        "@earendil-works/pi-tui": piTui,
+        typebox,
+      },
+    });
+    registerWebExtension = await jiti.import(
+      WEB_ACCESS_MODULE,
+      { default: true },
+    ) as (api: ExtensionAPI) => void;
+  } catch {
+    // A missing or unloadable integration is observable through local status.
+  }
+  registerPiMatty(pi, process.env, {
+    ...(registerWebExtension ? { registerWebExtension } : {}),
+  });
 }
