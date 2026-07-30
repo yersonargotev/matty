@@ -507,6 +507,13 @@ try {
   const toolText = driverResult.toolText;
   assert.match(toolText, /https:\/\/[^\s)]+/, "tool result lacks a citation URL");
   assert.match(toolText, /Sources?:/i, "tool result lacks a Sources section");
+  const citationUrls = [
+    ...new Set(
+      [...toolText.matchAll(/https:\/\/[^\s)]+/g)].map(([url]) =>
+        url.replace(/[.,;]+$/, ""),
+      ),
+    ),
+  ];
   const observations = parseJsonLines(
     await readFile(observationsPath, "utf8"),
   );
@@ -546,6 +553,7 @@ try {
     searchInternalModel: `${PARENT_PROVIDER}/${SEARCH_MODEL}`,
     transport: `https://${CODEX_HOST}${CODEX_PATH}`,
     citationObserved: true,
+    citationUrls,
     separateOpenAiApiKey: false,
     operatorAuthUnchanged: true,
     browserCookieAccess: false,
