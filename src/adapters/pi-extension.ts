@@ -71,6 +71,7 @@ import {
   deriveWebCapabilityState,
   preflightWebCapability,
   runWebCapabilityOperation,
+  validateWebCapabilityContract,
   type WebCapabilityContract,
   type WebCapabilityState,
 } from "../domain/web-capability.ts";
@@ -432,10 +433,16 @@ export function registerPiMatty(
   const registeredWebTools: string[] = [];
   let webState: WebCapabilityState = "unavailable";
   let webInitializationSucceeded = false;
-  if (!childRole && options.registerWebExtension) {
+  const webContractValidation = validateWebCapabilityContract(
+    options.webContract ?? createParentWebCapabilityContract("required"),
+  );
+  if (
+    !childRole &&
+    options.registerWebExtension &&
+    webContractValidation.ok
+  ) {
     const certifiedTools = new Set<string>(WEB_CAPABILITY_TOOLS);
-    const webContract = options.webContract ??
-      createParentWebCapabilityContract("required");
+    const webContract = webContractValidation.contract;
     const webPolicyResult = (resolution: {
       status: string;
       disclosure?: string;

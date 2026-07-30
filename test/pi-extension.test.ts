@@ -245,6 +245,24 @@ test("parent web contracts disclose optional failure and suppress none policy", 
   assert.deepEqual(none.tools.map((tool) => tool.name), ["subagent"]);
 });
 
+test("parent web preflight rejects an incompatible contract before registration", () => {
+  const harness = createExtensionHarness();
+  let initialized = false;
+  registerPiMatty(harness.pi, {}, {
+    registerWebExtension() {
+      initialized = true;
+    },
+    webContract: {
+      ...createParentWebCapabilityContract("required"),
+      tools: ["web_search", "web_search"],
+      failureBehavior: "disclose",
+    } as never,
+  });
+
+  assert.equal(initialized, false);
+  assert.deepEqual(harness.tools.map((tool) => tool.name), ["subagent"]);
+});
+
 test("explorer child registration blocks mutating bash and does not recurse", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, { MATTY_CHILD_ROLE: "explorer" });
