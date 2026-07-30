@@ -8,12 +8,22 @@
     "type": "git",
     "url": "git+https://github.com/yersonargotev/matty.git"
   },
+  "homepage": "https://github.com/yersonargotev/matty#readme",
+  "bugs": {
+    "url": "https://github.com/yersonargotev/matty/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "keywords": [
     "pi-package"
   ],
   "files": [
     "dist",
-    "THIRD_PARTY_NOTICES.md"
+    "PRODUCTION_DEPENDENCY_LIFECYCLES.json",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_PROVENANCE.json"
   ],
   "pi": {
     "extensions": [
@@ -28,7 +38,8 @@
     "typecheck": "tsgo -p tsconfig.json",
     "test": "node --test test/*.test.ts",
     "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs && node scripts/acceptance/t07.mjs",
-    "check": "npm run typecheck && npm test && npm run test:acceptance"
+    "inspect:artifact": "node scripts/release/inspect-artifact.mjs",
+    "check": "npm run typecheck && npm test && npm run build && npm run inspect:artifact && npm run test:acceptance"
   },
   "devDependencies": {
     "@types/node": "26.1.2",

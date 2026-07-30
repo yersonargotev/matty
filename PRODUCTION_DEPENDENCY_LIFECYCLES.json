@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "lockfileVersion": 3,
+  "entries": [
+    {
+      "packagePath": "node_modules/@earendil-works/pi-coding-agent/node_modules/@google/genai",
+      "name": "@google/genai",
+      "version": "1.52.0",
+      "resolved": "https://registry.npmjs.org/@google/genai/-/genai-1.52.0.tgz",
+      "integrity": "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q==",
+      "license": "Apache-2.0",
+      "scripts": {
+        "preinstall": "echo 'preinstall: no-op'",
+        "prepare": "node scripts/prepare.js"
+      },
+      "effects": "Registry installation runs the no-op preinstall command. npm does not run prepare when installing this registry tarball, whose packed files omit scripts/prepare.js.",
+      "justification": "Transitive dependency of the exact Pi 0.83.0 peer tree; required by Pi's Google provider integration."
+    },
+    {
+      "packagePath": "node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs",
+      "name": "protobufjs",
+      "version": "7.6.5",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.5.tgz",
+      "integrity": "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
+      "license": "BSD-3-Clause",
+      "scripts": {
+        "postinstall": "node scripts/postinstall",
+        "prepublish": "cd cli && npm install && cd .. && npm run build"
+      },
+      "effects": "Registry installation runs postinstall, which checks a dependent package's protobufjs version prefix and only warns on incompatibility. The source-package prepublish build is not run when installing the registry tarball.",
+      "justification": "Transitive serialization dependency of @google/genai in the exact Pi 0.83.0 peer tree."
+    },
+    {
+      "packagePath": "node_modules/@google/genai",
+      "name": "@google/genai",
+      "version": "1.52.0",
+      "resolved": "https://registry.npmjs.org/@google/genai/-/genai-1.52.0.tgz",
+      "integrity": "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q==",
+      "license": "Apache-2.0",
+      "scripts": {
+        "preinstall": "echo 'preinstall: no-op'",
+        "prepare": "node scripts/prepare.js"
+      },
+      "effects": "Registry installation runs the no-op preinstall command. npm does not run prepare when installing this registry tarball, whose packed files omit scripts/prepare.js.",
+      "justification": "Transitive dependency of the exact production tree resolved through Pi and pi-web-access peers; required by Pi's Google provider integration."
+    },
+    {
+      "packagePath": "node_modules/protobufjs",
+      "name": "protobufjs",
+      "version": "7.6.5",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.5.tgz",
+      "integrity": "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
+      "license": "BSD-3-Clause",
+      "scripts": {
+        "postinstall": "node scripts/postinstall",
+        "prepublish": "cd cli && npm install && cd .. && npm run build"
+      },
+      "effects": "Registry installation runs postinstall, which checks a dependent package's protobufjs version prefix and only warns on incompatibility. The source-package prepublish build is not run when installing the registry tarball.",
+      "justification": "Transitive serialization dependency of @google/genai in the exact production tree."
+    }
+  ]
+}

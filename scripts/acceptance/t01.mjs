@@ -448,7 +448,10 @@ async function main() {
       "dist/domain/worker-guard.js",
     ];
     const expectedPackedFiles = [
+      "LICENSE",
+      "PRODUCTION_DEPENDENCY_LIFECYCLES.json",
       "THIRD_PARTY_NOTICES.md",
+      "THIRD_PARTY_PROVENANCE.json",
       ...expectedDistFiles,
       "package.json",
     ].sort();
