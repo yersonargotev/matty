@@ -1,3 +1,14 @@
+import { basename, dirname } from "node:path";
+
+import {
+  WEB_CAPABILITY_TOOLS,
+  type WebCapabilityState,
+} from "./web-capability.ts";
+import {
+  isPathWithin,
+  isResearchRunId,
+} from "./research-paths.ts";
+
 export const INSPECTION_TOOLS = [
   "read",
   "grep",
@@ -18,6 +29,12 @@ export const WORKER_TOOLS = [
   "bash",
 ] as const;
 
+export const RESEARCH_FILE_TOOL = "research_file";
+export const RESEARCHER_TOOLS = [
+  ...WEB_CAPABILITY_TOOLS,
+  RESEARCH_FILE_TOOL,
+] as const;
+
 export const INSPECTION_ROLES = [
   "explorer",
   "designer",
@@ -26,14 +43,23 @@ export const INSPECTION_ROLES = [
 
 export type InspectionRole = (typeof INSPECTION_ROLES)[number];
 
-export const MATTY_ROLES = [...INSPECTION_ROLES, "worker"] as const;
+export const MATTY_ROLES = [
+  ...INSPECTION_ROLES,
+  "researcher",
+  "worker",
+] as const;
 export type MattyRole = (typeof MATTY_ROLES)[number];
 
 export const DELEGATION_INPUT_GUIDANCE =
   `{"role": ${
-    MATTY_ROLES.map((role) => JSON.stringify(role)).join("|")
+    [...INSPECTION_ROLES, "worker"].map((role) => JSON.stringify(role)).join(
+      "|",
+    )
+  }, "task": string} or {"role": "researcher", "task": string, "web": "required"|"optional", "report"?: string}`;
+export const INSPECTION_ROLE_INPUT_GUIDANCE =
+  `{"role": ${
+    INSPECTION_ROLES.map((role) => JSON.stringify(role)).join("|")
   }, "task": string}`;
-export const INSPECTION_ROLE_INPUT_GUIDANCE = DELEGATION_INPUT_GUIDANCE;
 
 export interface InspectionCapabilityContract {
   schemaVersion: 1;
@@ -83,9 +109,72 @@ export interface WorkerCapabilityContract {
   failureBehavior: "fail-invocation";
 }
 
+export interface ResearcherCapabilityContract {
+  schemaVersion: 1;
+  id: "delegate-researcher";
+  role: "researcher";
+  tools: readonly string[];
+  writeAuthority: "research-artifacts";
+  mutationPolicy: "bounded-research-files";
+  web: "required" | "optional";
+  github: "absent";
+  workspaceRoot: string;
+  projectRoot: string;
+  workspace: string;
+  report: string;
+  writeLimits: {
+    workspaceFiles: "multiple";
+    researchReports: 1;
+    overwrite: "forbidden";
+  };
+  cardinality: {
+    min: 1;
+    max: 1;
+  };
+  concurrency: {
+    maxActive: 1;
+  };
+  independence: "required";
+  failureBehavior: "fail-invocation" | "disclose-web-failure";
+}
+
 export type CapabilityContract =
   | InspectionCapabilityContract
+  | ResearcherCapabilityContract
   | WorkerCapabilityContract;
+
+export function createResearcherCapabilityContract(
+  scope: Pick<
+    ResearcherCapabilityContract,
+    "web" | "workspaceRoot" | "projectRoot" | "workspace" | "report"
+  >,
+): ResearcherCapabilityContract {
+  return {
+    schemaVersion: 1,
+    id: "delegate-researcher",
+    role: "researcher",
+    tools: [...RESEARCHER_TOOLS],
+    writeAuthority: "research-artifacts",
+    mutationPolicy: "bounded-research-files",
+    web: scope.web,
+    github: "absent",
+    workspaceRoot: scope.workspaceRoot,
+    projectRoot: scope.projectRoot,
+    workspace: scope.workspace,
+    report: scope.report,
+    writeLimits: {
+      workspaceFiles: "multiple",
+      researchReports: 1,
+      overwrite: "forbidden",
+    },
+    cardinality: { min: 1, max: 1 },
+    concurrency: { maxActive: 1 },
+    independence: "required",
+    failureBehavior: scope.web === "required"
+      ? "fail-invocation"
+      : "disclose-web-failure",
+  };
+}
 
 export function createWorkerCapabilityContract(
   scope: Pick<WorkerCapabilityContract, "workingTree" | "temporaryPaths">,
@@ -156,6 +245,8 @@ export interface CapabilityAvailability {
   independentRuntime: boolean;
   inspectionGuard: boolean;
   workerGuard?: boolean;
+  researchFileTool?: boolean;
+  web?: WebCapabilityState;
   github?: {
     available: boolean;
     authenticated: boolean;
@@ -214,6 +305,11 @@ export function validateCapabilityContract(
   if (candidate.role === "worker") {
     return validateWorkerCapabilityContract(
       value as Partial<WorkerCapabilityContract>,
+    );
+  }
+  if (candidate.role === "researcher") {
+    return validateResearcherCapabilityContract(
+      value as Partial<ResearcherCapabilityContract>,
     );
   }
   const errors: string[] = [];
@@ -345,6 +441,102 @@ function validateWorkerCapabilityContract(
   };
 }
 
+function validateResearcherCapabilityContract(
+  candidate: Partial<ResearcherCapabilityContract>,
+): CapabilityContractValidation {
+  const errors: string[] = [];
+  const expectedFailureBehavior = candidate.web === "required"
+    ? "fail-invocation"
+    : candidate.web === "optional"
+      ? "disclose-web-failure"
+      : undefined;
+  if (
+    candidate.schemaVersion !== 1 ||
+    candidate.id !== "delegate-researcher" ||
+    candidate.role !== "researcher" ||
+    candidate.github !== "absent" ||
+    candidate.independence !== "required" ||
+    candidate.failureBehavior !== expectedFailureBehavior
+  ) {
+    errors.push("contract does not match the researcher v1 operation");
+  }
+  if (
+    candidate.cardinality?.min !== 1 ||
+    candidate.cardinality.max !== 1 ||
+    candidate.concurrency?.maxActive !== 1 ||
+    candidate.writeLimits?.workspaceFiles !== "multiple" ||
+    candidate.writeLimits.researchReports !== 1 ||
+    candidate.writeLimits.overwrite !== "forbidden"
+  ) {
+    errors.push("researcher contract requires exactly one bounded report");
+  }
+  if (!Array.isArray(candidate.tools)) {
+    errors.push("tools must be an array");
+  } else {
+    const tools = candidate.tools as unknown[];
+    if (
+      tools.some((tool) => typeof tool !== "string") ||
+      tools.length !== new Set(tools).size
+    ) {
+      errors.push("tools must be unique");
+    }
+    if (
+      tools.length !== RESEARCHER_TOOLS.length ||
+      RESEARCHER_TOOLS.some((tool) => !tools.includes(tool))
+    ) {
+      errors.push("researcher tools must match the package-owned allowlist");
+    }
+  }
+  if (candidate.writeAuthority !== "research-artifacts") {
+    errors.push("researcher write authority must be bounded artifacts");
+  }
+  if (candidate.mutationPolicy !== "bounded-research-files") {
+    errors.push("researcher mutation policy must be bounded research files");
+  }
+  const workspaceRoot = candidate.workspaceRoot;
+  const projectRoot = candidate.projectRoot;
+  const workspace = candidate.workspace;
+  const report = candidate.report;
+  const workspaceRootValid = isAbsoluteNormalizedPath(workspaceRoot);
+  const projectRootValid = isAbsoluteNormalizedPath(projectRoot);
+  const workspaceValid = isAbsoluteNormalizedPath(workspace);
+  const reportPathValid = isAbsoluteNormalizedPath(report);
+  if (!workspaceRootValid || !projectRootValid) {
+    errors.push("research authority roots must be absolute normalized paths");
+  }
+  if (!workspaceValid) {
+    errors.push("research workspace must be an absolute normalized path");
+  }
+  if (
+    !reportPathValid ||
+    (reportPathValid && !report.endsWith(".md"))
+  ) {
+    errors.push("research report must be an absolute normalized Markdown path");
+  }
+  if (
+    workspaceRootValid &&
+    projectRootValid &&
+    workspaceValid &&
+    reportPathValid &&
+    (
+      !workspaceRoot.endsWith("/matty/research") ||
+      dirname(workspace) !== workspaceRoot ||
+      !isResearchRunId(basename(workspace)) ||
+      !isPathWithin(projectRoot, report) ||
+      report === projectRoot
+    )
+  ) {
+    errors.push("research artifact paths exceed their declared authority");
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    contract: candidate as ResearcherCapabilityContract,
+  };
+}
+
 export function preflightCapability<T extends CapabilityContract>(
   contract: T,
   availability: CapabilityAvailability,
@@ -370,9 +562,23 @@ export function preflightCapability<T extends CapabilityContract>(
   ) {
     unmet.push("independent Subagent Runtime is unavailable");
   }
-  if (contract.role === "worker" && !availability.workerGuard) {
-    unmet.push("Worker Guard is unavailable");
-  } else if (contract.role !== "worker" && !availability.inspectionGuard) {
+  if (contract.role === "worker") {
+    if (!availability.workerGuard) {
+      unmet.push("Worker Guard is unavailable");
+    }
+  } else if (contract.role === "researcher") {
+    if (!availability.researchFileTool) {
+      unmet.push("Research File tool is unavailable");
+    }
+    if (
+      contract.web === "required" &&
+      availability.web !== "available"
+    ) {
+      unmet.push(
+        `required web capability is ${availability.web ?? "unavailable"}`,
+      );
+    }
+  } else if (!availability.inspectionGuard) {
     unmet.push("Inspection Guard is unavailable");
   }
   if (

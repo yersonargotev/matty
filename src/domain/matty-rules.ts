@@ -19,6 +19,8 @@ function renderMattyRules(role: MattyPromptRole): string {
       ? "Active role: parent; delegate bounded work through Capability Contracts."
       : role === "worker"
       ? "Active child role: worker; implement within validated paths and return changes to the parent."
+      : role === "researcher"
+      ? "Active child role: researcher; use certified web tools and write only bounded research artifacts."
       : `Active child role: ${role}; inspect only and return findings to the parent.`;
 
   return [
@@ -29,6 +31,7 @@ function renderMattyRules(role: MattyPromptRole): string {
     `- subagent accepts exactly ${DELEGATION_INPUT_GUIDANCE}; this path runs one independent role.`,
     "- Explorer, designer, and reviewer receive read, grep, find, ls, and guarded bash.",
     "- Reviewer may use read-only gh after availability and authentication preflight; explorer and designer may not use gh.",
+    "- Researcher receives only the four certified Web Capability tools and research_file; it has no bash, write, or edit authority.",
     "- Worker receives read, write, edit, grep, find, ls, and bash; writes are limited to the trusted working tree and validated temporary paths.",
     "- Single Writer permits at most one active worker per repository; parallel-writer contracts fail preflight.",
     "- This path accepts one task and runs one child; required capability failure is explicit and never falls back to inline parent work.",

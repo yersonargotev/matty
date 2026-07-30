@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   DESIGNER_CAPABILITY_CONTRACT,
   EXPLORER_CAPABILITY_CONTRACT,
+  RESEARCHER_TOOLS,
   REVIEWER_CAPABILITY_CONTRACT,
   WORKER_TOOLS,
+  createResearcherCapabilityContract,
   createWorkerCapabilityContract,
   preflightCapability,
   validateCapabilityContract,
@@ -121,6 +123,110 @@ test("validates a Single Writer Capability Contract with bounded paths", () => {
   assert.equal(contract.mutationPolicy, "worker-guard");
   assert.deepEqual(contract.cardinality, { min: 1, max: 1 });
   assert.deepEqual(contract.concurrency, { maxActive: 1 });
+});
+
+test("validates a researcher Capability Contract with two bounded write zones", () => {
+  const contract = createResearcherCapabilityContract({
+    web: "required",
+    workspaceRoot: "/validated/tmp/matty/research",
+    projectRoot: "/trusted/project",
+    workspace:
+      "/validated/tmp/matty/research/123e4567-e89b-42d3-a456-426614174000",
+    report: "/trusted/project/docs/research/result.md",
+  });
+
+  assert.deepEqual(validateCapabilityContract(contract), {
+    ok: true,
+    contract,
+  });
+  assert.deepEqual(contract.tools, RESEARCHER_TOOLS);
+  assert.equal(contract.writeAuthority, "research-artifacts");
+  assert.deepEqual(contract.writeLimits, {
+    workspaceFiles: "multiple",
+    researchReports: 1,
+    overwrite: "forbidden",
+  });
+});
+
+test("rejects escaped researcher paths and altered write limits", () => {
+  const contract = createResearcherCapabilityContract({
+    web: "optional",
+    workspaceRoot: "/validated/tmp/matty/research",
+    projectRoot: "/trusted/project",
+    workspace:
+      "/validated/tmp/matty/research/123e4567-e89b-42d3-a456-426614174000",
+    report: "/trusted/project/docs/research/result.md",
+  });
+  const result = validateCapabilityContract({
+    ...contract,
+    workspace: "/validated/tmp/matty/research/../escape",
+    report: "/trusted/project/docs/research/result.txt",
+    writeLimits: {
+      ...contract.writeLimits,
+      researchReports: 2,
+      overwrite: "allowed",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.deepEqual(result.errors, [
+      "researcher contract requires exactly one bounded report",
+      "research workspace must be an absolute normalized path",
+      "research report must be an absolute normalized Markdown path",
+    ]);
+  }
+});
+
+test("rejects researcher artifacts outside their declared authority", () => {
+  const contract = createResearcherCapabilityContract({
+    web: "required",
+    workspaceRoot: "/validated/tmp/matty/research",
+    projectRoot: "/trusted/project",
+    workspace:
+      "/different/tmp/matty/research/123e4567-e89b-42d3-a456-426614174000",
+    report: "/different/project/report.md",
+  });
+  const result = validateCapabilityContract(contract);
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.deepEqual(result.errors, [
+      "research artifact paths exceed their declared authority",
+    ]);
+  }
+});
+
+test("researcher preflight requires web and the bounded file tool", () => {
+  const contract = createResearcherCapabilityContract({
+    web: "required",
+    workspaceRoot: "/validated/tmp/matty/research",
+    projectRoot: "/trusted/project",
+    workspace:
+      "/validated/tmp/matty/research/123e4567-e89b-42d3-a456-426614174000",
+    report: "/trusted/project/docs/research/result.md",
+  });
+
+  assert.deepEqual(
+    preflightCapability(contract, {
+      availableTools: RESEARCHER_TOOLS,
+      independentRuntime: true,
+      inspectionGuard: false,
+      researchFileTool: false,
+      web: "degraded",
+    }),
+    {
+      ok: false,
+      diagnostic: {
+        kind: "capability-preflight",
+        contractId: "delegate-researcher",
+        unmet: [
+          "Research File tool is unavailable",
+          "required web capability is degraded",
+        ],
+      },
+    },
+  );
 });
 
 test("rejects parallel-writer and escaped-path contracts before execution", () => {

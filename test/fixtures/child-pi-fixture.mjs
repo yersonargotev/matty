@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -45,6 +47,13 @@ if (task === "malformed-message") {
   setInterval(() => {}, 1_000);
 } else {
   const failed = task === "failure";
+  if (task?.startsWith("Researcher assignment:\n")) {
+    const scope = JSON.parse(process.env.MATTY_RESEARCH_SCOPE ?? "null");
+    await mkdir(dirname(scope.report), { recursive: true });
+    await writeFile(scope.report, "# Fixture Research Report\n", {
+      flag: "wx",
+    });
+  }
   if (task === "tool-progress") {
     process.stdout.write(
       `${JSON.stringify({

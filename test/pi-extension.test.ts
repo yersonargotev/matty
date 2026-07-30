@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +20,7 @@ import type {
 import {
   registerPiMatty,
 } from "../src/adapters/pi-extension.ts";
+import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
   MATTY_RULES_END,
   MATTY_RULES_START,
@@ -108,7 +117,7 @@ test("parent registration exposes explicit delegated roles", async () => {
   const subagent = harness.tools.find((tool) => tool.name === "subagent");
   assert.match(
     subagent?.promptGuidelines?.join("\n") ?? "",
-    /\{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
+    /"researcher"/,
   );
   assert.deepEqual(
     (
@@ -116,9 +125,14 @@ test("parent registration exposes explicit delegated roles", async () => {
         enum?: string[];
       }
     )?.enum,
-    ["explorer", "designer", "reviewer", "worker"],
+    ["explorer", "designer", "reviewer", "researcher", "worker"],
   );
   assert.deepEqual(subagent?.parameters?.required, ["role", "task"]);
+  assert.deepEqual(
+    (subagent?.parameters?.properties?.web as { enum?: string[] })?.enum,
+    ["required", "optional"],
+  );
+  assert.ok(subagent?.parameters?.properties?.report);
   assert.deepEqual(harness.commands, ["matty"]);
 
   const webSearch = harness.tools.find((tool) => tool.name === "web_search");
@@ -134,6 +148,180 @@ test("parent registration exposes explicit delegated roles", async () => {
     JSON.stringify(failedSearch),
     /provider secret must not escape/,
   );
+});
+
+test("researcher alone receives certified web and bounded file tools", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-research-child-"));
+  try {
+    const project = join(root, "project");
+    await mkdir(project);
+    const temporaryRoot = join(root, "matty", "research");
+    const report = join(project, "report.md");
+    const scope = await createResearchWorkspace({
+      temporaryRoot,
+      projectRoot: project,
+      report,
+    });
+    const contract = {
+      schemaVersion: 1,
+      id: "delegate-researcher",
+      role: "researcher",
+      tools: [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+        "research_file",
+      ],
+      writeAuthority: "research-artifacts",
+      mutationPolicy: "bounded-research-files",
+      web: "required",
+      github: "absent",
+      workspaceRoot: scope.temporaryRoot,
+      projectRoot: scope.projectRoot,
+      workspace: scope.workspace,
+      report: scope.report,
+      writeLimits: {
+        workspaceFiles: "multiple",
+        researchReports: 1,
+        overwrite: "forbidden",
+      },
+      cardinality: { min: 1, max: 1 },
+      concurrency: { maxActive: 1 },
+      independence: "required",
+      failureBehavior: "fail-invocation",
+    };
+    const researcher = createExtensionHarness();
+    registerPiMatty(researcher.pi, {
+      MATTY_CHILD_ROLE: "researcher",
+      MATTY_RESEARCH_SCOPE: JSON.stringify(scope),
+      MATTY_RESEARCH_CONTRACT: JSON.stringify(contract),
+    }, {
+      registerWebExtension(pi) {
+        for (
+          const name of [
+            "web_search",
+            "source_check",
+            "fetch_content",
+            "get_search_content",
+            "clone_github",
+          ]
+        ) {
+          pi.registerTool({ name } as never);
+        }
+      },
+    });
+
+    assert.deepEqual(researcher.tools.map((tool) => tool.name), [
+      "web_search",
+      "source_check",
+      "fetch_content",
+      "get_search_content",
+      "research_file",
+    ]);
+    const researchFile = researcher.tools.find((tool) =>
+      tool.name === "research_file"
+    );
+    await researchFile?.execute?.(
+      "research-write" as never,
+      {
+        destination: "report",
+        content: "# Durable report\n",
+      } as never,
+    );
+    assert.equal(await readFile(report, "utf8"), "# Durable report\n");
+
+    const explorer = createExtensionHarness();
+    registerPiMatty(explorer.pi, { MATTY_CHILD_ROLE: "explorer" }, {
+      registerWebExtension(pi) {
+        pi.registerTool({ name: "web_search" } as never);
+      },
+    });
+    assert.deepEqual(explorer.tools, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("researcher delegation returns normalized artifacts and cleans only workspace on shutdown", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-research-parent-"));
+  try {
+    const project = join(root, "project");
+    const isolated = join(root, "isolated");
+    await mkdir(project);
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, { TMPDIR: isolated }, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+      },
+      registerWebExtension(pi) {
+        for (
+          const name of [
+            "web_search",
+            "source_check",
+            "fetch_content",
+            "get_search_content",
+          ]
+        ) {
+          pi.registerTool({ name } as never);
+        }
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")
+      ?.execute;
+    assert.ok(execute);
+    const result = await execute(
+      "researcher-1" as never,
+      {
+        role: "researcher",
+        task: "Research primary sources",
+        web: "required",
+      } as never,
+      undefined as never,
+      undefined as never,
+      {
+        cwd: project,
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: {
+          async getApiKeyAndHeaders() {
+            return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+          },
+        },
+      } as never,
+    );
+    const terminal = result.details as {
+      artifacts: { workspace: string; report: string };
+      outcome: { status: string };
+    };
+    assert.equal(
+      terminal.outcome.status,
+      "succeeded",
+      JSON.stringify(terminal.outcome),
+    );
+    assert.equal(
+      terminal.artifacts.report,
+      join(
+        await realpath(project),
+        "docs",
+        "research",
+        "research-primary-sources.md",
+      ),
+    );
+    assert.equal(await realpath(terminal.artifacts.workspace), terminal.artifacts.workspace);
+    await mkdir(join(project, "docs", "research"), { recursive: true });
+    await writeFile(terminal.artifacts.report, "durable");
+
+    const shutdown = harness.handlers.get("session_shutdown")?.[0];
+    assert.ok(shutdown);
+    await shutdown({ type: "session_shutdown" } as never, {} as never);
+
+    await assert.rejects(access(terminal.artifacts.workspace));
+    assert.equal(await readFile(terminal.artifacts.report, "utf8"), "durable");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("worker child permits bounded writes and blocks parent-owned mutations", async () => {

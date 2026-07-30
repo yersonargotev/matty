@@ -9,7 +9,7 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piTui from "@earendil-works/pi-tui";
 import * as typebox from "typebox";
 import { execFile } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -25,6 +25,10 @@ import {
   blockedInspectionDelegation,
   runInspectionDelegation,
 } from "../application/inspection-role-delegation.ts";
+import {
+  blockedResearcherDelegation,
+  runResearcherDelegation,
+} from "../application/researcher-delegation.ts";
 import {
   blockedWorkerDelegation,
   runWorkerDelegation,
@@ -42,7 +46,9 @@ import {
   DELEGATION_INPUT_GUIDANCE,
   INSPECTION_ROLES,
   MATTY_ROLES,
+  RESEARCHER_TOOLS,
   WORKER_TOOLS,
+  createResearcherCapabilityContract,
   createWorkerCapabilityContract,
   inspectionCapabilityContract,
   isInspectionRole,
@@ -50,6 +56,7 @@ import {
   validateCapabilityContract,
   type InspectionRole,
   type MattyRole,
+  type ResearcherCapabilityContract,
   type WorkerCapabilityContract,
 } from "../domain/capability-contract.ts";
 import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
@@ -65,6 +72,13 @@ import {
 import {
   MATTY_PACKAGE_VERSION,
 } from "../domain/package-contract.ts";
+import {
+  cleanupResearchWorkspace,
+  cleanupStaleResearchWorkspaces,
+  createResearchWorkspace,
+  writeResearchFile,
+  type ResearchWorkspace,
+} from "../domain/research-workspace.ts";
 import {
   WEB_CAPABILITY_TOOLS,
   createParentWebCapabilityContract,
@@ -187,6 +201,10 @@ function childEnvironment(
     userHome?: string;
     userConfigurationPaths: readonly string[];
   },
+  research?: {
+    contract: ResearcherCapabilityContract;
+    scope: ResearchWorkspace;
+  },
 ): NodeJS.ProcessEnv {
   const inheritedNames = [
     "PATH",
@@ -210,6 +228,13 @@ function childEnvironment(
     ...additions,
     MATTY_CHILD_ROLE: role,
   };
+  if (research) {
+    return {
+      ...child,
+      MATTY_RESEARCH_CONTRACT: JSON.stringify(research.contract),
+      MATTY_RESEARCH_SCOPE: JSON.stringify(research.scope),
+    };
+  }
   if (!worker) {
     return child;
   }
@@ -227,6 +252,49 @@ function childEnvironment(
       worker.userConfigurationPaths,
     ),
   };
+}
+
+function researcherScope(
+  environment: NodeJS.ProcessEnv,
+): {
+  contract: ResearcherCapabilityContract;
+  scope: ResearchWorkspace;
+} | undefined {
+  try {
+    const contract = JSON.parse(
+      environment.MATTY_RESEARCH_CONTRACT ?? "null",
+    ) as unknown;
+    const scope = JSON.parse(
+      environment.MATTY_RESEARCH_SCOPE ?? "null",
+    ) as unknown;
+    const validation = validateCapabilityContract(contract);
+    if (
+      !validation.ok ||
+      validation.contract.role !== "researcher" ||
+      typeof scope !== "object" ||
+      scope === null ||
+      Array.isArray(scope)
+    ) {
+      return undefined;
+    }
+    const candidate = scope as Partial<ResearchWorkspace>;
+    if (
+      typeof candidate.temporaryRoot !== "string" ||
+      typeof candidate.projectRoot !== "string" ||
+      candidate.temporaryRoot !== validation.contract.workspaceRoot ||
+      candidate.projectRoot !== validation.contract.projectRoot ||
+      candidate.workspace !== validation.contract.workspace ||
+      candidate.report !== validation.contract.report
+    ) {
+      return undefined;
+    }
+    return {
+      contract: validation.contract,
+      scope: candidate as ResearchWorkspace,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 async function reviewerGithubPreflight(
@@ -358,6 +426,54 @@ function delegationResult<T extends { outcome: { status: string } }>(
   };
 }
 
+function blockedCapabilityResult(
+  contractId: string,
+  unmet: string[],
+): {
+  content: Array<{ type: "text"; text: string }>;
+  details: {
+    contract: null;
+    outcome: {
+      status: "blocked";
+      diagnostic: {
+        kind: "capability-preflight";
+        contractId: string;
+        unmet: string[];
+      };
+    };
+  };
+  isError: true;
+} {
+  const details = {
+    contract: null,
+    outcome: {
+      status: "blocked" as const,
+      diagnostic: {
+        kind: "capability-preflight" as const,
+        contractId,
+        unmet,
+      },
+    },
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(details) }],
+    details,
+    isError: true,
+  };
+}
+
+function defaultResearchReport(task: string): string {
+  const slug = task
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80)
+    .replace(/-$/g, "") || "research";
+  return `docs/research/${slug}.md`;
+}
+
 async function blockedToolCall(
   role: MattyRole,
   event: ToolCallEvent,
@@ -398,6 +514,9 @@ async function blockedToolCall(
       ? undefined
       : { block: true, reason: decision.reason };
   }
+  if (!isInspectionRole(role)) {
+    return undefined;
+  }
   if (event.toolName === "edit" || event.toolName === "write") {
     return {
       block: true,
@@ -430,14 +549,19 @@ export function registerPiMatty(
   const childRole = isMattyRole(environment.MATTY_CHILD_ROLE)
     ? environment.MATTY_CHILD_ROLE
     : undefined;
+  const research = childRole === "researcher"
+    ? researcherScope(environment)
+    : undefined;
   const registeredWebTools: string[] = [];
   let webState: WebCapabilityState = "unavailable";
   let webInitializationSucceeded = false;
   const webContractValidation = validateWebCapabilityContract(
-    options.webContract ?? createParentWebCapabilityContract("required"),
+    childRole === "researcher" && research
+      ? createParentWebCapabilityContract(research.contract.web)
+      : options.webContract ?? createParentWebCapabilityContract("required"),
   );
   if (
-    !childRole &&
+    (!childRole || (childRole === "researcher" && research)) &&
     options.registerWebExtension &&
     webContractValidation.ok
   ) {
@@ -530,6 +654,74 @@ export function registerPiMatty(
       initializationSucceeded: webInitializationSucceeded,
     });
   }
+  if (research) {
+    pi.registerTool({
+      name: "research_file",
+      label: "Research File",
+      description:
+        "Write a new file in the validated Research Workspace or the one approved Research Report.",
+      parameters: {
+        type: "object",
+        properties: {
+          destination: {
+            type: "string",
+            enum: ["workspace", "report"],
+          },
+          path: {
+            type: "string",
+            description:
+              "Relative workspace path. Omit for the approved report.",
+          },
+          content: { type: "string" },
+        },
+        required: ["destination", "content"],
+        additionalProperties: false,
+      } as never,
+      async execute(
+        _toolCallId: string,
+        input: {
+          destination: "workspace" | "report";
+          path?: string;
+          content: string;
+        },
+      ) {
+        try {
+          const result = input.destination === "workspace" &&
+              typeof input.path === "string"
+            ? await writeResearchFile(research.scope, {
+              destination: "workspace",
+              path: input.path,
+              content: input.content,
+            })
+            : input.destination === "report" && input.path === undefined
+              ? await writeResearchFile(research.scope, {
+                destination: "report",
+                content: input.content,
+              })
+              : undefined;
+          if (!result) {
+            throw new Error("research file destination is invalid");
+          }
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(result),
+            }],
+            details: result,
+          };
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : "research file write failed";
+          return {
+            content: [{ type: "text" as const, text: message }],
+            details: { error: message },
+            isError: true,
+          };
+        }
+      },
+    } as never);
+  }
   let rulesConflict: string | undefined;
   pi.on("before_agent_start", (event) => {
     rulesConflict = detectMattyRulesConflict(event.systemPrompt);
@@ -542,14 +734,40 @@ export function registerPiMatty(
   });
 
   if (childRole) {
-    const scope = childRole === "worker"
-      ? workerGuardScope(environment)
-      : undefined;
-    pi.on("tool_call", (event) => blockedToolCall(childRole, event, scope));
+    if (childRole !== "researcher") {
+      const scope = childRole === "worker"
+        ? workerGuardScope(environment)
+        : undefined;
+      pi.on("tool_call", (event) => blockedToolCall(childRole, event, scope));
+    }
   } else {
     const activeInvocations = Object.fromEntries(
       INSPECTION_ROLES.map((role) => [role, 0]),
     ) as Record<InspectionRole, number>;
+    let activeResearchers = 0;
+    const sessionResearchWorkspaces = new Map<string, ResearchWorkspace>();
+    const researchTemporaryRoot = resolve(
+      environment.TMPDIR ?? tmpdir(),
+      "matty",
+      "research",
+    );
+    pi.on("session_start", async (event) => {
+      if (event.reason === "startup") {
+        await cleanupStaleResearchWorkspaces({
+          temporaryRoot: researchTemporaryRoot,
+        });
+      }
+    });
+    pi.on("session_shutdown", async () => {
+      for (const scope of sessionResearchWorkspaces.values()) {
+        try {
+          await cleanupResearchWorkspace(scope);
+          sessionResearchWorkspaces.delete(scope.workspace);
+        } catch {
+          // A failed validation is safer to leave untouched for startup cleanup.
+        }
+      }
+    });
     const invocation = options.invocation ?? currentPiInvocation();
     const independentRuntimeAvailable =
       options.independentRuntimeAvailable ?? invocation !== undefined;
@@ -566,6 +784,17 @@ export function registerPiMatty(
           minLength: 1,
           description: "One bounded delegated assignment.",
         },
+        web: {
+          type: "string",
+          enum: ["required", "optional"],
+          description: "Required for researcher; rejected for other roles.",
+        },
+        report: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Parent-approved Markdown report path for researcher.",
+        },
       },
       required: ["role", "task"],
       additionalProperties: false,
@@ -575,11 +804,12 @@ export function registerPiMatty(
       name: "subagent",
       label: "Matty Role",
       description:
-        "Run one independent explorer, designer, reviewer, or worker through the Matty Subagent Runtime.",
+        "Run one independent explorer, designer, reviewer, researcher, or worker through the Matty Subagent Runtime.",
       promptSnippet:
-        "Delegate one bounded inspection task to a named Matty Role.",
+        "Delegate one bounded task to a named Matty Role.",
       promptGuidelines: [
         `Call subagent with exactly ${DELEGATION_INPUT_GUIDANCE}.`,
+        "Researcher also requires web (required or optional) and one approved Markdown report path.",
         "Inspection roles receive read, grep, find, ls, and guarded bash; worker also receives edit and write.",
         "Only reviewer may perform read-only gh inspection after availability and authentication preflight.",
         "Single Writer permits at most one active worker per repository.",
@@ -590,7 +820,12 @@ export function registerPiMatty(
       executionMode: "parallel",
       async execute(
         _toolCallId: string,
-        params: { role: MattyRole; task: string },
+        params: {
+          role: MattyRole;
+          task: string;
+          web?: "required" | "optional";
+          report?: string;
+        },
         signal: AbortSignal | undefined,
         onUpdate:
           | ((update: {
@@ -601,25 +836,12 @@ export function registerPiMatty(
         ctx: ExtensionContext,
       ) {
         if (!isMattyRole(params.role)) {
-          const terminal = {
-            contract: null,
-            outcome: {
-              status: "blocked" as const,
-              diagnostic: {
-                kind: "capability-preflight" as const,
-                contractId: "delegate-invalid",
-                unmet: ["unsupported inspection role"],
-              },
-            },
-          };
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(terminal) }],
-            details: terminal,
-            isError: true,
-          };
+          return blockedCapabilityResult("delegate-invalid", [
+            "unsupported Matty Role",
+          ]);
         }
         const role = params.role;
-        if (role !== "worker" && rulesConflict) {
+        if (isInspectionRole(role) && rulesConflict) {
           const terminal = blockedInspectionDelegation(role, [
             `Matty Rules conflict: ${rulesConflict}`,
           ]);
@@ -743,6 +965,107 @@ export function registerPiMatty(
             progressOptions as never,
           );
           return delegationResult(terminal);
+        }
+
+        if (role === "researcher") {
+          const web = params.web;
+          const report = params.report?.trim() ||
+            defaultResearchReport(params.task);
+          if (web !== "required" && web !== "optional") {
+            return blockedCapabilityResult("delegate-researcher", [
+              "researcher requires a web requirement",
+            ]);
+          }
+          let scope: ResearchWorkspace;
+          try {
+            scope = await createResearchWorkspace({
+              temporaryRoot: researchTemporaryRoot,
+              projectRoot: ctx.cwd,
+              report,
+            });
+          } catch {
+            return blockedCapabilityResult("delegate-researcher", [
+              "research artifact destinations are invalid",
+            ]);
+          }
+          sessionResearchWorkspaces.set(scope.workspace, scope);
+          const contract = createResearcherCapabilityContract({
+            web,
+            workspaceRoot: scope.temporaryRoot,
+            projectRoot: scope.projectRoot,
+            workspace: scope.workspace,
+            report: scope.report,
+          });
+          if (rulesConflict) {
+            unmet.push(`Matty Rules conflict: ${rulesConflict}`);
+          }
+          if (
+            activeResearchers >= contract.concurrency.maxActive
+          ) {
+            unmet.push(
+              `researcher concurrency limit reached: ${activeResearchers} active`,
+            );
+          }
+          if (unmet.length > 0 || !ctx.model || !invocation) {
+            return delegationResult(
+              blockedResearcherDelegation(contract, unmet),
+            );
+          }
+          const researcherInvocation = !declaresInvocationTools(invocation)
+            ? invocationWithTools(invocation, RESEARCHER_TOOLS)
+            : invocation;
+          activeResearchers += 1;
+          try {
+            const terminal = await runResearcherDelegation(
+              params.task,
+              {
+                contract,
+                availability: {
+                  availableTools: invocationTools(researcherInvocation),
+                  independentRuntime: independentRuntimeAvailable,
+                  inspectionGuard: false,
+                  researchFileTool: true,
+                  web: webState,
+                },
+                createRunner() {
+                  return createChildPiRunner({
+                    invocation: researcherInvocation,
+                    parent: {
+                      provider: ctx.model?.provider ?? "",
+                      model: ctx.model?.id ?? "",
+                      thinking: thinkingLevel(ctx.thinkingLevel),
+                      cwd: scope.projectRoot,
+                    },
+                    authentication: {
+                      provider: ctx.model?.provider ?? "",
+                      environment: childEnvironment(
+                        environment,
+                        authentication?.ok
+                          ? authentication.env
+                          : undefined,
+                        options.childEnvironment,
+                        role,
+                        undefined,
+                        { contract, scope },
+                      ),
+                    },
+                  });
+                },
+                async reportDelivered() {
+                  try {
+                    const stats = await lstat(contract.report);
+                    return stats.isFile() && !stats.isSymbolicLink();
+                  } catch {
+                    return false;
+                  }
+                },
+              },
+              progressOptions as never,
+            );
+            return delegationResult(terminal);
+          } finally {
+            activeResearchers -= 1;
+          }
         }
 
         const github = role === "reviewer"

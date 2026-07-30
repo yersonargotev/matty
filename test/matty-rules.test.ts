@@ -20,7 +20,7 @@ test("injects exactly one marked Matty Rules block", () => {
   assert.match(prompt, /Base host instructions/);
   assert.match(
     prompt,
-    /subagent accepts exactly \{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
+    /"role": "researcher".*"web": "required"\|"optional".*"report"\?: string/,
   );
   assert.match(
     prompt,
@@ -79,10 +79,17 @@ test("detects a direct project instruction conflict outside marked rules", () =>
   );
 });
 
-test("rules describe the exposed inspection and worker roles", () => {
+test("rules describe all five least-privilege roles", () => {
   const prompt = injectMattyRules("Base", "parent");
 
-  assert.match(prompt, /exposes explorer, designer, reviewer, and worker/);
+  assert.match(
+    prompt,
+    /exposes explorer, designer, reviewer, researcher, and worker/,
+  );
+  assert.match(
+    prompt,
+    /Researcher receives only the four certified Web Capability tools and research_file/,
+  );
   assert.match(prompt, /best-effort command policy, not a security sandbox/);
   assert.match(prompt, /Worker Guard is a best-effort command and path policy/);
   assert.match(prompt, /Single Writer permits at most one active worker/);
@@ -101,5 +108,9 @@ test("injects the selected designer and reviewer child role", () => {
   assert.match(
     injectMattyRules("Base", "worker"),
     /Active child role: worker; implement within validated paths/,
+  );
+  assert.match(
+    injectMattyRules("Base", "researcher"),
+    /Active child role: researcher; use certified web tools and write only bounded research artifacts/,
   );
 });
