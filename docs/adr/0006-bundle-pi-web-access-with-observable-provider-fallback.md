@@ -15,12 +15,25 @@ GitHub cloning, PDF handling, YouTube, and local video remain
 `pi-web-access`-owned behavior outside Matty's specific v1 guarantees. Matty
 does not enable browser-cookie access or write provider configuration.
 
-Version `0.15.0` is the candidate pin for Matty `0.1.0`. Phase 0 must validate
-it with the Certified Pi Version, Certified Target, Reference Model Path,
-authentication, and packed-package combination. Matty may replace the candidate
-before publishing `0.1.0` if that validation fails. After publication, changing
-the bundled version requires a new Matty minor release and the same complete
-validation.
+Phase 0 validated version `0.15.0` as the pin to bundle for Matty `0.1.0` with
+the Certified Pi Version, Certified Target, Reference Model Path,
+ChatGPT/Codex OAuth, and packed-package combination. The proof installed the
+exact web extension alongside the packed Matty artifact; adding it to Matty's
+package dependency graph remains a separate integration step. The OpenAI
+search path resolved Pi's `openai-codex` credential through the extension
+context, selected its first compatible internal search model `gpt-5.4`, and called
+`https://chatgpt.com/backend-api/codex/responses`. The returned result contained
+current source citations. Validation observed the endpoint, model, native
+`web_search` tool, authorization presence, and response status without
+recording credentials, prompts, queries, or response bodies.
+
+The validation used no separate `OPENAI_API_KEY`, enabled no browser-cookie
+access, wrote no provider configuration, and left the operator's Pi credential
+file byte-for-byte and metadata-identical. The extension's public result names
+the coarse provider `openai`; the exact internal `openai-codex/gpt-5.4`
+selection was therefore observed at the sanitized transport seam. After
+publication, changing the bundled version requires a new Matty minor release
+and the same complete validation.
 
 Matty records each skill or web-dependent branch in a Web Contract outside the
 imported skill files, classifying access as `required`, `optional`, or `none`.
