@@ -49,7 +49,6 @@ function includes(fragment, message = `missing workflow invariant: ${fragment}`)
 
 includes("workflow_dispatch:");
 includes("type: boolean");
-includes("description: One-time publish of @yargote/matty@0.1.0");
 includes("permissions:\n  contents: read");
 includes(
   "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main'",
@@ -80,7 +79,7 @@ includes("${{ steps.certify.outputs.tarball }}");
 includes("${{ steps.certify.outputs.checksum }}");
 
 includes(
-  "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage && !inputs.bootstrap",
+  "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage",
 );
 includes("needs: certify");
 includes("environment: npm-stage");
@@ -90,38 +89,21 @@ includes("uses: actions/download-artifact@v4");
 includes("shasum -a 256 -c SHA256SUMS");
 includes('run: npm stage publish "${{ steps.verify.outputs.tarball }}"');
 
-includes(
-  "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.bootstrap && !inputs.stage",
+assert.doesNotMatch(workflow, /\bnpm\s+publish\b/, "npm publish is forbidden");
+assert.doesNotMatch(
+  workflow,
+  /\b(?:NODE_AUTH_TOKEN|NPM_TOKEN)\b/,
+  "npm write credentials are forbidden",
 );
-includes("environment: npm-bootstrap");
-includes("registry-url: https://registry.npmjs.org");
-includes("package-manager-cache: false");
-includes('if [[ "$identity" != "@yargote/matty@0.1.0" ]]');
-includes("NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}");
-includes(
-  'run: npm publish "${{ steps.verify-bootstrap.outputs.tarball }}" --provenance --access public',
-);
-assert.doesNotMatch(workflow, /\bNPM_TOKEN\b/, "generic npm token is forbidden");
 assert.doesNotMatch(
   workflow,
   /^\s+(?:contents|packages|actions|attestations):\s*write\s*$/m,
-  "only OIDC permissions may be writable",
+  "only the staging OIDC permission may be writable",
 );
 assert.equal(
   workflow.match(/^\s*run:\s*npm stage publish .+$/gm)?.length,
   1,
   "the workflow must contain exactly one npm stage publish command",
-);
-assert.equal(
-  workflow.match(/^\s*run:\s*npm publish .+$/gm)?.length,
-  1,
-  "the workflow must contain exactly one one-time npm publish command",
-);
-assert.equal(
-  workflow.match(/^\s+NODE_AUTH_TOKEN:\s*\$\{\{ secrets\.NPM_BOOTSTRAP_TOKEN \}\}\s*$/gm)
-    ?.length,
-  1,
-  "the bootstrap token must appear exactly once as a protected secret",
 );
 
 console.log("Release chain workflow invariants verified.");
