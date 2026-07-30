@@ -7,7 +7,7 @@ import {
   renderStatusJson,
 } from "../src/domain/status.ts";
 
-test("status reports an active certified package, Pi, and target from one snapshot", () => {
+test("status stages the catalog but degrades on the failed safety gate", () => {
   const snapshot = createStatusSnapshot({
     packageVersion: "0.1.0",
     piVersion: "0.83.0",
@@ -33,9 +33,15 @@ test("status reports an active certified package, Pi, and target from one snapsh
       certifiedTargets: ["darwin/arm64"],
       state: "certified",
     },
+    catalog: {
+      memberCount: 22,
+      state: "staged",
+      activationSafetyGate: "blocked",
+      blockingIssue: 3,
+    },
     activation: {
-      state: "active",
-      reason: "compatible",
+      state: "degraded",
+      reason: "activation-safety-gate",
     },
   });
 
@@ -45,7 +51,8 @@ test("status reports an active certified package, Pi, and target from one snapsh
       "Matty 0.1.0",
       "Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
-      "Activation active · compatible",
+      "Catalog 22 skills · staged",
+      "Activation degraded · activation-safety-gate",
     ].join("\n"),
   );
   assert.deepEqual(JSON.parse(renderStatusJson(snapshot)), snapshot);

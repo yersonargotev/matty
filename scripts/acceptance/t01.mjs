@@ -12,11 +12,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.83.0";
-const STARTUP_HINT = "Matty active · /skill:ask-matt · /matty status";
+const SAFETY_GATE_WARNING =
+  "Matty degraded · Activation Safety Gate blocked · /matty status";
 const REPOSITORY_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -120,6 +121,21 @@ async function snapshotTree(root) {
 
   await visit("");
   return entries;
+}
+
+async function listRelativeFiles(root) {
+  const files = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listRelativeFiles(path));
+    } else if (entry.isFile()) {
+      files.push(relative(REPOSITORY_ROOT, path).split(sep).join("/"));
+    }
+  }
+  return files;
 }
 
 function escapeSandboxLiteral(value) {
@@ -407,22 +423,44 @@ async function main() {
     }
     assert.equal(packMetadata.name, "@yargote/matty");
     assert.equal(packMetadata.version, "0.1.0");
+    const expectedDistFiles = [
+      "dist/adapters/pi-extension.d.ts",
+      "dist/adapters/pi-extension.js",
+      "dist/application/child-pi-runtime.d.ts",
+      "dist/application/child-pi-runtime.js",
+      "dist/application/register-matty.d.ts",
+      "dist/application/register-matty.js",
+      "dist/domain/package-contract.d.ts",
+      "dist/domain/package-contract.js",
+      "dist/domain/skill-catalog.d.ts",
+      "dist/domain/skill-catalog.js",
+      "dist/domain/status.d.ts",
+      "dist/domain/status.js",
+    ];
+    const catalogManifest = JSON.parse(
+      await readFile(
+        join(REPOSITORY_ROOT, "skills", "catalog.json"),
+        "utf8",
+      ),
+    );
     assert.deepEqual(
-      packMetadata.files.map((file) => file.path),
-      [
-        "THIRD_PARTY_NOTICES.md",
-        "dist/adapters/pi-extension.d.ts",
-        "dist/adapters/pi-extension.js",
-        "dist/application/child-pi-runtime.d.ts",
-        "dist/application/child-pi-runtime.js",
-        "dist/application/register-matty.d.ts",
-        "dist/application/register-matty.js",
-        "dist/domain/package-contract.d.ts",
-        "dist/domain/package-contract.js",
-        "dist/domain/status.d.ts",
-        "dist/domain/status.js",
-        "package.json",
-      ],
+      (await readdir(join(REPOSITORY_ROOT, "skills"), {
+        withFileTypes: true,
+      }))
+        .map((entry) => entry.name)
+        .sort(),
+      ["catalog.json", "engineering", "productivity"],
+      "[T01:pack] skills/ contains an undeclared top-level entry",
+    );
+    const expectedPackedFiles = [
+      "THIRD_PARTY_NOTICES.md",
+      ...expectedDistFiles,
+      "package.json",
+      ...await listRelativeFiles(join(REPOSITORY_ROOT, "skills")),
+    ].sort();
+    assert.deepEqual(
+      packMetadata.files.map((file) => file.path).sort(),
+      expectedPackedFiles,
       "[T01:pack] packed artifact contents differ from the reviewed runtime",
     );
     const artifactPath = join(artifactRoot, packMetadata.filename);
@@ -493,7 +531,7 @@ async function main() {
         (event) =>
           event.type === "extension_ui_request" &&
           event.method === "notify" &&
-          event.message === STARTUP_HINT,
+          event.message === SAFETY_GATE_WARNING,
       );
       rpc.send({ id: "commands", type: "get_commands" });
       const commandsResponse = await rpc.waitFor(
@@ -514,6 +552,17 @@ async function main() {
         ),
         "[T01:command-registration] /matty was not registered by the packed extension",
       );
+      const commandNames = new Set(
+        commandsResponse.data.commands.map((command) => command.name),
+      );
+      for (const member of catalogManifest.members) {
+        assert.equal(
+          commandNames.has(member.name) ||
+            commandNames.has(`skill:${member.name}`),
+          false,
+          `[T01:command-registration] staged skill ${member.name} was activated`,
+        );
+      }
 
       rpc.send({
         id: "human-status",
@@ -534,7 +583,11 @@ async function main() {
       );
       assert.match(
         humanNotification.message,
-        /Activation active · compatible/,
+        /Catalog 22 skills · staged/,
+      );
+      assert.match(
+        humanNotification.message,
+        /Activation degraded · activation-safety-gate/,
       );
 
       rpc.send({
@@ -574,8 +627,14 @@ async function main() {
       assert.equal(jsonStatus.target.platform, "darwin");
       assert.equal(jsonStatus.target.arch, "arm64");
       assert.deepEqual(jsonStatus.activation, {
-        state: "active",
-        reason: "compatible",
+        state: "degraded",
+        reason: "activation-safety-gate",
+      });
+      assert.deepEqual(jsonStatus.catalog, {
+        memberCount: 22,
+        state: "staged",
+        activationSafetyGate: "blocked",
+        blockingIssue: 3,
       });
     } catch (error) {
       rpcFailure = error;
@@ -602,10 +661,10 @@ async function main() {
         (event) =>
           event.type === "extension_ui_request" &&
           event.method === "notify" &&
-          event.message === STARTUP_HINT,
+          event.message === SAFETY_GATE_WARNING,
       ).length,
       1,
-      "[T01:startup] expected exactly one Startup Hint",
+      "[T01:startup] expected exactly one safety-gate warning",
     );
     await access(rpc.guardReadyPath);
     await assert.rejects(
@@ -644,7 +703,7 @@ async function main() {
         `artifact: ${packMetadata.filename}`,
         "Pi: 0.83.0",
         "target: darwin/arm64",
-        "activation: active",
+        "activation: degraded (activation-safety-gate)",
         "network during startup/status: denied",
         "project writes during startup/status: none",
       ].join("\n") + "\n",

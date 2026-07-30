@@ -13,6 +13,7 @@
   ],
   "files": [
     "dist",
+    "skills",
     "THIRD_PARTY_NOTICES.md"
   ],
   "pi": {
@@ -24,7 +25,7 @@
     "@earendil-works/pi-coding-agent": "0.83.0"
   },
   "scripts": {
-    "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json",
+    "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json && node scripts/build/validate-skill-catalog.mjs",
     "typecheck": "tsgo -p tsconfig.json",
     "test": "node --test test/*.test.ts",
     "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs",
