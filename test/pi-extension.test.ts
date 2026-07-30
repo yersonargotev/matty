@@ -138,3 +138,73 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
     },
   });
 });
+
+test("the explorer Capability Contract permits only one active invocation", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: ["test/fixtures/child-pi-fixture.mjs"],
+    },
+  });
+
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const controller = new AbortController();
+  let resolveStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: {
+      async getApiKeyAndHeaders() {
+        return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+      },
+    },
+  };
+
+  const first = execute(
+    "call-1" as never,
+    { task: "hold" } as never,
+    controller.signal as never,
+    ((update: { details?: { type?: string } }) => {
+      if (update.details?.type === "started") {
+        resolveStarted?.();
+      }
+    }) as never,
+    context as never,
+  );
+  await started;
+
+  let firstResult: { details?: unknown } | undefined;
+  try {
+    const blocked = await execute(
+      "call-2" as never,
+      { task: "Inspect while the first explorer is active" } as never,
+      undefined as never,
+      undefined as never,
+      context as never,
+    );
+    assert.deepEqual(
+      (blocked.details as { outcome: unknown }).outcome,
+      {
+        status: "blocked",
+        diagnostic: {
+          kind: "capability-preflight",
+          contractId: "delegate-explorer",
+          unmet: ["explorer concurrency limit reached: 1 active"],
+        },
+      },
+    );
+  } finally {
+    controller.abort();
+    firstResult = await first;
+  }
+  assert.equal(
+    (firstResult.details as { outcome: { status: string } }).outcome.status,
+    "cancelled",
+  );
+});

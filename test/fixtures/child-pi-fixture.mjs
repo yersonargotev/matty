@@ -37,6 +37,11 @@ if (task === "malformed-message") {
 } else if (task === "ignore-term") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1_000);
+} else if (
+  task === "hold" ||
+  task?.startsWith("Explorer assignment:\nhold\n")
+) {
+  setInterval(() => {}, 1_000);
 } else {
   const failed = task === "failure";
   if (task === "tool-progress") {

@@ -48,9 +48,16 @@ test("blocks recognized mutation families for an explorer", () => {
 test("recognizes mutation commands after pipes and shell separators", () => {
   for (const command of [
     "pwd; rm -f changed.txt",
+    "pwd\n/usr/bin/touch changed.txt",
     "printf value | tee changed.txt",
     "git status && git checkout main",
     "env FOO=bar sh -c 'mkdir changed'",
+    'echo "$(touch changed.txt)"',
+    "cat <(touch changed.txt)",
+    "cat <(curl https://example.com)",
+    "{ touch changed.txt; }",
+    "if true; then touch changed.txt; fi",
+    "git diff --output=changed.patch",
   ]) {
     assert.equal(inspectExplorerCommand(command).allowed, false, command);
   }

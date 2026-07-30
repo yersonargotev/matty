@@ -94,6 +94,17 @@ const SHELL_MUTATIONS = new Set([
   "pkill",
   "launchctl",
 ]);
+const SHELL_CONTROL_FLOW = new Set([
+  "!",
+  "{",
+  "case",
+  "for",
+  "function",
+  "if",
+  "select",
+  "until",
+  "while",
+]);
 const WRAPPERS = new Set(["command", "builtin", "nohup", "time"]);
 const ENV_OPTIONS_WITH_VALUES = new Set(["-u", "--unset"]);
 const SUDO_OPTIONS_WITH_VALUES = new Set([
@@ -123,6 +134,10 @@ function shellTokens(segment: string): string[] {
   ).map((token) => token.replace(/^["']|["']$/g, ""));
 }
 
+function commandName(token: string | undefined): string | undefined {
+  return token?.split(/[\\/]/).at(-1)?.toLowerCase();
+}
+
 function consumeOptions(
   tokens: string[],
   optionsWithValues: ReadonlySet<string>,
@@ -149,7 +164,7 @@ function commandTokens(segment: string): string[] {
     tokens.shift();
   }
   while (tokens.length > 0) {
-    const head = tokens[0]?.toLowerCase();
+    const head = commandName(tokens[0]);
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0] ?? "")) {
       tokens.shift();
       continue;
@@ -220,11 +235,22 @@ export function inspectExplorerCommand(
   if (/(?:^|[^<])(?:[0-9]*>{1,2})/.test(command)) {
     return blocked("shell");
   }
-  for (const segment of command.split(/[;&|]+/)) {
+  if (
+    command.includes("$(") ||
+    command.includes("`") ||
+    command.includes("<(") ||
+    command.includes(">(")
+  ) {
+    return blocked("shell");
+  }
+  for (const segment of command.split(/[;&|\r\n]+/)) {
     const tokens = commandTokens(segment);
-    const head = tokens[0]?.toLowerCase();
+    const head = commandName(tokens[0]);
     if (!head) {
       continue;
+    }
+    if (SHELL_CONTROL_FLOW.has(head)) {
+      return blocked("shell");
     }
     if (head === "gh") {
       return blocked("github");
@@ -234,7 +260,12 @@ export function inspectExplorerCommand(
     }
     if (
       head === "git" &&
-      GIT_MUTATIONS.has(gitSubcommand(tokens) ?? "")
+      (
+        GIT_MUTATIONS.has(gitSubcommand(tokens) ?? "") ||
+        tokens.some((token) =>
+          token === "--output" || token.startsWith("--output=")
+        )
+      )
     ) {
       return blocked("git");
     }

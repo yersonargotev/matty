@@ -19,7 +19,10 @@ import {
   registerMatty,
   type MattyHost,
 } from "../application/register-matty.ts";
-import { EXPLORER_TOOLS } from "../domain/capability-contract.ts";
+import {
+  EXPLORER_CAPABILITY_CONTRACT,
+  EXPLORER_TOOLS,
+} from "../domain/capability-contract.ts";
 import { inspectExplorerCommand } from "../domain/inspection-guard.ts";
 import {
   detectMattyRulesConflict,
@@ -165,6 +168,7 @@ export function registerPiMatty(
   if (childRole) {
     pi.on("tool_call", (event) => blockedToolCall(event));
   } else {
+    let activeExplorerInvocations = 0;
     const invocation = options.invocation ?? currentPiInvocation();
     const independentRuntimeAvailable =
       options.independentRuntimeAvailable ?? invocation !== undefined;
@@ -235,6 +239,14 @@ export function registerPiMatty(
             `parent authentication is unavailable: ${authentication.error}`,
           );
         }
+        if (
+          activeExplorerInvocations >=
+            EXPLORER_CAPABILITY_CONTRACT.concurrency.maxActive
+        ) {
+          unmet.push(
+            `explorer concurrency limit reached: ${activeExplorerInvocations} active`,
+          );
+        }
         if (unmet.length > 0 || !ctx.model || !invocation) {
           const terminal = blockedExplorerDelegation(unmet);
           return {
@@ -244,58 +256,63 @@ export function registerPiMatty(
           };
         }
 
-        const terminal = await runExplorerDelegation(
-          params.task,
-          {
-            availability: {
-              availableTools: EXPLORER_TOOLS,
-              independentRuntime: independentRuntimeAvailable,
-              inspectionGuard: true,
-            },
-            createRunner() {
-              return createChildPiRunner({
-                invocation,
-                parent: {
-                  provider: ctx.model?.provider ?? "",
-                  model: ctx.model?.id ?? "",
-                  thinking: thinkingLevel(ctx.thinkingLevel),
-                  cwd: ctx.cwd,
-                },
-                authentication: {
-                  provider: ctx.model?.provider ?? "",
-                  environment: childEnvironment(
-                    environment,
-                    authentication?.ok
-                      ? authentication.env
-                      : undefined,
-                    options.childEnvironment,
-                  ),
-                },
-              });
-            },
-          },
-          {
-            ...(signal ? { signal } : {}),
-            onProgress(progress) {
-              onUpdate?.({
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({ type: "progress", progress }),
+        activeExplorerInvocations += 1;
+        try {
+          const terminal = await runExplorerDelegation(
+            params.task,
+            {
+              availability: {
+                availableTools: EXPLORER_TOOLS,
+                independentRuntime: independentRuntimeAvailable,
+                inspectionGuard: true,
+              },
+              createRunner() {
+                return createChildPiRunner({
+                  invocation,
+                  parent: {
+                    provider: ctx.model?.provider ?? "",
+                    model: ctx.model?.id ?? "",
+                    thinking: thinkingLevel(ctx.thinkingLevel),
+                    cwd: ctx.cwd,
                   },
-                ],
-                details: progress,
-              });
+                  authentication: {
+                    provider: ctx.model?.provider ?? "",
+                    environment: childEnvironment(
+                      environment,
+                      authentication?.ok
+                        ? authentication.env
+                        : undefined,
+                      options.childEnvironment,
+                    ),
+                  },
+                });
+              },
             },
-          },
-        );
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(terminal) },
-          ],
-          details: terminal,
-          isError: terminal.outcome.status !== "succeeded",
-        };
+            {
+              ...(signal ? { signal } : {}),
+              onProgress(progress) {
+                onUpdate?.({
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ type: "progress", progress }),
+                    },
+                  ],
+                  details: progress,
+                });
+              },
+            },
+          );
+          return {
+            content: [
+              { type: "text" as const, text: JSON.stringify(terminal) },
+            ],
+            details: terminal,
+            isError: terminal.outcome.status !== "succeeded",
+          };
+        } finally {
+          activeExplorerInvocations -= 1;
+        }
       },
     } as never);
   }
