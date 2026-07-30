@@ -5,6 +5,8 @@ import {
   DESIGNER_CAPABILITY_CONTRACT,
   EXPLORER_CAPABILITY_CONTRACT,
   REVIEWER_CAPABILITY_CONTRACT,
+  WORKER_TOOLS,
+  createWorkerCapabilityContract,
   preflightCapability,
   validateCapabilityContract,
 } from "../src/domain/capability-contract.ts";
@@ -102,4 +104,70 @@ test("preflight rejects tools outside the contract allowlist", () => {
       unmet: ["unapproved tool is available: write"],
     },
   });
+});
+
+test("validates a Single Writer Capability Contract with bounded paths", () => {
+  const contract = createWorkerCapabilityContract({
+    workingTree: "/trusted/project",
+    temporaryPaths: ["/validated/tmp/session"],
+  });
+
+  assert.deepEqual(validateCapabilityContract(contract), {
+    ok: true,
+    contract,
+  });
+  assert.deepEqual(contract.tools, WORKER_TOOLS);
+  assert.equal(contract.writeAuthority, "trusted-working-tree");
+  assert.equal(contract.mutationPolicy, "worker-guard");
+  assert.deepEqual(contract.cardinality, { min: 1, max: 1 });
+  assert.deepEqual(contract.concurrency, { maxActive: 1 });
+});
+
+test("rejects parallel-writer and escaped-path contracts before execution", () => {
+  const contract = createWorkerCapabilityContract({
+    workingTree: "/trusted/project",
+    temporaryPaths: ["/validated/tmp/session"],
+  });
+  const result = validateCapabilityContract({
+    ...contract,
+    workingTree: "/trusted/project/../escape",
+    temporaryPaths: ["/validated/tmp/session", "relative/tmp"],
+    concurrency: { maxActive: 2 },
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.deepEqual(result.errors, [
+      "worker contract requires one writer",
+      "working tree must be an absolute normalized path",
+      "temporary paths must be unique absolute normalized paths",
+    ]);
+  }
+});
+
+test("worker preflight rejects an unavailable guard and unapproved tools", () => {
+  const contract = createWorkerCapabilityContract({
+    workingTree: "/trusted/project",
+    temporaryPaths: ["/validated/tmp/session"],
+  });
+
+  assert.deepEqual(
+    preflightCapability(contract, {
+      availableTools: [...WORKER_TOOLS, "web_search"],
+      independentRuntime: true,
+      inspectionGuard: false,
+      workerGuard: false,
+    }),
+    {
+      ok: false,
+      diagnostic: {
+        kind: "capability-preflight",
+        contractId: "delegate-worker",
+        unmet: [
+          "unapproved tool is available: web_search",
+          "Worker Guard is unavailable",
+        ],
+      },
+    },
+  );
 });

@@ -20,7 +20,7 @@ test("injects exactly one marked Matty Rules block", () => {
   assert.match(prompt, /Base host instructions/);
   assert.match(
     prompt,
-    /subagent accepts exactly \{"role": "explorer"\|"designer"\|"reviewer", "task": string\}/,
+    /subagent accepts exactly \{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
   );
 });
 
@@ -75,12 +75,14 @@ test("detects a direct project instruction conflict outside marked rules", () =>
   );
 });
 
-test("rules describe only the currently exposed inspection roles", () => {
+test("rules describe the exposed inspection and worker roles", () => {
   const prompt = injectMattyRules("Base", "parent");
 
-  assert.match(prompt, /exposes explorer, designer, and reviewer/);
+  assert.match(prompt, /exposes explorer, designer, reviewer, and worker/);
   assert.match(prompt, /best-effort command policy, not a security sandbox/);
-  assert.doesNotMatch(prompt, /Worker Guard|eight tasks|four children/);
+  assert.match(prompt, /Worker Guard is a best-effort command and path policy/);
+  assert.match(prompt, /Single Writer permits at most one active worker/);
+  assert.doesNotMatch(prompt, /eight tasks|four children/);
 });
 
 test("injects the selected designer and reviewer child role", () => {
@@ -91,5 +93,9 @@ test("injects the selected designer and reviewer child role", () => {
   assert.match(
     injectMattyRules("Base", "reviewer"),
     /Active child role: reviewer/,
+  );
+  assert.match(
+    injectMattyRules("Base", "worker"),
+    /Active child role: worker; implement within validated paths/,
   );
 });

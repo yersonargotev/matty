@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type {
@@ -13,7 +16,10 @@ import {
   MATTY_RULES_END,
   MATTY_RULES_START,
 } from "../src/domain/matty-rules.ts";
-import { INSPECTION_TOOLS } from "../src/domain/capability-contract.ts";
+import {
+  INSPECTION_TOOLS,
+  WORKER_TOOLS,
+} from "../src/domain/capability-contract.ts";
 
 function createExtensionHarness() {
   const handlers = new Map<string, Array<(...args: never[]) => unknown>>();
@@ -54,7 +60,7 @@ function createExtensionHarness() {
   return { pi, handlers, tools, commands };
 }
 
-test("parent registration exposes explicit inspection roles", async () => {
+test("parent registration exposes explicit delegated roles", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {});
 
@@ -69,10 +75,83 @@ test("parent registration exposes explicit inspection roles", async () => {
   assert.deepEqual(harness.tools.map((tool) => tool.name), ["subagent"]);
   assert.match(
     harness.tools[0]?.promptGuidelines?.join("\n") ?? "",
-    /\{"role": "explorer"\|"designer"\|"reviewer", "task": string\}/,
+    /\{"role": "explorer"\|"designer"\|"reviewer"\|"worker", "task": string\}/,
+  );
+  assert.deepEqual(
+    (
+      harness.tools[0]?.parameters?.properties?.role as {
+        enum?: string[];
+      }
+    )?.enum,
+    ["explorer", "designer", "reviewer", "worker"],
   );
   assert.deepEqual(harness.tools[0]?.parameters?.required, ["role", "task"]);
   assert.deepEqual(harness.commands, ["matty"]);
+});
+
+test("worker child permits bounded writes and blocks parent-owned mutations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-worker-child-"));
+  try {
+    const project = join(root, "project");
+    const temporary = join(root, "temporary");
+    const home = join(root, "home");
+    const external = join(root, "external");
+    await Promise.all(
+      [project, temporary, home, external].map((path) =>
+        mkdir(path, { recursive: true })
+      ),
+    );
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, {
+      MATTY_CHILD_ROLE: "worker",
+      MATTY_WORKER_WORKING_TREE: await realpath(project),
+      MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify([
+        await realpath(temporary),
+      ]),
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+    });
+
+    assert.deepEqual(harness.tools, []);
+    const guard = harness.handlers.get("tool_call")?.[0];
+    assert.ok(guard);
+    assert.equal(await guard({
+      type: "tool_call",
+      toolCallId: "worker-edit",
+      toolName: "edit",
+      input: {
+        path: join(project, "src", "feature.ts"),
+        edits: [],
+      },
+    } satisfies ToolCallEvent as never, {} as never), undefined);
+    assert.ok(await guard({
+      type: "tool_call",
+      toolCallId: "worker-external",
+      toolName: "write",
+      input: { path: join(external, "escape.txt"), content: "" },
+    } satisfies ToolCallEvent as never, {} as never));
+    assert.equal(await guard({
+      type: "tool_call",
+      toolCallId: "worker-install",
+      toolName: "bash",
+      input: { command: "npm install" },
+    } satisfies ToolCallEvent as never, {} as never), undefined);
+    for (const command of [
+      "gh issue view 10",
+      "git add src/feature.ts",
+      "npm install --global typescript",
+      `printf changed > ${join(home, ".npmrc")}`,
+    ]) {
+      assert.ok(await guard({
+        type: "tool_call",
+        toolCallId: `blocked-${command}`,
+        toolName: "bash",
+        input: { command },
+      } satisfies ToolCallEvent as never, {} as never), command);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("explorer child registration blocks mutating bash and does not recurse", async () => {
@@ -256,6 +335,79 @@ test("each inspection Capability Contract permits only one active invocation", a
     (firstResult.details as { outcome: { status: string } }).outcome.status,
     "cancelled",
   );
+});
+
+test("Single Writer permits at most one active worker for a repository", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, { TMPDIR: tmpdir() }, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        WORKER_TOOLS.join(","),
+      ],
+    },
+  });
+
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const controller = new AbortController();
+  let resolveStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: {
+      async getApiKeyAndHeaders() {
+        return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+      },
+    },
+  };
+
+  const first = execute(
+    "worker-1" as never,
+    { role: "worker", task: "hold" } as never,
+    controller.signal as never,
+    ((update: { details?: { type?: string } }) => {
+      if (update.details?.type === "started") {
+        resolveStarted?.();
+      }
+    }) as never,
+    context as never,
+  );
+  await started;
+
+  try {
+    const blocked = await execute(
+      "worker-2" as never,
+      { role: "worker", task: "Implement concurrently" } as never,
+      undefined as never,
+      undefined as never,
+      context as never,
+    );
+    assert.deepEqual(
+      (blocked.details as { outcome: unknown }).outcome,
+      {
+        status: "blocked",
+        diagnostic: {
+          kind: "capability-preflight",
+          contractId: "delegate-worker",
+          unmet: ["Single Writer already active for this repository"],
+        },
+      },
+    );
+  } finally {
+    controller.abort();
+    const result = await first;
+    assert.equal(
+      (result.details as { outcome: { status: string } }).outcome.status,
+      "cancelled",
+    );
+  }
 });
 
 test("reviewer gh preflight blocks before spawning and returns a diagnostic", async () => {

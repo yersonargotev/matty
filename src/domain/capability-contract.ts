@@ -8,6 +8,16 @@ export const INSPECTION_TOOLS = [
 
 export const EXPLORER_TOOLS = INSPECTION_TOOLS;
 
+export const WORKER_TOOLS = [
+  "read",
+  "write",
+  "edit",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+] as const;
+
 export const INSPECTION_ROLES = [
   "explorer",
   "designer",
@@ -16,10 +26,14 @@ export const INSPECTION_ROLES = [
 
 export type InspectionRole = (typeof INSPECTION_ROLES)[number];
 
-export const INSPECTION_ROLE_INPUT_GUIDANCE =
+export const MATTY_ROLES = [...INSPECTION_ROLES, "worker"] as const;
+export type MattyRole = (typeof MATTY_ROLES)[number];
+
+export const DELEGATION_INPUT_GUIDANCE =
   `{"role": ${
-    INSPECTION_ROLES.map((role) => JSON.stringify(role)).join("|")
+    MATTY_ROLES.map((role) => JSON.stringify(role)).join("|")
   }, "task": string}`;
+export const INSPECTION_ROLE_INPUT_GUIDANCE = DELEGATION_INPUT_GUIDANCE;
 
 export interface InspectionCapabilityContract {
   schemaVersion: 1;
@@ -46,6 +60,53 @@ export type ExplorerCapabilityContract = InspectionCapabilityContract & {
   role: "explorer";
   github: "absent";
 };
+
+export interface WorkerCapabilityContract {
+  schemaVersion: 1;
+  id: "delegate-worker";
+  role: "worker";
+  tools: readonly string[];
+  writeAuthority: "trusted-working-tree";
+  mutationPolicy: "worker-guard";
+  web: "absent";
+  github: "absent";
+  workingTree: string;
+  temporaryPaths: readonly string[];
+  cardinality: {
+    min: 1;
+    max: 1;
+  };
+  concurrency: {
+    maxActive: 1;
+  };
+  independence: "required";
+  failureBehavior: "fail-invocation";
+}
+
+export type CapabilityContract =
+  | InspectionCapabilityContract
+  | WorkerCapabilityContract;
+
+export function createWorkerCapabilityContract(
+  scope: Pick<WorkerCapabilityContract, "workingTree" | "temporaryPaths">,
+): WorkerCapabilityContract {
+  return {
+    schemaVersion: 1,
+    id: "delegate-worker",
+    role: "worker",
+    tools: [...WORKER_TOOLS],
+    writeAuthority: "trusted-working-tree",
+    mutationPolicy: "worker-guard",
+    web: "absent",
+    github: "absent",
+    workingTree: scope.workingTree,
+    temporaryPaths: [...scope.temporaryPaths],
+    cardinality: { min: 1, max: 1 },
+    concurrency: { maxActive: 1 },
+    independence: "required",
+    failureBehavior: "fail-invocation",
+  };
+}
 
 function inspectionContract(
   role: InspectionRole,
@@ -83,7 +144,7 @@ export const INSPECTION_CAPABILITY_CONTRACTS = {
 export type CapabilityContractValidation =
   | {
       ok: true;
-      contract: InspectionCapabilityContract;
+      contract: CapabilityContract;
     }
   | {
       ok: false;
@@ -94,6 +155,7 @@ export interface CapabilityAvailability {
   availableTools: readonly string[];
   independentRuntime: boolean;
   inspectionGuard: boolean;
+  workerGuard?: boolean;
   github?: {
     available: boolean;
     authenticated: boolean;
@@ -106,7 +168,7 @@ export interface CapabilityPreflightDiagnostic {
   unmet: string[];
 }
 
-export type CapabilityPreflight<T extends InspectionCapabilityContract> =
+export type CapabilityPreflight<T extends CapabilityContract> =
   | {
       ok: true;
       contract: T;
@@ -131,6 +193,10 @@ export function isInspectionRole(value: unknown): value is InspectionRole {
   return INSPECTION_ROLES.some((role) => role === value);
 }
 
+export function isMattyRole(value: unknown): value is MattyRole {
+  return MATTY_ROLES.some((role) => role === value);
+}
+
 export function inspectionCapabilityContract(
   role: InspectionRole,
 ): InspectionCapabilityContract {
@@ -144,7 +210,12 @@ export function validateCapabilityContract(
     return { ok: false, errors: ["contract must be an object"] };
   }
 
-  const candidate = value as Partial<InspectionCapabilityContract>;
+  const candidate = value as Partial<CapabilityContract>;
+  if (candidate.role === "worker") {
+    return validateWorkerCapabilityContract(
+      value as Partial<WorkerCapabilityContract>,
+    );
+  }
   const errors: string[] = [];
   const expected = isInspectionRole(candidate.role)
     ? inspectionCapabilityContract(candidate.role)
@@ -198,7 +269,83 @@ export function validateCapabilityContract(
   };
 }
 
-export function preflightCapability<T extends InspectionCapabilityContract>(
+function isAbsoluteNormalizedPath(value: unknown): value is string {
+  if (typeof value !== "string" || !value.startsWith("/")) {
+    return false;
+  }
+  const segments = value.split("/");
+  return !segments.includes(".") &&
+    !segments.includes("..") &&
+    !value.includes("//") &&
+    (value === "/" || !value.endsWith("/"));
+}
+
+function validateWorkerCapabilityContract(
+  candidate: Partial<WorkerCapabilityContract>,
+): CapabilityContractValidation {
+  const errors: string[] = [];
+  if (
+    candidate.schemaVersion !== 1 ||
+    candidate.id !== "delegate-worker" ||
+    candidate.role !== "worker" ||
+    candidate.web !== "absent" ||
+    candidate.github !== "absent" ||
+    candidate.independence !== "required" ||
+    candidate.failureBehavior !== "fail-invocation"
+  ) {
+    errors.push("contract does not match the worker v1 operation");
+  }
+  if (
+    candidate.cardinality?.min !== 1 ||
+    candidate.cardinality.max !== 1 ||
+    candidate.concurrency?.maxActive !== 1
+  ) {
+    errors.push("worker contract requires one writer");
+  }
+  if (!Array.isArray(candidate.tools)) {
+    errors.push("tools must be an array");
+  } else {
+    const tools = candidate.tools as unknown[];
+    if (
+      tools.some((tool) => typeof tool !== "string") ||
+      tools.length !== new Set(tools).size
+    ) {
+      errors.push("tools must be unique");
+    }
+    if (
+      tools.length !== WORKER_TOOLS.length ||
+      WORKER_TOOLS.some((tool) => !tools.includes(tool))
+    ) {
+      errors.push("worker tools must match the package-owned allowlist");
+    }
+  }
+  if (candidate.writeAuthority !== "trusted-working-tree") {
+    errors.push("worker write authority must be the trusted working tree");
+  }
+  if (candidate.mutationPolicy !== "worker-guard") {
+    errors.push("worker mutation policy must be Worker Guard");
+  }
+  if (!isAbsoluteNormalizedPath(candidate.workingTree)) {
+    errors.push("working tree must be an absolute normalized path");
+  }
+  if (
+    !Array.isArray(candidate.temporaryPaths) ||
+    candidate.temporaryPaths.length === 0 ||
+    candidate.temporaryPaths.some((path) => !isAbsoluteNormalizedPath(path)) ||
+    candidate.temporaryPaths.length !== new Set(candidate.temporaryPaths).size
+  ) {
+    errors.push("temporary paths must be unique absolute normalized paths");
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    contract: candidate as WorkerCapabilityContract,
+  };
+}
+
+export function preflightCapability<T extends CapabilityContract>(
   contract: T,
   availability: CapabilityAvailability,
 ): CapabilityPreflight<T> {
@@ -223,10 +370,15 @@ export function preflightCapability<T extends InspectionCapabilityContract>(
   ) {
     unmet.push("independent Subagent Runtime is unavailable");
   }
-  if (!availability.inspectionGuard) {
+  if (contract.role === "worker" && !availability.workerGuard) {
+    unmet.push("Worker Guard is unavailable");
+  } else if (contract.role !== "worker" && !availability.inspectionGuard) {
     unmet.push("Inspection Guard is unavailable");
   }
-  if (contract.github === "required-readonly") {
+  if (
+    contract.role !== "worker" &&
+    contract.github === "required-readonly"
+  ) {
     if (!availability.github?.available) {
       unmet.push("GitHub CLI is unavailable");
     }

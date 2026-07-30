@@ -3,8 +3,8 @@ import {
   CERTIFIED_TARGETS,
 } from "./package-contract.ts";
 import {
-  INSPECTION_ROLES,
-  type InspectionRole,
+  MATTY_ROLES,
+  type MattyRole,
 } from "./capability-contract.ts";
 
 export interface RuntimeFacts {
@@ -37,11 +37,16 @@ export interface StatusDiagnostic {
     reason: "compatible" | "unsupported-host";
   };
   roles: {
-    available: InspectionRole[];
+    available: MattyRole[];
   };
   inspectionGuard: {
     state: "best-effort";
     securityBoundary: false;
+  };
+  workerGuard: {
+    state: "best-effort";
+    securityBoundary: false;
+    singleWriter: true;
   };
 }
 
@@ -85,11 +90,16 @@ export function createStatusSnapshot(
       reason: compatibleHost ? "compatible" : "unsupported-host",
     },
     roles: {
-      available: [...INSPECTION_ROLES],
+      available: [...MATTY_ROLES],
     },
     inspectionGuard: {
       state: "best-effort",
       securityBoundary: false,
+    },
+    workerGuard: {
+      state: "best-effort",
+      securityBoundary: false,
+      singleWriter: true,
     },
   };
 }
@@ -102,6 +112,7 @@ export function renderStatusHuman(snapshot: StatusDiagnostic): string {
     `Activation ${snapshot.activation.state} · ${snapshot.activation.reason}`,
     `Roles ${snapshot.roles.available.join(", ")}`,
     "Inspection Guard best-effort · not a security sandbox",
+    "Worker Guard best-effort · Single Writer · not a security sandbox",
   ].join("\n");
 }
 

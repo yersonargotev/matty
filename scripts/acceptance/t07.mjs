@@ -5,6 +5,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   writeFile,
@@ -134,6 +135,8 @@ const host = join(sandbox, "host");
 const artifacts = join(sandbox, "artifacts");
 const npmCache = join(sandbox, "npm-cache");
 const bin = join(sandbox, "bin");
+const temporary = join(sandbox, "temporary");
+const external = join(sandbox, "external");
 const extension = join(sandbox, "t07-extension.ts");
 const guardReady = join(sandbox, "network-guard.ready");
 const guardViolation = join(sandbox, "network-guard.violation");
@@ -146,10 +149,16 @@ for (const directory of [
   artifacts,
   npmCache,
   bin,
+  temporary,
+  external,
 ]) {
   await mkdir(directory, { recursive: true });
 }
 await writeFile(join(project, "README.md"), "# acceptance\n");
+await writeFile(
+  join(project, "package.json"),
+  JSON.stringify({ name: "matty-worker-acceptance", private: true }),
+);
 const gh = join(bin, "gh");
 await writeFile(
   gh,
@@ -176,12 +185,16 @@ const isolatedEnv = {
   NO_UPDATE_NOTIFIER: "1",
   npm_config_cache: npmCache,
   npm_config_userconfig: join(home, ".npmrc"),
+  TMPDIR: temporary,
 };
 
 let rpc;
 try {
   await run("git", ["init", "-q"], { cwd: project, env: isolatedEnv });
-  await run("git", ["add", "README.md"], { cwd: project, env: isolatedEnv });
+  await run("git", ["add", "README.md", "package.json"], {
+    cwd: project,
+    env: isolatedEnv,
+  });
   await run(
     "git",
     [
@@ -264,7 +277,7 @@ import { registerPiMatty } from ${JSON.stringify(mattyExtension)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
 const childRole = process.env.MATTY_CHILD_ROLE;
-const childMode = ["explorer", "designer", "reviewer"].includes(childRole);
+const childMode = ["explorer", "designer", "reviewer", "worker"].includes(childRole);
 const requestedRole = process.env.MATTY_T07_ROLE ?? "explorer";
 const startMarker = "<!-- matty:rules -->";
 const endMarker = "<!-- /matty:rules -->";
@@ -299,6 +312,10 @@ function toolCalls(items) {
   }));
 }
 
+function toolCall(id, name, arguments_) {
+  return { type: "toolCall", id, name, arguments: arguments_ };
+}
+
 export default function t07Acceptance(pi) {
   registerPiMatty(pi, process.env, {
     invocation: {
@@ -308,13 +325,16 @@ export default function t07Acceptance(pi) {
         "-e",
         process.env.MATTY_T07_EXTENSION,
         "--tools",
-        "read,grep,find,ls,bash",
+        requestedRole === "worker"
+          ? "read,write,edit,grep,find,ls,bash"
+          : "read,grep,find,ls,bash",
       ],
     },
     childEnvironment: {
       MATTY_T07_PI: process.env.MATTY_T07_PI,
       MATTY_T07_EXTENSION: process.env.MATTY_T07_EXTENSION,
       MATTY_T07_ROLE: requestedRole,
+      MATTY_T07_EXTERNAL: process.env.MATTY_T07_EXTERNAL,
       MATTY_NETWORK_GUARD_READY:
         process.env.MATTY_NETWORK_GUARD_READY,
       MATTY_NETWORK_GUARD_VIOLATION:
@@ -387,6 +407,15 @@ export default function t07Acceptance(pi) {
       }
 
       if (results.length === 0) {
+        if (childRole === "worker") {
+          queueMicrotask(() => stream.end(assistant(model, [
+            toolCall("allowed-write", "write", {
+              path: "worker-output.txt",
+              content: "before\\n",
+            }),
+          ], "toolUse")));
+          return stream;
+        }
         const allowedCommands = [
           ["allowed-git", "git status --short"],
           ["allowed-codegraph", "codegraph status"],
@@ -400,6 +429,100 @@ export default function t07Acceptance(pi) {
           model,
           toolCalls(allowedCommands),
           "toolUse",
+        )));
+        return stream;
+      }
+      if (childRole === "worker") {
+        if (results.length === 1) {
+          queueMicrotask(() => stream.end(assistant(model, [
+            toolCall("allowed-edit", "edit", {
+              path: "worker-output.txt",
+              edits: [{ oldText: "before", newText: "after" }],
+            }),
+          ], "toolUse")));
+          return stream;
+        }
+        if (results.length === 2) {
+          const [temporaryPath] = JSON.parse(
+            process.env.MATTY_WORKER_TEMPORARY_PATHS ?? "[]",
+          );
+          queueMicrotask(() => stream.end(assistant(model, [
+            toolCall("allowed-temporary", "write", {
+              path: temporaryPath + "/worker-temporary.txt",
+              content: "temporary\\n",
+            }),
+          ], "toolUse")));
+          return stream;
+        }
+        if (results.length === 3) {
+          queueMicrotask(() => stream.end(assistant(model, toolCalls([
+            ["allowed-install", "npm install --offline --ignore-scripts --package-lock=false --no-audit --no-fund"],
+            ["allowed-check", "node --test"],
+            ["allowed-git", "git status --short"],
+            ["allowed-shell", "pwd"],
+          ]), "toolUse")));
+          return stream;
+        }
+        if (results.length === 7) {
+          queueMicrotask(() => stream.end(assistant(model, [
+            ...toolCalls([
+              ["blocked-github", "gh issue view 10"],
+              ["blocked-git", "git add worker-output.txt"],
+              ["blocked-global", "npm install --global typescript"],
+              [
+                "blocked-external",
+                "touch " + process.env.MATTY_T07_EXTERNAL + "/forbidden.txt",
+              ],
+            ]),
+            toolCall("blocked-user-config", "write", {
+              path: process.env.HOME + "/.npmrc",
+              content: "changed\\n",
+            }),
+          ], "toolUse")));
+          return stream;
+        }
+        const byId = new Map(results.map((result) => [result.toolCallId, result]));
+        const allowedIds = [
+          "allowed-write",
+          "allowed-edit",
+          "allowed-temporary",
+          "allowed-install",
+          "allowed-check",
+          "allowed-git",
+          "allowed-shell",
+        ];
+        const blockedIds = [
+          "blocked-github",
+          "blocked-git",
+          "blocked-global",
+          "blocked-external",
+          "blocked-user-config",
+        ];
+        const payload = {
+          rules: {
+            start: count(context.systemPrompt, startMarker),
+            end: count(context.systemPrompt, endMarker),
+          },
+          allowed: Object.fromEntries(
+            allowedIds.map((id) => [id, byId.get(id)?.isError === false]),
+          ),
+          blocked: Object.fromEntries(
+            blockedIds.map((id) => [
+              id,
+              byId.get(id)?.isError === true &&
+                JSON.stringify(byId.get(id)?.content).includes("Worker Guard blocked"),
+            ]),
+          ),
+        };
+        queueMicrotask(() => stream.end(assistant(
+          model,
+          [{
+            type: "text",
+            text: JSON.stringify({
+              summary: "worker implementation completed",
+              evidence: [payload],
+            }),
+          }],
         )));
         return stream;
       }
@@ -467,6 +590,18 @@ export default function t07Acceptance(pi) {
 }
 `,
   );
+  const workerNpm = join(bin, "npm");
+  await writeFile(
+    workerNpm,
+    `#!/bin/sh
+case " $* " in
+  *" --global "*|*" -g "*) exit 92 ;;
+esac
+mkdir -p node_modules/matty-worker-fixture
+printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
+`,
+  );
+  await chmod(workerNpm, 0o755);
 
   async function execute(role, blockRuntime) {
     const activeRpc = startRpc(pi, extension, canonicalProject, {
@@ -477,6 +612,7 @@ export default function t07Acceptance(pi) {
       MATTY_T07_PI: pi,
       MATTY_T07_EXTENSION: extension,
       MATTY_T07_ROLE: role,
+      MATTY_T07_EXTERNAL: external,
       ...(blockRuntime ? { MATTY_T07_BLOCK_RUNTIME: "1" } : {}),
     });
     rpc = activeRpc;
@@ -575,6 +711,33 @@ export default function t07Acceptance(pi) {
     await assert.rejects(access(forbidden));
   }
 
+  const worker = await execute("worker", false);
+  assert.equal(worker.terminal.contract.role, "worker");
+  assert.equal(
+    worker.terminal.outcome.status,
+    "succeeded",
+    JSON.stringify(worker.terminal),
+  );
+  const workerOutput = JSON.parse(worker.terminal.outcome.output);
+  const workerObserved = workerOutput.evidence[0];
+  assert.deepEqual(workerObserved.rules, { start: 1, end: 1 });
+  assert.ok(Object.values(workerObserved.allowed).every(Boolean));
+  assert.ok(Object.values(workerObserved.blocked).every(Boolean));
+  assert.equal(await readFile(join(project, "worker-output.txt"), "utf8"), "after\n");
+  assert.equal(
+    await readFile(join(temporary, "worker-temporary.txt"), "utf8"),
+    "temporary\n",
+  );
+  assert.equal(
+    await readFile(
+      join(project, "node_modules", "matty-worker-fixture", "installed.txt"),
+      "utf8",
+    ),
+    "installed\n",
+  );
+  await assert.rejects(access(join(external, "forbidden.txt")));
+  await assert.rejects(access(join(home, ".npmrc")));
+
   const blocked = await execute("explorer", true);
   assert.equal(blocked.terminal.outcome.status, "blocked");
   assert.deepEqual(blocked.terminal.outcome.diagnostic, {
@@ -591,7 +754,7 @@ export default function t07Acceptance(pi) {
   );
   process.stdout.write(
     [
-      "T07/T08 production inspection-role delegation acceptance passed",
+      "T07/T08/T09 production role delegation acceptance passed",
       `artifact: ${metadata.filename}`,
       "parent/child Matty Rules: exactly one",
       "Capability Contract/preflight: validated and diagnosable",
@@ -600,6 +763,8 @@ export default function t07Acceptance(pi) {
       "designer: gh blocked",
       "reviewer: gh availability/auth/read inspection passed; mutation blocked",
       "filesystem/shell/Git/GitHub/network mutations: blocked",
+      "worker: project writes, validated temporary writes, local install, and checks passed",
+      "Single Writer/Worker Guard: GitHub, Git, global install, external path, and user configuration blocked",
     ].join("\n") + "\n",
   );
 } finally {

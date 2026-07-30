@@ -39,7 +39,8 @@ if (task === "malformed-message") {
   setInterval(() => {}, 1_000);
 } else if (
   task === "hold" ||
-  task?.startsWith("Explorer assignment:\nhold\n")
+  task?.startsWith("Explorer assignment:\nhold\n") ||
+  task?.startsWith("Worker assignment:\nhold\n")
 ) {
   setInterval(() => {}, 1_000);
 } else {

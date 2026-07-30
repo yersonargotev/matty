@@ -5,6 +5,9 @@ import {
   type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -18,22 +21,38 @@ import {
   runInspectionDelegation,
 } from "../application/inspection-role-delegation.ts";
 import {
+  blockedWorkerDelegation,
+  runWorkerDelegation,
+} from "../application/worker-delegation.ts";
+import {
   registerMatty,
   type MattyHost,
 } from "../application/register-matty.ts";
 import {
   INSPECTION_TOOLS,
-  INSPECTION_ROLE_INPUT_GUIDANCE,
+  DELEGATION_INPUT_GUIDANCE,
   INSPECTION_ROLES,
+  MATTY_ROLES,
+  WORKER_TOOLS,
+  createWorkerCapabilityContract,
   inspectionCapabilityContract,
   isInspectionRole,
+  isMattyRole,
+  validateCapabilityContract,
   type InspectionRole,
+  type MattyRole,
+  type WorkerCapabilityContract,
 } from "../domain/capability-contract.ts";
 import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
 import {
   detectMattyRulesConflict,
   injectMattyRules,
 } from "../domain/matty-rules.ts";
+import {
+  inspectWorkerCommand,
+  inspectWorkerPath,
+  type WorkerGuardScope,
+} from "../domain/worker-guard.ts";
 import {
   MATTY_PACKAGE_VERSION,
 } from "../domain/package-contract.ts";
@@ -49,6 +68,7 @@ export interface PiMattyRegistrationOptions {
 }
 
 const execFileAsync = promisify(execFile);
+const activeWorkerRepositories = new Set<string>();
 
 function createPiHost(pi: ExtensionAPI): MattyHost {
   return {
@@ -84,9 +104,31 @@ function currentPiInvocation(): PiInvocation | undefined {
       "--no-extensions",
       "-e",
       fileURLToPath(import.meta.url),
-      "--tools",
-      INSPECTION_TOOLS.join(","),
     ],
+  };
+}
+
+function invocationWithTools(
+  invocation: PiInvocation,
+  tools: readonly string[],
+): PiInvocation {
+  const arguments_: string[] = [];
+  for (let index = 0; index < (invocation.arguments ?? []).length; index += 1) {
+    const argument = invocation.arguments?.[index];
+    if (argument === "--tools") {
+      index += 1;
+      continue;
+    }
+    if (argument?.startsWith("--tools=")) {
+      continue;
+    }
+    if (argument !== undefined) {
+      arguments_.push(argument);
+    }
+  }
+  return {
+    ...invocation,
+    arguments: [...arguments_, "--tools", tools.join(",")],
   };
 }
 
@@ -111,7 +153,11 @@ function childEnvironment(
   environment: NodeJS.ProcessEnv,
   authenticationEnvironment: Readonly<Record<string, string>> | undefined,
   additions: NodeJS.ProcessEnv | undefined,
-  role: InspectionRole,
+  role: MattyRole,
+  worker?: {
+    contract: WorkerCapabilityContract;
+    userConfigurationPaths: readonly string[];
+  },
 ): NodeJS.ProcessEnv {
   const inheritedNames = [
     "PATH",
@@ -129,11 +175,24 @@ function childEnvironment(
       return value === undefined ? [] : [[name, value]];
     }),
   );
-  return {
+  const child = {
     ...inherited,
     ...authenticationEnvironment,
     ...additions,
     MATTY_CHILD_ROLE: role,
+  };
+  if (!worker) {
+    return child;
+  }
+  return {
+    ...child,
+    MATTY_WORKER_WORKING_TREE: worker.contract.workingTree,
+    MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify(
+      worker.contract.temporaryPaths,
+    ),
+    MATTY_WORKER_USER_CONFIGURATION_PATHS: JSON.stringify(
+      worker.userConfigurationPaths,
+    ),
   };
 }
 
@@ -172,10 +231,110 @@ function thinkingLevel(value: string | undefined): PiThinkingLevel {
   }
 }
 
-function blockedToolCall(
-  role: InspectionRole,
+function workerGuardScope(
+  environment: NodeJS.ProcessEnv,
+): WorkerGuardScope | undefined {
+  try {
+    const workingTree = environment.MATTY_WORKER_WORKING_TREE;
+    const temporaryPaths = JSON.parse(
+      environment.MATTY_WORKER_TEMPORARY_PATHS ?? "[]",
+    ) as unknown;
+    const userConfigurationPaths = JSON.parse(
+      environment.MATTY_WORKER_USER_CONFIGURATION_PATHS ?? "[]",
+    ) as unknown;
+    if (
+      !workingTree ||
+      !Array.isArray(temporaryPaths) ||
+      temporaryPaths.some((path) => typeof path !== "string") ||
+      !Array.isArray(userConfigurationPaths) ||
+      userConfigurationPaths.some((path) => typeof path !== "string")
+    ) {
+      return undefined;
+    }
+    const contract = createWorkerCapabilityContract({
+      workingTree,
+      temporaryPaths: temporaryPaths as string[],
+    });
+    if (!validateCapabilityContract(contract).ok) {
+      return undefined;
+    }
+    return {
+      workingTree: contract.workingTree,
+      temporaryPaths: contract.temporaryPaths,
+      userConfigurationPaths: userConfigurationPaths as string[],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function userConfigurationPaths(
+  environment: NodeJS.ProcessEnv,
+): string[] {
+  return Array.from(
+    new Set(
+      [
+        environment.HOME,
+        environment.XDG_CONFIG_HOME,
+        environment.PI_CODING_AGENT_DIR,
+        environment.npm_config_userconfig,
+      ].flatMap((path) => path ? [resolve(path)] : []),
+    ),
+  );
+}
+
+async function workerContract(
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<WorkerCapabilityContract> {
+  return createWorkerCapabilityContract({
+    workingTree: await realpath(cwd),
+    temporaryPaths: [
+      await realpath(environment.TMPDIR ?? tmpdir()),
+    ],
+  });
+}
+
+async function blockedToolCall(
+  role: MattyRole,
   event: ToolCallEvent,
-): { block: true; reason: string } | undefined {
+  workerScope?: WorkerGuardScope,
+): Promise<{ block: true; reason: string } | undefined> {
+  if (role === "worker") {
+    if (!workerScope) {
+      return {
+        block: true,
+        reason: "Worker Guard blocked malformed validated path scope",
+      };
+    }
+    if (event.toolName === "edit" || event.toolName === "write") {
+      const path = (event.input as { path?: unknown }).path;
+      if (typeof path !== "string") {
+        return {
+          block: true,
+          reason: "Worker Guard blocked malformed write path",
+        };
+      }
+      const decision = await inspectWorkerPath(workerScope, path);
+      return decision.allowed
+        ? undefined
+        : { block: true, reason: decision.reason };
+    }
+    if (event.toolName !== "bash") {
+      return undefined;
+    }
+    const command = (event.input as { command?: unknown }).command;
+    if (typeof command !== "string") {
+      return {
+        block: true,
+        reason: "Worker Guard blocked malformed bash input",
+      };
+    }
+    const decision = await inspectWorkerCommand(workerScope, command);
+    return decision.allowed
+      ? undefined
+      : { block: true, reason: decision.reason };
+  }
   if (event.toolName === "edit" || event.toolName === "write") {
     return {
       block: true,
@@ -205,7 +364,7 @@ export function registerPiMatty(
   environment: NodeJS.ProcessEnv = process.env,
   options: PiMattyRegistrationOptions = {},
 ): void {
-  const childRole = isInspectionRole(environment.MATTY_CHILD_ROLE)
+  const childRole = isMattyRole(environment.MATTY_CHILD_ROLE)
     ? environment.MATTY_CHILD_ROLE
     : undefined;
   let rulesConflict: string | undefined;
@@ -220,7 +379,10 @@ export function registerPiMatty(
   });
 
   if (childRole) {
-    pi.on("tool_call", (event) => blockedToolCall(childRole, event));
+    const scope = childRole === "worker"
+      ? workerGuardScope(environment)
+      : undefined;
+    pi.on("tool_call", (event) => blockedToolCall(childRole, event, scope));
   } else {
     const activeInvocations = Object.fromEntries(
       INSPECTION_ROLES.map((role) => [role, 0]),
@@ -233,13 +395,13 @@ export function registerPiMatty(
       properties: {
         role: {
           type: "string",
-          enum: [...INSPECTION_ROLES],
-          description: "The least-privilege inspection role.",
+          enum: [...MATTY_ROLES],
+          description: "The least-privilege Matty Role.",
         },
         task: {
           type: "string",
           minLength: 1,
-          description: "One bounded codebase-inspection assignment.",
+          description: "One bounded delegated assignment.",
         },
       },
       required: ["role", "task"],
@@ -248,23 +410,24 @@ export function registerPiMatty(
 
     pi.registerTool({
       name: "subagent",
-      label: "Inspection role",
+      label: "Matty Role",
       description:
-        "Run one independent explorer, designer, or reviewer through the Matty Subagent Runtime.",
+        "Run one independent explorer, designer, reviewer, or worker through the Matty Subagent Runtime.",
       promptSnippet:
         "Delegate one bounded inspection task to a named Matty Role.",
       promptGuidelines: [
-        `Call subagent with exactly ${INSPECTION_ROLE_INPUT_GUIDANCE}.`,
-        "Each call runs exactly one independent inspection role with read, grep, find, ls, and guarded bash.",
+        `Call subagent with exactly ${DELEGATION_INPUT_GUIDANCE}.`,
+        "Inspection roles receive read, grep, find, ls, and guarded bash; worker also receives edit and write.",
         "Only reviewer may perform read-only gh inspection after availability and authentication preflight.",
+        "Single Writer permits at most one active worker per repository.",
         "Progress and the terminal success, failure, cancellation, or preflight diagnostic are structured.",
-        "The Inspection Guard is a best-effort command policy, not a security sandbox.",
+        "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
       ],
       parameters: parameters as never,
       executionMode: "parallel",
       async execute(
         _toolCallId: string,
-        params: { role: InspectionRole; task: string },
+        params: { role: MattyRole; task: string },
         signal: AbortSignal | undefined,
         onUpdate:
           | ((update: {
@@ -274,7 +437,7 @@ export function registerPiMatty(
           | undefined,
         ctx: ExtensionContext,
       ) {
-        if (!isInspectionRole(params.role)) {
+        if (!isMattyRole(params.role)) {
           const terminal = {
             contract: null,
             outcome: {
@@ -293,7 +456,7 @@ export function registerPiMatty(
           };
         }
         const role = params.role;
-        if (rulesConflict) {
+        if (role !== "worker" && rulesConflict) {
           const terminal = blockedInspectionDelegation(role, [
             `Matty Rules conflict: ${rulesConflict}`,
           ]);
@@ -320,6 +483,108 @@ export function registerPiMatty(
             `parent authentication is unavailable: ${authentication.error}`,
           );
         }
+        const progressOptions = {
+          ...(signal ? { signal } : {}),
+          onProgress(progress: Parameters<
+            NonNullable<typeof onUpdate>
+          >[0]["details"] & { type: string }) {
+            onUpdate?.({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ type: "progress", progress }),
+                },
+              ],
+              details: progress,
+            });
+          },
+        };
+
+        if (role === "worker") {
+          let contract: WorkerCapabilityContract;
+          try {
+            contract = await workerContract(ctx.cwd, environment);
+          } catch {
+            contract = createWorkerCapabilityContract({
+              workingTree: resolve(ctx.cwd),
+              temporaryPaths: [resolve(environment.TMPDIR ?? tmpdir())],
+            });
+            unmet.push("worker path scope is unavailable");
+          }
+          if (rulesConflict) {
+            unmet.push(`Matty Rules conflict: ${rulesConflict}`);
+          }
+          if (unmet.length > 0 || !ctx.model || !invocation) {
+            const terminal = blockedWorkerDelegation(contract, unmet);
+            return {
+              content: [
+                { type: "text" as const, text: JSON.stringify(terminal) },
+              ],
+              details: terminal,
+              isError: true,
+            };
+          }
+          const workerInvocation = invocationTools(invocation).length === 0
+            ? invocationWithTools(invocation, WORKER_TOOLS)
+            : invocation;
+          const configurationPaths = userConfigurationPaths(environment);
+          const terminal = await runWorkerDelegation(
+            params.task,
+            {
+              contract,
+              availability: {
+                availableTools: invocationTools(workerInvocation),
+                independentRuntime: independentRuntimeAvailable,
+                inspectionGuard: false,
+                workerGuard: true,
+              },
+              acquireWriter() {
+                if (activeWorkerRepositories.has(contract.workingTree)) {
+                  return undefined;
+                }
+                activeWorkerRepositories.add(contract.workingTree);
+                return () => {
+                  activeWorkerRepositories.delete(contract.workingTree);
+                };
+              },
+              createRunner() {
+                return createChildPiRunner({
+                  invocation: workerInvocation,
+                  parent: {
+                    provider: ctx.model?.provider ?? "",
+                    model: ctx.model?.id ?? "",
+                    thinking: thinkingLevel(ctx.thinkingLevel),
+                    cwd: contract.workingTree,
+                  },
+                  authentication: {
+                    provider: ctx.model?.provider ?? "",
+                    environment: childEnvironment(
+                      environment,
+                      authentication?.ok
+                        ? authentication.env
+                        : undefined,
+                      options.childEnvironment,
+                      role,
+                      {
+                        contract,
+                        userConfigurationPaths: configurationPaths,
+                      },
+                    ),
+                  },
+                });
+              },
+            },
+            progressOptions as never,
+          );
+          return {
+            content: [
+              { type: "text" as const, text: JSON.stringify(terminal) },
+            ],
+            details: terminal,
+            isError: terminal.outcome.status !== "succeeded",
+          };
+        }
+
         const github = role === "reviewer"
           ? await (
             options.reviewerGithubPreflight ??
@@ -343,6 +608,9 @@ export function registerPiMatty(
           };
         }
 
+        const inspectionInvocation = invocationTools(invocation).length === 0
+          ? invocationWithTools(invocation, INSPECTION_TOOLS)
+          : invocation;
         activeInvocations[role] += 1;
         try {
           const terminal = await runInspectionDelegation(
@@ -350,14 +618,14 @@ export function registerPiMatty(
             params.task,
             {
               availability: {
-                availableTools: invocationTools(invocation),
+                availableTools: invocationTools(inspectionInvocation),
                 independentRuntime: independentRuntimeAvailable,
                 inspectionGuard: true,
                 github,
               },
               createRunner() {
                 return createChildPiRunner({
-                  invocation,
+                  invocation: inspectionInvocation,
                   parent: {
                     provider: ctx.model?.provider ?? "",
                     model: ctx.model?.id ?? "",
@@ -378,20 +646,7 @@ export function registerPiMatty(
                 });
               },
             },
-            {
-              ...(signal ? { signal } : {}),
-              onProgress(progress) {
-                onUpdate?.({
-                  content: [
-                    {
-                      type: "text",
-                      text: JSON.stringify({ type: "progress", progress }),
-                    },
-                  ],
-                  details: progress,
-                });
-              },
-            },
+            progressOptions as never,
           );
           return {
             content: [
