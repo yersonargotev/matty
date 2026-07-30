@@ -28,7 +28,10 @@ active session's provider, model, authentication, and reasoning configuration;
 Matty roles may later vary prompts and allowed tools but do not silently switch
 models or require a second provider account.
 
-Bounded Concurrency remains a later layer: eight tasks accepted per call and four
-child processes active simultaneously, with overflow reported as queued. Agent
-discovery, trust, diagnostics, Delegation Contracts, and Single Writer
-enforcement also remain outside this one-child runtime.
+Bounded Concurrency is a layer above this one-child runtime: a validated
+delegation group accepts one to eight tasks and schedules at most four child
+processes simultaneously, with overflow reported as queued. Required groups are
+atomic and cancel remaining owned work after failure; optional fallback is
+limited to inspection groups and reports an observable skip. Role contracts,
+Redacted Diagnostics, and Single Writer enforcement remain outside the
+one-child runtime and are applied by the group and role-operation layers.

@@ -51,11 +51,11 @@ export const MATTY_ROLES = [
 export type MattyRole = (typeof MATTY_ROLES)[number];
 
 export const DELEGATION_INPUT_GUIDANCE =
-  `{"role": ${
-    [...INSPECTION_ROLES, "worker"].map((role) => JSON.stringify(role)).join(
-      "|",
-    )
-  }, "task": string} or {"role": "researcher", "task": string, "web": "required"|"optional", "report"?: string}`;
+  `{"requirement": "required"|"optional", "tasks": [{"role": ${
+    [...INSPECTION_ROLES, "researcher", "worker"].map((role) =>
+      JSON.stringify(role)
+    ).join("|")
+  }, "task": string, "web"?: "required"|"optional", "report"?: string}]}`;
 export const INSPECTION_ROLE_INPUT_GUIDANCE =
   `{"role": ${
     INSPECTION_ROLES.map((role) => JSON.stringify(role)).join("|")
@@ -64,6 +64,7 @@ export const INSPECTION_ROLE_INPUT_GUIDANCE =
 export interface InspectionCapabilityContract {
   schemaVersion: 1;
   id: `delegate-${InspectionRole}`;
+  requirement: "required";
   role: InspectionRole;
   tools: readonly string[];
   writeAuthority: "none";
@@ -90,6 +91,7 @@ export type ExplorerCapabilityContract = InspectionCapabilityContract & {
 export interface WorkerCapabilityContract {
   schemaVersion: 1;
   id: "delegate-worker";
+  requirement: "required";
   role: "worker";
   tools: readonly string[];
   writeAuthority: "trusted-working-tree";
@@ -112,6 +114,7 @@ export interface WorkerCapabilityContract {
 export interface ResearcherCapabilityContract {
   schemaVersion: 1;
   id: "delegate-researcher";
+  requirement: "required";
   role: "researcher";
   tools: readonly string[];
   writeAuthority: "research-artifacts";
@@ -152,6 +155,7 @@ export function createResearcherCapabilityContract(
   return {
     schemaVersion: 1,
     id: "delegate-researcher",
+    requirement: "required",
     role: "researcher",
     tools: [...RESEARCHER_TOOLS],
     writeAuthority: "research-artifacts",
@@ -182,6 +186,7 @@ export function createWorkerCapabilityContract(
   return {
     schemaVersion: 1,
     id: "delegate-worker",
+    requirement: "required",
     role: "worker",
     tools: [...WORKER_TOOLS],
     writeAuthority: "trusted-working-tree",
@@ -204,6 +209,7 @@ function inspectionContract(
   return {
     schemaVersion: 1,
     id: `delegate-${role}`,
+    requirement: "required",
     role,
     tools: [...INSPECTION_TOOLS],
     writeAuthority: "none",
@@ -320,6 +326,7 @@ export function validateCapabilityContract(
     !expected ||
     candidate.schemaVersion !== 1 ||
     candidate.id !== expected.id ||
+    candidate.requirement !== "required" ||
     candidate.web !== "absent" ||
     candidate.github !== expected.github ||
     candidate.independence !== "required" ||
@@ -383,6 +390,7 @@ function validateWorkerCapabilityContract(
   if (
     candidate.schemaVersion !== 1 ||
     candidate.id !== "delegate-worker" ||
+    candidate.requirement !== "required" ||
     candidate.role !== "worker" ||
     candidate.web !== "absent" ||
     candidate.github !== "absent" ||
@@ -453,6 +461,7 @@ function validateResearcherCapabilityContract(
   if (
     candidate.schemaVersion !== 1 ||
     candidate.id !== "delegate-researcher" ||
+    candidate.requirement !== "required" ||
     candidate.role !== "researcher" ||
     candidate.github !== "absent" ||
     candidate.independence !== "required" ||

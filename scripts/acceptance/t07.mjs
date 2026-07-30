@@ -393,8 +393,11 @@ export default function t07Acceptance(pi) {
             id: "parent-subagent",
             name: "subagent",
             arguments: {
-              role: requestedRole,
-              task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family.",
+              requirement: "required",
+              tasks: [{
+                role: requestedRole,
+                task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family.",
+              }],
             },
           }], "toolUse")));
         } else {
@@ -674,14 +677,16 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
 
   const success = await execute("explorer", false);
   assert.deepEqual(success.parentRules, { start: 1, end: 1 });
-  assert.equal(success.terminal.contract.role, "explorer");
+  assert.equal(success.terminal.status, "succeeded");
+  const successLeaf = success.terminal.tasks[0].value;
+  assert.equal(successLeaf.contract.role, "explorer");
   assert.equal(
-    success.terminal.outcome.status,
+    successLeaf.outcome.status,
     "succeeded",
     JSON.stringify(success.terminal),
   );
   assert.deepEqual(
-    success.progress.map((progress) => progress.type),
+    success.progress.map((progress) => progress.progress.type),
     [
       "started",
       "identified",
@@ -699,7 +704,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
       "message",
     ],
   );
-  const observed = success.terminal.outcome.output.evidence[0];
+  const observed = successLeaf.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });
   assert.ok(Object.values(observed.allowed).every(Boolean));
   assert.ok(Object.values(observed.blocked).every(Boolean));
@@ -707,13 +712,15 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
 
   for (const role of ["designer", "reviewer"]) {
     const roleResult = await execute(role, false);
-    assert.equal(roleResult.terminal.contract.role, role);
+    assert.equal(roleResult.terminal.status, "succeeded");
+    const roleLeaf = roleResult.terminal.tasks[0].value;
+    assert.equal(roleLeaf.contract.role, role);
     assert.equal(
-      roleResult.terminal.outcome.status,
+      roleLeaf.outcome.status,
       "succeeded",
       JSON.stringify(roleResult.terminal),
     );
-    const roleObserved = roleResult.terminal.outcome.output.evidence[0];
+    const roleObserved = roleLeaf.outcome.output.evidence[0];
     assert.deepEqual(roleObserved.rules, { start: 1, end: 1 });
     assert.ok(Object.values(roleObserved.allowed).every(Boolean));
     assert.ok(Object.values(roleObserved.blocked).every(Boolean));
@@ -721,13 +728,15 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   }
 
   const worker = await execute("worker", false);
-  assert.equal(worker.terminal.contract.role, "worker");
+  assert.equal(worker.terminal.status, "succeeded");
+  const workerLeaf = worker.terminal.tasks[0].value;
+  assert.equal(workerLeaf.contract.role, "worker");
   assert.equal(
-    worker.terminal.outcome.status,
+    workerLeaf.outcome.status,
     "succeeded",
     JSON.stringify(worker.terminal),
   );
-  const workerOutput = JSON.parse(worker.terminal.outcome.output);
+  const workerOutput = JSON.parse(workerLeaf.outcome.output);
   const workerObserved = workerOutput.evidence[0];
   assert.deepEqual(workerObserved.rules, { start: 1, end: 1 });
   assert.ok(Object.values(workerObserved.allowed).every(Boolean));
@@ -748,13 +757,18 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   await assert.rejects(access(join(home, ".npmrc")));
 
   const blocked = await execute("explorer", true);
-  assert.equal(blocked.terminal.outcome.status, "blocked");
-  assert.deepEqual(blocked.terminal.outcome.diagnostic, {
-    kind: "capability-preflight",
-    contractId: "delegate-explorer",
-    unmet: ["independent Subagent Runtime is unavailable"],
-  });
-  assert.deepEqual(blocked.progress, []);
+  assert.equal(blocked.terminal.status, "blocked");
+  assert.deepEqual(blocked.terminal.diagnostics, [{
+    kind: "delegation",
+    code: "preflight-failed",
+    taskIndex: 0,
+    role: "explorer",
+    reason: "runtime-unavailable",
+  }]);
+  assert.deepEqual(
+    blocked.progress.map((progress) => progress.code),
+    ["preflight-failed"],
+  );
 
   await access(guardReady);
   await assert.rejects(
@@ -763,11 +777,12 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   process.stdout.write(
     [
-      "T07/T08/T09 production role delegation acceptance passed",
+      "T07/T08/T09/T12 production role delegation acceptance passed",
       `artifact: ${metadata.filename}`,
       "parent/child Matty Rules: exactly one",
       "Capability Contract/preflight: validated and diagnosable",
       "real Subagent Runtime: structured progress and terminal output",
+      "delegation groups: validated, atomic, bounded, and redacted",
       "Git/CodeGraph/shell/diagnostics: inspected",
       "designer: gh blocked",
       "reviewer: gh availability/auth/read inspection passed; mutation blocked",

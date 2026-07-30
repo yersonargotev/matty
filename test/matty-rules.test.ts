@@ -20,7 +20,7 @@ test("injects exactly one marked Matty Rules block", () => {
   assert.match(prompt, /Base host instructions/);
   assert.match(
     prompt,
-    /"role": "researcher".*"web": "required"\|"optional".*"report"\?: string/,
+    /"requirement": "required"\|"optional".*"tasks".*"researcher".*"web"\?: "required"\|"optional".*"report"\?: string/,
   );
   assert.match(
     prompt,
@@ -93,7 +93,9 @@ test("rules describe all five least-privilege roles", () => {
   assert.match(prompt, /best-effort command policy, not a security sandbox/);
   assert.match(prompt, /Worker Guard is a best-effort command and path policy/);
   assert.match(prompt, /Single Writer permits at most one active worker/);
-  assert.doesNotMatch(prompt, /eight tasks|four children/);
+  assert.match(prompt, /one to eight tasks and runs at most four children/);
+  assert.match(prompt, /Required groups are atomic/);
+  assert.match(prompt, /Optional fallback is limited to inspection groups/);
 });
 
 test("injects the selected designer and reviewer child role", () => {

@@ -121,18 +121,31 @@ test("parent registration exposes explicit delegated roles", async () => {
   );
   assert.deepEqual(
     (
-      subagent?.parameters?.properties?.role as {
+      (
+        subagent?.parameters?.properties?.tasks as {
+          items?: { properties?: Record<string, unknown> };
+        }
+      )?.items?.properties?.role as {
         enum?: string[];
       }
     )?.enum,
     ["explorer", "designer", "reviewer", "researcher", "worker"],
   );
-  assert.deepEqual(subagent?.parameters?.required, ["role", "task"]);
+  assert.deepEqual(subagent?.parameters?.required, ["requirement", "tasks"]);
   assert.deepEqual(
-    (subagent?.parameters?.properties?.web as { enum?: string[] })?.enum,
+    (
+      (
+        subagent?.parameters?.properties?.tasks as {
+          items?: { properties?: Record<string, unknown> };
+        }
+      )?.items?.properties?.web as { enum?: string[] }
+    )?.enum,
     ["required", "optional"],
   );
-  assert.ok(subagent?.parameters?.properties?.report);
+  assert.equal(
+    (subagent?.parameters?.properties?.tasks as { maxItems?: number })?.maxItems,
+    8,
+  );
   assert.deepEqual(harness.commands, ["matty"]);
 
   const webSearch = harness.tools.find((tool) => tool.name === "web_search");
@@ -150,6 +163,209 @@ test("parent registration exposes explicit delegated roles", async () => {
   );
 });
 
+test("subagent rejects an invalid group before any child preflight", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi);
+  const execute = harness.tools.find((tool) => tool.name === "subagent")
+    ?.execute;
+  assert.ok(execute);
+  const secret = "prompt content must not enter diagnostics";
+
+  const result = await execute(
+    "invalid-group" as never,
+    {
+      requirement: "required",
+      tasks: Array.from({ length: 9 }, () => ({
+        role: "explorer",
+        task: secret,
+      })),
+    } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  ) as unknown as {
+    details: {
+      status: string;
+      validationErrors: Array<{ code: string }>;
+    };
+    isError: boolean;
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.status, "blocked");
+  assert.deepEqual(result.details.validationErrors, [{
+    code: "task-limit-exceeded",
+  }]);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+});
+
+test("required group authentication preflight blocks before spawning", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")
+    ?.execute;
+  assert.ok(execute);
+  let started = false;
+
+  const result = await execute(
+    "blocked-group" as never,
+    {
+      requirement: "required",
+      tasks: [
+        { role: "explorer", task: "first" },
+        { role: "designer", task: "second" },
+      ],
+    } as never,
+    undefined as never,
+    ((update: { details?: { progress?: { type?: string } } }) => {
+      started ||= update.details?.progress?.type === "started";
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: false, error: "secret provider failure" };
+        },
+      },
+    } as never,
+  );
+
+  assert.equal(started, false);
+  assert.equal(
+    (result.details as { status: string }).status,
+    "blocked",
+  );
+  assert.doesNotMatch(JSON.stringify(result), /secret provider failure/);
+});
+
+test("optional inspection fallback discloses a skip without failing the tool", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    independentRuntimeAvailable: false,
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")
+    ?.execute;
+  assert.ok(execute);
+
+  const result = await execute(
+    "optional-group" as never,
+    {
+      requirement: "optional",
+      tasks: [{ role: "explorer", task: "inspect if available" }],
+    } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: {} };
+        },
+      },
+    } as never,
+  ) as unknown as {
+    details: {
+      status: string;
+      diagnostics: Array<{ code: string; reason?: string }>;
+    };
+    isError: boolean;
+  };
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.status, "partial");
+  assert.deepEqual(result.details.diagnostics, [{
+    kind: "delegation",
+    code: "skipped",
+    taskIndex: 0,
+    role: "explorer",
+    phase: "before-spawn",
+    reason: "runtime-unavailable",
+  }]);
+});
+
+test("required group artifact preflight blocks before a sibling spawns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-group-preflight-"));
+  try {
+    const project = join(root, "project");
+    await mkdir(project);
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, { TMPDIR: join(root, "temporary") }, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+      },
+      registerWebExtension(pi) {
+        for (
+          const name of [
+            "web_search",
+            "source_check",
+            "fetch_content",
+            "get_search_content",
+          ]
+        ) {
+          pi.registerTool({ name } as never);
+        }
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")
+      ?.execute;
+    assert.ok(execute);
+    let started = false;
+
+    const result = await execute(
+      "invalid-artifact-group" as never,
+      {
+        requirement: "required",
+        tasks: [
+          { role: "explorer", task: "must not start" },
+          {
+            role: "researcher",
+            task: "invalid report",
+            web: "required",
+            report: "../outside.md",
+          },
+        ],
+      } as never,
+      undefined as never,
+      ((update: { details?: { progress?: { type?: string } } }) => {
+        started ||= update.details?.progress?.type === "started";
+      }) as never,
+      {
+        cwd: project,
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: {
+          async getApiKeyAndHeaders() {
+            return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+          },
+        },
+      } as never,
+    );
+
+    assert.equal(started, false);
+    assert.equal((result.details as { status: string }).status, "blocked");
+    assert.ok(
+      (
+        result.details as {
+          diagnostics: Array<{ reason?: string }>;
+        }
+      ).diagnostics.some((diagnostic) =>
+        diagnostic.reason === "artifact-destination-invalid"
+      ),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("researcher alone receives certified web and bounded file tools", async () => {
   const root = await mkdtemp(join(tmpdir(), "matty-research-child-"));
   try {
@@ -165,6 +381,7 @@ test("researcher alone receives certified web and bounded file tools", async () 
     const contract = {
       schemaVersion: 1,
       id: "delegate-researcher",
+      requirement: "required",
       role: "researcher",
       tools: [
         "web_search",
@@ -533,6 +750,7 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
     contract: {
       schemaVersion: 1,
       id: "delegate-designer",
+      requirement: "required",
       role: "designer",
       tools: ["read", "grep", "find", "ls", "bash"],
       writeAuthority: "none",
@@ -555,6 +773,86 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
       },
     },
   });
+});
+
+test("one subagent call queues a fifth child behind four active children", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const controller = new AbortController();
+  const started = new Set<number>();
+  const queued = new Set<number>();
+  let resolveFourStarted: (() => void) | undefined;
+  const fourStarted = new Promise<void>((resolve) => {
+    resolveFourStarted = resolve;
+  });
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: {
+      async getApiKeyAndHeaders() {
+        return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+      },
+    },
+  };
+
+  const running = execute(
+    "group-1" as never,
+    {
+      requirement: "required",
+      tasks: Array.from({ length: 5 }, () => ({
+        role: "explorer",
+        task: "hold",
+      })),
+    } as never,
+    controller.signal as never,
+    ((update: {
+      details?: {
+        code?: string;
+        taskIndex?: number;
+        progress?: { type?: string };
+      };
+    }) => {
+      const details = update.details;
+      if (
+        details?.code === "queued" &&
+        typeof details.taskIndex === "number"
+      ) {
+        queued.add(details.taskIndex);
+      }
+      if (
+        details?.progress?.type === "started" &&
+        typeof details.taskIndex === "number"
+      ) {
+        started.add(details.taskIndex);
+        if (started.size === 4) {
+          resolveFourStarted?.();
+        }
+      }
+    }) as never,
+    context as never,
+  );
+  await fourStarted;
+  controller.abort();
+  const result = await running;
+
+  assert.deepEqual([...started].sort(), [0, 1, 2, 3]);
+  assert.deepEqual([...queued], [4]);
+  assert.equal(
+    (result.details as { status: string }).status,
+    "cancelled",
+  );
 });
 
 test("each inspection Capability Contract permits only one active invocation", async () => {
@@ -624,6 +922,7 @@ test("each inspection Capability Contract permits only one active invocation", a
         },
       },
     );
+
   } finally {
     controller.abort();
     firstResult = await first;
@@ -696,6 +995,37 @@ test("Single Writer permits at most one active worker for a repository", async (
           unmet: ["Single Writer already active for this repository"],
         },
       },
+    );
+
+    let groupStarted = false;
+    const blockedGroup = await execute(
+      "worker-group" as never,
+      {
+        requirement: "required",
+        tasks: [
+          { role: "explorer", task: "must not start" },
+          { role: "worker", task: "must not race" },
+        ],
+      } as never,
+      undefined as never,
+      ((update: { details?: { progress?: { type?: string } } }) => {
+        groupStarted ||= update.details?.progress?.type === "started";
+      }) as never,
+      context as never,
+    );
+    assert.equal(groupStarted, false);
+    assert.equal(
+      (blockedGroup.details as { status: string }).status,
+      "blocked",
+    );
+    assert.ok(
+      (
+        blockedGroup.details as {
+          diagnostics: Array<{ reason?: string }>;
+        }
+      ).diagnostics.some((diagnostic) =>
+        diagnostic.reason === "writer-unavailable"
+      ),
     );
   } finally {
     controller.abort();

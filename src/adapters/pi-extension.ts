@@ -34,6 +34,10 @@ import {
   runWorkerDelegation,
 } from "../application/worker-delegation.ts";
 import {
+  runDelegationGroup,
+  type DelegationTaskExecution,
+} from "../application/delegation-scheduler.ts";
+import {
   acquireRepositoryWriter,
   singleWriterStatePath,
 } from "../application/single-writer.ts";
@@ -53,12 +57,17 @@ import {
   inspectionCapabilityContract,
   isInspectionRole,
   isMattyRole,
+  preflightCapability,
   validateCapabilityContract,
   type InspectionRole,
   type MattyRole,
   type ResearcherCapabilityContract,
   type WorkerCapabilityContract,
 } from "../domain/capability-contract.ts";
+import type {
+  DelegationGroupContract,
+  DelegationTaskDeclaration,
+} from "../domain/delegation-group.ts";
 import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
 import {
   detectMattyRulesConflict,
@@ -101,6 +110,26 @@ export interface PiMattyRegistrationOptions {
     authenticated: boolean;
   }>;
 }
+
+type WriterRelease = () => void | Promise<void>;
+
+interface PreparedWorkerExecution {
+  contract: WorkerCapabilityContract;
+  takeWriterLease(): WriterRelease | undefined;
+  releaseIfUnused(): Promise<void>;
+}
+
+interface PreparedResearcherExecution {
+  contract: ResearcherCapabilityContract;
+  scope: ResearchWorkspace;
+  transferred: boolean;
+}
+
+type SingleTaskExecutionParams = DelegationTaskDeclaration & {
+  executionScope?: "standalone" | "group";
+  preparedWorker?: PreparedWorkerExecution;
+  preparedResearcher?: PreparedResearcherExecution;
+};
 
 const execFileAsync = promisify(execFile);
 const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
@@ -774,33 +803,52 @@ export function registerPiMatty(
     const parameters = {
       type: "object",
       properties: {
-        role: {
-          type: "string",
-          enum: [...MATTY_ROLES],
-          description: "The least-privilege Matty Role.",
-        },
-        task: {
-          type: "string",
-          minLength: 1,
-          description: "One bounded delegated assignment.",
-        },
-        web: {
+        requirement: {
           type: "string",
           enum: ["required", "optional"],
-          description: "Required for researcher; rejected for other roles.",
-        },
-        report: {
-          type: "string",
-          minLength: 1,
           description:
-            "Parent-approved Markdown report path for researcher.",
+            "Required groups are atomic; optional inspection groups disclose skipped work.",
+        },
+        tasks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: {
+            type: "object",
+            properties: {
+              role: {
+                type: "string",
+                enum: [...MATTY_ROLES],
+                description: "The least-privilege Matty Role.",
+              },
+              task: {
+                type: "string",
+                minLength: 1,
+                description: "One bounded delegated assignment.",
+              },
+              web: {
+                type: "string",
+                enum: ["required", "optional"],
+                description:
+                  "Required for researcher; rejected for other roles.",
+              },
+              report: {
+                type: "string",
+                minLength: 1,
+                description:
+                  "Parent-approved Markdown report path for researcher.",
+              },
+            },
+            required: ["role", "task"],
+            additionalProperties: false,
+          },
         },
       },
-      required: ["role", "task"],
+      required: ["requirement", "tasks"],
       additionalProperties: false,
     };
 
-    pi.registerTool({
+    const singleTaskTool = {
       name: "subagent",
       label: "Matty Role",
       description:
@@ -816,16 +864,11 @@ export function registerPiMatty(
         "Progress and the terminal success, failure, cancellation, or preflight diagnostic are structured.",
         "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
       ],
-      parameters: parameters as never,
+      parameters: {} as never,
       executionMode: "parallel",
       async execute(
         _toolCallId: string,
-        params: {
-          role: MattyRole;
-          task: string;
-          web?: "required" | "optional";
-          report?: string;
-        },
+        params: SingleTaskExecutionParams,
         signal: AbortSignal | undefined,
         onUpdate:
           | ((update: {
@@ -887,14 +930,18 @@ export function registerPiMatty(
 
         if (role === "worker") {
           let contract: WorkerCapabilityContract;
-          try {
-            contract = await workerContract(ctx.cwd, environment);
-          } catch {
-            contract = createWorkerCapabilityContract({
-              workingTree: resolve(ctx.cwd),
-              temporaryPaths: [resolve(environment.TMPDIR ?? tmpdir())],
-            });
-            unmet.push("worker path scope is unavailable");
+          if (params.preparedWorker) {
+            contract = params.preparedWorker.contract;
+          } else {
+            try {
+              contract = await workerContract(ctx.cwd, environment);
+            } catch {
+              contract = createWorkerCapabilityContract({
+                workingTree: resolve(ctx.cwd),
+                temporaryPaths: [resolve(environment.TMPDIR ?? tmpdir())],
+              });
+              unmet.push("worker path scope is unavailable");
+            }
           }
           if (rulesConflict) {
             unmet.push(`Matty Rules conflict: ${rulesConflict}`);
@@ -926,6 +973,9 @@ export function registerPiMatty(
                 workerGuard: true,
               },
               async acquireWriter() {
+                if (params.preparedWorker) {
+                  return params.preparedWorker.takeWriterLease();
+                }
                 return await acquireRepositoryWriter(
                   contract.workingTree,
                   writerStateRoot,
@@ -977,29 +1027,38 @@ export function registerPiMatty(
             ]);
           }
           let scope: ResearchWorkspace;
-          try {
-            scope = await createResearchWorkspace({
-              temporaryRoot: researchTemporaryRoot,
-              projectRoot: ctx.cwd,
-              report,
-            });
-          } catch {
-            return blockedCapabilityResult("delegate-researcher", [
-              "research artifact destinations are invalid",
-            ]);
+          if (params.preparedResearcher) {
+            scope = params.preparedResearcher.scope;
+          } else {
+            try {
+              scope = await createResearchWorkspace({
+                temporaryRoot: researchTemporaryRoot,
+                projectRoot: ctx.cwd,
+                report,
+              });
+            } catch {
+              return blockedCapabilityResult("delegate-researcher", [
+                "research artifact destinations are invalid",
+              ]);
+            }
           }
           sessionResearchWorkspaces.set(scope.workspace, scope);
-          const contract = createResearcherCapabilityContract({
-            web,
-            workspaceRoot: scope.temporaryRoot,
-            projectRoot: scope.projectRoot,
-            workspace: scope.workspace,
-            report: scope.report,
-          });
+          if (params.preparedResearcher) {
+            params.preparedResearcher.transferred = true;
+          }
+          const contract = params.preparedResearcher?.contract ??
+            createResearcherCapabilityContract({
+              web,
+              workspaceRoot: scope.temporaryRoot,
+              projectRoot: scope.projectRoot,
+              workspace: scope.workspace,
+              report: scope.report,
+            });
           if (rulesConflict) {
             unmet.push(`Matty Rules conflict: ${rulesConflict}`);
           }
           if (
+            params.executionScope !== "group" &&
             activeResearchers >= contract.concurrency.maxActive
           ) {
             unmet.push(
@@ -1076,6 +1135,7 @@ export function registerPiMatty(
           : { available: false, authenticated: false };
         const contract = inspectionCapabilityContract(role);
         if (
+          params.executionScope !== "group" &&
           activeInvocations[role] >= contract.concurrency.maxActive
         ) {
           unmet.push(
@@ -1135,6 +1195,318 @@ export function registerPiMatty(
         } finally {
           activeInvocations[role] -= 1;
         }
+      },
+    };
+
+    pi.registerTool({
+      ...singleTaskTool,
+      description:
+        "Run one to eight independent Matty Role tasks with at most four active children.",
+      promptSnippet:
+        "Delegate a required atomic group or an optional inspection group.",
+      promptGuidelines: [
+        `Call subagent with exactly ${DELEGATION_INPUT_GUIDANCE}.`,
+        "A required group is atomic: one failure cancels remaining work and never falls back inline.",
+        "An optional group may contain inspection roles only and reports unavailable work as skipped.",
+        "At most eight tasks are accepted and at most four children run concurrently; overflow is queued.",
+        "Researcher requires web and may receive one approved Markdown report path.",
+        "Single Writer permits at most one worker per group and per repository.",
+        "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
+      ],
+      parameters: parameters as never,
+      async execute(
+        toolCallId: string,
+        params:
+          | {
+              requirement: "required" | "optional";
+              tasks: DelegationTaskDeclaration[];
+            }
+          | DelegationTaskDeclaration,
+        signal: AbortSignal | undefined,
+        onUpdate:
+          | ((update: {
+              content: Array<{ type: "text"; text: string }>;
+              details: unknown;
+            }) => void)
+          | undefined,
+        ctx: ExtensionContext,
+      ) {
+        if ("role" in params) {
+          return await singleTaskTool.execute(
+            toolCallId,
+            params,
+            signal,
+            onUpdate,
+            ctx,
+          );
+        }
+        const contract: DelegationGroupContract = {
+          schemaVersion: 1,
+          id: "delegate-group",
+          requirement: params.requirement,
+          fallback: params.requirement === "required" ? "none" : "skip",
+          atomic: params.requirement === "required",
+          cardinality: { min: 1, max: 8 },
+          concurrency: { maxActive: 4 },
+          independence: "required",
+          tasks: params.tasks.map((task) =>
+            task.role === "researcher"
+              ? {
+                ...task,
+                report: resolve(
+                  ctx.cwd,
+                  task.report?.trim() || defaultResearchReport(task.task),
+                ),
+              }
+              : task
+          ),
+        };
+        let authenticationPreflight: Promise<boolean> | undefined;
+        const preparedWorkers = new Map<number, PreparedWorkerExecution>();
+        const preparedResearchers = new Map<
+          number,
+          PreparedResearcherExecution
+        >();
+        const result = await (async () => {
+          try {
+            return await runDelegationGroup(contract, {
+              async preflight(task, taskIndex) {
+                if (
+                  !ctx.model ||
+                  !invocation ||
+                  !independentRuntimeAvailable
+                ) {
+                  return { ok: false, reason: "runtime-unavailable" };
+                }
+                if (rulesConflict) {
+                  return { ok: false, reason: "rules-conflict" };
+                }
+                authenticationPreflight ??= ctx.modelRegistry
+                  .getApiKeyAndHeaders(ctx.model)
+                  .then((authentication) => authentication.ok)
+                  .catch(() => false);
+                if (!(await authenticationPreflight)) {
+                  return {
+                    ok: false,
+                    reason: "authentication-unavailable",
+                  };
+                }
+
+                if (isInspectionRole(task.role)) {
+                  const github = task.role === "reviewer"
+                    ? await (
+                      options.reviewerGithubPreflight ??
+                        (() => reviewerGithubPreflight(environment))
+                    )()
+                    : { available: false, authenticated: false };
+                  if (
+                    task.role === "reviewer" &&
+                    (!github.available || !github.authenticated)
+                  ) {
+                    return { ok: false, reason: "github-unavailable" };
+                  }
+                  const roleInvocation = !declaresInvocationTools(invocation)
+                    ? invocationWithTools(invocation, INSPECTION_TOOLS)
+                    : invocation;
+                  const rolePreflight = preflightCapability(
+                    inspectionCapabilityContract(task.role),
+                    {
+                      availableTools: invocationTools(roleInvocation),
+                      independentRuntime: independentRuntimeAvailable,
+                      inspectionGuard: true,
+                      github,
+                    },
+                  );
+                  return rolePreflight.ok
+                    ? { ok: true }
+                    : { ok: false, reason: "tool-surface-incompatible" };
+                }
+
+                if (task.role === "worker") {
+                  let workerCapability: WorkerCapabilityContract;
+                  try {
+                    workerCapability = await workerContract(
+                      ctx.cwd,
+                      environment,
+                    );
+                  } catch {
+                    return {
+                      ok: false,
+                      reason: "artifact-destination-invalid",
+                    };
+                  }
+                  const roleInvocation = !declaresInvocationTools(invocation)
+                    ? invocationWithTools(invocation, WORKER_TOOLS)
+                    : invocation;
+                  const rolePreflight = preflightCapability(
+                    workerCapability,
+                    {
+                      availableTools: invocationTools(roleInvocation),
+                      independentRuntime: independentRuntimeAvailable,
+                      inspectionGuard: false,
+                      workerGuard: true,
+                    },
+                  );
+                  if (!rolePreflight.ok) {
+                    return {
+                      ok: false,
+                      reason: "tool-surface-incompatible",
+                    };
+                  }
+                  const writerStateRoot =
+                    workerCapability.temporaryPaths.at(-1) ?? tmpdir();
+                  let writerLease = await acquireRepositoryWriter(
+                    workerCapability.workingTree,
+                    writerStateRoot,
+                  );
+                  if (!writerLease) {
+                    return { ok: false, reason: "writer-unavailable" };
+                  }
+                  preparedWorkers.set(taskIndex, {
+                    contract: workerCapability,
+                    takeWriterLease() {
+                      const lease = writerLease;
+                      writerLease = undefined;
+                      return lease;
+                    },
+                    async releaseIfUnused() {
+                      const lease = writerLease;
+                      writerLease = undefined;
+                      await lease?.();
+                    },
+                  });
+                  return { ok: true };
+                }
+
+                if (task.web === "required" && webState !== "available") {
+                  return { ok: false, reason: "web-unavailable" };
+                }
+                let scope: ResearchWorkspace;
+                try {
+                  scope = await createResearchWorkspace({
+                    temporaryRoot: researchTemporaryRoot,
+                    projectRoot: ctx.cwd,
+                    report: task.report ??
+                      defaultResearchReport(task.task),
+                  });
+                } catch {
+                  return {
+                    ok: false,
+                    reason: "artifact-destination-invalid",
+                  };
+                }
+                const researcherCapability =
+                  createResearcherCapabilityContract({
+                    web: task.web ?? "required",
+                    workspaceRoot: scope.temporaryRoot,
+                    projectRoot: scope.projectRoot,
+                    workspace: scope.workspace,
+                    report: scope.report,
+                  });
+                const preparation: PreparedResearcherExecution = {
+                  contract: researcherCapability,
+                  scope,
+                  transferred: false,
+                };
+                preparedResearchers.set(taskIndex, preparation);
+                const roleInvocation = !declaresInvocationTools(invocation)
+                  ? invocationWithTools(invocation, RESEARCHER_TOOLS)
+                  : invocation;
+                const rolePreflight = preflightCapability(
+                  researcherCapability,
+                  {
+                    availableTools: invocationTools(roleInvocation),
+                    independentRuntime: independentRuntimeAvailable,
+                    inspectionGuard: false,
+                    researchFileTool: true,
+                    web: webState,
+                  },
+                );
+                return rolePreflight.ok
+                  ? { ok: true }
+                  : { ok: false, reason: "tool-surface-incompatible" };
+              },
+              async run(task, taskIndex, taskOptions) {
+                const preparedWorker = preparedWorkers.get(taskIndex);
+                const preparedResearcher = preparedResearchers.get(taskIndex);
+                const leafResult = await singleTaskTool.execute(
+                  toolCallId,
+                  {
+                    ...task,
+                    executionScope: "group",
+                    ...(preparedWorker ? { preparedWorker } : {}),
+                    ...(preparedResearcher ? { preparedResearcher } : {}),
+                  },
+                  taskOptions.signal,
+                  onUpdate
+                    ? (update) => {
+                      onUpdate({
+                        content: update.content,
+                        details: { taskIndex, progress: update.details },
+                      });
+                    }
+                    : undefined,
+                  ctx,
+                );
+                const leafStatus = (
+                  leafResult.details as {
+                    outcome?: { status?: string };
+                  }
+                ).outcome?.status;
+                if (leafStatus === "cancelled") {
+                  return { status: "cancelled" };
+                }
+                if (leafResult.isError) {
+                  return { status: "failed" };
+                }
+                return {
+                  status: "succeeded",
+                  value: leafResult.details,
+                } satisfies DelegationTaskExecution<unknown>;
+              },
+            }, {
+              ...(signal ? { signal } : {}),
+              onDiagnostic(diagnostic) {
+                onUpdate?.({
+                  content: [{
+                    type: "text",
+                    text: JSON.stringify(diagnostic),
+                  }],
+                  details: diagnostic,
+                });
+              },
+            });
+          } finally {
+            await Promise.all(
+              [...preparedWorkers.values()].map(async (preparation) => {
+                try {
+                  await preparation.releaseIfUnused();
+                } catch {
+                  // Keep the closed-allowlist group result; stale leases expire.
+                }
+              }),
+            );
+            await Promise.all(
+              [...preparedResearchers.values()].map(async (preparation) => {
+                if (!preparation.transferred) {
+                  try {
+                    await cleanupResearchWorkspace(preparation.scope);
+                  } catch {
+                    // Marker-bearing workspaces remain eligible for startup cleanup.
+                  }
+                }
+              }),
+            );
+          }
+        })();
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          details: result,
+          isError:
+            result.status === "blocked" ||
+            result.status === "failed" ||
+            result.status === "cancelled",
+        };
       },
     } as never);
   }

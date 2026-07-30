@@ -26,6 +26,7 @@ test("validates the production inspection-role Capability Contracts", () => {
     assert.deepEqual(contract.tools, ["read", "grep", "find", "ls", "bash"]);
     assert.equal(contract.writeAuthority, "none");
     assert.equal(contract.mutationPolicy, "inspection-guard");
+    assert.equal(contract.requirement, "required");
     assert.deepEqual(contract.cardinality, { min: 1, max: 1 });
   }
   assert.equal(DESIGNER_CAPABILITY_CONTRACT.github, "absent");
@@ -121,6 +122,7 @@ test("validates a Single Writer Capability Contract with bounded paths", () => {
   assert.deepEqual(contract.tools, WORKER_TOOLS);
   assert.equal(contract.writeAuthority, "trusted-working-tree");
   assert.equal(contract.mutationPolicy, "worker-guard");
+  assert.equal(contract.requirement, "required");
   assert.deepEqual(contract.cardinality, { min: 1, max: 1 });
   assert.deepEqual(contract.concurrency, { maxActive: 1 });
 });
@@ -141,6 +143,7 @@ test("validates a researcher Capability Contract with two bounded write zones", 
   });
   assert.deepEqual(contract.tools, RESEARCHER_TOOLS);
   assert.equal(contract.writeAuthority, "research-artifacts");
+  assert.equal(contract.requirement, "required");
   assert.deepEqual(contract.writeLimits, {
     workspaceFiles: "multiple",
     researchReports: 1,
