@@ -57,6 +57,7 @@ includes(
 includes("runs-on: macos-15");
 includes("environment: release-candidate");
 includes("node-version: 24");
+includes("npm install --global @colbymchenry/codegraph@0.9.9");
 includes("npm ci --ignore-scripts");
 assert.doesNotMatch(
   workflow,
