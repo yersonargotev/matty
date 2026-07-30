@@ -9,7 +9,8 @@ A worker may read, create, and edit files in the trusted working tree, write to
 the validated temporary paths, install project-local dependencies, and run
 project checks. Single Writer uses a repository-keyed lease so separate Matty
 parent processes sharing a repository and system temporary root cannot run
-workers concurrently. Parallel-writer contracts fail Capability Preflight.
+workers concurrently. The Worker Guard reserves Matty's lease path from worker
+mutation. Parallel-writer contracts fail Capability Preflight.
 
 The Worker Guard blocks recognized `gh` access, Git index and reference
 mutation, global installation, writes outside the validated roots, and writes

@@ -418,6 +418,10 @@ async function main() {
       "dist/application/inspection-role-delegation.js",
       "dist/application/register-matty.d.ts",
       "dist/application/register-matty.js",
+      "dist/application/single-writer.d.ts",
+      "dist/application/single-writer.js",
+      "dist/application/worker-delegation.d.ts",
+      "dist/application/worker-delegation.js",
       "dist/domain/capability-contract.d.ts",
       "dist/domain/capability-contract.js",
       "dist/domain/inspection-guard.d.ts",
@@ -428,6 +432,8 @@ async function main() {
       "dist/domain/package-contract.js",
       "dist/domain/status.d.ts",
       "dist/domain/status.js",
+      "dist/domain/worker-guard.d.ts",
+      "dist/domain/worker-guard.js",
     ];
     const expectedPackedFiles = [
       "THIRD_PARTY_NOTICES.md",

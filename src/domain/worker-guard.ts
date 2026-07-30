@@ -5,6 +5,7 @@ export type WorkerMutationClass =
   | "github"
   | "git"
   | "global-installation"
+  | "single-writer"
   | "external-path"
   | "user-configuration"
   | "shell";
@@ -20,6 +21,7 @@ export type WorkerDecision =
 export interface WorkerGuardScope {
   workingTree: string;
   temporaryPaths: readonly string[];
+  protectedPaths?: readonly string[];
   userHome?: string;
   userConfigurationPaths: readonly string[];
 }
@@ -123,6 +125,13 @@ export async function inspectWorkerPath(
   const absolute = resolve(cwd, requestedPath);
   const candidate = await canonicalCandidate(absolute);
 
+  if (
+    scope.protectedPaths?.some((path) =>
+      containsPath(path, absolute) || containsPath(path, candidate)
+    )
+  ) {
+    return blocked("single-writer", "Matty Single Writer lease mutation");
+  }
   if (
     scope.userConfigurationPaths.some((path) =>
       containsPath(path, absolute) || containsPath(path, candidate)

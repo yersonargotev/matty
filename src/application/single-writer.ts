@@ -23,11 +23,15 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+export function singleWriterStatePath(stateRoot: string): string {
+  return join(stateRoot, "matty-single-writer-v1");
+}
+
 export async function acquireRepositoryWriter(
   workingTree: string,
   stateRoot: string,
 ): Promise<(() => Promise<void>) | undefined> {
-  const lockRoot = join(stateRoot, "matty-single-writer-v1");
+  const lockRoot = singleWriterStatePath(stateRoot);
   await mkdir(lockRoot, { recursive: true, mode: 0o700 });
   const repositoryId = createHash("sha256")
     .update(workingTree)

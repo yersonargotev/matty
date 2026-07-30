@@ -24,7 +24,10 @@ import {
   blockedWorkerDelegation,
   runWorkerDelegation,
 } from "../application/worker-delegation.ts";
-import { acquireRepositoryWriter } from "../application/single-writer.ts";
+import {
+  acquireRepositoryWriter,
+  singleWriterStatePath,
+} from "../application/single-writer.ts";
 import {
   registerMatty,
   type MattyHost,
@@ -162,6 +165,7 @@ function childEnvironment(
   role: MattyRole,
   worker?: {
     contract: WorkerCapabilityContract;
+    protectedPaths: readonly string[];
     userHome?: string;
     userConfigurationPaths: readonly string[];
   },
@@ -197,6 +201,7 @@ function childEnvironment(
     MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify(
       worker.contract.temporaryPaths,
     ),
+    MATTY_WORKER_PROTECTED_PATHS: JSON.stringify(worker.protectedPaths),
     ...(worker.userHome
       ? { MATTY_WORKER_USER_HOME: worker.userHome }
       : {}),
@@ -252,10 +257,15 @@ function workerGuardScope(
     const userConfigurationPaths = JSON.parse(
       environment.MATTY_WORKER_USER_CONFIGURATION_PATHS ?? "[]",
     ) as unknown;
+    const protectedPaths = JSON.parse(
+      environment.MATTY_WORKER_PROTECTED_PATHS ?? "[]",
+    ) as unknown;
     if (
       !workingTree ||
       !Array.isArray(temporaryPaths) ||
       temporaryPaths.some((path) => typeof path !== "string") ||
+      !Array.isArray(protectedPaths) ||
+      protectedPaths.some((path) => typeof path !== "string") ||
       !Array.isArray(userConfigurationPaths) ||
       userConfigurationPaths.some((path) => typeof path !== "string")
     ) {
@@ -271,6 +281,7 @@ function workerGuardScope(
     return {
       workingTree: contract.workingTree,
       temporaryPaths: contract.temporaryPaths,
+      protectedPaths: protectedPaths as string[],
       ...(environment.MATTY_WORKER_USER_HOME
         ? { userHome: environment.MATTY_WORKER_USER_HOME }
         : {}),
@@ -562,6 +573,8 @@ export function registerPiMatty(
             ? invocationWithTools(invocation, WORKER_TOOLS)
             : invocation;
           const configurationPaths = userConfigurationPaths(environment);
+          const writerStateRoot = contract.temporaryPaths.at(-1) ?? tmpdir();
+          const protectedPaths = [singleWriterStatePath(writerStateRoot)];
           const terminal = await runWorkerDelegation(
             params.task,
             {
@@ -575,7 +588,7 @@ export function registerPiMatty(
               async acquireWriter() {
                 return await acquireRepositoryWriter(
                   contract.workingTree,
-                  contract.temporaryPaths.at(-1) ?? tmpdir(),
+                  writerStateRoot,
                 );
               },
               createRunner() {
@@ -598,6 +611,7 @@ export function registerPiMatty(
                       role,
                       {
                         contract,
+                        protectedPaths,
                         ...(environment.HOME
                           ? { userHome: resolve(environment.HOME) }
                           : {}),

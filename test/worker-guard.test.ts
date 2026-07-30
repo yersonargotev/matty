@@ -36,6 +36,7 @@ async function withScope(
       {
         workingTree: await realpath(project),
         temporaryPaths: [await realpath(temporary)],
+        protectedPaths: [join(temporary, "matty-single-writer-v1")],
         userHome: canonicalHome,
         userConfigurationPaths: [
           join(canonicalHome, ".config"),
@@ -99,6 +100,10 @@ test("blocks external, user-configuration, Git, GitHub, and global-install write
       ["printf changed > $HOME/.npmrc", "user-configuration"],
       ["printf changed > ${HOME}/.config/tool.json", "user-configuration"],
       ["touch ../escape.txt", "external-path"],
+      [
+        `rm -rf ${join(paths.temporary, "matty-single-writer-v1")}`,
+        "single-writer",
+      ],
     ];
 
     for (const [command, mutationClass] of cases) {

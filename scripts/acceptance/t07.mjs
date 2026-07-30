@@ -474,6 +474,12 @@ export default function t07Acceptance(pi) {
                 "blocked-external",
                 "touch " + process.env.MATTY_T07_EXTERNAL + "/forbidden.txt",
               ],
+              [
+                "blocked-single-writer",
+                "rm -rf " + JSON.parse(
+                  process.env.MATTY_WORKER_PROTECTED_PATHS ?? "[]",
+                )[0],
+              ],
             ]),
             toolCall("blocked-user-config", "write", {
               path: process.env.HOME + "/.npmrc",
@@ -498,6 +504,7 @@ export default function t07Acceptance(pi) {
           "blocked-git-reference",
           "blocked-global",
           "blocked-external",
+          "blocked-single-writer",
           "blocked-user-config",
         ];
         const payload = {
