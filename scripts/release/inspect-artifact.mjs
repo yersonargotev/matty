@@ -254,28 +254,10 @@ function inspectThirdPartyProvenance(provenance, lockfile) {
 }
 
 async function main() {
-  const manifest = await readJson(join(REPOSITORY_ROOT, "package.json"));
   const lockfile = await readJson(join(REPOSITORY_ROOT, "package-lock.json"));
-  const inventory = await readJson(
-    join(REPOSITORY_ROOT, "PRODUCTION_DEPENDENCY_LIFECYCLES.json"),
-  );
-  const provenance = await readJson(
-    join(REPOSITORY_ROOT, "THIRD_PARTY_PROVENANCE.json"),
-  );
-  const license = await readFile(join(REPOSITORY_ROOT, "LICENSE"), "utf8");
-  const notices = await readFile(
-    join(REPOSITORY_ROOT, "THIRD_PARTY_NOTICES.md"),
-    "utf8",
-  );
-
-  inspectPackageMetadata(manifest);
-  await inspectLifecycleInventory(lockfile, inventory);
-  inspectThirdPartyProvenance(provenance, lockfile);
-  assert.match(license, /^MIT License\n\nCopyright \(c\) 2026 Yerson Argote\n/);
-  assert.match(notices, /^# Third-party notices\n/);
-
   const sandbox = await mkdtemp(join(tmpdir(), "matty-artifact-"));
   const artifactRoot = join(sandbox, "artifacts");
+  const extractedRoot = join(sandbox, "extracted");
   const isolatedEnv = {
     ...process.env,
     HOME: join(sandbox, "home"),
@@ -286,19 +268,55 @@ async function main() {
   };
   try {
     await mkdir(artifactRoot, { recursive: true });
+    await mkdir(extractedRoot, { recursive: true });
+    const providedArtifact = process.env.MATTY_PACKED_ARTIFACT
+      ? resolve(process.env.MATTY_PACKED_ARTIFACT)
+      : undefined;
     const packed = await run(
       "npm",
-      [
-        "pack",
-        REPOSITORY_ROOT,
-        "--ignore-scripts",
-        "--json",
-        "--pack-destination",
-        artifactRoot,
-      ],
+      providedArtifact
+        ? ["pack", providedArtifact, "--ignore-scripts", "--dry-run", "--json"]
+        : [
+          "pack",
+          REPOSITORY_ROOT,
+          "--ignore-scripts",
+          "--json",
+          "--pack-destination",
+          artifactRoot,
+        ],
       { cwd: sandbox, env: isolatedEnv },
     );
     const [metadata] = JSON.parse(packed.stdout);
+    const artifactPath = providedArtifact ??
+      join(artifactRoot, metadata.filename);
+    await access(artifactPath);
+    await run(
+      "tar",
+      ["-xzf", artifactPath, "-C", extractedRoot],
+      { cwd: sandbox, env: isolatedEnv },
+    );
+    const packageRoot = join(extractedRoot, "package");
+    const manifest = await readJson(join(packageRoot, "package.json"));
+    const inventory = await readJson(
+      join(packageRoot, "PRODUCTION_DEPENDENCY_LIFECYCLES.json"),
+    );
+    const provenance = await readJson(
+      join(packageRoot, "THIRD_PARTY_PROVENANCE.json"),
+    );
+    const license = await readFile(join(packageRoot, "LICENSE"), "utf8");
+    const notices = await readFile(
+      join(packageRoot, "THIRD_PARTY_NOTICES.md"),
+      "utf8",
+    );
+
+    inspectPackageMetadata(manifest);
+    await inspectLifecycleInventory(lockfile, inventory);
+    inspectThirdPartyProvenance(provenance, lockfile);
+    assert.match(
+      license,
+      /^MIT License\n\nCopyright \(c\) 2026 Yerson Argote\n/,
+    );
+    assert.match(notices, /^# Third-party notices\n/);
     assert.equal(metadata.name, manifest.name);
     assert.equal(metadata.version, manifest.version);
     assert.deepEqual(
@@ -317,7 +335,7 @@ async function main() {
       false,
       "packed artifact contains skills, source, or install-time generators",
     );
-    const artifact = await readFile(join(artifactRoot, metadata.filename));
+    const artifact = await readFile(artifactPath);
     const digest = createHash("sha256").update(artifact).digest("hex");
     process.stdout.write(
       [

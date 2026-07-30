@@ -214,23 +214,31 @@ try {
   });
   const canonicalProject = await realpath(project);
 
-  await run("npm", ["run", "build"], {
-    cwd: repositoryRoot,
-    env: isolatedEnv,
-  });
+  const providedArtifact = process.env.MATTY_PACKED_ARTIFACT
+    ? resolve(process.env.MATTY_PACKED_ARTIFACT)
+    : undefined;
+  if (!providedArtifact) {
+    await run("npm", ["run", "build"], {
+      cwd: repositoryRoot,
+      env: isolatedEnv,
+    });
+  }
   const packed = await run(
     "npm",
-    [
-      "pack",
-      repositoryRoot,
-      "--json",
-      "--pack-destination",
-      artifacts,
-    ],
+    providedArtifact
+      ? ["pack", providedArtifact, "--ignore-scripts", "--dry-run", "--json"]
+      : [
+        "pack",
+        repositoryRoot,
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        artifacts,
+      ],
     { cwd: project, env: isolatedEnv },
   );
   const [metadata] = JSON.parse(packed.stdout);
-  const artifact = join(artifacts, metadata.filename);
+  const artifact = providedArtifact ?? join(artifacts, metadata.filename);
   await access(artifact);
   await run(
     "npm",
@@ -277,7 +285,7 @@ import { registerPiMatty } from ${JSON.stringify(mattyExtension)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
 const childRole = process.env.MATTY_CHILD_ROLE;
-const childMode = ["explorer", "designer", "reviewer", "worker"].includes(childRole);
+const childMode = ["explorer", "designer", "reviewer", "researcher", "worker"].includes(childRole);
 const requestedRole = process.env.MATTY_T07_ROLE ?? "explorer";
 const startMarker = "<!-- matty:rules -->";
 const endMarker = "<!-- /matty:rules -->";
@@ -327,6 +335,8 @@ export default function t07Acceptance(pi) {
         "--tools",
         requestedRole === "worker"
           ? "read,write,edit,grep,find,ls,bash"
+          : requestedRole === "researcher"
+          ? "web_search,source_check,fetch_content,get_search_content,research_file"
           : "read,grep,find,ls,bash",
       ],
     },
@@ -342,6 +352,30 @@ export default function t07Acceptance(pi) {
     },
     independentRuntimeAvailable:
       process.env.MATTY_T07_BLOCK_RUNTIME !== "1",
+    registerWebExtension(api) {
+      for (const name of [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ]) {
+        api.registerTool({
+          name,
+          label: name,
+          description: "T15 certified web fixture",
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            return {
+              content: [{
+                type: "text",
+                text: "Current cited result: https://example.invalid/source",
+              }],
+              details: { provider: "acceptance-fixture" },
+            };
+          },
+        });
+      }
+    },
   });
 
   pi.on("before_agent_start", (event) => {
@@ -397,6 +431,12 @@ export default function t07Acceptance(pi) {
               tasks: [{
                 role: requestedRole,
                 task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family.",
+                ...(requestedRole === "researcher"
+                  ? {
+                    web: "required",
+                    report: "docs/research/t15-packed-research.md",
+                  }
+                  : {}),
               }],
             },
           }], "toolUse")));
@@ -410,6 +450,12 @@ export default function t07Acceptance(pi) {
       }
 
       if (results.length === 0) {
+        if (childRole === "researcher") {
+          queueMicrotask(() => stream.end(assistant(model, [
+            toolCall("research-web", "web_search", {}),
+          ], "toolUse")));
+          return stream;
+        }
         if (childRole === "worker") {
           queueMicrotask(() => stream.end(assistant(model, [
             toolCall("allowed-write", "write", {
@@ -536,6 +582,29 @@ export default function t07Acceptance(pi) {
             }),
           }],
         )));
+        return stream;
+      }
+      if (childRole === "researcher") {
+        if (results.length === 1) {
+          queueMicrotask(() => stream.end(assistant(model, [
+            toolCall("research-report", "research_file", {
+              destination: "report",
+              content:
+                "# Packed researcher evidence\\n\\nSource: https://example.invalid/source\\n",
+            }),
+          ], "toolUse")));
+          return stream;
+        }
+        queueMicrotask(() => stream.end(assistant(model, [{
+          type: "text",
+          text: JSON.stringify({
+            summary: "researcher completed cited packed research",
+            evidence: [{
+              web: results[0]?.isError === false,
+              report: results[1]?.isError === false,
+            }],
+          }),
+        }])));
         return stream;
       }
       const allowedCount = childRole === "reviewer" ? 5 : 4;
@@ -756,6 +825,28 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   await assert.rejects(access(join(external, "forbidden.txt")));
   await assert.rejects(access(join(home, ".npmrc")));
 
+  const researcher = await execute("researcher", false);
+  assert.equal(researcher.terminal.status, "succeeded");
+  const researcherLeaf = researcher.terminal.tasks[0].value;
+  assert.equal(researcherLeaf.contract.role, "researcher");
+  assert.equal(
+    researcherLeaf.outcome.status,
+    "succeeded",
+    JSON.stringify(researcher.terminal),
+  );
+  const researcherOutput = JSON.parse(researcherLeaf.outcome.output);
+  assert.deepEqual(researcherOutput.evidence, [{
+    web: true,
+    report: true,
+  }]);
+  assert.match(
+    await readFile(
+      join(project, "docs", "research", "t15-packed-research.md"),
+      "utf8",
+    ),
+    /https:\/\/example\.invalid\/source/,
+  );
+
   const blocked = await execute("explorer", true);
   assert.equal(blocked.terminal.status, "blocked");
   assert.deepEqual(blocked.terminal.diagnostics, [{
@@ -789,6 +880,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
       "filesystem/shell/Git/GitHub/network mutations: blocked",
       "worker: project writes, validated temporary writes, local install, and checks passed",
       "Single Writer/Worker Guard: GitHub, Git, global install, external path, and user configuration blocked",
+      "researcher: required web contract and one cited bounded report passed",
     ].join("\n") + "\n",
   );
 } finally {

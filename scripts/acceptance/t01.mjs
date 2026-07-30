@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.83.0";
 const ACTIVE_HINT = "Matty active · /matty status";
@@ -126,7 +126,14 @@ function escapeSandboxLiteral(value) {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
-function startRpc(piBinary, cwd, env, sandboxRoot, operatorHome) {
+function startRpc(
+  piBinary,
+  cwd,
+  env,
+  sandboxRoot,
+  operatorHome,
+  additionalArguments = [],
+) {
   const guardReadyPath = join(sandboxRoot, "network-guard.ready");
   const guardViolationPath = join(
     sandboxRoot,
@@ -161,6 +168,7 @@ function startRpc(piBinary, cwd, env, sandboxRoot, operatorHome) {
       "-p",
       sandboxProfile,
       piBinary,
+      ...additionalArguments,
       "--mode",
       "rpc",
       "--no-session",
@@ -379,20 +387,28 @@ async function main() {
 
   let succeeded = false;
   try {
-    await run("pack", "npm", ["run", "build"], {
-      cwd: REPOSITORY_ROOT,
-      env: isolatedEnv,
-    });
+    const providedArtifact = process.env.MATTY_PACKED_ARTIFACT
+      ? resolve(process.env.MATTY_PACKED_ARTIFACT)
+      : undefined;
+    if (!providedArtifact) {
+      await run("pack", "npm", ["run", "build"], {
+        cwd: REPOSITORY_ROOT,
+        env: isolatedEnv,
+      });
+    }
     const packResult = await run(
       "pack",
       "npm",
-      [
-        "pack",
-        REPOSITORY_ROOT,
-        "--json",
-        "--pack-destination",
-        artifactRoot,
-      ],
+      providedArtifact
+        ? ["pack", providedArtifact, "--ignore-scripts", "--dry-run", "--json"]
+        : [
+          "pack",
+          REPOSITORY_ROOT,
+          "--ignore-scripts",
+          "--json",
+          "--pack-destination",
+          artifactRoot,
+        ],
       { cwd: projectRoot, env: isolatedEnv },
     );
     let packMetadata;
@@ -467,7 +483,8 @@ async function main() {
       false,
       "[T01:pack] packed artifact contains skills",
     );
-    const artifactPath = join(artifactRoot, packMetadata.filename);
+    const artifactPath = providedArtifact ??
+      join(artifactRoot, packMetadata.filename);
     await access(artifactPath);
 
     await run(
@@ -763,6 +780,268 @@ async function main() {
       );
     }
 
+    const unsupportedExtension = join(
+      sandboxRoot,
+      "unsupported-host-extension.mjs",
+    );
+    const registerMattyUrl = pathToFileURL(
+      join(
+        installedMattyRoot,
+        "@yargote",
+        "matty",
+        "dist",
+        "application",
+        "register-matty.js",
+      ),
+    ).href;
+    await writeFile(
+      unsupportedExtension,
+      `
+import { registerMatty } from ${JSON.stringify(registerMattyUrl)};
+
+export default function unsupportedHostAcceptance(pi) {
+  const nonReferenceModel =
+    process.env.MATTY_T15_SCENARIO === "non-reference-model";
+  registerMatty({
+    registerCommand(name, command) {
+      pi.registerCommand(name, {
+        description: command.description,
+        handler: async (args, context) => {
+          await command.handle(args, (message, level) => {
+            context.ui.notify(message, level);
+          });
+        },
+      });
+    },
+    onSessionStart(handler) {
+      pi.on("session_start", async (event, context) => {
+        await handler(event, (message, level) => {
+          context.ui.notify(message, level);
+        });
+      });
+    },
+  }, {
+    packageVersion: "0.1.0",
+    piVersion: nonReferenceModel ? "0.83.0" : "0.84.0",
+    platform: nonReferenceModel ? "darwin" : "linux",
+    arch: nonReferenceModel ? "arm64" : "x64",
+    activeModel: nonReferenceModel
+      ? { provider: "another-provider", model: "another-model" }
+      : undefined,
+    subagentRuntimeAvailable: true,
+    web: { state: "unavailable", registeredTools: [] },
+  });
+  pi.registerCommand("t15-parent-ping", {
+    description: "Prove Pi remains usable",
+    handler: async (_args, context) => {
+      context.ui.notify("T15_PARENT_OK", "info");
+    },
+  });
+}
+`,
+      "utf8",
+    );
+    const unsupportedRpc = startRpc(
+      piBinary,
+      projectRoot,
+      isolatedEnv,
+      sandboxRoot,
+      operatorHome,
+      ["--no-extensions", "-e", unsupportedExtension],
+    );
+    try {
+      await unsupportedRpc.waitFor(
+        "unsupported-host",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message ===
+            "Matty degraded · unsupported Pi version or target · /matty status",
+      );
+      unsupportedRpc.send({
+        id: "unsupported-status",
+        type: "prompt",
+        message: "/matty status --json",
+      });
+      const unsupportedStatusEvent = await unsupportedRpc.waitFor(
+        "unsupported-host",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message?.startsWith("{") &&
+          JSON.parse(event.message).command === "status",
+      );
+      const unsupportedStatus = JSON.parse(unsupportedStatusEvent.message);
+      assert.deepEqual(unsupportedStatus.activation, {
+        state: "degraded",
+        reason: "unsupported-host",
+        codes: ["host-uncertified"],
+      });
+      unsupportedRpc.send({
+        id: "unsupported-ping",
+        type: "prompt",
+        message: "/t15-parent-ping",
+      });
+      await unsupportedRpc.waitFor(
+        "unsupported-host",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message === "T15_PARENT_OK",
+      );
+    } finally {
+      await unsupportedRpc.close();
+    }
+
+    const nonReferenceRpc = startRpc(
+      piBinary,
+      projectRoot,
+      {
+        ...isolatedEnv,
+        MATTY_T15_SCENARIO: "non-reference-model",
+      },
+      sandboxRoot,
+      operatorHome,
+      ["--no-extensions", "-e", unsupportedExtension],
+    );
+    try {
+      await nonReferenceRpc.waitFor(
+        "non-reference-model",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message === ACTIVE_HINT,
+      );
+      nonReferenceRpc.send({
+        id: "non-reference-status",
+        type: "prompt",
+        message: "/matty status --json",
+      });
+      const nonReferenceStatusEvent = await nonReferenceRpc.waitFor(
+        "non-reference-model",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message?.startsWith("{") &&
+          JSON.parse(event.message).command === "status",
+      );
+      const nonReferenceStatus = JSON.parse(nonReferenceStatusEvent.message);
+      assert.deepEqual(nonReferenceStatus.activation, {
+        state: "active",
+        reason: "compatible",
+        codes: [],
+      });
+      assert.equal(
+        nonReferenceStatus.referenceModelPath.state,
+        "unverified",
+      );
+      assert.ok(
+        nonReferenceStatus.diagnostics.some(
+          (diagnostic) => diagnostic.code === "reference-model-unverified",
+        ),
+        "[T01:non-reference-model] missing unverified-model diagnostic",
+      );
+      nonReferenceRpc.send({
+        id: "non-reference-ping",
+        type: "prompt",
+        message: "/t15-parent-ping",
+      });
+      await nonReferenceRpc.waitFor(
+        "non-reference-model",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message === "T15_PARENT_OK",
+      );
+    } finally {
+      await nonReferenceRpc.close();
+    }
+
+    const settingsPath = join(homeRoot, ".pi", "agent", "settings.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    const installedSource = settings.packages?.find((entry) =>
+      (typeof entry === "string" ? entry : entry.source) === mattySource
+    );
+    assert.ok(installedSource, "[T01:disable] Matty package source is missing");
+    settings.packages = settings.packages.map((entry) =>
+      (typeof entry === "string" ? entry : entry.source) === mattySource
+        ? {
+          source: mattySource,
+          extensions: ["-dist/adapters/pi-extension.js"],
+        }
+        : entry
+    );
+    await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+
+    const disabledRpc = startRpc(
+      piBinary,
+      projectRoot,
+      isolatedEnv,
+      sandboxRoot,
+      operatorHome,
+    );
+    try {
+      disabledRpc.send({ id: "disabled-commands", type: "get_commands" });
+      const disabledCommands = await disabledRpc.waitFor(
+        "disable",
+        (event) =>
+          event.type === "response" && event.id === "disabled-commands",
+      );
+      assert.equal(disabledCommands.success, true);
+      assert.equal(
+        disabledCommands.data.commands.some(
+          (command) => command.name === "matty",
+        ),
+        false,
+        "[T01:disable] disabled Matty extension still registered commands",
+      );
+      assert.equal(
+        disabledRpc.events.some(
+          (event) =>
+            event.type === "extension_ui_request" &&
+            event.message === ACTIVE_HINT,
+        ),
+        false,
+        "[T01:disable] disabled Matty extension still activated",
+      );
+    } finally {
+      await disabledRpc.close();
+    }
+
+    await run("remove", piBinary, ["remove", mattySource], {
+      cwd: projectRoot,
+      env: isolatedEnv,
+    });
+    await assert.rejects(
+      access(join(installedMattyRoot, "@yargote", "matty")),
+      "[T01:remove] Matty package remains installed",
+    );
+    const removedRpc = startRpc(
+      piBinary,
+      projectRoot,
+      isolatedEnv,
+      sandboxRoot,
+      operatorHome,
+    );
+    try {
+      removedRpc.send({ id: "removed-commands", type: "get_commands" });
+      const removedCommands = await removedRpc.waitFor(
+        "remove",
+        (event) =>
+          event.type === "response" && event.id === "removed-commands",
+      );
+      assert.equal(removedCommands.success, true);
+      assert.equal(
+        removedCommands.data.commands.some(
+          (command) => command.name === "matty",
+        ),
+        false,
+        "[T01:remove] removed Matty extension still registered commands",
+      );
+    } finally {
+      await removedRpc.close();
+    }
+
     succeeded = true;
     process.stdout.write(
       [
@@ -774,6 +1053,9 @@ async function main() {
         "Web Capability: available (pi-web-access 0.15.0)",
         "network during startup/status/doctor: denied",
         "project writes during startup/status/doctor: none",
+        "unsupported host: Matty degraded, Pi usable",
+        "non-reference model: Matty active, Reference Model Path unverified",
+        "disable/remove: Matty inactive, Pi usable",
       ].join("\n") + "\n",
     );
   } catch (error) {

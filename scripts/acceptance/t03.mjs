@@ -170,23 +170,31 @@ const isolatedEnv = {
 
 let rpc;
 try {
-  await run("npm", ["run", "build"], {
-    cwd: repositoryRoot,
-    env: isolatedEnv,
-  });
+  const providedArtifact = process.env.MATTY_PACKED_ARTIFACT
+    ? resolve(process.env.MATTY_PACKED_ARTIFACT)
+    : undefined;
+  if (!providedArtifact) {
+    await run("npm", ["run", "build"], {
+      cwd: repositoryRoot,
+      env: isolatedEnv,
+    });
+  }
   const packed = await run(
     "npm",
-    [
-      "pack",
-      repositoryRoot,
-      "--json",
-      "--pack-destination",
-      artifacts,
-    ],
+    providedArtifact
+      ? ["pack", providedArtifact, "--ignore-scripts", "--dry-run", "--json"]
+      : [
+        "pack",
+        repositoryRoot,
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        artifacts,
+      ],
     { cwd: project, env: isolatedEnv },
   );
   const [metadata] = JSON.parse(packed.stdout);
-  const artifact = join(artifacts, metadata.filename);
+  const artifact = providedArtifact ?? join(artifacts, metadata.filename);
   await access(artifact);
 
   await run(

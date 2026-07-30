@@ -1,0 +1,93 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage the certified tarball on npm
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    environment: release-candidate
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Certify release candidate
+        id: certify
+        env:
+          PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
+          MATTY_REFERENCE_AUTH_PATH: ${{ runner.temp }}/matty-reference-auth.json
+          CANDIDATE_OUTPUT_DIR: ${{ runner.temp }}/matty-release-candidate
+        run: |
+          install -m 600 /dev/null "$MATTY_REFERENCE_AUTH_PATH"
+          printf '%s' "$PI_AUTH_JSON" > "$MATTY_REFERENCE_AUTH_PATH"
+          npm run certify:candidate -- --output-dir "$CANDIDATE_OUTPUT_DIR"
+
+          shopt -s nullglob
+          tarballs=("$CANDIDATE_OUTPUT_DIR"/*.tgz)
+          if [[ ${#tarballs[@]} -ne 1 ]]; then
+            echo "Expected exactly one certified tarball" >&2
+            exit 1
+          fi
+          tarball="${tarballs[0]}"
+          checksum="$CANDIDATE_OUTPUT_DIR/SHA256SUMS"
+          test -f "$checksum"
+          (cd "$CANDIDATE_OUTPUT_DIR" && shasum -a 256 -c SHA256SUMS)
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+      - name: Upload certified release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: certified-release-candidate
+          if-no-files-found: error
+          path: |
+            ${{ steps.certify.outputs.tarball }}
+            ${{ steps.certify.outputs.checksum }}
+
+  stage:
+    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage
+    needs: certify
+    runs-on: ubuntu-latest
+    environment: npm-stage
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.18.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: certified-release-candidate
+          path: ${{ runner.temp }}/certified-release-candidate
+      - name: Verify certified release candidate
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/certified-release-candidate
+        run: |
+          shopt -s nullglob
+          tarballs=("$ARTIFACT_DIR"/*.tgz)
+          checksums=("$ARTIFACT_DIR"/SHA256SUMS)
+          if [[ ${#tarballs[@]} -ne 1 || ${#checksums[@]} -ne 1 ]]; then
+            echo "Expected exactly one tarball and its SHA256 evidence" >&2
+            exit 1
+          fi
+          (
+            cd "$ARTIFACT_DIR"
+            shasum -a 256 -c SHA256SUMS
+          )
+          echo "tarball=${tarballs[0]}" >> "$GITHUB_OUTPUT"
+        id: verify
+      - name: Stage certified release candidate
+        run: npm stage publish "${{ steps.verify.outputs.tarball }}"

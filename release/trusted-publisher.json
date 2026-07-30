@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "provider": "github",
+  "package": "@yargote/matty",
+  "repository": "yersonargotev/matty",
+  "workflowFile": "release-candidate.yml",
+  "environment": "npm-stage",
+  "allowedActions": [
+    "stage-publish"
+  ],
+  "activationIssue": 17
+}
