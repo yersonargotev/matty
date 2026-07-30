@@ -410,8 +410,11 @@ async function main() {
     assert.deepEqual(
       packMetadata.files.map((file) => file.path),
       [
+        "THIRD_PARTY_NOTICES.md",
         "dist/adapters/pi-extension.d.ts",
         "dist/adapters/pi-extension.js",
+        "dist/application/child-pi-runtime.d.ts",
+        "dist/application/child-pi-runtime.js",
         "dist/application/register-matty.d.ts",
         "dist/application/register-matty.js",
         "dist/domain/package-contract.d.ts",

@@ -12,7 +12,8 @@
     "pi-package"
   ],
   "files": [
-    "dist"
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "pi": {
     "extensions": [
@@ -26,7 +27,7 @@
     "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json",
     "typecheck": "tsgo -p tsconfig.json",
     "test": "node --test test/*.test.ts",
-    "test:acceptance": "node scripts/acceptance/t01.mjs",
+    "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs",
     "check": "npm run typecheck && npm test && npm run test:acceptance"
   },
   "devDependencies": {
