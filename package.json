@@ -1,0 +1,39 @@
+{
+  "name": "@yargote/matty",
+  "version": "0.1.0",
+  "description": "Batteries-included engineering workflow for Pi",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yersonargotev/matty.git"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "dist"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/adapters/pi-extension.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0"
+  },
+  "scripts": {
+    "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo -p tsconfig.json",
+    "test": "node --test test/*.test.ts",
+    "test:acceptance": "node scripts/acceptance/t01.mjs",
+    "check": "npm run typecheck && npm test && npm run test:acceptance"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
