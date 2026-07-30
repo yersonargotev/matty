@@ -69,9 +69,7 @@ export function registerMatty(
     }
 
     notify(
-      snapshot.activation.reason === "activation-safety-gate"
-        ? "Matty degraded · Activation Safety Gate blocked · /matty status"
-        : "Matty degraded · unsupported Pi version or target · /matty status",
+      "Matty degraded · unsupported Pi version or target · /matty status",
       "warning",
     );
   });

@@ -49,7 +49,7 @@ function createPiHarness() {
   };
 }
 
-test("a compatible host stays diagnosable while the safety gate is blocked", async () => {
+test("a compatible host activates Matty Core", async () => {
   const harness = createPiHarness();
 
   registerMatty(harness.host, {
@@ -65,9 +65,8 @@ test("a compatible host stays diagnosable while the safety gate is blocked", asy
   await harness.handlers.get("session_start")?.({ reason: "startup" });
   assert.deepEqual(harness.notifications, [
     {
-      message:
-        "Matty degraded · Activation Safety Gate blocked · /matty status",
-      level: "warning",
+      message: "Matty active · /matty status",
+      level: "info",
     },
   ]);
 
@@ -78,8 +77,7 @@ test("a compatible host stays diagnosable while the safety gate is blocked", asy
       "Matty 0.1.0",
       "Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
-      "Catalog 22 skills · staged",
-      "Activation degraded · activation-safety-gate",
+      "Activation active · compatible",
     ].join("\n"),
   );
 
@@ -87,8 +85,8 @@ test("a compatible host stays diagnosable while the safety gate is blocked", asy
   const jsonStatus = JSON.parse(harness.notifications.at(-1)?.message ?? "");
   assert.equal(jsonStatus.schemaVersion, 1);
   assert.equal(jsonStatus.command, "status");
-  assert.equal(jsonStatus.activation.state, "degraded");
-  assert.equal(jsonStatus.catalog.memberCount, 22);
+  assert.equal(jsonStatus.activation.state, "active");
+  assert.equal("catalog" in jsonStatus, false);
 });
 
 test("an unsupported host stays diagnosable and replaces the active hint", async () => {

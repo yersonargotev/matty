@@ -12,12 +12,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.83.0";
-const SAFETY_GATE_WARNING =
-  "Matty degraded · Activation Safety Gate blocked · /matty status";
+const ACTIVE_HINT = "Matty active · /matty status";
 const REPOSITORY_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -121,21 +120,6 @@ async function snapshotTree(root) {
 
   await visit("");
   return entries;
-}
-
-async function listRelativeFiles(root) {
-  const files = [];
-  const entries = await readdir(root, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listRelativeFiles(path));
-    } else if (entry.isFile()) {
-      files.push(relative(REPOSITORY_ROOT, path).split(sep).join("/"));
-    }
-  }
-  return files;
 }
 
 function escapeSandboxLiteral(value) {
@@ -440,36 +424,25 @@ async function main() {
       "dist/domain/matty-rules.js",
       "dist/domain/package-contract.d.ts",
       "dist/domain/package-contract.js",
-      "dist/domain/skill-catalog.d.ts",
-      "dist/domain/skill-catalog.js",
       "dist/domain/status.d.ts",
       "dist/domain/status.js",
     ];
-    const catalogManifest = JSON.parse(
-      await readFile(
-        join(REPOSITORY_ROOT, "skills", "catalog.json"),
-        "utf8",
-      ),
-    );
-    assert.deepEqual(
-      (await readdir(join(REPOSITORY_ROOT, "skills"), {
-        withFileTypes: true,
-      }))
-        .map((entry) => entry.name)
-        .sort(),
-      ["catalog.json", "engineering", "productivity"],
-      "[T01:pack] skills/ contains an undeclared top-level entry",
-    );
     const expectedPackedFiles = [
       "THIRD_PARTY_NOTICES.md",
       ...expectedDistFiles,
       "package.json",
-      ...await listRelativeFiles(join(REPOSITORY_ROOT, "skills")),
     ].sort();
     assert.deepEqual(
       packMetadata.files.map((file) => file.path).sort(),
       expectedPackedFiles,
       "[T01:pack] packed artifact contents differ from the reviewed runtime",
+    );
+    assert.equal(
+      packMetadata.files.some(
+        (file) => file.path === "skills" || file.path.startsWith("skills/"),
+      ),
+      false,
+      "[T01:pack] packed artifact contains skills",
     );
     const artifactPath = join(artifactRoot, packMetadata.filename);
     await access(artifactPath);
@@ -539,7 +512,7 @@ async function main() {
         (event) =>
           event.type === "extension_ui_request" &&
           event.method === "notify" &&
-          event.message === SAFETY_GATE_WARNING,
+          event.message === ACTIVE_HINT,
       );
       rpc.send({ id: "commands", type: "get_commands" });
       const commandsResponse = await rpc.waitFor(
@@ -560,18 +533,6 @@ async function main() {
         ),
         "[T01:command-registration] /matty was not registered by the packed extension",
       );
-      const commandNames = new Set(
-        commandsResponse.data.commands.map((command) => command.name),
-      );
-      for (const member of catalogManifest.members) {
-        assert.equal(
-          commandNames.has(member.name) ||
-            commandNames.has(`skill:${member.name}`),
-          false,
-          `[T01:command-registration] staged skill ${member.name} was activated`,
-        );
-      }
-
       rpc.send({
         id: "human-status",
         type: "prompt",
@@ -591,11 +552,7 @@ async function main() {
       );
       assert.match(
         humanNotification.message,
-        /Catalog 22 skills · staged/,
-      );
-      assert.match(
-        humanNotification.message,
-        /Activation degraded · activation-safety-gate/,
+        /Activation active · compatible/,
       );
 
       rpc.send({
@@ -635,15 +592,10 @@ async function main() {
       assert.equal(jsonStatus.target.platform, "darwin");
       assert.equal(jsonStatus.target.arch, "arm64");
       assert.deepEqual(jsonStatus.activation, {
-        state: "degraded",
-        reason: "activation-safety-gate",
+        state: "active",
+        reason: "compatible",
       });
-      assert.deepEqual(jsonStatus.catalog, {
-        memberCount: 22,
-        state: "staged",
-        activationSafetyGate: "blocked",
-        blockingIssue: 3,
-      });
+      assert.equal("catalog" in jsonStatus, false);
     } catch (error) {
       rpcFailure = error;
       throw error;
@@ -669,10 +621,10 @@ async function main() {
         (event) =>
           event.type === "extension_ui_request" &&
           event.method === "notify" &&
-          event.message === SAFETY_GATE_WARNING,
+          event.message === ACTIVE_HINT,
       ).length,
       1,
-      "[T01:startup] expected exactly one safety-gate warning",
+      "[T01:startup] expected exactly one active hint",
     );
     await access(rpc.guardReadyPath);
     await assert.rejects(
@@ -711,7 +663,7 @@ async function main() {
         `artifact: ${packMetadata.filename}`,
         "Pi: 0.83.0",
         "target: darwin/arm64",
-        "activation: degraded (activation-safety-gate)",
+        "activation: active",
         "network during startup/status: denied",
         "project writes during startup/status: none",
       ].join("\n") + "\n",

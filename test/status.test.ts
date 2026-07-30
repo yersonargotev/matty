@@ -7,7 +7,7 @@ import {
   renderStatusJson,
 } from "../src/domain/status.ts";
 
-test("status stages the catalog but degrades on the failed safety gate", () => {
+test("status activates on a certified host", () => {
   const snapshot = createStatusSnapshot({
     packageVersion: "0.1.0",
     piVersion: "0.83.0",
@@ -33,15 +33,9 @@ test("status stages the catalog but degrades on the failed safety gate", () => {
       certifiedTargets: ["darwin/arm64"],
       state: "certified",
     },
-    catalog: {
-      memberCount: 22,
-      state: "staged",
-      activationSafetyGate: "blocked",
-      blockingIssue: 3,
-    },
     activation: {
-      state: "degraded",
-      reason: "activation-safety-gate",
+      state: "active",
+      reason: "compatible",
     },
   });
 
@@ -51,9 +45,24 @@ test("status stages the catalog but degrades on the failed safety gate", () => {
       "Matty 0.1.0",
       "Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
-      "Catalog 22 skills · staged",
-      "Activation degraded · activation-safety-gate",
+      "Activation active · compatible",
     ].join("\n"),
   );
   assert.deepEqual(JSON.parse(renderStatusJson(snapshot)), snapshot);
+});
+
+test("status degrades on an unsupported host", () => {
+  const snapshot = createStatusSnapshot({
+    packageVersion: "0.1.0",
+    piVersion: "0.84.0",
+    platform: "linux",
+    arch: "x64",
+  });
+
+  assert.deepEqual(snapshot.activation, {
+    state: "degraded",
+    reason: "unsupported-host",
+  });
+  assert.equal(snapshot.pi.state, "unsupported");
+  assert.equal(snapshot.target.state, "unsupported");
 });
