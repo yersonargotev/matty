@@ -24,6 +24,7 @@ import {
   blockedWorkerDelegation,
   runWorkerDelegation,
 } from "../application/worker-delegation.ts";
+import { acquireRepositoryWriter } from "../application/single-writer.ts";
 import {
   registerMatty,
   type MattyHost,
@@ -68,7 +69,6 @@ export interface PiMattyRegistrationOptions {
 }
 
 const execFileAsync = promisify(execFile);
-const activeWorkerRepositories = new Set<string>();
 
 function createPiHost(pi: ExtensionAPI): MattyHost {
   return {
@@ -149,6 +149,12 @@ function invocationTools(invocation: PiInvocation | undefined): string[] {
     : [];
 }
 
+function declaresInvocationTools(invocation: PiInvocation): boolean {
+  return (invocation.arguments ?? []).some((argument) =>
+    argument === "--tools" || argument.startsWith("--tools=")
+  );
+}
+
 function childEnvironment(
   environment: NodeJS.ProcessEnv,
   authenticationEnvironment: Readonly<Record<string, string>> | undefined,
@@ -156,6 +162,7 @@ function childEnvironment(
   role: MattyRole,
   worker?: {
     contract: WorkerCapabilityContract;
+    userHome?: string;
     userConfigurationPaths: readonly string[];
   },
 ): NodeJS.ProcessEnv {
@@ -190,6 +197,9 @@ function childEnvironment(
     MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify(
       worker.contract.temporaryPaths,
     ),
+    ...(worker.userHome
+      ? { MATTY_WORKER_USER_HOME: worker.userHome }
+      : {}),
     MATTY_WORKER_USER_CONFIGURATION_PATHS: JSON.stringify(
       worker.userConfigurationPaths,
     ),
@@ -261,6 +271,9 @@ function workerGuardScope(
     return {
       workingTree: contract.workingTree,
       temporaryPaths: contract.temporaryPaths,
+      ...(environment.MATTY_WORKER_USER_HOME
+        ? { userHome: environment.MATTY_WORKER_USER_HOME }
+        : {}),
       userConfigurationPaths: userConfigurationPaths as string[],
     };
   } catch {
@@ -271,13 +284,17 @@ function workerGuardScope(
 function userConfigurationPaths(
   environment: NodeJS.ProcessEnv,
 ): string[] {
+  const home = environment.HOME;
   return Array.from(
     new Set(
       [
-        environment.HOME,
-        environment.XDG_CONFIG_HOME,
-        environment.PI_CODING_AGENT_DIR,
-        environment.npm_config_userconfig,
+        environment.XDG_CONFIG_HOME ?? (home ? resolve(home, ".config") : undefined),
+        environment.PI_CODING_AGENT_DIR ??
+          (home ? resolve(home, ".pi", "agent") : undefined),
+        environment.npm_config_userconfig ??
+          (home ? resolve(home, ".npmrc") : undefined),
+        home ? resolve(home, ".gitconfig") : undefined,
+        home ? resolve(home, ".ssh") : undefined,
       ].flatMap((path) => path ? [resolve(path)] : []),
     ),
   );
@@ -287,12 +304,29 @@ async function workerContract(
   cwd: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<WorkerCapabilityContract> {
+  const temporaryPaths = await Promise.all(
+    [environment.TMPDIR ?? tmpdir(), tmpdir()].map(async (path) =>
+      await realpath(path)
+    ),
+  );
   return createWorkerCapabilityContract({
     workingTree: await realpath(cwd),
-    temporaryPaths: [
-      await realpath(environment.TMPDIR ?? tmpdir()),
-    ],
+    temporaryPaths: [...new Set(temporaryPaths)],
   });
+}
+
+function delegationResult<T extends { outcome: { status: string } }>(
+  terminal: T,
+): {
+  content: Array<{ type: "text"; text: string }>;
+  details: T;
+  isError: boolean;
+} {
+  return {
+    content: [{ type: "text", text: JSON.stringify(terminal) }],
+    details: terminal,
+    isError: terminal.outcome.status !== "succeeded",
+  };
 }
 
 async function blockedToolCall(
@@ -524,7 +558,7 @@ export function registerPiMatty(
               isError: true,
             };
           }
-          const workerInvocation = invocationTools(invocation).length === 0
+          const workerInvocation = !declaresInvocationTools(invocation)
             ? invocationWithTools(invocation, WORKER_TOOLS)
             : invocation;
           const configurationPaths = userConfigurationPaths(environment);
@@ -538,14 +572,11 @@ export function registerPiMatty(
                 inspectionGuard: false,
                 workerGuard: true,
               },
-              acquireWriter() {
-                if (activeWorkerRepositories.has(contract.workingTree)) {
-                  return undefined;
-                }
-                activeWorkerRepositories.add(contract.workingTree);
-                return () => {
-                  activeWorkerRepositories.delete(contract.workingTree);
-                };
+              async acquireWriter() {
+                return await acquireRepositoryWriter(
+                  contract.workingTree,
+                  contract.temporaryPaths.at(-1) ?? tmpdir(),
+                );
               },
               createRunner() {
                 return createChildPiRunner({
@@ -567,6 +598,9 @@ export function registerPiMatty(
                       role,
                       {
                         contract,
+                        ...(environment.HOME
+                          ? { userHome: resolve(environment.HOME) }
+                          : {}),
                         userConfigurationPaths: configurationPaths,
                       },
                     ),
@@ -576,13 +610,7 @@ export function registerPiMatty(
             },
             progressOptions as never,
           );
-          return {
-            content: [
-              { type: "text" as const, text: JSON.stringify(terminal) },
-            ],
-            details: terminal,
-            isError: terminal.outcome.status !== "succeeded",
-          };
+          return delegationResult(terminal);
         }
 
         const github = role === "reviewer"
@@ -608,7 +636,7 @@ export function registerPiMatty(
           };
         }
 
-        const inspectionInvocation = invocationTools(invocation).length === 0
+        const inspectionInvocation = !declaresInvocationTools(invocation)
           ? invocationWithTools(invocation, INSPECTION_TOOLS)
           : invocation;
         activeInvocations[role] += 1;
@@ -648,13 +676,7 @@ export function registerPiMatty(
             },
             progressOptions as never,
           );
-          return {
-            content: [
-              { type: "text" as const, text: JSON.stringify(terminal) },
-            ],
-            details: terminal,
-            isError: terminal.outcome.status !== "succeeded",
-          };
+          return delegationResult(terminal);
         } finally {
           activeInvocations[role] -= 1;
         }

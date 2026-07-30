@@ -22,22 +22,25 @@ async function withScope(
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "matty-worker-guard-"));
   try {
-    const project = join(root, "project");
     const temporary = join(root, "temporary");
     const home = join(root, "home");
+    const project = join(home, "src", "project");
     const external = join(root, "external");
     await Promise.all(
       [project, temporary, home, external, join(project, ".git")].map(
         (path) => mkdir(path, { recursive: true }),
       ),
     );
+    const canonicalHome = await realpath(home);
     await run(
       {
         workingTree: await realpath(project),
         temporaryPaths: [await realpath(temporary)],
+        userHome: canonicalHome,
         userConfigurationPaths: [
-          await realpath(home),
-          join(home, ".config"),
+          join(canonicalHome, ".config"),
+          join(canonicalHome, ".npmrc"),
+          join(canonicalHome, ".pi"),
         ],
       },
       { root, project, temporary, home, external },
@@ -63,6 +66,7 @@ test("allows worker writes in the trusted tree and validated temporary paths", a
       "node --test test/worker.test.ts",
       "touch src/generated.ts",
       `printf value > ${join(paths.temporary, "result.txt")}`,
+      "printf value > $TMPDIR/result.txt",
       "git status --short",
       "git diff --check",
     ]) {
@@ -80,6 +84,9 @@ test("blocks external, user-configuration, Git, GitHub, and global-install write
       ["git add src/file.ts", "git"],
       ["git commit -m changed", "git"],
       ["git checkout main", "git"],
+      ["git update-index --refresh", "git"],
+      ["git update-ref refs/heads/worker HEAD", "git"],
+      ["git symbolic-ref HEAD refs/heads/worker", "git"],
       ["npm install --global typescript", "global-installation"],
       ["pnpm add -g typescript", "global-installation"],
       ["cargo install ripgrep", "global-installation"],
@@ -89,6 +96,8 @@ test("blocks external, user-configuration, Git, GitHub, and global-install write
       ["sh -c 'git add src/file.ts'", "shell"],
       [`touch ${join(paths.external, "escape.txt")}`, "external-path"],
       [`printf changed > ${join(paths.home, ".npmrc")}`, "user-configuration"],
+      ["printf changed > $HOME/.npmrc", "user-configuration"],
+      ["printf changed > ${HOME}/.config/tool.json", "user-configuration"],
       ["touch ../escape.txt", "external-path"],
     ];
 

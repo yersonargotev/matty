@@ -468,6 +468,7 @@ export default function t07Acceptance(pi) {
             ...toolCalls([
               ["blocked-github", "gh issue view 10"],
               ["blocked-git", "git add worker-output.txt"],
+              ["blocked-git-reference", "git update-ref refs/heads/worker HEAD"],
               ["blocked-global", "npm install --global typescript"],
               [
                 "blocked-external",
@@ -494,6 +495,7 @@ export default function t07Acceptance(pi) {
         const blockedIds = [
           "blocked-github",
           "blocked-git",
+          "blocked-git-reference",
           "blocked-global",
           "blocked-external",
           "blocked-user-config",

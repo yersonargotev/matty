@@ -25,6 +25,9 @@ function execution(
       inspectionGuard: false,
       workerGuard: true,
     },
+    acquireWriter() {
+      return () => {};
+    },
     createRunner() {
       return runner;
     },

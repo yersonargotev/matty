@@ -14,7 +14,10 @@ import {
 export interface WorkerDelegationExecution {
   contract: WorkerCapabilityContract;
   availability: CapabilityAvailability;
-  acquireWriter?(): (() => void) | undefined;
+  acquireWriter():
+    | (() => void | Promise<void>)
+    | undefined
+    | Promise<(() => void | Promise<void>) | undefined>;
   createRunner(): DelegatedTaskRunner;
 }
 
@@ -78,16 +81,11 @@ export async function runWorkerDelegation(
       preflight.diagnostic.unmet,
     );
   }
-  let releaseWriter: (() => void) | undefined;
-  if (execution.acquireWriter) {
-    releaseWriter = execution.acquireWriter();
-    if (!releaseWriter) {
-      return blockedWorkerDelegation(execution.contract, [
-        "Single Writer already active for this repository",
-      ]);
-    }
-  } else {
-    releaseWriter = () => {};
+  const releaseWriter = await execution.acquireWriter();
+  if (!releaseWriter) {
+    return blockedWorkerDelegation(execution.contract, [
+      "Single Writer already active for this repository",
+    ]);
   }
   try {
     const runner = execution.createRunner();
@@ -99,6 +97,6 @@ export async function runWorkerDelegation(
       ),
     };
   } finally {
-    releaseWriter();
+    await releaseWriter();
   }
 }

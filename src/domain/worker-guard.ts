@@ -20,6 +20,7 @@ export type WorkerDecision =
 export interface WorkerGuardScope {
   workingTree: string;
   temporaryPaths: readonly string[];
+  userHome?: string;
   userConfigurationPaths: readonly string[];
 }
 
@@ -51,7 +52,10 @@ const GIT_MUTATIONS = new Set([
   "stash",
   "submodule",
   "switch",
+  "symbolic-ref",
   "tag",
+  "update-index",
+  "update-ref",
   "worktree",
 ]);
 
@@ -300,6 +304,36 @@ function redirectionTargets(segment: string): string[] {
   ).filter(Boolean);
 }
 
+function expandWriteTarget(
+  scope: WorkerGuardScope,
+  target: string,
+): string | undefined {
+  const home = scope.userHome;
+  const xdgConfig = scope.userConfigurationPaths.find((path) =>
+    basename(path) === ".config"
+  );
+  const temporary = scope.temporaryPaths[0];
+  const substitutions: Array<[string, string | undefined]> = [
+    ["~/", home],
+    ["$HOME/", home],
+    ["${HOME}/", home],
+    ["$XDG_CONFIG_HOME/", xdgConfig],
+    ["${XDG_CONFIG_HOME}/", xdgConfig],
+    ["$TMPDIR/", temporary],
+    ["${TMPDIR}/", temporary],
+  ];
+  for (const [prefix, root] of substitutions) {
+    if (target.startsWith(prefix)) {
+      return root
+        ? resolve(root, target.slice(prefix.length))
+        : undefined;
+    }
+  }
+  return target.includes("$") || target.startsWith("~")
+    ? undefined
+    : target;
+}
+
 export async function inspectWorkerCommand(
   scope: WorkerGuardScope,
   command: string,
@@ -361,7 +395,11 @@ export async function inspectWorkerCommand(
       ...packageManagerWriteTargets(tokens),
       ...redirectionTargets(segment),
     ]) {
-      const decision = await inspectWorkerPath(scope, target, cwd);
+      const expanded = expandWriteTarget(scope, target);
+      if (!expanded) {
+        return blocked("shell", "unresolved shell write path");
+      }
+      const decision = await inspectWorkerPath(scope, expanded, cwd);
       if (!decision.allowed) {
         return decision;
       }
