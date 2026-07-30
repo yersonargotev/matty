@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/mattpocock/skills",
+    "commit": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+    "roots": [
+      "skills/engineering",
+      "skills/productivity"
+    ],
+    "fileCount": 68,
+    "snapshotSha256": "e5cf6d080ecfe4c3c197d2268704cb3bc42c00455703a8fe2be2f3b061bc6509"
+  },
+  "releaseContentSha256": "e5cf6d080ecfe4c3c197d2268704cb3bc42c00455703a8fe2be2f3b061bc6509",
+  "members": [
+    {
+      "name": "ask-matt",
+      "path": "skills/engineering/ask-matt/SKILL.md"
+    },
+    {
+      "name": "code-review",
+      "path": "skills/engineering/code-review/SKILL.md"
+    },
+    {
+      "name": "codebase-design",
+      "path": "skills/engineering/codebase-design/SKILL.md"
+    },
+    {
+      "name": "diagnosing-bugs",
+      "path": "skills/engineering/diagnosing-bugs/SKILL.md"
+    },
+    {
+      "name": "domain-modeling",
+      "path": "skills/engineering/domain-modeling/SKILL.md"
+    },
+    {
+      "name": "grill-with-docs",
+      "path": "skills/engineering/grill-with-docs/SKILL.md"
+    },
+    {
+      "name": "implement",
+      "path": "skills/engineering/implement/SKILL.md"
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "path": "skills/engineering/improve-codebase-architecture/SKILL.md"
+    },
+    {
+      "name": "prototype",
+      "path": "skills/engineering/prototype/SKILL.md"
+    },
+    {
+      "name": "research",
+      "path": "skills/engineering/research/SKILL.md"
+    },
+    {
+      "name": "resolving-merge-conflicts",
+      "path": "skills/engineering/resolving-merge-conflicts/SKILL.md"
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "path": "skills/engineering/setup-matt-pocock-skills/SKILL.md"
+    },
+    {
+      "name": "tdd",
+      "path": "skills/engineering/tdd/SKILL.md"
+    },
+    {
+      "name": "to-spec",
+      "path": "skills/engineering/to-spec/SKILL.md"
+    },
+    {
+      "name": "to-tickets",
+      "path": "skills/engineering/to-tickets/SKILL.md"
+    },
+    {
+      "name": "triage",
+      "path": "skills/engineering/triage/SKILL.md"
+    },
+    {
+      "name": "wayfinder",
+      "path": "skills/engineering/wayfinder/SKILL.md"
+    },
+    {
+      "name": "grill-me",
+      "path": "skills/productivity/grill-me/SKILL.md"
+    },
+    {
+      "name": "grilling",
+      "path": "skills/productivity/grilling/SKILL.md"
+    },
+    {
+      "name": "handoff",
+      "path": "skills/productivity/handoff/SKILL.md"
+    },
+    {
+      "name": "teach",
+      "path": "skills/productivity/teach/SKILL.md"
+    },
+    {
+      "name": "writing-great-skills",
+      "path": "skills/productivity/writing-great-skills/SKILL.md"
+    }
+  ],
+  "askMatt": {
+    "path": "skills/engineering/ask-matt/SKILL.md",
+    "builtInRoutes": [
+      "compact"
+    ],
+    "optionalRoutes": []
+  }
+}
