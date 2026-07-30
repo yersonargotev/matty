@@ -543,7 +543,7 @@ try {
       web: `${webPackage.name}@${webPackage.version}`,
     },
     parent: `${PARENT_PROVIDER}/${PARENT_MODEL}`,
-    searchFallback: `${PARENT_PROVIDER}/${SEARCH_MODEL}`,
+    searchInternalModel: `${PARENT_PROVIDER}/${SEARCH_MODEL}`,
     transport: `https://${CODEX_HOST}${CODEX_PATH}`,
     citationObserved: true,
     separateOpenAiApiKey: false,
