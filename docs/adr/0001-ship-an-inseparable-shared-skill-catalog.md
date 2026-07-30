@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0022
+---
+
 # Ship an inseparable shared skill catalog
 
 Each Matty release ships one complete Shared Skill Catalog that users adopt as

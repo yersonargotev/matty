@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0022
+---
+
 # Stage the Shared Skill Catalog until activation is safe
 
 Matty imports, validates, and packs the complete Shared Skill Catalog, but does

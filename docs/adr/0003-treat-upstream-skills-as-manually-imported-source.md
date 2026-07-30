@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0022
+---
+
 # Treat upstream skills as manually imported source
 
 Matty initially copies `skills/engineering` and `skills/productivity` verbatim

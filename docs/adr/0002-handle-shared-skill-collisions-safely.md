@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0022
+---
+
 # Handle shared skill collisions safely
 
 When an external skill claims a Matty-reserved name, Matty continues activating

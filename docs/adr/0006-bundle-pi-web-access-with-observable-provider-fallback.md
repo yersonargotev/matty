@@ -2,49 +2,23 @@
 
 Matty supplies its Web Capability by bundling exactly
 `pi-web-access@0.15.0`, without a semver range. It prefers the OpenAI search
-path backed by Pi's ChatGPT/Codex subscription credentials, while allowing
-`pi-web-access` to fall back internally to Exa MCP when OpenAI is unavailable.
-This internal transport does not create a general Matty MCP surface. The
-provider used must remain observable, and users may pin OpenAI through
-provider-owned `pi-web-access` configuration when they do not want fallback.
+path backed by Pi's ChatGPT/Codex subscription credentials and permits the
+dependency's internal Exa MCP fallback when OpenAI is unavailable. The selected
+provider remains observable, but credentials, configuration, and stored state
+remain owned by Pi and `pi-web-access`.
 
-Matty bundles the complete, unmodified dependency rather than maintaining a
-fork. Its v1 support contract covers `web_search`, `source_check`,
-`fetch_content`, and `get_search_content`. Additional capabilities such as
-GitHub cloning, PDF handling, YouTube, and local video remain
-`pi-web-access`-owned behavior outside Matty's specific v1 guarantees. Matty
-does not enable browser-cookie access or write provider configuration.
+Matty certifies only `web_search`, `source_check`, `fetch_content`, and
+`get_search_content`. The parent and `researcher` receive those tools; the
+other four roles do not. Matty does not enable browser-cookie access, write
+provider configuration, or expose the internal fallback as a general MCP
+surface.
 
-Phase 0 validated version `0.15.0` as the pin to bundle for Matty `0.1.0` with
-the Certified Pi Version, Certified Target, Reference Model Path,
-ChatGPT/Codex OAuth, and packed-package combination. The proof installed the
-exact web extension alongside the packed Matty artifact; adding it to Matty's
-package dependency graph remains a separate integration step. The OpenAI
-search path resolved Pi's `openai-codex` credential through the extension
-context, selected its first compatible internal search model `gpt-5.4`, and called
-`https://chatgpt.com/backend-api/codex/responses`. The returned result contained
-current source citations. Validation observed the endpoint, model, native
-`web_search` tool, authorization presence, and response status without
-recording credentials, prompts, queries, or response bodies.
+Unavailable or failed web access follows the calling Capability Contract:
+required use fails, optional use may continue only with explicit disclosure,
+and absent use receives no web tools. Matty `0.1` does not maintain per-skill
+Web Contracts; workflow-specific requirements stay outside Matty Core.
 
-The validation used no separate `OPENAI_API_KEY`, enabled no browser-cookie
-access, wrote no provider configuration, and left the operator's Pi credential
-file byte-for-byte and metadata-identical. The extension's public result names
-the coarse provider `openai`; the exact internal `openai-codex/gpt-5.4`
-selection was therefore observed at the sanitized transport seam. After
-publication, changing the bundled version requires a new Matty minor release
-and the same complete validation.
-
-Matty records each skill or web-dependent branch in a Web Contract outside the
-imported skill files, classifying access as `required`, `optional`, or `none`.
-A Web Preflight runs before the classified path produces effects. Unavailable
-required access blocks only that path and is never silently replaced by model
-knowledge. Unavailable optional access may continue only with explicit
-disclosure that no web research was performed. The same behavior applies when
-access fails after a successful preflight.
-
-The parent agent receives the four certified Web Capability tools. Among
-subagents, only `researcher` receives them. Explorer, designer, reviewer, and
-worker rely on a researcher or the parent for external research. This boundary
-does not reclassify the reviewer's read-only `gh` inspection or the worker's
-project-local dependency installation as web research.
+Phase 0 validated the exact dependency with Pi `0.83.0`, macOS Apple Silicon,
+`openai-codex/gpt-5.6-sol`, ChatGPT/Codex authentication, and the packed Matty
+artifact. Changing the bundled version requires a new minor release and the
+same complete validation.

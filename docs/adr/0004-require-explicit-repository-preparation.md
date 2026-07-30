@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0022
+---
+
 # Require explicit repository preparation
 
 Matty makes its Shared Skill Catalog available immediately after installation,
