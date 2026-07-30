@@ -43,6 +43,7 @@ import {
 } from "../application/single-writer.ts";
 import {
   registerMatty,
+  type DiagnosticContext,
   type MattyHost,
 } from "../application/register-matty.ts";
 import {
@@ -81,6 +82,7 @@ import {
 import {
   MATTY_PACKAGE_VERSION,
 } from "../domain/package-contract.ts";
+import type { RuntimeFacts } from "../domain/status.ts";
 import {
   cleanupResearchWorkspace,
   cleanupStaleResearchWorkspaces,
@@ -109,6 +111,7 @@ export interface PiMattyRegistrationOptions {
     available: boolean;
     authenticated: boolean;
   }>;
+  diagnosticFailures?: RuntimeFacts["failures"];
 }
 
 type WriterRelease = () => void | Promise<void>;
@@ -134,7 +137,38 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
 const execFileAsync = promisify(execFile);
 const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
 
-function createPiHost(pi: ExtensionAPI): MattyHost {
+function createPiHost(
+  pi: ExtensionAPI,
+  getDiagnosticContext: () => Pick<
+    DiagnosticContext,
+    "failures" | "concurrency"
+  > = () => ({}),
+): MattyHost {
+  function diagnosticContext(
+    context: ExtensionContext,
+  ): DiagnosticContext {
+    const referenceAuthentication =
+      context.model?.provider === "openai-codex" &&
+      typeof context.modelRegistry?.isUsingOAuth === "function" &&
+      context.modelRegistry.isUsingOAuth(context.model)
+        ? "chatgpt-codex-subscription" as const
+        : undefined;
+    return {
+      ...(context.model
+        ? {
+          activeModel: {
+            provider: context.model.provider,
+            model: context.model.id,
+            ...(referenceAuthentication
+              ? { authentication: referenceAuthentication }
+              : {}),
+          },
+        }
+        : {}),
+      ...getDiagnosticContext(),
+    };
+  }
+
   return {
     registerCommand(name, command) {
       pi.registerCommand(name, {
@@ -142,7 +176,7 @@ function createPiHost(pi: ExtensionAPI): MattyHost {
         handler: async (args, context) => {
           await command.handle(args, (message, level) => {
             context.ui.notify(message, level);
-          });
+          }, diagnosticContext(context));
         },
       });
     },
@@ -150,7 +184,7 @@ function createPiHost(pi: ExtensionAPI): MattyHost {
       pi.on("session_start", async (event, context) => {
         await handler(event, (message, level) => {
           context.ui.notify(message, level);
-        });
+        }, diagnosticContext(context));
       });
     },
   };
@@ -575,6 +609,18 @@ export function registerPiMatty(
   environment: NodeJS.ProcessEnv = process.env,
   options: PiMattyRegistrationOptions = {},
 ): void {
+  let diagnosticActiveChildren = 0;
+  let diagnosticQueuedChildren = 0;
+  async function trackDiagnosticChild<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    diagnosticActiveChildren += 1;
+    try {
+      return await operation();
+    } finally {
+      diagnosticActiveChildren -= 1;
+    }
+  }
   const childRole = isMattyRole(environment.MATTY_CHILD_ROLE)
     ? environment.MATTY_CHILD_ROLE
     : undefined;
@@ -780,13 +826,13 @@ export function registerPiMatty(
       "matty",
       "research",
     );
-    pi.on("session_start", async (event) => {
-      if (event.reason === "startup") {
-        await cleanupStaleResearchWorkspaces({
-          temporaryRoot: researchTemporaryRoot,
-        });
-      }
-    });
+    let researchCleanup: Promise<void> | undefined;
+    const prepareResearchRoot = async () => {
+      researchCleanup ??= cleanupStaleResearchWorkspaces({
+        temporaryRoot: researchTemporaryRoot,
+      }).then(() => undefined);
+      await researchCleanup;
+    };
     pi.on("session_shutdown", async () => {
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
@@ -962,9 +1008,10 @@ export function registerPiMatty(
           const configurationPaths = userConfigurationPaths(environment);
           const writerStateRoot = contract.temporaryPaths.at(-1) ?? tmpdir();
           const protectedPaths = [singleWriterStatePath(writerStateRoot)];
-          const terminal = await runWorkerDelegation(
-            params.task,
-            {
+          return await trackDiagnosticChild(async () => {
+            const terminal = await runWorkerDelegation(
+              params.task,
+              {
               contract,
               availability: {
                 availableTools: invocationTools(workerInvocation),
@@ -1011,10 +1058,11 @@ export function registerPiMatty(
                   },
                 });
               },
-            },
-            progressOptions as never,
-          );
-          return delegationResult(terminal);
+              },
+              progressOptions as never,
+            );
+            return delegationResult(terminal);
+          });
         }
 
         if (role === "researcher") {
@@ -1031,6 +1079,7 @@ export function registerPiMatty(
             scope = params.preparedResearcher.scope;
           } else {
             try {
+              await prepareResearchRoot();
               scope = await createResearchWorkspace({
                 temporaryRoot: researchTemporaryRoot,
                 projectRoot: ctx.cwd,
@@ -1075,9 +1124,10 @@ export function registerPiMatty(
             : invocation;
           activeResearchers += 1;
           try {
-            const terminal = await runResearcherDelegation(
-              params.task,
-              {
+            return await trackDiagnosticChild(async () => {
+              const terminal = await runResearcherDelegation(
+                params.task,
+                {
                 contract,
                 availability: {
                   availableTools: invocationTools(researcherInvocation),
@@ -1118,10 +1168,11 @@ export function registerPiMatty(
                     return false;
                   }
                 },
-              },
-              progressOptions as never,
-            );
-            return delegationResult(terminal);
+                },
+                progressOptions as never,
+              );
+              return delegationResult(terminal);
+            });
           } finally {
             activeResearchers -= 1;
           }
@@ -1156,10 +1207,11 @@ export function registerPiMatty(
           : invocation;
         activeInvocations[role] += 1;
         try {
-          const terminal = await runInspectionDelegation(
-            role,
-            params.task,
-            {
+          return await trackDiagnosticChild(async () => {
+            const terminal = await runInspectionDelegation(
+              role,
+              params.task,
+              {
               availability: {
                 availableTools: invocationTools(inspectionInvocation),
                 independentRuntime: independentRuntimeAvailable,
@@ -1188,10 +1240,11 @@ export function registerPiMatty(
                   },
                 });
               },
-            },
-            progressOptions as never,
-          );
-          return delegationResult(terminal);
+              },
+              progressOptions as never,
+            );
+            return delegationResult(terminal);
+          });
         } finally {
           activeInvocations[role] -= 1;
         }
@@ -1267,6 +1320,11 @@ export function registerPiMatty(
           number,
           PreparedResearcherExecution
         >();
+        let groupQueuedChildren = Math.max(
+          0,
+          contract.tasks.length - contract.concurrency.maxActive,
+        );
+        diagnosticQueuedChildren += groupQueuedChildren;
         const result = await (async () => {
           try {
             return await runDelegationGroup(contract, {
@@ -1383,6 +1441,7 @@ export function registerPiMatty(
                 }
                 let scope: ResearchWorkspace;
                 try {
+                  await prepareResearchRoot();
                   scope = await createResearchWorkspace({
                     temporaryRoot: researchTemporaryRoot,
                     projectRoot: ctx.cwd,
@@ -1427,6 +1486,16 @@ export function registerPiMatty(
                   : { ok: false, reason: "tool-surface-incompatible" };
               },
               async run(task, taskIndex, taskOptions) {
+                if (taskIndex >= contract.concurrency.maxActive) {
+                  groupQueuedChildren = Math.max(
+                    0,
+                    groupQueuedChildren - 1,
+                  );
+                  diagnosticQueuedChildren = Math.max(
+                    0,
+                    diagnosticQueuedChildren - 1,
+                  );
+                }
                 const preparedWorker = preparedWorkers.get(taskIndex);
                 const preparedResearcher = preparedResearchers.get(taskIndex);
                 const leafResult = await singleTaskTool.execute(
@@ -1477,6 +1546,10 @@ export function registerPiMatty(
               },
             });
           } finally {
+            diagnosticQueuedChildren = Math.max(
+              0,
+              diagnosticQueuedChildren - groupQueuedChildren,
+            );
             await Promise.all(
               [...preparedWorkers.values()].map(async (preparation) => {
                 try {
@@ -1511,11 +1584,23 @@ export function registerPiMatty(
     } as never);
   }
 
-  registerMatty(createPiHost(pi), {
+  registerMatty(createPiHost(pi, () => ({
+    failures: [
+      ...(options.diagnosticFailures ?? []),
+      ...(rulesConflict ? [{ source: "rule-injection" as const }] : []),
+    ],
+    concurrency: {
+      activeChildren: diagnosticActiveChildren,
+      queuedChildren: diagnosticQueuedChildren,
+    },
+  })), {
     packageVersion: MATTY_PACKAGE_VERSION,
     piVersion: PI_VERSION,
     platform: process.platform,
     arch: process.arch,
+    subagentRuntimeAvailable:
+      options.independentRuntimeAvailable ??
+      (options.invocation ?? currentPiInvocation()) !== undefined,
     web: {
       state: webState,
       registeredTools: registeredWebTools.filter((tool) =>

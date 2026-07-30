@@ -3,9 +3,11 @@ import {
   access,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,6 +49,10 @@ function createExtensionHarness() {
     }>;
   }> = [];
   const commands: string[] = [];
+  const commandHandlers = new Map<
+    string,
+    (args: string, context: unknown) => Promise<void>
+  >();
   const pi = {
     on(name: string, handler: (...args: never[]) => unknown) {
       const registered = handlers.get(name) ?? [];
@@ -64,12 +70,18 @@ function createExtensionHarness() {
     }) {
       tools.push(tool);
     },
-    registerCommand(name: string) {
+    registerCommand(
+      name: string,
+      command: {
+        handler(args: string, context: unknown): Promise<void>;
+      },
+    ) {
       commands.push(name);
+      commandHandlers.set(name, command.handler);
     },
   } as unknown as ExtensionAPI;
 
-  return { pi, handlers, tools, commands };
+  return { pi, handlers, tools, commands, commandHandlers };
 }
 
 test("parent registration exposes explicit delegated roles", async () => {
@@ -161,6 +173,86 @@ test("parent registration exposes explicit delegated roles", async () => {
     JSON.stringify(failedSearch),
     /provider secret must not escape/,
   );
+});
+
+test("Pi status and doctor use local model and runtime facts", async () => {
+  const harness = createExtensionHarness();
+  const notifications: string[] = [];
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: ["fixture.mjs"],
+    },
+    independentRuntimeAvailable: true,
+    registerWebExtension(pi) {
+      for (
+        const name of [
+          "web_search",
+          "source_check",
+          "fetch_content",
+          "get_search_content",
+        ]
+      ) {
+        pi.registerTool({ name } as never);
+      }
+    },
+  });
+
+  await harness.commandHandlers.get("matty")?.("doctor --json", {
+    model: {
+      provider: "openai-codex",
+      id: "gpt-5.6-sol",
+    },
+    modelRegistry: {
+      isUsingOAuth() {
+        return true;
+      },
+    },
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
+      },
+    },
+  });
+
+  const diagnostic = JSON.parse(notifications.at(-1) ?? "");
+  assert.equal(diagnostic.command, "doctor");
+  assert.equal(diagnostic.referenceModelPath.state, "verified");
+  assert.equal(diagnostic.subagentRuntime.state, "available");
+  assert.equal(diagnostic.activation.state, "active");
+});
+
+test("startup does not remove persistent Matty state", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-zero-write-"));
+  const temporaryRoot = join(sandbox, "matty", "research");
+  const projectRoot = join(sandbox, "project");
+  await mkdir(projectRoot, { recursive: true });
+  const scope = await createResearchWorkspace({
+    temporaryRoot,
+    projectRoot,
+    report: "docs/research/report.md",
+  });
+  const old = new Date("2000-01-01T00:00:00.000Z");
+  for (const entry of await readdir(scope.workspace)) {
+    await utimes(join(scope.workspace, entry), old, old);
+  }
+
+  try {
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, { TMPDIR: sandbox });
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler(
+        { reason: "startup" } as never,
+        {
+          model: undefined,
+          ui: { notify() {} },
+        } as never,
+      );
+    }
+    await access(scope.workspace);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("subagent rejects an invalid group before any child preflight", async () => {
@@ -729,6 +821,7 @@ test("designer blocks gh while reviewer allows read-only gh and blocks mutation"
 
 test("a direct Matty Rules conflict blocks only delegation with a diagnostic", async () => {
   const harness = createExtensionHarness();
+  const notifications: string[] = [];
   registerPiMatty(harness.pi, {});
 
   const inject = harness.handlers.get("before_agent_start")?.[0];
@@ -773,6 +866,32 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
       },
     },
   });
+
+  await harness.commandHandlers.get("matty")?.("doctor --json", {
+    model: undefined,
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
+      },
+    },
+  });
+  const doctor = JSON.parse(notifications.at(-1) ?? "");
+  assert.deepEqual(doctor.mattyRules, {
+    schemaVersion: 1,
+    state: "unavailable",
+  });
+  assert.ok(
+    doctor.diagnostics.some(
+      (diagnostic: { code?: string }) =>
+        diagnostic.code === "matty-rules-unavailable",
+    ),
+  );
+  assert.equal(
+    JSON.stringify(doctor).includes(
+      "project instructions attempt to disable Matty Rules",
+    ),
+    false,
+  );
 });
 
 test("one subagent call queues a fifth child behind four active children", async () => {
@@ -844,6 +963,19 @@ test("one subagent call queues a fifth child behind four active children", async
     context as never,
   );
   await fourStarted;
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("status --json", {
+    ...context,
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
+      },
+    },
+  });
+  const status = JSON.parse(notifications.at(-1) ?? "");
+  assert.equal(status.concurrency.activeChildren, 4);
+  assert.equal(status.concurrency.queuedChildren, 1);
+
   controller.abort();
   const result = await running;
 

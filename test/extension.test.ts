@@ -57,6 +57,12 @@ test("a compatible host activates Matty Core", async () => {
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
+    activeModel: {
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      authentication: "chatgpt-codex-subscription",
+    },
+    subagentRuntimeAvailable: true,
     web: {
       state: "available",
       registeredTools: [
@@ -84,13 +90,18 @@ test("a compatible host activates Matty Core", async () => {
     harness.notifications.at(-1)?.message,
     [
       "Matty 0.1.0",
-      "Pi 0.83.0 · certified",
+      "Host Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
+      "Reference Model Path openai-codex/gpt-5.6-sol · verified",
       "Activation active · compatible",
-      "Roles explorer, designer, reviewer, researcher, worker",
+      "Subagent Runtime available · child-process",
+      "Roles available · explorer, designer, reviewer, researcher, worker",
       "Inspection Guard best-effort · not a security sandbox",
       "Worker Guard best-effort · Single Writer · not a security sandbox",
-      "Web available · web_search, source_check, fetch_content, get_search_content",
+      "Matty Rules v1 · active",
+      "Capability Contracts v1 · available · delegate-explorer, delegate-designer, delegate-reviewer, delegate-researcher, delegate-worker, delegate-group, parent-web",
+      "Concurrency 8 accepted · 4 max active · 0 active · 0 queued · Single Writer",
+      "Web Capability available · web_search, source_check, fetch_content, get_search_content",
     ].join("\n"),
   );
 
@@ -133,5 +144,52 @@ test("an unsupported host stays diagnosable and replaces the active hint", async
   assert.deepEqual(jsonStatus.activation, {
     state: "degraded",
     reason: "unsupported-host",
+    codes: ["host-uncertified"],
   });
+});
+
+test("status and doctor render the same Redacted Diagnostic snapshot", async () => {
+  const harness = createPiHarness();
+  registerMatty(harness.host, {
+    packageVersion: "0.1.0",
+    piVersion: "0.83.0",
+    platform: "darwin",
+    arch: "arm64",
+    activeModel: {
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      authentication: "chatgpt-codex-subscription",
+    },
+    subagentRuntimeAvailable: true,
+    web: {
+      state: "available",
+      registeredTools: [
+        "web_search",
+        "source_check",
+        "fetch_content",
+        "get_search_content",
+      ],
+    },
+  });
+
+  await harness.commands.get("matty")?.handle("status --json");
+  const statusText = harness.notifications.at(-1)?.message ?? "";
+  await harness.commands.get("matty")?.handle("doctor --json");
+  const doctorText = harness.notifications.at(-1)?.message ?? "";
+
+  assert.equal(/\u001B\[[0-?]*[ -/]*[@-~]/.test(statusText), false);
+  assert.equal(/\u001B\[[0-?]*[ -/]*[@-~]/.test(doctorText), false);
+  const status = JSON.parse(statusText);
+  const doctor = JSON.parse(doctorText);
+  assert.equal(status.command, "status");
+  assert.equal(doctor.command, "doctor");
+  delete status.command;
+  delete doctor.command;
+  assert.deepEqual(doctor, status);
+
+  await harness.commands.get("matty")?.handle("doctor");
+  assert.equal(
+    harness.notifications.at(-1)?.message,
+    "Matty doctor · active\nNo remediation required.",
+  );
 });

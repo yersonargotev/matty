@@ -586,18 +586,22 @@ async function main() {
           event.method === "notify" &&
           event.message?.startsWith("Matty 0.1.0\n"),
       );
-      assert.match(humanNotification.message, /Pi 0\.83\.0 · certified/);
+      assert.match(
+        humanNotification.message,
+        /Host Pi 0\.83\.0 · certified/,
+      );
       assert.match(
         humanNotification.message,
         /Target darwin\/arm64 · certified/,
       );
       assert.match(
         humanNotification.message,
-        /Activation active · compatible/,
+        /Reference Model Path openai-codex\/gpt-5\.6-sol · (verified|unverified)/,
       );
+      assert.match(humanNotification.message, /Activation active/);
       assert.match(
         humanNotification.message,
-        /Web available · web_search, source_check, fetch_content, get_search_content/,
+        /Web Capability available · web_search, source_check, fetch_content, get_search_content/,
       );
 
       rpc.send({
@@ -639,6 +643,7 @@ async function main() {
       assert.deepEqual(jsonStatus.activation, {
         state: "active",
         reason: "compatible",
+        codes: [],
       });
       assert.deepEqual(jsonStatus.web, {
         state: "available",
@@ -650,6 +655,51 @@ async function main() {
         ],
       });
       assert.equal("catalog" in jsonStatus, false);
+
+      rpc.send({
+        id: "human-doctor",
+        type: "prompt",
+        message: "/matty doctor",
+      });
+      const humanDoctor = await rpc.waitFor(
+        "doctor",
+        (event) =>
+          event.type === "extension_ui_request" &&
+          event.method === "notify" &&
+          event.message?.startsWith("Matty doctor · active\n"),
+      );
+      assert.match(
+        humanDoctor.message,
+        /reference-model-unverified|No remediation required/,
+      );
+
+      rpc.send({
+        id: "json-doctor",
+        type: "prompt",
+        message: "/matty doctor --json",
+      });
+      const jsonDoctorNotification = await rpc.waitFor(
+        "doctor",
+        (event) => {
+          if (
+            event.type !== "extension_ui_request" ||
+            event.method !== "notify" ||
+            !event.message?.startsWith("{")
+          ) {
+            return false;
+          }
+          try {
+            return JSON.parse(event.message).command === "doctor";
+          } catch {
+            return false;
+          }
+        },
+      );
+      assert.doesNotMatch(jsonDoctorNotification.message, /\u001b\[/);
+      const jsonDoctor = JSON.parse(jsonDoctorNotification.message);
+      delete jsonStatus.command;
+      delete jsonDoctor.command;
+      assert.deepEqual(jsonDoctor, jsonStatus);
     } catch (error) {
       rpcFailure = error;
       throw error;
@@ -683,19 +733,19 @@ async function main() {
     await access(rpc.guardReadyPath);
     await assert.rejects(
       access(rpc.guardViolationPath),
-      "[T01:status] startup or status attempted a network operation",
+      "[T01:diagnostics] startup, status, or doctor attempted a network operation",
     );
     const projectAfterStatus = await snapshotTree(projectRoot);
     const homeAfterStatus = await snapshotTree(homeRoot);
     assert.deepEqual(
       projectAfterStatus,
       projectBeforeStartup,
-      "[T01:status] Pi startup or /matty status wrote to the project",
+      "[T01:diagnostics] Pi startup, status, or doctor wrote to the project",
     );
     assert.deepEqual(
       homeAfterStatus,
       homeBeforeStartup,
-      "[T01:status] Pi startup or /matty status persisted home state",
+      "[T01:diagnostics] Pi startup, status, or doctor persisted home state",
     );
 
     for (const forbiddenPath of [
@@ -719,8 +769,8 @@ async function main() {
         "target: darwin/arm64",
         "activation: active",
         "Web Capability: available (pi-web-access 0.15.0)",
-        "network during startup/status: denied",
-        "project writes during startup/status: none",
+        "network during startup/status/doctor: denied",
+        "project writes during startup/status/doctor: none",
       ].join("\n") + "\n",
     );
   } catch (error) {
