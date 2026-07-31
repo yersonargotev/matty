@@ -11,7 +11,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,15 +20,33 @@ const REPOSITORY_ROOT = resolve(
   "../..",
 );
 
-function parseOutputDirectory(arguments_) {
-  const index = arguments_.indexOf("--output-dir");
-  const value = index >= 0 ? arguments_[index + 1] : undefined;
-  if (!value || arguments_.length !== 2) {
+function parseOptions(arguments_) {
+  const outputIndex = arguments_.indexOf("--output-dir");
+  const output = outputIndex >= 0 ? arguments_[outputIndex + 1] : undefined;
+  if (
+    !output ||
+    !arguments_.includes("--reference-auth-stdin") ||
+    arguments_.length !== 3
+  ) {
     throw new Error(
-      "Usage: node scripts/release/certify-candidate.mjs --output-dir <empty-directory>",
+      "Usage: node scripts/release/certify-candidate.mjs --output-dir <empty-directory> --reference-auth-stdin",
     );
   }
-  return resolve(value);
+  return resolve(output);
+}
+
+async function readReferenceAuth() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  const value = Buffer.concat(chunks).toString("utf8");
+  assert.ok(value, "reference authentication input must not be empty");
+  assert.doesNotThrow(
+    () => JSON.parse(value),
+    "reference authentication must be JSON",
+  );
+  return value;
 }
 
 async function run(command, args, options) {
@@ -77,11 +95,22 @@ async function run(command, args, options) {
   });
 }
 
-const outputDirectory = parseOutputDirectory(process.argv.slice(2));
+const outputDirectory = parseOptions(process.argv.slice(2));
+let referenceAuth = await readReferenceAuth();
+const manifest = JSON.parse(
+  await readFile(join(REPOSITORY_ROOT, "package.json"), "utf8"),
+);
+const releaseTag = process.env.GITHUB_REF_NAME ?? `v${manifest.version}`;
+assert.equal(
+  releaseTag,
+  `v${manifest.version}`,
+  "release tag and package version differ",
+);
+assert.match(releaseTag, /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
 assert.equal(
   `${process.platform}/${process.arch}`,
   "darwin/arm64",
-  "Matty Core 0.2.0 certification is only valid on macOS Apple Silicon",
+  "Matty release certification is only valid on macOS Apple Silicon",
 );
 await mkdir(outputDirectory, { recursive: true });
 assert.deepEqual(
@@ -91,19 +120,18 @@ assert.deepEqual(
 );
 
 const executionSandbox = await mkdtemp(join(tmpdir(), "matty-candidate-"));
-const referenceAuthPath = resolve(
-  process.env.MATTY_REFERENCE_AUTH_PATH ??
-    join(homedir(), ".pi", "agent", "auth.json"),
-);
-await access(referenceAuthPath);
+const {
+  PI_AUTH_JSON: _secret,
+  MATTY_REFERENCE_AUTH_PATH: _reference,
+  ...safeProcessEnv
+} = process.env;
 const isolatedEnv = {
-  ...process.env,
+  ...safeProcessEnv,
   HOME: join(executionSandbox, "home"),
   XDG_CONFIG_HOME: join(executionSandbox, "home", ".config"),
   TMPDIR: join(executionSandbox, "tmp"),
   npm_config_cache: join(executionSandbox, "npm-cache"),
   npm_config_userconfig: join(executionSandbox, "home", ".npmrc"),
-  MATTY_REFERENCE_AUTH_PATH: referenceAuthPath,
 };
 
 try {
@@ -160,7 +188,7 @@ try {
   );
   const [metadata] = JSON.parse(packed.stdout);
   assert.equal(metadata.name, "@yargote/matty");
-  assert.equal(metadata.version, "0.2.0");
+  assert.equal(metadata.version, manifest.version);
   const artifactPath = join(outputDirectory, metadata.filename);
   await access(artifactPath);
   const artifactDigest = createHash("sha256")
@@ -178,14 +206,13 @@ try {
       "scripts/release/inspect-artifact.mjs",
       120_000,
     ],
-    ["T01 install/diagnostics/lifecycle", "scripts/acceptance/t01.mjs", 300_000],
-    ["T03 runtime", "scripts/acceptance/t03.mjs", 300_000],
-    ["T07 roles/guards/contracts", "scripts/acceptance/t07.mjs", 600_000],
     [
-      "T04 Reference Model Path",
-      "scripts/acceptance/t04-reference-web.mjs",
+      "T01 install/diagnostics/lifecycle",
+      "scripts/acceptance/t01.mjs",
       300_000,
     ],
+    ["T03 runtime", "scripts/acceptance/t03.mjs", 300_000],
+    ["T07 roles/guards/contracts", "scripts/acceptance/t07.mjs", 600_000],
   ]) {
     await run("node", [script], {
       cwd: REPOSITORY_ROOT,
@@ -193,6 +220,20 @@ try {
       label,
       timeoutMs,
     });
+  }
+
+  const referenceAuthPath = join(executionSandbox, "reference-auth.json");
+  await writeFile(referenceAuthPath, referenceAuth, { mode: 0o600 });
+  referenceAuth = "";
+  try {
+    await run("node", ["scripts/acceptance/t04-reference-web.mjs"], {
+      cwd: REPOSITORY_ROOT,
+      env: { ...candidateEnv, MATTY_REFERENCE_AUTH_PATH: referenceAuthPath },
+      label: "T04 Reference Model Path",
+      timeoutMs: 300_000,
+    });
+  } finally {
+    await rm(referenceAuthPath, { force: true });
   }
 
   const verifiedArtifactDigest = createHash("sha256")
@@ -208,9 +249,47 @@ try {
     `${artifactDigest}  ${metadata.filename}\n`,
     "utf8",
   );
+  const commit = process.env.GITHUB_SHA ?? "local";
+  const repository = process.env.GITHUB_REPOSITORY ?? "yersonargotev/matty";
+  const runId = process.env.GITHUB_RUN_ID ?? "local";
+  const evidence = {
+    schemaVersion: 1,
+    package: {
+      name: metadata.name,
+      version: metadata.version,
+      filename: metadata.filename,
+      sha256: artifactDigest,
+    },
+    release: {
+      tag: releaseTag,
+      ref: process.env.GITHUB_REF ?? `refs/tags/${releaseTag}`,
+      commit,
+    },
+    github: {
+      repository,
+      workflow: process.env.GITHUB_WORKFLOW ?? "local",
+      workflowRef: process.env.GITHUB_WORKFLOW_REF ?? "local",
+      runId,
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "local",
+      runUrl:
+        runId === "local"
+          ? "local"
+          : `https://github.com/${repository}/actions/runs/${runId}`,
+    },
+    certification: {
+      platform: `${process.platform}/${process.arch}`,
+      node: process.version,
+      reference: "openai-codex/gpt-5.6-sol via ChatGPT/Codex OAuth",
+    },
+  };
+  await writeFile(
+    join(outputDirectory, "RELEASE-EVIDENCE.json"),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    "utf8",
+  );
   process.stdout.write(
     [
-      "Matty Core 0.2.0 release candidate certified",
+      `Matty Core ${manifest.version} release candidate certified`,
       `artifact: ${metadata.filename}`,
       `sha256: ${artifactDigest}`,
       "host: Pi 0.83.0 on darwin/arm64",
