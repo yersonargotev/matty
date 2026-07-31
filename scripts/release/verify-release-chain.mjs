@@ -3,19 +3,26 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const workflow = await readFile(
-  join(repositoryRoot, ".github/workflows/release-candidate.yml"),
+  join(root, ".github/workflows/release-candidate.yml"),
   "utf8",
 );
-const manifest = JSON.parse(
-  await readFile(join(repositoryRoot, "package.json"), "utf8"),
+const certifier = await readFile(
+  join(root, "scripts/release/certify-candidate.mjs"),
+  "utf8",
 );
+const tagValidator = await readFile(
+  join(root, "scripts/release/validate-release-tag.mjs"),
+  "utf8",
+);
+const publicVerifier = await readFile(
+  join(root, "scripts/release/verify-public-release.mjs"),
+  "utf8",
+);
+const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const trustedPublisher = JSON.parse(
-  await readFile(
-    join(repositoryRoot, "release/trusted-publisher.json"),
-    "utf8",
-  ),
+  await readFile(join(root, "release/trusted-publisher.json"), "utf8"),
 );
 
 assert.equal(manifest.name, "@yargote/matty");
@@ -24,7 +31,10 @@ assert.deepEqual(manifest.repository, {
   type: "git",
   url: "git+https://github.com/yersonargotev/matty.git",
 });
-assert.equal(manifest.homepage, "https://github.com/yersonargotev/matty#readme");
+assert.equal(
+  manifest.homepage,
+  "https://github.com/yersonargotev/matty#readme",
+);
 assert.deepEqual(manifest.bugs, {
   url: "https://github.com/yersonargotev/matty/issues",
 });
@@ -43,71 +53,110 @@ assert.deepEqual(trustedPublisher, {
   activationIssue: 17,
 });
 
-function includes(fragment, message = `missing workflow invariant: ${fragment}`) {
-  assert.ok(workflow.includes(fragment), message);
-}
-
-includes("workflow_dispatch:");
-includes("type: boolean");
-includes("permissions:\n  contents: read");
-includes(
-  "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main'",
-);
-includes("runs-on: macos-15");
+const includes = (fragment) =>
+  assert.ok(
+    workflow.includes(fragment),
+    `missing workflow invariant: ${fragment}`,
+  );
+assert.match(workflow, /^on:\n  push:\n    tags:\n      - ["']v\*["']$/m);
+assert.doesNotMatch(workflow, /workflow_dispatch:/);
+includes("group: release-${{ github.ref }}");
+includes("node scripts/release/validate-release-tag.mjs");
 includes("environment: release-candidate");
-includes("node-version: 24");
-includes("npm ci --ignore-scripts");
-assert.doesNotMatch(
-  workflow,
-  /npm install --global @colbymchenry\/codegraph/,
-  "release certification must use Matty's pinned CodeGraph dependency",
-);
-assert.doesNotMatch(
-  workflow,
-  /^\s+cache:\s*npm\s*$/m,
-  "release workflow must not enable the npm package cache",
-);
-includes("PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}");
-includes("MATTY_REFERENCE_AUTH_PATH: ${{ runner.temp }}/matty-reference-auth.json");
-includes('install -m 600 /dev/null "$MATTY_REFERENCE_AUTH_PATH"');
-includes('npm run certify:candidate -- --output-dir "$CANDIDATE_OUTPUT_DIR"');
-assert.match(
-  workflow,
-  /^\s*npm run certify:candidate -- --output-dir "\$CANDIDATE_OUTPUT_DIR"\s*$/m,
-  "candidate certification must run in full with only its explicit output directory",
-);
-includes('checksum="$CANDIDATE_OUTPUT_DIR/SHA256SUMS"');
-includes('(cd "$CANDIDATE_OUTPUT_DIR" && shasum -a 256 -c SHA256SUMS)');
-includes("uses: actions/upload-artifact@v4");
-includes("${{ steps.certify.outputs.tarball }}");
-includes("${{ steps.certify.outputs.checksum }}");
-
-includes(
-  "if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage",
-);
-includes("needs: certify");
 includes("environment: npm-stage");
-includes("id-token: write");
-includes("npm install --global npm@11.18.0");
-includes("uses: actions/download-artifact@v4");
-includes("shasum -a 256 -c SHA256SUMS");
-includes('run: npm stage publish "${{ steps.verify.outputs.tarball }}"');
+includes("RELEASE-EVIDENCE.json");
+includes(
+  'npm stage publish "${{ steps.verify.outputs.tarball }}" --tag latest',
+);
+includes("npm stage list @yargote/matty");
+includes("npm stage view <stage-id>");
+includes("npm stage download <stage-id>");
+includes("npm stage approve <stage-id>");
+includes("NPM-STAGE-EVIDENCE.json");
+includes("stage-id: ${{ steps.publish.outputs.stage-id }}");
+includes("--timeout-seconds 21600");
+includes("node scripts/release/verify-public-release.mjs");
+includes("public-release-evidence");
+includes('gh release create "$TAG" "$ARTIFACT_DIR"/*');
+includes("--verify-tag --draft");
+includes("npm audit signatures");
+includes('gh release upload "$TAG" "$EVIDENCE_DIR"/* --clobber');
+includes('gh release edit "$TAG" --draft=false --latest');
+assert.equal(
+  workflow.match(/gh api "repos\/\$REPOSITORY\/git\/ref\/tags\/\$TAG"/g)
+    ?.length,
+  2,
+  "the live tag target must be checked before draft creation and publication",
+);
 
-assert.doesNotMatch(workflow, /\bnpm\s+publish\b/, "npm publish is forbidden");
+for (const pin of [
+  "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+  "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+])
+  includes(pin);
+assert.doesNotMatch(
+  workflow,
+  /uses:\s+actions\/(?:checkout|setup-node|upload-artifact|download-artifact)@v\d/,
+);
+assert.doesNotMatch(
+  workflow,
+  /\bnpm\s+publish\b/,
+  "direct npm publish is forbidden",
+);
 assert.doesNotMatch(
   workflow,
   /\b(?:NODE_AUTH_TOKEN|NPM_TOKEN)\b/,
   "npm write credentials are forbidden",
 );
-assert.doesNotMatch(
-  workflow,
-  /^\s+(?:contents|packages|actions|attestations):\s*write\s*$/m,
-  "only the staging OIDC permission may be writable",
+assert.equal(
+  workflow.match(/^\s+npm stage publish .+$/gm)?.length,
+  1,
+  "exactly one stage publish is required",
 );
 assert.equal(
-  workflow.match(/^\s*run:\s*npm stage publish .+$/gm)?.length,
+  workflow.match(/^\s+id-token:\s*write\s*$/gm)?.length,
   1,
-  "the workflow must contain exactly one npm stage publish command",
+  "OIDC must be isolated to the stage job",
+);
+assert.equal(
+  workflow.match(/^\s+environment:\s*release-candidate\s*$/gm)?.length,
+  1,
+  "certification has one protected approval",
+);
+assert.equal(
+  workflow.match(/^\s+environment:\s*npm-stage\s*$/gm)?.length,
+  1,
+  "trusted publisher identity must remain exact",
+);
+assert.equal(
+  workflow.match(/^\s+contents:\s*write\s*$/gm)?.length,
+  2,
+  "only draft and final verification jobs may write releases",
 );
 
-console.log("Release chain workflow invariants verified.");
+assert.match(
+  certifier,
+  /delete process\.env\.PI_AUTH_JSON|PI_AUTH_JSON: _secret/,
+);
+assert.match(certifier, /--reference-auth-stdin/);
+assert.doesNotMatch(workflow, /--reference-auth-path/);
+assert.match(certifier, /writeFile\(referenceAuthPath, referenceAuth/);
+assert.match(certifier, /scripts\/acceptance\/t04-reference-web\.mjs/);
+assert.match(certifier, /RELEASE-EVIDENCE\.json/);
+assert.doesNotMatch(
+  certifier,
+  /assert\.equal\(metadata\.version,\s*"\d+\.\d+\.\d+"/,
+);
+
+assert.match(tagValidator, /GITHUB_REF_PROTECTED/);
+assert.match(tagValidator, /cat-file", "-t"/);
+assert.match(tagValidator, /merge-base", "--is-ancestor"/);
+assert.match(tagValidator, /lock\.packages\?\.\[""\]\?\.version/);
+assert.match(publicVerifier, /https:\/\/slsa\.dev\/provenance\/v1/);
+assert.match(publicVerifier, /subject\.digest\?\.sha512/);
+assert.match(publicVerifier, /source\.digest\?\.gitCommit/);
+assert.match(publicVerifier, /invocationId/);
+
+console.log("Tag-triggered staged release-chain invariants verified.");

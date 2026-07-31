@@ -1,25 +1,44 @@
 name: Release candidate
 
 on:
-  workflow_dispatch:
-    inputs:
-      stage:
-        description: Stage the certified tarball on npm
-        required: false
-        default: false
-        type: boolean
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    if: github.repository == 'yersonargotev/matty'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+      - name: Validate new stable release tag
+        id: validate
+        run: node scripts/release/validate-release-tag.mjs
+
   certify:
-    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main'
+    needs: validate
     runs-on: macos-15
     environment: release-candidate
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24
       - run: npm ci --ignore-scripts
@@ -27,67 +46,172 @@ jobs:
         id: certify
         env:
           PI_AUTH_JSON: ${{ secrets.PI_AUTH_JSON }}
-          MATTY_REFERENCE_AUTH_PATH: ${{ runner.temp }}/matty-reference-auth.json
           CANDIDATE_OUTPUT_DIR: ${{ runner.temp }}/matty-release-candidate
         run: |
-          install -m 600 /dev/null "$MATTY_REFERENCE_AUTH_PATH"
-          printf '%s' "$PI_AUTH_JSON" > "$MATTY_REFERENCE_AUTH_PATH"
-          npm run certify:candidate -- --output-dir "$CANDIDATE_OUTPUT_DIR"
+          printf '%s' "$PI_AUTH_JSON" | (
+            unset PI_AUTH_JSON
+            node scripts/release/certify-candidate.mjs --output-dir "$CANDIDATE_OUTPUT_DIR" --reference-auth-stdin
+          )
 
           shopt -s nullglob
           tarballs=("$CANDIDATE_OUTPUT_DIR"/*.tgz)
-          if [[ ${#tarballs[@]} -ne 1 ]]; then
-            echo "Expected exactly one certified tarball" >&2
-            exit 1
-          fi
-          tarball="${tarballs[0]}"
-          checksum="$CANDIDATE_OUTPUT_DIR/SHA256SUMS"
-          test -f "$checksum"
+          test ${#tarballs[@]} -eq 1
+          test -f "$CANDIDATE_OUTPUT_DIR/SHA256SUMS"
+          test -f "$CANDIDATE_OUTPUT_DIR/RELEASE-EVIDENCE.json"
           (cd "$CANDIDATE_OUTPUT_DIR" && shasum -a 256 -c SHA256SUMS)
-          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
-          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
       - name: Upload certified release candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: certified-release-candidate
           if-no-files-found: error
           path: |
-            ${{ steps.certify.outputs.tarball }}
-            ${{ steps.certify.outputs.checksum }}
+            ${{ runner.temp }}/matty-release-candidate/*.tgz
+            ${{ runner.temp }}/matty-release-candidate/SHA256SUMS
+            ${{ runner.temp }}/matty-release-candidate/RELEASE-EVIDENCE.json
 
   stage:
-    if: github.repository == 'yersonargotev/matty' && github.ref == 'refs/heads/main' && inputs.stage
-    needs: certify
+    needs: [validate, certify]
     runs-on: ubuntu-latest
     environment: npm-stage
+    outputs:
+      stage-id: ${{ steps.publish.outputs.stage-id }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24
-      - run: npm install --global npm@11.18.0
-      - uses: actions/download-artifact@v4
+      - run: npm install --global --ignore-scripts npm@11.18.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: certified-release-candidate
           path: ${{ runner.temp }}/certified-release-candidate
       - name: Verify certified release candidate
+        id: verify
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/certified-release-candidate
         run: |
           shopt -s nullglob
           tarballs=("$ARTIFACT_DIR"/*.tgz)
-          checksums=("$ARTIFACT_DIR"/SHA256SUMS)
-          if [[ ${#tarballs[@]} -ne 1 || ${#checksums[@]} -ne 1 ]]; then
-            echo "Expected exactly one tarball and its SHA256 evidence" >&2
-            exit 1
-          fi
-          (
-            cd "$ARTIFACT_DIR"
-            shasum -a 256 -c SHA256SUMS
-          )
+          test ${#tarballs[@]} -eq 1
+          test -f "$ARTIFACT_DIR/SHA256SUMS"
+          test -f "$ARTIFACT_DIR/RELEASE-EVIDENCE.json"
+          (cd "$ARTIFACT_DIR" && shasum -a 256 -c SHA256SUMS)
           echo "tarball=${tarballs[0]}" >> "$GITHUB_OUTPUT"
-        id: verify
-      - name: Stage certified release candidate
-        run: npm stage publish "${{ steps.verify.outputs.tarball }}"
+      - name: Stage the exact certified artifact with OIDC
+        id: publish
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          STAGE_EVIDENCE: ${{ runner.temp }}/NPM-STAGE-EVIDENCE.json
+        run: |
+          npm stage publish "${{ steps.verify.outputs.tarball }}" --tag latest --json > "$STAGE_EVIDENCE"
+          node - <<'NODE'
+          const evidence = JSON.parse(require("node:fs").readFileSync(process.env.STAGE_EVIDENCE, "utf8"));
+          const [candidate] = Object.values(evidence);
+          if (!candidate || candidate.name !== "@yargote/matty" || candidate.version !== process.env.VERSION || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.stageId ?? "")) {
+            throw new Error("npm did not return the expected stage evidence");
+          }
+          require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `stage-id=${candidate.stageId}\n`);
+          require("node:fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, `stage ID: \`${candidate.stageId}\`\n`);
+          NODE
+
+  draft-release:
+    needs: [validate, stage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: certified-release-candidate
+          path: ${{ runner.temp }}/certified-release-candidate
+      - name: Revalidate the immutable release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          target=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          test "$target" = "commit $GITHUB_SHA"
+      - name: Create draft release and attach certified evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARTIFACT_DIR: ${{ runner.temp }}/certified-release-candidate
+          STAGE_ID: ${{ needs.stage.outputs.stage-id }}
+        run: |
+          node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({schemaVersion:1, package:"@yargote/matty", version:process.env.VERSION, tag:"latest", stageId:process.env.STAGE_ID}, null, 2) + "\n")' "$RUNNER_TEMP/NPM-STAGE-EVIDENCE.json"
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          ## Certified staged release
+
+          The attached tarball, checksum, and release evidence were certified by this workflow and submitted to npm staging with OIDC.
+
+          A maintainer must inspect and approve it interactively with npm 2FA:
+
+          `npm stage list @yargote/matty`
+          `npm stage view <stage-id>`
+          `npm stage download <stage-id>`
+          `npm stage approve <stage-id>`
+
+          Do not approve if the downloaded staged tarball differs from `SHA256SUMS`. This draft is published automatically only after the same workflow run verifies the public artifact and provenance.
+          EOF
+          gh release create "$TAG" "$ARTIFACT_DIR"/* "$RUNNER_TEMP/NPM-STAGE-EVIDENCE.json" \
+            --verify-tag --draft --title "Matty v$VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          {
+            echo '## npm staged release awaiting human approval'
+            echo 'Run `npm stage list @yargote/matty`, then `npm stage view <stage-id>` and `npm stage download <stage-id>`.'
+            echo 'Compare the download to SHA256SUMS; if correct, run `npm stage approve <stage-id>` and complete npm 2FA.'
+            echo 'This run will poll npm for up to six hours and will leave the GitHub Release as a draft on timeout or mismatch.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-and-publish-release:
+    needs: [validate, draft-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 370
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: certified-release-candidate
+          path: ${{ runner.temp }}/certified-release-candidate
+      - name: Poll for npm approval and verify public release
+        run: node scripts/release/verify-public-release.mjs --artifact-dir "$RUNNER_TEMP/certified-release-candidate" --output-dir "$RUNNER_TEMP/public-release-evidence" --timeout-seconds 21600
+      - name: Verify npm signatures and attestations
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          EVIDENCE_DIR: ${{ runner.temp }}/public-release-evidence
+        run: |
+          audit_root="$RUNNER_TEMP/npm-signature-audit"
+          mkdir -p "$audit_root/home" "$audit_root/cache" "$audit_root/project"
+          cd "$audit_root/project"
+          HOME="$audit_root/home" npm_config_cache="$audit_root/cache" npm_config_userconfig="$audit_root/npmrc" npm init --yes > /dev/null
+          HOME="$audit_root/home" npm_config_cache="$audit_root/cache" npm_config_userconfig="$audit_root/npmrc" npm install --ignore-scripts "@yargote/matty@$VERSION"
+          HOME="$audit_root/home" npm_config_cache="$audit_root/cache" npm_config_userconfig="$audit_root/npmrc" npm audit signatures | tee "$EVIDENCE_DIR/NPM-AUDIT-SIGNATURES.txt"
+      - name: Upload independently verified public evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: public-release-evidence
+          if-no-files-found: error
+          path: ${{ runner.temp }}/public-release-evidence/*
+      - name: Revalidate the release tag and publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          EVIDENCE_DIR: ${{ runner.temp }}/public-release-evidence
+        run: |
+          target=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          test "$target" = "commit $GITHUB_SHA"
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$TAG" "$EVIDENCE_DIR"/* --clobber
+          gh release edit "$TAG" --draft=false --latest

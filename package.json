@@ -40,6 +40,8 @@
     "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs && node scripts/acceptance/t07.mjs",
     "inspect:artifact": "node scripts/release/inspect-artifact.mjs",
     "verify:release-chain": "node scripts/release/verify-release-chain.mjs",
+    "validate:release-tag": "node scripts/release/validate-release-tag.mjs",
+    "verify:public-release": "node scripts/release/verify-public-release.mjs",
     "certify:candidate": "node scripts/release/certify-candidate.mjs",
     "check": "npm run typecheck && npm test && npm run build && npm run inspect:artifact && npm run verify:release-chain && npm run test:acceptance"
   },
