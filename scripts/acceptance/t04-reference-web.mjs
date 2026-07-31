@@ -298,7 +298,7 @@ globalThis.fetch = async function observedFetch(input, init) {
   );
   assert.equal(piPackage.version, "0.83.0");
   assert.equal(webPackage.version, "0.15.0");
-  assert.equal(mattyPackage.version, "0.1.0");
+  assert.equal(mattyPackage.version, "0.2.0");
 
   const mattyExtension = join(
     host,
