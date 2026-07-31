@@ -81,7 +81,7 @@ const outputDirectory = parseOutputDirectory(process.argv.slice(2));
 assert.equal(
   `${process.platform}/${process.arch}`,
   "darwin/arm64",
-  "Matty Core 0.1.0 certification is only valid on macOS Apple Silicon",
+  "Matty Core 0.2.0 certification is only valid on macOS Apple Silicon",
 );
 await mkdir(outputDirectory, { recursive: true });
 assert.deepEqual(
@@ -160,7 +160,7 @@ try {
   );
   const [metadata] = JSON.parse(packed.stdout);
   assert.equal(metadata.name, "@yargote/matty");
-  assert.equal(metadata.version, "0.1.0");
+  assert.equal(metadata.version, "0.2.0");
   const artifactPath = join(outputDirectory, metadata.filename);
   await access(artifactPath);
   const artifactDigest = createHash("sha256")
@@ -210,13 +210,13 @@ try {
   );
   process.stdout.write(
     [
-      "Matty Core 0.1.0 release candidate certified",
+      "Matty Core 0.2.0 release candidate certified",
       `artifact: ${metadata.filename}`,
       `sha256: ${artifactDigest}`,
       "host: Pi 0.83.0 on darwin/arm64",
       "reference: openai-codex/gpt-5.6-sol via ChatGPT/Codex OAuth",
       "release workflow policy: OIDC stage-only",
-      "trusted-publisher activation: pending human bootstrap issue #17",
+      "certification action: candidate artifact only (no staging or publication)",
     ].join("\n") + "\n",
   );
 } finally {

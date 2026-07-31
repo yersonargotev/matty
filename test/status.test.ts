@@ -22,7 +22,7 @@ const UNCERTIFIED = {
 
 test("status activates on a certified host", () => {
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
@@ -49,7 +49,7 @@ test("status activates on a certified host", () => {
     command: "status",
     package: {
       name: "@yargote/matty",
-      version: "0.1.0",
+      version: "0.2.0",
     },
     pi: {
       version: "0.83.0",
@@ -135,7 +135,7 @@ test("status activates on a certified host", () => {
   assert.equal(
     renderStatusHuman(snapshot),
     [
-      "Matty 0.1.0",
+      "Matty 0.2.0",
       "Host Pi 0.83.0 · certified",
       "Target darwin/arm64 · certified",
       "Reference Model Path openai-codex/gpt-5.6-sol · verified",
@@ -155,7 +155,7 @@ test("status activates on a certified host", () => {
 
 test("status degrades on an unsupported host", () => {
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "0.84.0",
     platform: "linux",
     arch: "x64",
@@ -181,7 +181,7 @@ test("status degrades on an unsupported host", () => {
 
 test("status reports a locally derived degraded Web Capability", () => {
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
@@ -201,7 +201,7 @@ test("status reports a locally derived degraded Web Capability", () => {
 
 test("a non-reference model is unverified without degrading activation", () => {
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
@@ -244,7 +244,7 @@ test("diagnostics omit injected secrets, content, URLs, paths, and unknown field
     "raw provider stderr",
   ];
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "0.83.0",
     platform: "darwin",
     arch: "arm64",
@@ -303,7 +303,7 @@ test("diagnostics omit injected secrets, content, URLs, paths, and unknown field
 
 test("doctor diagnostics use Matty codes in remediation order", () => {
   const snapshot = createStatusSnapshot({
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: "future",
     platform: "linux",
     arch: "x64",

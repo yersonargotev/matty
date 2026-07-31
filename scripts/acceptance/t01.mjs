@@ -422,7 +422,7 @@ async function main() {
       );
     }
     assert.equal(packMetadata.name, "@yargote/matty");
-    assert.equal(packMetadata.version, "0.1.0");
+    assert.equal(packMetadata.version, "0.2.0");
     const expectedDistFiles = [
       "dist/adapters/pi-extension.d.ts",
       "dist/adapters/pi-extension.js",
@@ -640,7 +640,7 @@ async function main() {
         (event) =>
           event.type === "extension_ui_request" &&
           event.method === "notify" &&
-          event.message?.startsWith("Matty 0.1.0\n"),
+          event.message?.startsWith("Matty 0.2.0\n"),
       );
       assert.match(
         humanNotification.message,
@@ -687,7 +687,7 @@ async function main() {
       assert.equal(jsonStatus.schemaVersion, 1);
       assert.deepEqual(jsonStatus.package, {
         name: "@yargote/matty",
-        version: "0.1.0",
+        version: "0.2.0",
       });
       assert.deepEqual(jsonStatus.pi, {
         version: "0.83.0",
@@ -863,7 +863,7 @@ export default function unsupportedHostAcceptance(pi) {
       });
     },
   }, {
-    packageVersion: "0.1.0",
+    packageVersion: "0.2.0",
     piVersion: nonReferenceModel ? "0.83.0" : "0.84.0",
     platform: nonReferenceModel ? "darwin" : "linux",
     arch: nonReferenceModel ? "arm64" : "x64",
