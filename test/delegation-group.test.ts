@@ -338,6 +338,58 @@ test("a required group failure cancels running and queued work", async () => {
   );
 });
 
+test("scheduler preserves closed-allowlist child failure codes", async () => {
+  for (
+    const code of [
+      "child-failed",
+      "protocol-failed",
+      "child-exited",
+      "missing-research-report",
+    ] as const
+  ) {
+    const result = await runDelegationGroup(requiredGroup(1), {
+      async preflight() {
+        return { ok: true };
+      },
+      async run() {
+        return { status: "failed", code };
+      },
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.tasks[0]?.status, "failed");
+    assert.equal(
+      result.tasks[0] && "diagnostic" in result.tasks[0]
+        ? result.tasks[0].diagnostic.code
+        : undefined,
+      code,
+    );
+  }
+});
+
+test("scheduler redacts unknown task failure codes", async () => {
+  const secret = "provider-specific-secret-code";
+  const result = await runDelegationGroup(requiredGroup(1), {
+    async preflight() {
+      return { ok: true };
+    },
+    async run() {
+      return {
+        status: "failed",
+        code: secret,
+      } as unknown as DelegationTaskExecution<never>;
+    },
+  });
+
+  assert.equal(
+    result.tasks[0] && "diagnostic" in result.tasks[0]
+      ? result.tasks[0].diagnostic.code
+      : undefined,
+    "task-failed",
+  );
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+});
+
 test("scheduler exceptions become redacted task diagnostics", async () => {
   const secret = "provider stderr and prompt content";
   const result = await runDelegationGroup(requiredGroup(1), {

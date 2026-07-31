@@ -371,6 +371,52 @@ test("subagent rejects an invalid group before any child preflight", async () =>
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
 });
 
+test("subagent group preserves a redacted child failure code", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        join(process.cwd(), "test/fixtures/child-pi-fixture.mjs"),
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")
+    ?.execute;
+  assert.ok(execute);
+
+  const result = await execute(
+    "failed-group" as never,
+    {
+      requirement: "required",
+      tasks: [{ role: "explorer", task: "failure" }],
+    } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  ) as unknown as {
+    details: {
+      status: string;
+      tasks: Array<{ diagnostic?: { code?: string } }>;
+    };
+  };
+
+  assert.equal(result.details.status, "failed");
+  assert.equal(result.details.tasks[0]?.diagnostic?.code, "child-failed");
+  assert.doesNotMatch(JSON.stringify(result), /controlled failure/);
+});
+
 test("required group authentication preflight blocks before spawning", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {

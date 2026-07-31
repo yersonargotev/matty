@@ -46,7 +46,8 @@ if (task === "malformed-message") {
 ) {
   setInterval(() => {}, 1_000);
 } else {
-  const failed = task === "failure";
+  const failed = task === "failure" ||
+    task?.startsWith("Explorer assignment:\nfailure\n");
   if (task?.startsWith("Researcher assignment:\n")) {
     const scope = JSON.parse(process.env.MATTY_RESEARCH_SCOPE ?? "null");
     await mkdir(dirname(scope.report), { recursive: true });

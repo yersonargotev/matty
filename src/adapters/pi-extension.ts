@@ -39,7 +39,9 @@ import {
   runWorkerDelegation,
 } from "../application/worker-delegation.ts";
 import {
+  isDelegationLeafFailureCode,
   runDelegationGroup,
+  type DelegationLeafFailureCode,
   type DelegationTaskExecution,
 } from "../application/delegation-scheduler.ts";
 import {
@@ -495,6 +497,29 @@ async function workerContract(
     workingTree: await realpath(cwd),
     temporaryPaths: [...new Set(temporaryPaths)],
   });
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function leafOutcome(details: unknown): {
+  status?: unknown;
+  failureCode?: DelegationLeafFailureCode;
+} {
+  if (!isUnknownRecord(details) || !isUnknownRecord(details.outcome)) {
+    return {};
+  }
+  const { status, failure } = details.outcome;
+  if (!isUnknownRecord(failure)) {
+    return { status };
+  }
+  return {
+    status,
+    ...(isDelegationLeafFailureCode(failure.kind)
+      ? { failureCode: failure.kind }
+      : {}),
+  };
 }
 
 function delegationResult<T extends { outcome: { status: string } }>(
@@ -1567,16 +1592,17 @@ export function registerPiMatty(
                     : undefined,
                   ctx,
                 );
-                const leafStatus = (
-                  leafResult.details as {
-                    outcome?: { status?: string };
-                  }
-                ).outcome?.status;
-                if (leafStatus === "cancelled") {
+                const outcome = leafOutcome(leafResult.details);
+                if (outcome.status === "cancelled") {
                   return { status: "cancelled" };
                 }
                 if (leafResult.isError) {
-                  return { status: "failed" };
+                  return {
+                    status: "failed",
+                    ...(outcome.failureCode
+                      ? { code: outcome.failureCode }
+                      : {}),
+                  };
                 }
                 return {
                   status: "succeeded",

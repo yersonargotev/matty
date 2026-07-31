@@ -6,13 +6,31 @@ import {
 } from "../domain/delegation-group.ts";
 import type { MattyRole } from "../domain/capability-contract.ts";
 
+export const DELEGATION_LEAF_FAILURE_CODES = [
+  "child-failed",
+  "protocol-failed",
+  "child-exited",
+  "missing-research-report",
+] as const;
+
+export type DelegationLeafFailureCode =
+  (typeof DELEGATION_LEAF_FAILURE_CODES)[number];
+
+export function isDelegationLeafFailureCode(
+  value: unknown,
+): value is DelegationLeafFailureCode {
+  return typeof value === "string" &&
+    DELEGATION_LEAF_FAILURE_CODES.some((code) => code === value);
+}
+
 export type DelegationDiagnosticCode =
   | "queued"
   | "preflight-failed"
   | "skipped"
   | "task-failed"
   | "cancelled"
-  | "partial-failure";
+  | "partial-failure"
+  | DelegationLeafFailureCode;
 
 export interface DelegationDiagnostic {
   kind: "delegation";
@@ -40,7 +58,7 @@ export type DelegationTaskPreflight =
 
 export type DelegationTaskExecution<T> =
   | { status: "succeeded"; value: T }
-  | { status: "failed" }
+  | { status: "failed"; code?: DelegationLeafFailureCode }
   | { status: "cancelled" };
 
 export interface DelegationGroupExecution<T> {
@@ -282,7 +300,9 @@ export async function runDelegationGroup<T>(
             const diagnostic: DelegationDiagnostic = {
               kind: "delegation",
               code: outcome.status === "failed"
-                ? "task-failed"
+                ? isDelegationLeafFailureCode(outcome.code)
+                  ? outcome.code
+                  : "task-failed"
                 : "cancelled",
               taskIndex,
               role: task.role,
