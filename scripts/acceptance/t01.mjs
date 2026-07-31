@@ -467,6 +467,7 @@ async function main() {
     ];
     const expectedPackedFiles = [
       "LICENSE",
+      "README.md",
       "PRODUCTION_DEPENDENCY_LIFECYCLES.json",
       "THIRD_PARTY_NOTICES.md",
       "THIRD_PARTY_PROVENANCE.json",
