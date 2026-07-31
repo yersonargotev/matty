@@ -208,10 +208,6 @@ try {
     ],
     { cwd: project, env: isolatedEnv },
   );
-  await run("codegraph", ["init", "-i"], {
-    cwd: project,
-    env: isolatedEnv,
-  });
   const canonicalProject = await realpath(project);
 
   const providedArtifact = process.env.MATTY_PACKED_ARTIFACT

@@ -11,8 +11,9 @@ import * as typebox from "typebox";
 import { execFile } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { delimiter, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
@@ -21,6 +22,10 @@ import {
   type PiInvocation,
   type PiThinkingLevel,
 } from "../application/child-pi-runtime.ts";
+import {
+  initializeCodeGraphProject,
+  type CodeGraphInitializationResult,
+} from "../application/codegraph-runtime.ts";
 import {
   blockedInspectionDelegation,
   runInspectionDelegation,
@@ -106,6 +111,10 @@ export interface PiMattyRegistrationOptions {
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
   registerWebExtension?: (pi: ExtensionAPI) => void;
+  registerCodeGraphExtension?: (pi: ExtensionAPI) => void;
+  initializeCodeGraph?: (
+    cwd: string,
+  ) => Promise<CodeGraphInitializationResult>;
   webContract?: WebCapabilityContract;
   reviewerGithubPreflight?: () => Promise<{
     available: boolean;
@@ -136,6 +145,19 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
 
 const execFileAsync = promisify(execFile);
 const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
+const CODEGRAPH_EXTENSION_MODULE =
+  "@vndv/pi-codegraph/extensions/codegraph.ts";
+const require = createRequire(import.meta.url);
+
+function prependBundledCodeGraphToPath(environment: NodeJS.ProcessEnv): void {
+  const manifest = require.resolve("@colbymchenry/codegraph/package.json");
+  const binDirectory = resolve(dirname(manifest), "../..", ".bin");
+  const currentPath = environment.PATH ?? "";
+  const entries = currentPath.split(delimiter).filter(Boolean);
+  if (!entries.includes(binDirectory)) {
+    environment.PATH = [binDirectory, ...entries].join(delimiter);
+  }
+}
 
 function createPiHost(
   pi: ExtensionAPI,
@@ -611,6 +633,9 @@ export function registerPiMatty(
 ): void {
   let diagnosticActiveChildren = 0;
   let diagnosticQueuedChildren = 0;
+  const diagnosticFailures: Array<
+    NonNullable<RuntimeFacts["failures"]>[number]
+  > = [...(options.diagnosticFailures ?? [])];
   async function trackDiagnosticChild<T>(
     operation: () => Promise<T>,
   ): Promise<T> {
@@ -627,6 +652,31 @@ export function registerPiMatty(
   const research = childRole === "researcher"
     ? researcherScope(environment)
     : undefined;
+  if (!childRole && options.registerCodeGraphExtension) {
+    try {
+      options.registerCodeGraphExtension(pi);
+    } catch {
+      diagnosticFailures.push({ source: "dependency" });
+    }
+  }
+  if (!childRole && options.initializeCodeGraph) {
+    pi.on("session_start", async (_event, context) => {
+      try {
+        await options.initializeCodeGraph?.(context.cwd);
+      } catch {
+        if (!diagnosticFailures.some((failure) =>
+          failure.source === "dependency"
+        )) {
+          diagnosticFailures.push({ source: "dependency" });
+        }
+        context.ui.notify(
+          "CodeGraph initialization failed; Matty remains available. Run /matty doctor for remediation.",
+          "warning",
+        );
+      }
+    });
+  }
+
   const registeredWebTools: string[] = [];
   let webState: WebCapabilityState = "unavailable";
   let webInitializationSucceeded = false;
@@ -1586,7 +1636,7 @@ export function registerPiMatty(
 
   registerMatty(createPiHost(pi, () => ({
     failures: [
-      ...(options.diagnosticFailures ?? []),
+      ...diagnosticFailures,
       ...(rulesConflict ? [{ source: "rule-injection" as const }] : []),
     ],
     concurrency: {
@@ -1612,25 +1662,45 @@ export function registerPiMatty(
 
 export default async function mattyExtension(pi: ExtensionAPI): Promise<void> {
   let registerWebExtension: ((api: ExtensionAPI) => void) | undefined;
+  let registerCodeGraphExtension: ((api: ExtensionAPI) => void) | undefined;
+  const diagnosticFailures: Array<
+    NonNullable<RuntimeFacts["failures"]>[number]
+  > = [];
+  const jiti = createJiti(import.meta.url, {
+    moduleCache: false,
+    tryNative: false,
+    virtualModules: {
+      "@earendil-works/pi-coding-agent": piCodingAgent,
+      "@earendil-works/pi-ai/compat": piAiCompat,
+      "@earendil-works/pi-tui": piTui,
+      typebox,
+    },
+  });
   try {
-    const jiti = createJiti(import.meta.url, {
-      moduleCache: false,
-      tryNative: false,
-      virtualModules: {
-        "@earendil-works/pi-coding-agent": piCodingAgent,
-        "@earendil-works/pi-ai/compat": piAiCompat,
-        "@earendil-works/pi-tui": piTui,
-        typebox,
-      },
-    });
     registerWebExtension = await jiti.import(
       WEB_ACCESS_MODULE,
       { default: true },
     ) as (api: ExtensionAPI) => void;
   } catch {
-    // A missing or unloadable integration is observable through local status.
+    // Web availability is observable through local status.
+  }
+  try {
+    prependBundledCodeGraphToPath(process.env);
+    registerCodeGraphExtension = await jiti.import(
+      CODEGRAPH_EXTENSION_MODULE,
+      { default: true },
+    ) as (api: ExtensionAPI) => void;
+  } catch {
+    diagnosticFailures.push({ source: "dependency" });
   }
   registerPiMatty(pi, process.env, {
     ...(registerWebExtension ? { registerWebExtension } : {}),
+    ...(registerCodeGraphExtension
+      ? {
+        registerCodeGraphExtension,
+        initializeCodeGraph: initializeCodeGraphProject,
+      }
+      : {}),
+    diagnosticFailures,
   });
 }

@@ -175,6 +175,86 @@ test("parent registration exposes explicit delegated roles", async () => {
   );
 });
 
+test("parent registration exposes CodeGraph tools and initializes the session project", async () => {
+  const harness = createExtensionHarness();
+  const initialized: string[] = [];
+  registerPiMatty(harness.pi, {}, {
+    registerCodeGraphExtension(pi) {
+      for (const name of [
+        "codegraph_search",
+        "codegraph_node",
+        "codegraph_files",
+        "codegraph_callers",
+        "codegraph_callees",
+        "codegraph_impact",
+        "codegraph_explore",
+        "codegraph_status",
+      ]) {
+        pi.registerTool({ name } as never);
+      }
+    },
+    async initializeCodeGraph(cwd) {
+      initialized.push(cwd);
+      return { status: "initialized", root: cwd };
+    },
+  });
+
+  assert.deepEqual(harness.tools.map((tool) => tool.name), [
+    "codegraph_search",
+    "codegraph_node",
+    "codegraph_files",
+    "codegraph_callers",
+    "codegraph_callees",
+    "codegraph_impact",
+    "codegraph_explore",
+    "codegraph_status",
+    "subagent",
+  ]);
+  for (const handler of harness.handlers.get("session_start") ?? []) {
+    await handler(
+      { reason: "startup" } as never,
+      {
+        cwd: "/workspace/project",
+        model: undefined,
+        ui: { notify() {} },
+      } as never,
+    );
+  }
+  assert.deepEqual(initialized, ["/workspace/project"]);
+});
+
+test("CodeGraph initialization failure warns without disabling Matty", async () => {
+  const harness = createExtensionHarness();
+  const notifications: Array<{ message: string; level: string }> = [];
+  registerPiMatty(harness.pi, {}, {
+    registerCodeGraphExtension() {},
+    async initializeCodeGraph() {
+      throw new Error("private initialization detail");
+    },
+  });
+
+  for (const handler of harness.handlers.get("session_start") ?? []) {
+    await handler(
+      { reason: "startup" } as never,
+      {
+        cwd: "/workspace/project",
+        model: undefined,
+        ui: {
+          notify(message: string, level: string) {
+            notifications.push({ message, level });
+          },
+        },
+      } as never,
+    );
+  }
+
+  assert.ok(harness.commands.includes("matty"));
+  assert.ok(notifications.some(({ message, level }) =>
+    level === "warning" && message.includes("CodeGraph initialization failed")
+  ));
+  assert.doesNotMatch(JSON.stringify(notifications), /private initialization detail/);
+});
+
 test("Pi status and doctor use local model and runtime facts", async () => {
   const harness = createExtensionHarness();
   const notifications: string[] = [];

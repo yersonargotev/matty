@@ -22,7 +22,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - run: npm install --global @colbymchenry/codegraph@0.9.9
       - run: npm ci --ignore-scripts
       - name: Certify release candidate
         id: certify

@@ -51,6 +51,8 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
+    "@colbymchenry/codegraph": "1.5.0",
+    "@vndv/pi-codegraph": "0.1.10",
     "jiti": "2.7.0",
     "pi-web-access": "0.15.0"
   }

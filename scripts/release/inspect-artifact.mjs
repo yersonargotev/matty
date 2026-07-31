@@ -29,6 +29,8 @@ const EXPECTED_DIST_FILES = [
   "dist/adapters/pi-extension.js",
   "dist/application/child-pi-runtime.d.ts",
   "dist/application/child-pi-runtime.js",
+  "dist/application/codegraph-runtime.d.ts",
+  "dist/application/codegraph-runtime.js",
   "dist/application/delegation-scheduler.d.ts",
   "dist/application/delegation-scheduler.js",
   "dist/application/explorer-delegation.d.ts",
@@ -223,6 +225,9 @@ function inspectThirdPartyProvenance(provenance, lockfile) {
 
   const paths = new Map([
     ["@earendil-works/pi-coding-agent", "node_modules/@earendil-works/pi-coding-agent"],
+    ["@colbymchenry/codegraph", "node_modules/@colbymchenry/codegraph"],
+    ["@colbymchenry/codegraph-darwin-arm64", "node_modules/@colbymchenry/codegraph-darwin-arm64"],
+    ["@vndv/pi-codegraph", "node_modules/@vndv/pi-codegraph"],
     ["jiti", "node_modules/jiti"],
     ["pi-web-access", "node_modules/pi-web-access"],
   ]);

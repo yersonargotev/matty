@@ -428,6 +428,8 @@ async function main() {
       "dist/adapters/pi-extension.js",
       "dist/application/child-pi-runtime.d.ts",
       "dist/application/child-pi-runtime.js",
+      "dist/application/codegraph-runtime.d.ts",
+      "dist/application/codegraph-runtime.js",
       "dist/application/delegation-scheduler.d.ts",
       "dist/application/delegation-scheduler.js",
       "dist/application/explorer-delegation.d.ts",
@@ -543,8 +545,42 @@ async function main() {
         "utf8",
       ),
     );
+    const installedCodeGraphPackage = JSON.parse(
+      await readFile(
+        join(installedMattyRoot, "@colbymchenry", "codegraph", "package.json"),
+        "utf8",
+      ),
+    );
+    const installedCodeGraphBundle = JSON.parse(
+      await readFile(
+        join(
+          installedMattyRoot,
+          "@colbymchenry",
+          "codegraph-darwin-arm64",
+          "package.json",
+        ),
+        "utf8",
+      ),
+    );
+    const installedPiCodeGraphPackage = JSON.parse(
+      await readFile(
+        join(installedMattyRoot, "@vndv", "pi-codegraph", "package.json"),
+        "utf8",
+      ),
+    );
     assert.equal(installedMattyPackage.dependencies["pi-web-access"], "0.15.0");
+    assert.equal(
+      installedMattyPackage.dependencies["@colbymchenry/codegraph"],
+      "1.5.0",
+    );
+    assert.equal(
+      installedMattyPackage.dependencies["@vndv/pi-codegraph"],
+      "0.1.10",
+    );
     assert.equal(installedWebPackage.version, "0.15.0");
+    assert.equal(installedCodeGraphPackage.version, "1.5.0");
+    assert.equal(installedCodeGraphBundle.version, "1.5.0");
+    assert.equal(installedPiCodeGraphPackage.version, "0.1.10");
 
     await writeFile(
       join(homeRoot, ".pi", "agent", "auth.json"),
@@ -757,11 +793,17 @@ async function main() {
     );
     const projectAfterStatus = await snapshotTree(projectRoot);
     const homeAfterStatus = await snapshotTree(homeRoot);
-    assert.deepEqual(
-      projectAfterStatus,
-      projectBeforeStartup,
-      "[T01:diagnostics] Pi startup, status, or doctor wrote to the project",
+    const withoutCodeGraphData = (entries) => entries.filter((entry) =>
+      !entry.startsWith("directory:.codegraph") &&
+      !entry.startsWith("file:.codegraph")
     );
+    assert.deepEqual(
+      withoutCodeGraphData(projectAfterStatus),
+      projectBeforeStartup,
+      "[T01:diagnostics] Pi startup, status, or doctor wrote outside .codegraph",
+    );
+    await access(join(projectRoot, ".codegraph", ".gitignore"));
+    await access(join(projectRoot, ".codegraph", "codegraph.db"));
     assert.deepEqual(
       homeAfterStatus,
       homeBeforeStartup,
@@ -1052,7 +1094,7 @@ export default function unsupportedHostAcceptance(pi) {
         "activation: active",
         "Web Capability: available (pi-web-access 0.15.0)",
         "network during startup/status/doctor: denied",
-        "project writes during startup/status/doctor: none",
+        "project writes during startup/status/doctor: CodeGraph index only",
         "unsupported host: Matty degraded, Pi usable",
         "non-reference model: Matty active, Reference Model Path unverified",
         "disable/remove: Matty inactive, Pi usable",
