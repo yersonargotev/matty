@@ -121,7 +121,7 @@ interface PiMessageEnd {
   type: "message_end";
   message?: {
     role?: string;
-    content?: Array<{ type?: string; text?: string }>;
+    content?: Array<{ type?: string; text?: string }> | string;
     stopReason?: string;
     errorMessage?: string;
   };
@@ -151,9 +151,17 @@ function isMessageEnd(value: unknown): value is PiMessageEnd {
     typeof candidate.message !== "object" ||
     candidate.message === null ||
     Array.isArray(candidate.message) ||
-    typeof candidate.message.role !== "string" ||
-    !Array.isArray(candidate.message.content)
+    typeof candidate.message.role !== "string"
   ) {
+    return false;
+  }
+  if (
+    candidate.message.role === "custom" &&
+    typeof candidate.message.content === "string"
+  ) {
+    return true;
+  }
+  if (!Array.isArray(candidate.message.content)) {
     return false;
   }
   return candidate.message.content.every(

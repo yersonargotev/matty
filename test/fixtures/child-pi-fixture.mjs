@@ -73,6 +73,19 @@ if (task === "malformed-message") {
       })}\n`,
     );
   }
+  if (task === "custom-message-content") {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "web-search-content-ready",
+          content: "search content",
+          display: true,
+        },
+      })}\n`,
+    );
+  }
   process.stdout.write(
     `${JSON.stringify({
       type: "message_end",
