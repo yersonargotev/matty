@@ -1,6 +1,6 @@
 # Propuesta: gestión nativa de Delegations
 
-**Estado:** diseño en grilling, sin implementación
+**Estado:** diseño confirmado; spike #56 validado; implementación productiva pendiente
 
 **Fecha:** 2026-08-15
 
@@ -138,7 +138,7 @@ Estas capacidades requieren decisiones nuevas sobre protocolo bidireccional, ide
 
 ## Estrategia de entrega
 
-Antes de la implementación definitiva se hará un spike desechable que valide únicamente:
+Antes de la implementación definitiva se hizo un spike desechable que validó únicamente:
 
 - abrir `/matty delegations` mientras `subagent` ejecuta;
 - actualizar la vista sin corrupción visual;
@@ -147,12 +147,54 @@ Antes de la implementación definitiva se hará un spike desechable que valide �
 
 El código del spike no se convierte directamente en arquitectura de producción. Superado el spike, el Incremento 1 se implementa con tests sobre seams explícitos.
 
-El issue tracker conservará dos alcances separados:
+El issue tracker separa las fronteras de entrega:
 
-1. un issue implementable para el spike y el Incremento 1;
-2. un issue para el Incremento 2 — Fleet observable, bloqueado por el primero.
+1. #56 conserva el spike desechable ya validado;
+2. #57 y #58 implementan observación y cancelación como gestión esencial;
+3. #59 mantiene el Incremento 2 — Fleet observable — bloqueado por la gestión esencial;
+4. #60 conserva la frontera posterior de actividad redactada.
 
 El Incremento 3 permanece en esta propuesta hasta contar con evidencia suficiente para dividirlo en trabajo implementable.
+
+## Resultado del spike de interacción (#56)
+
+**Veredicto:** viable con Pi `0.83.0` en `darwin/arm64`. El spike fue instrumentación desechable en el adaptador Pi, se ejercitó en TUI y se eliminó por completo antes de conservar estos resultados.
+
+### Evidencia observada
+
+- Una Delegation `required` de cinco Delegated Tasks abrió `/matty delegations` mientras cuatro Child Executions estaban activos y una Delegated Task permanecía en cola.
+- La vista se actualizó en vivo de `running` (`active:4`, `queued:1`) a `cancelling` y `cancelled` sin contenido duplicado o corrupción visible. La selección y la expansión permanecieron ligadas al mismo `D-<8 hex>` durante las transiciones.
+- Una ejecución adicional inició dos Delegations raíz en paralelo. La seleccionada pasó de la segunda fila a la primera cuando la otra Delegation cambió de `running` a `succeeded`; el marcador permaneció en el mismo Delegation ID, demostrando que el reordenamiento no retargetea la selección.
+- `c` abrió una confirmación interna. `Esc` la rechazó sin cancelar; una segunda solicitud confirmada con `y` alcanzó la ruta activa: los cuatro Child Executions emitieron progreso `terminating` con `SIGTERM`, y la Delegated Task en cola terminó cancelada en fase `before-spawn`.
+- `q` cerró la consola; `/matty status` se ejecutó inmediatamente después, demostrando que el editor recuperó el foco.
+- Una segunda ejecución cerró con `Esc` mientras una Delegation seguía activa; `/matty status` volvió a ejecutarse inmediatamente y reportó un Child Execution activo, confirmando restauración de foco sin esperar al tool result.
+- Las dos ejecuciones usaron el binario local exacto `@earendil-works/pi-coding-agent@0.83.0`. El modelo activo del ensayo fue `openai-codex/gpt-5.4`; la validación demuestra compatibilidad del host TUI, no certifica otro Reference Model Path.
+
+### Hallazgos y límites
+
+- Los comandos de extensión se despachan durante streaming, por lo que no es necesario esperar a que termine `subagent`.
+- `ctx.ui.custom()` no-overlay restaura el editor y su foco al invocar `done()`. Es una base más conservadora para Incremento 1 que el overlay experimental.
+- La confirmación debe ser un estado dentro del componente. Abrir `ctx.ui.confirm()` desde una vista custom no-overlay sustituye el contenedor y puede restaurar el editor en lugar de la consola.
+- Cada cambio de snapshot debe invalidar la presentación y llamar `tui.requestRender()`; las líneas deben truncarse al ancho recibido.
+- La selección debe almacenar Delegation ID, nunca índice de fila. El ensayo con dos Delegations confirmó identidad estable durante reordenamiento; el Incremento 1 debe conservar esta conducta en sus tests de presentación.
+- La validación fue sobre una extensión fuente instrumentada, no sobre el artefacto npm empaquetado. El gate del Incremento 1 sigue requiriendo aceptación packed y revisión manual.
+- La ausencia de corrupción se evaluó en la TUI y en el stream ANSI capturado; no existe todavía un emulador de terminal automatizado que compare frames visuales.
+
+### Seam recomendado para producción
+
+No promover los maps, controllers ni el componente del spike. Crear un módulo profundo y session-scoped **Delegation Registry** que oculte identidad, transiciones, retención, resolución de carreras y controllers detrás de una interfaz pequeña equivalente a:
+
+```text
+accept(declaration) -> Delegation ID
+snapshot() -> lifecycle metadata only
+subscribe(listener) -> unsubscribe
+record(id, lifecycle event)
+cancel(id) -> cancelling | already-cancelling | already-finished
+finish(id, result)
+shutdown()
+```
+
+El adaptador Pi debe limitarse a conectar el tool público y lifecycle del host con ese registro. Una presentación pura conserva `selectedId`/expansión y produce filas ordenadas; una capa TUI delgada maneja teclado, render e invalidación. Los modos no interactivos consumen el mismo snapshot determinista sin exponer controllers ni ofrecer cancelación sin confirmación.
 
 ## Estado del diseño
 
@@ -165,4 +207,4 @@ Diseño confirmado. El spec y sus tracer bullets están publicados en GitHub:
 - [#59 — Show an observable Delegation fleet](https://github.com/yersonargotev/matty/issues/59)
 - [#60 — Add redacted Child Execution activity summaries](https://github.com/yersonargotev/matty/issues/60)
 
-Los issues son sub-issues de #55 y forman una cadena de dependencias nativas en el orden listado. #56 es la frontera inicial lista para implementación.
+Los issues son sub-issues de #55 y forman una cadena de dependencias nativas en el orden listado. El spike #56 validó la frontera TUI; #57 es la siguiente frontera de implementación.
