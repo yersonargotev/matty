@@ -7,11 +7,10 @@ import {
   type InspectionMutationClass,
 } from "../src/domain/inspection-guard.ts";
 
-test("allows explorer Git, CodeGraph, shell, and diagnostic inspection", () => {
+test("allows explorer Git, shell, and diagnostic inspection", () => {
   for (const command of [
     "git status --short",
     "git log -1 --oneline",
-    'codegraph explore "createChildPiRunner"',
     "rg -n TODO src",
     "pwd && node --version",
   ]) {

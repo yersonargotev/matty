@@ -16,8 +16,8 @@ same Web Capability; the other four roles must delegate external research to
 the researcher or return it to the parent.
 
 The `explorer`, `designer`, and `reviewer` receive `read`, `grep`, `find`, `ls`,
-and `bash`. Explorer and designer shell access supports local Git history,
-CodeGraph, and diagnostic inspection. Reviewer shell access also supports
+and `bash`. Explorer and designer shell access supports local Git history
+and diagnostic inspection. Reviewer shell access also supports
 remote inspection through inherited `gh` authentication. A shared, role-aware
 Inspection Guard blocks recognized local and remote mutation command families
 and blocks `gh` entirely for explorer and designer. The guard is explicitly
