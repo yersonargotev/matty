@@ -11,9 +11,8 @@ import * as typebox from "typebox";
 import { execFile } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
@@ -24,9 +23,9 @@ import {
   type PiThinkingLevel,
 } from "../application/child-pi-runtime.ts";
 import {
-  initializeCodeGraphProject,
-  type CodeGraphInitializationResult,
-} from "../application/codegraph-runtime.ts";
+  CHILD_CONTROL_ENVIRONMENT as CONTROL_ENV,
+  scrubChildControlEnvironment,
+} from "../application/child-control-environment.ts";
 import {
   blockedInspectionDelegation,
   runInspectionDelegation,
@@ -115,10 +114,6 @@ export interface PiMattyRegistrationOptions {
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
   registerWebExtension?: (pi: ExtensionAPI) => void;
-  registerCodeGraphExtension?: (pi: ExtensionAPI) => void;
-  initializeCodeGraph?: (
-    cwd: string,
-  ) => Promise<CodeGraphInitializationResult>;
   webContract?: WebCapabilityContract;
   reviewerGithubPreflight?: () => Promise<{
     available: boolean;
@@ -149,19 +144,6 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
 
 const execFileAsync = promisify(execFile);
 const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
-const CODEGRAPH_EXTENSION_MODULE =
-  "@vndv/pi-codegraph/extensions/codegraph.ts";
-const require = createRequire(import.meta.url);
-
-function prependBundledCodeGraphToPath(environment: NodeJS.ProcessEnv): void {
-  const manifest = require.resolve("@colbymchenry/codegraph/package.json");
-  const binDirectory = resolve(dirname(manifest), "../..", ".bin");
-  const currentPath = environment.PATH ?? "";
-  const entries = currentPath.split(delimiter).filter(Boolean);
-  if (!entries.includes(binDirectory)) {
-    environment.PATH = [binDirectory, ...entries].join(delimiter);
-  }
-}
 
 function createPiHost(
   pi: ExtensionAPI,
@@ -316,13 +298,13 @@ function childEnvironment(
     ...inherited,
     ...authenticationEnvironment,
     ...additions,
-    MATTY_CHILD_ROLE: role,
+    [CONTROL_ENV.role]: role,
   };
   if (research) {
     return {
       ...child,
-      MATTY_RESEARCH_CONTRACT: JSON.stringify(research.contract),
-      MATTY_RESEARCH_SCOPE: JSON.stringify(research.scope),
+      [CONTROL_ENV.researchContract]: JSON.stringify(research.contract),
+      [CONTROL_ENV.researchScope]: JSON.stringify(research.scope),
     };
   }
   if (!worker) {
@@ -330,17 +312,11 @@ function childEnvironment(
   }
   return {
     ...child,
-    MATTY_WORKER_WORKING_TREE: worker.contract.workingTree,
-    MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify(
-      worker.contract.temporaryPaths,
-    ),
-    MATTY_WORKER_PROTECTED_PATHS: JSON.stringify(worker.protectedPaths),
-    ...(worker.userHome
-      ? { MATTY_WORKER_USER_HOME: worker.userHome }
-      : {}),
-    MATTY_WORKER_USER_CONFIGURATION_PATHS: JSON.stringify(
-      worker.userConfigurationPaths,
-    ),
+    [CONTROL_ENV.workerWorkingTree]: worker.contract.workingTree,
+    [CONTROL_ENV.workerTemporaryPaths]: JSON.stringify(worker.contract.temporaryPaths),
+    [CONTROL_ENV.workerProtectedPaths]: JSON.stringify(worker.protectedPaths),
+    ...(worker.userHome ? { [CONTROL_ENV.workerUserHome]: worker.userHome } : {}),
+    [CONTROL_ENV.workerUserConfigurationPaths]: JSON.stringify(worker.userConfigurationPaths),
   };
 }
 
@@ -352,10 +328,10 @@ function researcherScope(
 } | undefined {
   try {
     const contract = JSON.parse(
-      environment.MATTY_RESEARCH_CONTRACT ?? "null",
+      environment[CONTROL_ENV.researchContract] ?? "null",
     ) as unknown;
     const scope = JSON.parse(
-      environment.MATTY_RESEARCH_SCOPE ?? "null",
+      environment[CONTROL_ENV.researchScope] ?? "null",
     ) as unknown;
     const validation = validateCapabilityContract(contract);
     if (
@@ -426,16 +402,10 @@ function workerGuardScope(
   environment: NodeJS.ProcessEnv,
 ): WorkerGuardScope | undefined {
   try {
-    const workingTree = environment.MATTY_WORKER_WORKING_TREE;
-    const temporaryPaths = JSON.parse(
-      environment.MATTY_WORKER_TEMPORARY_PATHS ?? "[]",
-    ) as unknown;
-    const userConfigurationPaths = JSON.parse(
-      environment.MATTY_WORKER_USER_CONFIGURATION_PATHS ?? "[]",
-    ) as unknown;
-    const protectedPaths = JSON.parse(
-      environment.MATTY_WORKER_PROTECTED_PATHS ?? "[]",
-    ) as unknown;
+    const workingTree = environment[CONTROL_ENV.workerWorkingTree];
+    const temporaryPaths = JSON.parse(environment[CONTROL_ENV.workerTemporaryPaths] ?? "[]") as unknown;
+    const userConfigurationPaths = JSON.parse(environment[CONTROL_ENV.workerUserConfigurationPaths] ?? "[]") as unknown;
+    const protectedPaths = JSON.parse(environment[CONTROL_ENV.workerProtectedPaths] ?? "[]") as unknown;
     if (
       !workingTree ||
       !Array.isArray(temporaryPaths) ||
@@ -454,13 +424,12 @@ function workerGuardScope(
     if (!validateCapabilityContract(contract).ok) {
       return undefined;
     }
+    const userHome = environment[CONTROL_ENV.workerUserHome];
     return {
       workingTree: contract.workingTree,
       temporaryPaths: contract.temporaryPaths,
       protectedPaths: protectedPaths as string[],
-      ...(environment.MATTY_WORKER_USER_HOME
-        ? { userHome: environment.MATTY_WORKER_USER_HOME }
-        : {}),
+      ...(userHome ? { userHome } : {}),
       userConfigurationPaths: userConfigurationPaths as string[],
     };
   } catch {
@@ -674,36 +643,13 @@ export function registerPiMatty(
       diagnosticActiveChildren -= 1;
     }
   }
-  const childRole = isMattyRole(environment.MATTY_CHILD_ROLE)
-    ? environment.MATTY_CHILD_ROLE
-    : undefined;
-  const research = childRole === "researcher"
-    ? researcherScope(environment)
-    : undefined;
-  if (!childRole && options.registerCodeGraphExtension) {
-    try {
-      options.registerCodeGraphExtension(pi);
-    } catch {
-      diagnosticFailures.push({ source: "dependency" });
-    }
-  }
-  if (!childRole && options.initializeCodeGraph) {
-    pi.on("session_start", async (_event, context) => {
-      try {
-        await options.initializeCodeGraph?.(context.cwd);
-      } catch {
-        if (!diagnosticFailures.some((failure) =>
-          failure.source === "dependency"
-        )) {
-          diagnosticFailures.push({ source: "dependency" });
-        }
-        context.ui.notify(
-          "CodeGraph initialization failed; Matty remains available. Run /matty doctor for remediation.",
-          "warning",
-        );
-      }
-    });
-  }
+  const childRoleValue = environment[CONTROL_ENV.role];
+  const childRole = isMattyRole(childRoleValue) ? childRoleValue : undefined;
+  const research = childRole === "researcher" ? researcherScope(environment) : undefined;
+  const capturedWorkerScope = childRole === "worker" ? workerGuardScope(environment) : undefined;
+  // Control contracts are one-hop bootstrap inputs, not ambient child authority.
+  // Capture them before any repository-visible tool or process can run.
+  scrubChildControlEnvironment(environment);
 
   const registeredWebTools: string[] = [];
   let webState: WebCapabilityState = "unavailable";
@@ -891,9 +837,7 @@ export function registerPiMatty(
 
   if (childRole) {
     if (childRole !== "researcher") {
-      const scope = childRole === "worker"
-        ? workerGuardScope(environment)
-        : undefined;
+      const scope = childRole === "worker" ? capturedWorkerScope : undefined;
       pi.on("tool_call", (event) => blockedToolCall(childRole, event, scope));
     }
   } else {
@@ -965,8 +909,57 @@ export function registerPiMatty(
                 description:
                   "Parent-approved Markdown report path for researcher.",
               },
+              reviewScope: {
+                type: "object",
+                description: "Required closed Review Scope Contract for reviewer only.",
+                properties: {
+                  schemaVersion: { type: "number", const: 1 },
+                  issue: {
+                    type: "object",
+                    properties: {
+                      repository: { type: "string", minLength: 1 },
+                      number: { type: "number", minimum: 1 },
+                      reference: { type: "string", minLength: 1 },
+                    },
+                    required: ["repository", "number", "reference"],
+                    additionalProperties: false,
+                  },
+                  requirements: {
+                    type: "array", minItems: 1,
+                    items: { type: "string", minLength: 1 },
+                  },
+                  outOfScope: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        reference: { type: "string", minLength: 1 },
+                        reason: { type: "string", minLength: 1 },
+                      },
+                      required: ["reference", "reason"],
+                      additionalProperties: false,
+                    },
+                  },
+                  baseSha: { type: "string", pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+                  candidateSha: { type: "string", pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+                  axes: {
+                    type: "array", minItems: 1,
+                    items: {
+                      type: "string",
+                      enum: ["standards", "spec", "security", "correctness", "maintainability"],
+                    },
+                  },
+                },
+                required: ["schemaVersion", "issue", "requirements", "outOfScope", "baseSha", "candidateSha", "axes"],
+                additionalProperties: false,
+              },
             },
             required: ["role", "task"],
+            allOf: [{
+              if: { properties: { role: { const: "reviewer" } }, required: ["role"] },
+              then: { required: ["reviewScope"] },
+              else: { not: { required: ["reviewScope"] } },
+            }],
             additionalProperties: false,
           },
         },
@@ -985,6 +978,7 @@ export function registerPiMatty(
       promptGuidelines: [
         `Call subagent with exactly ${DELEGATION_INPUT_GUIDANCE}.`,
         "Researcher also requires web (required or optional) and one approved Markdown report path.",
+        "Reviewer requires one closed reviewScope matching the documented exact shape; other roles reject it.",
         "Inspection roles receive read, grep, find, ls, and guarded bash; worker also receives edit and write.",
         "Only reviewer may perform read-only gh inspection after availability and authentication preflight.",
         "Single Writer permits at most one active worker per repository.",
@@ -1322,7 +1316,10 @@ export function registerPiMatty(
                 });
               },
               },
-              progressOptions as never,
+              {
+                ...progressOptions,
+                ...(role === "reviewer" ? { reviewScope: params.reviewScope } : {}),
+              } as never,
             );
             return delegationResult(terminal);
           });
@@ -1344,6 +1341,7 @@ export function registerPiMatty(
         "An optional group may contain inspection roles only and reports unavailable work as skipped.",
         "At most eight tasks are accepted and at most four children run concurrently; overflow is queued.",
         "Researcher requires web and may receive one approved Markdown report path.",
+        "Reviewer requires one closed reviewScope matching the documented exact shape; other roles reject it.",
         "Single Writer permits at most one worker per group and per repository.",
         "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
       ],
@@ -1696,7 +1694,6 @@ export function registerPiMatty(
 
 export default async function mattyExtension(pi: ExtensionAPI): Promise<void> {
   let registerWebExtension: ((api: ExtensionAPI) => void) | undefined;
-  let registerCodeGraphExtension: ((api: ExtensionAPI) => void) | undefined;
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
   > = [];
@@ -1718,23 +1715,8 @@ export default async function mattyExtension(pi: ExtensionAPI): Promise<void> {
   } catch {
     // Web availability is observable through local status.
   }
-  try {
-    prependBundledCodeGraphToPath(process.env);
-    registerCodeGraphExtension = await jiti.import(
-      CODEGRAPH_EXTENSION_MODULE,
-      { default: true },
-    ) as (api: ExtensionAPI) => void;
-  } catch {
-    diagnosticFailures.push({ source: "dependency" });
-  }
   registerPiMatty(pi, process.env, {
     ...(registerWebExtension ? { registerWebExtension } : {}),
-    ...(registerCodeGraphExtension
-      ? {
-        registerCodeGraphExtension,
-        initializeCodeGraph: initializeCodeGraphProject,
-      }
-      : {}),
     diagnosticFailures,
   });
 }

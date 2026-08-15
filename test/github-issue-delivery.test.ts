@@ -10,6 +10,8 @@ import {
 } from "../src/adapters/github-issue-delivery.ts";
 import type { GitDeliveryCommandRunner } from "../src/adapters/git-issue-delivery-workspace.ts";
 import { deliveryIdentityKey } from "../src/application/issue-delivery-workspace.ts";
+import { initialRepairBudget } from "../src/domain/issue-delivery.ts";
+import { commitSha } from "../src/domain/commit-sha.ts";
 
 async function prepareRepository(root: string) {
   await mkdir(join(root, "docs/agents"), { recursive: true });
@@ -45,8 +47,9 @@ test("production status binds checks to the exact candidate SHA and emits closed
     branch,
     path: "/repo",
     isolation: "in-place" as const,
-    startingCheckout: { root: "/repo", ref: "main", sha: "0000000000000000000000000000000000000000" },
-    integration: { branch: "main", sha: "0000000000000000000000000000000000000000" },
+    startingCheckout: { root: "/repo", ref: "main", sha: commitSha("0000000000000000000000000000000000000000") },
+    integration: { branch: "main", sha: commitSha("0000000000000000000000000000000000000000") },
+    repairBudget: initialRepairBudget(),
   };
   const gitCalls: string[][] = [];
   const runGit: GitDeliveryCommandRunner = async (args) => {
@@ -130,8 +133,8 @@ test("production status binds checks to the exact candidate SHA and emits closed
 });
 
 test("an unpublished local candidate does not query GitHub checks or statuses", async () => {
-  const candidateSha = "1111111111111111111111111111111111111111";
-  const baseSha = "0000000000000000000000000000000000000000";
+  const candidateSha = commitSha("1111111111111111111111111111111111111111");
+  const baseSha = commitSha("0000000000000000000000000000000000000000");
   const identity = {
     repository: "github.com/yersonargotev/matty",
     tracker: "github" as const,
@@ -172,6 +175,8 @@ test("an unpublished local candidate does not query GitHub checks or statuses", 
     deliveryIdentity: identity,
     gate: "verification",
     candidateSha,
+    candidateState: "local-unpublished",
+    repairBudget: initialRepairBudget(),
     checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
     blockers: [],
   });
@@ -179,9 +184,9 @@ test("an unpublished local candidate does not query GitHub checks or statuses", 
 });
 
 test("a remote delivery candidate mismatch returns drift without querying stale checks", async () => {
-  const candidateSha = "1111111111111111111111111111111111111111";
-  const remoteSha = "2222222222222222222222222222222222222222";
-  const baseSha = "0000000000000000000000000000000000000000";
+  const candidateSha = commitSha("1111111111111111111111111111111111111111");
+  const remoteSha = commitSha("2222222222222222222222222222222222222222");
+  const baseSha = commitSha("0000000000000000000000000000000000000000");
   const identity = {
     repository: "github.com/yersonargotev/matty",
     tracker: "github" as const,
@@ -224,7 +229,7 @@ test("a remote delivery candidate mismatch returns drift without querying stale 
 });
 
 test("a later pull-request page containing a related incompatible PR is ambiguous", async () => {
-  const candidateSha = "1111111111111111111111111111111111111111";
+  const candidateSha = commitSha("1111111111111111111111111111111111111111");
   const identity = {
     repository: "github.com/yersonargotev/matty",
     tracker: "github" as const,
@@ -238,7 +243,7 @@ test("a later pull-request page containing a related incompatible PR is ambiguou
         identity,
         branch,
         integrationBranch: "main",
-        integrationSha: "0000000000000000000000000000000000000000",
+        integrationSha: commitSha("0000000000000000000000000000000000000000"),
         candidateSha,
       },
     }),
@@ -291,6 +296,129 @@ test("a later pull-request page containing a related incompatible PR is ambiguou
       recommendation: "Preserve the candidate and reconcile the ambiguity before continuing.",
     },
   });
+});
+
+test("dependency inspection fails closed on malformed and authorization failures", async (context) => {
+  for (const [name, dependencyFailure] of [
+    ["malformed", () => "{not-json"],
+    ["unauthorized", () => { throw Object.assign(new Error("denied"), { stderr: "HTTP 401" }); }],
+  ] as const) {
+    await context.test(name, async () => {
+      const root = await mkdtemp(join(tmpdir(), "matty-dependency-failure-"));
+      try {
+        await prepareRepository(root);
+        const runCommand: IssueDeliveryCommandReader = async (command, args) => {
+          if (command === "git" && args[0] === "rev-parse") return root;
+          if (command === "git" && args[0] === "remote") return "https://github.com/yersonargotev/matty.git";
+          if (command === "gh" && args[0] === "--version") return "gh version";
+          if (command === "gh" && args[0] === "auth") return "authenticated";
+          if (args[1] === "repos/yersonargotev/matty/issues/34") {
+            return JSON.stringify({
+              number: 34, state: "open", labels: [{ name: "ready-to-build" }],
+              html_url: "https://github.com/yersonargotev/matty/issues/34",
+              title: "Issue", body: "",
+            });
+          }
+          if (args[1]?.includes("/dependencies/blocked_by")) return dependencyFailure();
+          throw new Error("unexpected command");
+        };
+        const outcome = await createGithubIssueDelivery(
+          { HOME: join(root, "home") }, runCommand, undefined,
+          { inspect: async () => ({ status: "absent" }), prepare: async () => { throw new Error("must not prepare"); } },
+        )({ intent: "deliver", issue: "34", cwd: root });
+        assert.equal(outcome.status, "blocked");
+        if (outcome.status === "blocked") {
+          assert.equal(outcome.exceptionBrief.evidence[0], "qualification-inspection-failed");
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("confirmed missing native dependency endpoint uses exact Blocked by fallback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-dependency-fallback-"));
+  const calls: string[] = [];
+  try {
+    await prepareRepository(root);
+    const runCommand: IssueDeliveryCommandReader = async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") return root;
+      if (command === "git" && args[0] === "remote") return "https://github.com/yersonargotev/matty.git";
+      if (command === "gh" && args[0] === "--version") return "gh version";
+      if (command === "gh" && args[0] === "auth") return "authenticated";
+      const endpoint = args[1]!;
+      calls.push(endpoint);
+      if (endpoint === "repos/yersonargotev/matty/issues/34") {
+        return JSON.stringify({
+          number: 34, state: "open", labels: [{ name: "ready-to-build" }],
+          html_url: "https://github.com/yersonargotev/matty/issues/34",
+          title: "Issue", body: "Blocked by: #42\n\nSupporting prose #99",
+        });
+      }
+      if (endpoint.includes("/dependencies/blocked_by")) {
+        throw Object.assign(new Error("endpoint unavailable"), { stderr: "HTTP 404" });
+      }
+      if (endpoint === "repos/yersonargotev/matty/issues/42") {
+        return JSON.stringify({
+          number: 42, state: "open", title: "Publication dependency",
+          html_url: "https://github.com/yersonargotev/matty/issues/42",
+        });
+      }
+      throw new Error("unexpected command");
+    };
+    const outcome = await createGithubIssueDelivery(
+      { HOME: join(root, "home") }, runCommand, undefined,
+      { inspect: async () => ({ status: "absent" }), prepare: async () => { throw new Error("must not prepare"); } },
+    )({ intent: "deliver", issue: "34", cwd: root });
+    assert.equal(outcome.status, "blocked");
+    if (outcome.status === "blocked") {
+      assert.ok(outcome.exceptionBrief.evidence.includes("issue-blocked-by-dependency"));
+    }
+    assert.ok(calls.includes("repos/yersonargotev/matty/issues/42"));
+    assert.equal(calls.includes("repos/yersonargotev/matty/issues/99"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native dependency inspection reads every page before qualification", async () => {
+  const root = await mkdtemp(join(tmpdir(), "matty-dependency-pagination-"));
+  try {
+    await prepareRepository(root);
+    const runCommand: IssueDeliveryCommandReader = async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") return root;
+      if (command === "git" && args[0] === "remote") return "https://github.com/yersonargotev/matty.git";
+      if (command === "gh" && args[0] === "--version") return "gh version";
+      if (command === "gh" && args[0] === "auth") return "authenticated";
+      const endpoint = args[1]!;
+      if (endpoint === "repos/yersonargotev/matty/issues/34") {
+        return JSON.stringify({
+          number: 34, state: "open", labels: [{ name: "ready-to-build" }],
+          html_url: "https://github.com/yersonargotev/matty/issues/34",
+          title: "Issue", body: "",
+        });
+      }
+      if (endpoint.includes("/dependencies/blocked_by")) {
+        assert.deepEqual(args.slice(2), ["--paginate", "--slurp"]);
+        return JSON.stringify([
+          [{ number: 41, state: "closed", title: "Closed dependency", html_url: "https://github.com/yersonargotev/matty/issues/41" }],
+          [{ number: 42, state: "open", title: "Open dependency", html_url: "https://github.com/yersonargotev/matty/issues/42" }],
+        ]);
+      }
+      throw new Error("unexpected command");
+    };
+    const outcome = await createGithubIssueDelivery(
+      { HOME: join(root, "home") }, runCommand, undefined,
+      { inspect: async () => ({ status: "absent" }), prepare: async () => { throw new Error("must not prepare"); } },
+    )({ intent: "deliver", issue: "34", cwd: root });
+    assert.equal(outcome.status, "blocked");
+    if (outcome.status === "blocked") {
+      assert.ok(outcome.exceptionBrief.evidence.includes("issue-blocked-by-dependency"));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("blocked production qualification performs only Git and GitHub reads", async () => {

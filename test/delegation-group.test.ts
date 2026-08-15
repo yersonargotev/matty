@@ -103,6 +103,39 @@ test("centrally rejects parallel writers and web on a non-researcher role", () =
   });
 });
 
+test("reviewer requires one closed Review Scope Contract", () => {
+  const reviewScope = {
+    schemaVersion: 1,
+    issue: { repository: "github.com/acme/repo", number: 36, reference: "#36" },
+    requirements: ["Keep review scope closed"],
+    outOfScope: [{ reference: "#42", reason: "dependent publication behavior" }],
+    baseSha: "0000000000000000000000000000000000000000",
+    candidateSha: "1111111111111111111111111111111111111111",
+    axes: ["spec"],
+  };
+  const missing = validateDelegationGroupContract({
+    ...requiredGroup(1),
+    tasks: [{ role: "reviewer", task: "review" }],
+  });
+  assert.deepEqual(missing, {
+    ok: false,
+    errors: [{ code: "invalid-task", taskIndex: 0 }],
+  });
+
+  const valid = {
+    ...requiredGroup(1),
+    tasks: [{ role: "reviewer", task: "review", reviewScope }],
+  };
+  assert.deepEqual(validateDelegationGroupContract(valid), { ok: true, contract: valid });
+  assert.deepEqual(validateDelegationGroupContract({
+    ...valid,
+    tasks: [{ ...valid.tasks[0], reviewScope: { ...reviewScope, expansion: "forbidden" } }],
+  }), {
+    ok: false,
+    errors: [{ code: "invalid-task", taskIndex: 0 }],
+  });
+});
+
 test("optional fallback is limited to non-writing inspection groups", () => {
   const result = validateDelegationGroupContract({
     ...optionalInspectionGroup(1),

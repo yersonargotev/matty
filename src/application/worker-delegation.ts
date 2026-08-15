@@ -3,6 +3,7 @@ import type {
   DelegatedTaskProgress,
   DelegatedTaskRunner,
 } from "./child-pi-runtime.ts";
+import { workerCompletionReport, type WorkerCompletionReport } from "../domain/worker-completion.ts";
 import {
   createCapabilityPreflightDiagnostic,
   preflightCapability,
@@ -31,9 +32,17 @@ export interface BlockedWorkerOutcome {
   diagnostic: CapabilityPreflightDiagnostic;
 }
 
+type SuccessfulWorkerOutcome =
+  Extract<DelegatedTaskOutcome, { status: "succeeded" }> extends infer Outcome
+    ? Omit<Outcome, "output"> & { output: WorkerCompletionReport }
+    : never;
+
+type WorkerDelegationOutcome = Exclude<DelegatedTaskOutcome, { status: "succeeded" }> |
+  SuccessfulWorkerOutcome | BlockedWorkerOutcome;
+
 export interface WorkerDelegationTerminal {
   contract: WorkerCapabilityContract;
-  outcome: DelegatedTaskOutcome | BlockedWorkerOutcome;
+  outcome: WorkerDelegationOutcome;
 }
 
 export function blockedWorkerDelegation(
@@ -62,7 +71,8 @@ function workerTask(
     "You may read, edit, create, install project-local dependencies, and run project checks.",
     "Do not use gh, mutate the Git index or references, install globally, write outside validated paths, or write real user configuration.",
     "The Worker Guard is a best-effort command and path policy, not a security sandbox.",
-    "Return a concise implementation summary; the parent reviews and integrates all changes.",
+    'Return JSON exactly {"schemaVersion":1,"summary":string,"changedPaths":string[],"checks":[{"command":string,"status":"passed"|"failed"|"not-run"}],"evidenceRole":"supporting-only-parent-verification-required","reportedFullGate":{"status":"passed"|"failed"|"not-run","command"?:string}}.',
+    "Checks are supporting evidence, not verification. The parent reviews and integrates all changes only after inspecting the diff and independently running this repository's authoritative full gate.",
   ].join("\n");
 }
 
@@ -89,13 +99,29 @@ export async function runWorkerDelegation(
   }
   try {
     const runner = execution.createRunner();
-    return {
-      contract: preflight.contract,
-      outcome: await runner.run(
-        workerTask(preflight.contract, task),
-        options,
-      ),
-    };
+    const outcome = await runner.run(workerTask(preflight.contract, task), options);
+    if (outcome.status !== "succeeded") {
+      return { contract: preflight.contract, outcome };
+    }
+    try {
+      return {
+        contract: preflight.contract,
+        outcome: { ...outcome, output: workerCompletionReport(JSON.parse(outcome.output)) },
+      };
+    } catch {
+      return {
+        contract: preflight.contract,
+        outcome: {
+          status: "failed",
+          child: outcome.child,
+          failure: {
+            kind: "protocol-failed",
+            message: "worker completed without a valid structured completion report",
+          },
+          exit: outcome.exit,
+        },
+      };
+    }
   } finally {
     await releaseWriter();
   }

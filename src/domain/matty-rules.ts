@@ -40,6 +40,9 @@ function renderMattyRules(role: MattyPromptRole): string {
     "- Model knowledge is never reported as completed web research; required web failure blocks, and optional web failure is disclosed.",
     "- The Inspection Guard is a best-effort command policy, not a security sandbox.",
     "- The Worker Guard is a best-effort command and path policy, not a security sandbox.",
+    "- Worker process success and reported checks are supporting evidence only; the parent must inspect the diff and independently run the repository-authoritative full gate before claiming success or integrating.",
+    "- Independent review axes are collected into one adjudicated finding set before repair; the parent, not reviewers, adjudicates scope and contradictions.",
+    "- One repair cycle addresses all accepted findings together; genuinely new later findings must explain additional Repair Budget consumption.",
     "- The parent owns commits, pushes, pull requests, reviews, merges, releases, and other external-state mutation.",
     MATTY_RULES_END,
   ].join("\n");

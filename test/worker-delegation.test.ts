@@ -10,6 +10,7 @@ import {
   WORKER_TOOLS,
   createWorkerCapabilityContract,
 } from "../src/domain/capability-contract.ts";
+import { workerCompletionReport } from "../src/domain/worker-completion.ts";
 
 function execution(
   runner: DelegatedTaskRunner,
@@ -44,7 +45,14 @@ test("runs a worker over the trusted tree through the guarded runtime", async ()
         return {
           status: "succeeded",
           child: { pid: 42, runId: "run-42" },
-          output: "implementation complete",
+          output: JSON.stringify({
+            schemaVersion: 1,
+            summary: "implementation complete",
+            changedPaths: ["src/example.ts"],
+            checks: [{ command: "project check", status: "passed" }],
+            evidenceRole: "supporting-only-parent-verification-required",
+            reportedFullGate: { status: "not-run" },
+          }),
           exit: { code: 0, signal: null },
         };
       },
@@ -57,6 +65,18 @@ test("runs a worker over the trusted tree through the guarded runtime", async ()
   assert.match(observedTask, /parent reviews and integrates all changes/);
   assert.equal(terminal.contract.role, "worker");
   assert.equal(terminal.outcome.status, "succeeded");
+});
+
+test("worker completion is closed and cannot claim an authoritative gate", () => {
+  assert.throws(() => workerCompletionReport({
+    schemaVersion: 1,
+    summary: "done",
+    changedPaths: [],
+    checks: [],
+    evidenceRole: "supporting-only-parent-verification-required",
+    reportedFullGate: { status: "passed", command: "npm run check" },
+    authoritativeGate: { status: "passed" },
+  }));
 });
 
 test("worker preflight rejects parallel writers before constructing a runner", async () => {

@@ -143,6 +143,10 @@ test("parent registration exposes explicit delegated roles", async () => {
     subagent?.promptGuidelines?.join("\n") ?? "",
     /"researcher"/,
   );
+  assert.match(
+    subagent?.promptGuidelines?.join("\n") ?? "",
+    /Reviewer requires one closed reviewScope/,
+  );
   assert.deepEqual(
     (
       (
@@ -166,10 +170,24 @@ test("parent registration exposes explicit delegated roles", async () => {
     )?.enum,
     ["required", "optional"],
   );
-  assert.equal(
-    (subagent?.parameters?.properties?.tasks as { maxItems?: number })?.maxItems,
-    8,
-  );
+  const taskSchema = (subagent?.parameters?.properties?.tasks as {
+    maxItems?: number;
+    items?: {
+      allOf?: unknown[];
+      properties?: Record<string, unknown>;
+    };
+  });
+  assert.equal(taskSchema?.maxItems, 8);
+  assert.equal(taskSchema?.items?.allOf?.length, 1);
+  const scopeSchema = taskSchema?.items?.properties?.reviewScope as {
+    additionalProperties?: boolean;
+    required?: string[];
+  };
+  assert.equal(scopeSchema.additionalProperties, false);
+  assert.deepEqual(scopeSchema.required, [
+    "schemaVersion", "issue", "requirements", "outOfScope",
+    "baseSha", "candidateSha", "axes",
+  ]);
   assert.deepEqual(harness.commands, ["matty"]);
 
   const webSearch = harness.tools.find((tool) => tool.name === "web_search");
@@ -185,86 +203,6 @@ test("parent registration exposes explicit delegated roles", async () => {
     JSON.stringify(failedSearch),
     /provider secret must not escape/,
   );
-});
-
-test("parent registration exposes CodeGraph tools and initializes the session project", async () => {
-  const harness = createExtensionHarness();
-  const initialized: string[] = [];
-  registerPiMatty(harness.pi, {}, {
-    registerCodeGraphExtension(pi) {
-      for (const name of [
-        "codegraph_search",
-        "codegraph_node",
-        "codegraph_files",
-        "codegraph_callers",
-        "codegraph_callees",
-        "codegraph_impact",
-        "codegraph_explore",
-        "codegraph_status",
-      ]) {
-        pi.registerTool({ name } as never);
-      }
-    },
-    async initializeCodeGraph(cwd) {
-      initialized.push(cwd);
-      return { status: "initialized", root: cwd };
-    },
-  });
-
-  assert.deepEqual(harness.tools.map((tool) => tool.name), [
-    "codegraph_search",
-    "codegraph_node",
-    "codegraph_files",
-    "codegraph_callers",
-    "codegraph_callees",
-    "codegraph_impact",
-    "codegraph_explore",
-    "codegraph_status",
-    "subagent",
-  ]);
-  for (const handler of harness.handlers.get("session_start") ?? []) {
-    await handler(
-      { reason: "startup" } as never,
-      {
-        cwd: "/workspace/project",
-        model: undefined,
-        ui: { notify() {} },
-      } as never,
-    );
-  }
-  assert.deepEqual(initialized, ["/workspace/project"]);
-});
-
-test("CodeGraph initialization failure warns without disabling Matty", async () => {
-  const harness = createExtensionHarness();
-  const notifications: Array<{ message: string; level: string }> = [];
-  registerPiMatty(harness.pi, {}, {
-    registerCodeGraphExtension() {},
-    async initializeCodeGraph() {
-      throw new Error("private initialization detail");
-    },
-  });
-
-  for (const handler of harness.handlers.get("session_start") ?? []) {
-    await handler(
-      { reason: "startup" } as never,
-      {
-        cwd: "/workspace/project",
-        model: undefined,
-        ui: {
-          notify(message: string, level: string) {
-            notifications.push({ message, level });
-          },
-        },
-      } as never,
-    );
-  }
-
-  assert.ok(harness.commands.includes("matty"));
-  assert.ok(notifications.some(({ message, level }) =>
-    level === "warning" && message.includes("CodeGraph initialization failed")
-  ));
-  assert.doesNotMatch(JSON.stringify(notifications), /private initialization detail/);
 });
 
 test("Pi status and doctor use local model and runtime facts", async () => {
@@ -349,7 +287,7 @@ test("startup does not remove persistent Matty state", async () => {
 
 test("subagent rejects an invalid group before any child preflight", async () => {
   const harness = createExtensionHarness();
-  registerPiMatty(harness.pi);
+  registerPiMatty(harness.pi, {});
   const execute = harness.tools.find((tool) => tool.name === "subagent")
     ?.execute;
   assert.ok(execute);
@@ -784,16 +722,27 @@ test("worker child permits bounded writes and blocks parent-owned mutations", as
       ),
     );
     const harness = createExtensionHarness();
-    registerPiMatty(harness.pi, {
+    const childProcessEnvironment: NodeJS.ProcessEnv = {
       MATTY_CHILD_ROLE: "worker",
+      MATTY_USER_PREFERENCE: "retained",
+      OPENAI_API_KEY: "retained-auth",
+      MATTY_WORKER_PROTECTED_PATHS: "[]",
+      MATTY_WORKER_USER_CONFIGURATION_PATHS: "[]",
       MATTY_WORKER_WORKING_TREE: await realpath(project),
       MATTY_WORKER_TEMPORARY_PATHS: JSON.stringify([
         await realpath(temporary),
       ]),
       HOME: home,
       XDG_CONFIG_HOME: join(home, ".config"),
-    });
+    };
+    registerPiMatty(harness.pi, childProcessEnvironment);
 
+    assert.equal(childProcessEnvironment.MATTY_CHILD_ROLE, undefined);
+    assert.equal(childProcessEnvironment.MATTY_WORKER_WORKING_TREE, undefined);
+    assert.equal(childProcessEnvironment.MATTY_WORKER_TEMPORARY_PATHS, undefined);
+    assert.equal(childProcessEnvironment.MATTY_WORKER_PROTECTED_PATHS, undefined);
+    assert.equal(childProcessEnvironment.MATTY_USER_PREFERENCE, "retained");
+    assert.equal(childProcessEnvironment.OPENAI_API_KEY, "retained-auth");
     assert.deepEqual(harness.tools, []);
     const guard = harness.handlers.get("tool_call")?.[0];
     assert.ok(guard);

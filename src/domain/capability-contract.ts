@@ -55,7 +55,7 @@ export const DELEGATION_INPUT_GUIDANCE =
     [...INSPECTION_ROLES, "researcher", "worker"].map((role) =>
       JSON.stringify(role)
     ).join("|")
-  }, "task": string, "web"?: "required"|"optional", "report"?: string}]}`;
+  }, "task": string, "web"?: "required"|"optional", "report"?: string, "reviewScope"?: {"schemaVersion": 1, "issue": {"repository": string, "number": number, "reference": string}, "requirements": string[], "outOfScope": [{"reference": string, "reason": string}], "baseSha": string, "candidateSha": string, "axes": string[]}}]}`;
 export const INSPECTION_ROLE_INPUT_GUIDANCE =
   `{"role": ${
     INSPECTION_ROLES.map((role) => JSON.stringify(role)).join("|")

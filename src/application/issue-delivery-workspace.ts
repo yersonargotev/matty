@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
-import type {
-  DeliveryIdentity,
-  DeliveryWorkspace,
-  ExceptionBrief,
+import {
+  initialRepairBudget,
+  type DeliveryIdentity,
+  type DeliveryWorkspace,
+  type ExceptionBrief,
+  type RepairBudget,
 } from "../domain/issue-delivery.ts";
+import type { CommitSha } from "../domain/commit-sha.ts";
 import type {
   ExistingIssueDeliveryResult,
   IssueDeliveryWorkspace,
@@ -16,10 +19,10 @@ import type {
 export interface WorkspaceCheckoutFacts {
   root: string;
   ref: string | null;
-  sha: string;
+  sha: CommitSha;
   clean: boolean;
   integrationBranch: string;
-  integrationSha: string;
+  integrationSha: CommitSha;
 }
 
 export interface DeliveryOwnershipRecord {
@@ -33,8 +36,9 @@ export interface DeliveryOwnershipRecord {
   startingCheckout: DeliveryWorkspace["startingCheckout"];
   integration: {
     branch: string;
-    sha: string;
+    sha: CommitSha;
   };
+  repairBudget: RepairBudget;
 }
 
 export interface IssueDeliveryWorkspacePort {
@@ -113,6 +117,7 @@ function proposedRecord(
       branch: facts.integrationBranch,
       sha: facts.integrationSha,
     },
+    repairBudget: initialRepairBudget(),
   };
 }
 

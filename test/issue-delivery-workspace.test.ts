@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  deliverIssue,
+  deliverIssue as deliverIssueWithObserver,
   type IssueDeliveryPreflight,
 } from "../src/application/issue-delivery.ts";
 import {
@@ -12,7 +12,22 @@ import {
   type IssueDeliveryWorkspacePort,
   type WorkspaceCheckoutFacts,
 } from "../src/application/issue-delivery-workspace.ts";
-import { ISSUE_DELIVERY_WORKFLOW } from "../src/domain/issue-delivery.ts";
+import { initialRepairBudget, ISSUE_DELIVERY_WORKFLOW } from "../src/domain/issue-delivery.ts";
+import { commitSha } from "../src/domain/commit-sha.ts";
+
+const BASE_SHA = commitSha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+const LOCAL_SHA = commitSha("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+async function deliverIssue(
+  request: Parameters<typeof deliverIssueWithObserver>[0],
+  qualify: () => Promise<IssueDeliveryPreflight>,
+  workspace: Parameters<typeof deliverIssueWithObserver>[2],
+) {
+  return await deliverIssueWithObserver(request, {
+    observeQualification: qualify,
+    observeActive: async () => { throw new Error("active observation must not run"); },
+  }, workspace);
+}
 
 function readyPreflight(issue = 35): IssueDeliveryPreflight {
   return {
@@ -89,10 +104,10 @@ class MemoryWorkspacePort implements IssueDeliveryWorkspacePort {
 const exactBase: WorkspaceCheckoutFacts = {
   root: "/repo",
   ref: "main",
-  sha: "base-sha",
+  sha: BASE_SHA,
   clean: true,
   integrationBranch: "main",
-  integrationSha: "base-sha",
+  integrationSha: BASE_SHA,
 };
 
 async function runWithPort(port: IssueDeliveryWorkspacePort, issue = 35) {
@@ -137,7 +152,7 @@ test("a clean checkout exactly at integration base prepares the delivery branch 
     assert.deepEqual(outcome.workspace.startingCheckout, {
       root: "/repo",
       ref: "main",
-      sha: "base-sha",
+      sha: BASE_SHA,
     });
   }
 });
@@ -156,7 +171,7 @@ test("the same marked Delivery Identity resumes idempotently", async () => {
     assert.deepEqual(second.workspace.startingCheckout, {
       root: "/repo",
       ref: "main",
-      sha: "base-sha",
+      sha: BASE_SHA,
     });
   }
 });
@@ -195,8 +210,9 @@ test("an active record whose key disagrees with its Delivery Identity is blocked
     branch: "matty/deliver-35-lookalike",
     path: "/repo",
     isolation: "in-place",
-    startingCheckout: { root: "/repo", ref: "main", sha: "base-sha" },
-    integration: { branch: "main", sha: "base-sha" },
+    startingCheckout: { root: "/repo", ref: "main", sha: BASE_SHA },
+    integration: { branch: "main", sha: BASE_SHA },
+    repairBudget: initialRepairBudget(),
   };
 
   const outcome = await runWithPort(port);
@@ -229,7 +245,7 @@ test("dirty, detached, divergent, and unrelated checkouts preserve the checkout 
   const cases: Array<[string, Partial<WorkspaceCheckoutFacts>]> = [
     ["dirty", { clean: false }],
     ["detached", { ref: null }],
-    ["divergent", { sha: "local-sha" }],
+    ["divergent", { sha: LOCAL_SHA }],
     ["unrelated", { ref: "feature/other" }],
   ];
 
