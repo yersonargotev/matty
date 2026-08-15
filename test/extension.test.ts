@@ -6,7 +6,6 @@ import {
   type MattyHost,
   type NotificationLevel,
 } from "../src/application/register-matty.ts";
-import { initialRepairBudget, renderIssueDeliveryOutcome, type IssueDeliveryOutcome } from "../src/domain/issue-delivery.ts";
 
 function createPiHarness() {
   const handlers = new Map<
@@ -147,87 +146,6 @@ test("an unsupported host stays diagnosable and replaces the active hint", async
     reason: "unsupported-host",
     codes: ["host-uncertified"],
   });
-});
-
-test("only explicit /matty deliver input invokes Issue Delivery", async () => {
-  const harness = createPiHarness();
-  const requests: string[] = [];
-  const qualified: IssueDeliveryOutcome = {
-    schemaVersion: 1,
-    status: "qualified",
-    workflow: {
-      id: "issue-delivery",
-      definitionVersion: 1,
-      guidanceVersion: 1,
-    },
-    deliveryIdentity: {
-      repository: "github.com/yersonargotev/matty",
-      tracker: "github",
-      issue: 34,
-    },
-    scope: { schemaVersion: 1, reference: "https://github.com/yersonargotev/matty/issues/34", title: "Issue", body: "", requirements: [], dependencies: [] },
-    evidence: [],
-  };
-  registerMatty(harness.host, {
-    packageVersion: "0.2.0",
-    piVersion: "0.83.0",
-    platform: "darwin",
-    arch: "arm64",
-    web: { state: "unavailable", registeredTools: [] },
-  }, {
-    deliverIssue: async (request) => {
-      requests.push(request.issue);
-      return qualified;
-    },
-  });
-
-  await harness.commands.get("matty")?.handle("ask-matt deliver 34");
-  await harness.commands.get("matty")?.handle("deliver 34 35");
-  assert.deepEqual(requests, []);
-
-  await harness.commands.get("matty")?.handle("deliver #34");
-  assert.deepEqual(requests, ["#34"]);
-  assert.equal(harness.notifications.at(-1)?.message, renderIssueDeliveryOutcome(qualified));
-  assert.equal(harness.notifications.at(-1)?.level, "info");
-});
-
-test("delivery status is explicit and general diagnostics remain offline", async () => {
-  const harness = createPiHarness();
-  const requests: Array<{ intent: string; issue: string }> = [];
-  registerMatty(harness.host, {
-    packageVersion: "0.2.0",
-    piVersion: "0.83.0",
-    platform: "darwin",
-    arch: "arm64",
-    web: { state: "unavailable", registeredTools: [] },
-  }, {
-    deliverIssue: async (request) => {
-      requests.push({ intent: request.intent, issue: request.issue });
-      return {
-        schemaVersion: 1,
-        status: "active",
-        deliveryIdentity: {
-          repository: "github.com/yersonargotev/matty",
-          tracker: "github",
-          issue: 34,
-        },
-        gate: "implementation",
-        candidateSha: null,
-        candidateState: "none",
-        repairBudget: initialRepairBudget(),
-        checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
-        blockers: ["implementation-required"],
-      };
-    },
-  });
-
-  await harness.handlers.get("session_start")?.({ reason: "startup" });
-  await harness.commands.get("matty")?.handle("status");
-  await harness.commands.get("matty")?.handle("doctor");
-  assert.deepEqual(requests, []);
-
-  await harness.commands.get("matty")?.handle("deliver 34 --status");
-  assert.deepEqual(requests, [{ intent: "status", issue: "34" }]);
 });
 
 test("status and doctor render the same Redacted Diagnostic snapshot", async () => {

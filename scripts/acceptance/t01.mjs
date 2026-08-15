@@ -424,10 +424,6 @@ async function main() {
     assert.equal(packMetadata.name, "@yargote/matty");
     assert.equal(packMetadata.version, "0.2.0");
     const expectedDistFiles = [
-      "dist/adapters/git-issue-delivery-workspace.d.ts",
-      "dist/adapters/git-issue-delivery-workspace.js",
-      "dist/adapters/github-issue-delivery.d.ts",
-      "dist/adapters/github-issue-delivery.js",
       "dist/adapters/pi-extension.d.ts",
       "dist/adapters/pi-extension.js",
       "dist/application/child-control-environment.d.ts",
@@ -440,10 +436,6 @@ async function main() {
       "dist/application/explorer-delegation.js",
       "dist/application/inspection-role-delegation.d.ts",
       "dist/application/inspection-role-delegation.js",
-      "dist/application/issue-delivery-workspace.d.ts",
-      "dist/application/issue-delivery-workspace.js",
-      "dist/application/issue-delivery.d.ts",
-      "dist/application/issue-delivery.js",
       "dist/application/register-matty.d.ts",
       "dist/application/register-matty.js",
       "dist/application/researcher-delegation.d.ts",
@@ -460,9 +452,6 @@ async function main() {
       "dist/domain/delegation-group.js",
       "dist/domain/inspection-guard.d.ts",
       "dist/domain/inspection-guard.js",
-      "dist/domain/issue-delivery-guidance-v1.md",
-      "dist/domain/issue-delivery.d.ts",
-      "dist/domain/issue-delivery.js",
       "dist/domain/matty-rules.d.ts",
       "dist/domain/matty-rules.js",
       "dist/domain/package-contract.d.ts",
@@ -481,8 +470,6 @@ async function main() {
       "dist/domain/worker-completion.js",
       "dist/domain/worker-guard.d.ts",
       "dist/domain/worker-guard.js",
-      "dist/domain/workflow-guidance.d.ts",
-      "dist/domain/workflow-guidance.js",
     ];
     const expectedPackedFiles = [
       "LICENSE",

@@ -28,10 +28,6 @@ import {
   MATTY_RULES_START,
 } from "../src/domain/matty-rules.ts";
 import {
-  ISSUE_DELIVERY_GUIDANCE_END,
-  ISSUE_DELIVERY_GUIDANCE_START,
-} from "../src/domain/workflow-guidance.ts";
-import {
   INSPECTION_TOOLS,
   WORKER_TOOLS,
 } from "../src/domain/capability-contract.ts";
@@ -123,14 +119,6 @@ test("parent registration exposes explicit delegated roles", async () => {
 
   assert.equal(result.systemPrompt.split(MATTY_RULES_START).length - 1, 1);
   assert.equal(result.systemPrompt.split(MATTY_RULES_END).length - 1, 1);
-  assert.equal(
-    result.systemPrompt.split(ISSUE_DELIVERY_GUIDANCE_START).length - 1,
-    1,
-  );
-  assert.equal(
-    result.systemPrompt.split(ISSUE_DELIVERY_GUIDANCE_END).length - 1,
-    1,
-  );
   assert.deepEqual(harness.tools.map((tool) => tool.name), [
     "web_search",
     "source_check",
@@ -1153,15 +1141,12 @@ test("each inspection Capability Contract permits only one active invocation", a
 });
 
 test("Single Writer permits at most one active worker for a repository", async () => {
-  const workingTree = await mkdtemp(
-    join(tmpdir(), "matty-pi-extension-single-writer-repository-"),
-  );
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, { TMPDIR: tmpdir() }, {
     invocation: {
       command: process.execPath,
       arguments: [
-        join(process.cwd(), "test/fixtures/child-pi-fixture.mjs"),
+        "test/fixtures/child-pi-fixture.mjs",
         "--tools",
         WORKER_TOOLS.join(","),
       ],
@@ -1176,7 +1161,7 @@ test("Single Writer permits at most one active worker for a repository", async (
     resolveStarted = resolve;
   });
   const context = {
-    cwd: workingTree,
+    cwd: process.cwd(),
     model: { provider: "fixture-provider", id: "fixture-model" },
     thinkingLevel: "off",
     modelRegistry: {
@@ -1256,7 +1241,6 @@ test("Single Writer permits at most one active worker for a repository", async (
       (result.details as { outcome: { status: string } }).outcome.status,
       "cancelled",
     );
-    await rm(workingTree, { recursive: true, force: true });
   }
 });
 
