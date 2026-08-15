@@ -174,7 +174,7 @@ test("only explicit /matty deliver input invokes Issue Delivery", async () => {
     arch: "arm64",
     web: { state: "unavailable", registeredTools: [] },
   }, {
-    qualifyIssueDelivery: async (request) => {
+    deliverIssue: async (request) => {
       requests.push(request.issue);
       return qualified;
     },

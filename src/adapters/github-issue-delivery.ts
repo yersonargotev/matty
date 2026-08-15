@@ -7,11 +7,11 @@ import { promisify } from "node:util";
 
 import {
   deliverIssue,
-  qualifyIssueDelivery,
   type IssueDeliveryInspection,
   type IssueDeliveryInspectionRequest,
   type IssueDeliveryPreflight,
   type IssueDeliveryRequest,
+  type IssueDeliveryWorkspace,
   type ParsedIssueReference,
 } from "../application/issue-delivery.ts";
 import {
@@ -221,6 +221,14 @@ function githubNotFound(error: unknown): boolean {
   return /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr);
 }
 
+function parsePaginatedPages(raw: string, kind: string): unknown[] {
+  const value: unknown = JSON.parse(raw);
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`invalid ${kind} pagination`);
+  }
+  return value;
+}
+
 async function readDeliveryInspection(
   request: IssueDeliveryInspectionRequest,
   cwd: string,
@@ -250,25 +258,61 @@ async function readDeliveryInspection(
     [
       "api",
       `repos/${repositoryName}/pulls?state=all&head=${encodeURIComponent(`${owner}:${request.branch}`)}&per_page=100`,
+      "--paginate",
+      "--slurp",
     ],
     cwd,
   );
-  const pullsValue: unknown = JSON.parse(pullsRaw);
-  if (!Array.isArray(pullsValue)) throw new Error("invalid pull request inspection");
-  const pullRequests = pullsValue.map((value) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      throw new Error("invalid pull request inspection");
+  const pullPages = parsePaginatedPages(pullsRaw, "pull request");
+  const pullRequests: IssueDeliveryInspection["pullRequests"] = [];
+  for (const page of pullPages) {
+    if (!Array.isArray(page)) throw new Error("invalid pull request inspection");
+    for (const value of page) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error("invalid pull request inspection");
+      }
+      const pull = value as {
+        head?: unknown;
+        base?: unknown;
+        state?: unknown;
+        merged_at?: unknown;
+      };
+      if (
+        typeof pull.head !== "object" || pull.head === null || Array.isArray(pull.head) ||
+        typeof pull.base !== "object" || pull.base === null || Array.isArray(pull.base) ||
+        (pull.state !== "open" && pull.state !== "closed") ||
+        !(pull.merged_at === null || typeof pull.merged_at === "string")
+      ) {
+        throw new Error("invalid pull request inspection");
+      }
+      const head = pull.head as { sha?: unknown; ref?: unknown; repo?: unknown };
+      const base = pull.base as { ref?: unknown };
+      if (
+        typeof head.sha !== "string" || head.sha.length === 0 ||
+        typeof head.ref !== "string" || !Object.hasOwn(head, "repo") ||
+        !(head.repo === null ||
+          (typeof head.repo === "object" && !Array.isArray(head.repo) &&
+            typeof (head.repo as { full_name?: unknown }).full_name === "string")) ||
+        typeof base.ref !== "string"
+      ) {
+        throw new Error("invalid pull request inspection");
+      }
+      const headRepository = head.repo === null
+        ? null
+        : `github.com/${
+          (head.repo as { full_name: string }).full_name.toLowerCase()
+        }`;
+      const compatible =
+        headRepository === request.identity.repository &&
+        head.ref === request.branch &&
+        base.ref === request.integrationBranch &&
+        pull.state === "open" &&
+        pull.merged_at === null;
+      pullRequests.push(compatible
+        ? { compatibility: "compatible", headSha: head.sha }
+        : { compatibility: "incompatible" });
     }
-    const head = (value as { head?: unknown }).head;
-    if (typeof head !== "object" || head === null || Array.isArray(head)) {
-      throw new Error("invalid pull request inspection");
-    }
-    const { sha, ref } = head as { sha?: unknown; ref?: unknown };
-    if (typeof sha !== "string" || sha.length === 0 || ref !== request.branch) {
-      throw new Error("invalid pull request inspection");
-    }
-    return { headSha: sha };
-  });
+  }
 
   const readBranchSha = async (
     branch: string,
@@ -303,31 +347,84 @@ async function readDeliveryInspection(
     const [checksRaw, statusesRaw] = await Promise.all([
       runCommand(
         "gh",
-        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs?per_page=100`],
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs?per_page=100`, "--paginate", "--slurp"],
         cwd,
       ),
       runCommand(
         "gh",
-        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/status?per_page=100`],
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/status?per_page=100`, "--paginate", "--slurp"],
         cwd,
       ),
     ]);
-    const checkRuns = JSON.parse(checksRaw) as { check_runs?: unknown };
-    if (!Array.isArray(checkRuns.check_runs)) {
-      throw new Error("invalid check inspection");
+    const checkRunPages = parsePaginatedPages(checksRaw, "check run");
+    const rawCheckRuns: unknown[] = [];
+    let expectedTotal: number | undefined;
+    let hasTotalCount: boolean | undefined;
+    for (const page of checkRunPages) {
+      if (typeof page !== "object" || page === null || Array.isArray(page)) {
+        throw new Error("invalid check inspection");
+      }
+      const { check_runs: pageRuns, total_count: totalCount } = page as {
+        check_runs?: unknown;
+        total_count?: unknown;
+      };
+      if (!Array.isArray(pageRuns)) throw new Error("invalid check inspection");
+      const pageHasTotalCount = totalCount !== undefined;
+      if (hasTotalCount !== undefined && hasTotalCount !== pageHasTotalCount) {
+        throw new Error("inconsistent check inspection");
+      }
+      hasTotalCount = pageHasTotalCount;
+      if (pageHasTotalCount) {
+        if (!Number.isSafeInteger(totalCount) || (totalCount as number) < 0) {
+          throw new Error("invalid check inspection");
+        }
+        if (expectedTotal !== undefined && expectedTotal !== totalCount) {
+          throw new Error("inconsistent check inspection");
+        }
+        expectedTotal = totalCount as number;
+      }
+      rawCheckRuns.push(...pageRuns);
     }
-    const combinedStatus = JSON.parse(statusesRaw) as { statuses?: unknown };
-    if (!Array.isArray(combinedStatus.statuses)) {
-      throw new Error("invalid status inspection");
+    if (expectedTotal !== undefined && rawCheckRuns.length !== expectedTotal) {
+      throw new Error("incomplete check inspection");
     }
-    checks = checkRuns.check_runs.map((run) => {
+
+    const statusPages = parsePaginatedPages(statusesRaw, "status");
+    const rawStatuses: unknown[] = [];
+    let expectedStatusTotal: number | undefined;
+    let hasStatusTotalCount: boolean | undefined;
+    for (const page of statusPages) {
+      if (typeof page !== "object" || page === null || Array.isArray(page)) {
+        throw new Error("invalid status inspection");
+      }
+      const { statuses: pageStatuses, total_count: totalCount } = page as {
+        statuses?: unknown;
+        total_count?: unknown;
+      };
+      if (!Array.isArray(pageStatuses)) throw new Error("invalid status inspection");
+      const pageHasTotalCount = totalCount !== undefined;
+      if (
+        (hasStatusTotalCount !== undefined && hasStatusTotalCount !== pageHasTotalCount) ||
+        (pageHasTotalCount && (!Number.isSafeInteger(totalCount) || (totalCount as number) < 0)) ||
+        (expectedStatusTotal !== undefined && expectedStatusTotal !== totalCount)
+      ) {
+        throw new Error("inconsistent status inspection");
+      }
+      hasStatusTotalCount = pageHasTotalCount;
+      if (pageHasTotalCount) expectedStatusTotal = totalCount as number;
+      rawStatuses.push(...pageStatuses);
+    }
+    if (expectedStatusTotal !== undefined && rawStatuses.length !== expectedStatusTotal) {
+      throw new Error("incomplete status inspection");
+    }
+    checks = rawCheckRuns.map((run) => {
       if (typeof run !== "object" || run === null || Array.isArray(run)) {
         throw new Error("invalid check inspection");
       }
       const { status, conclusion } = run as { status?: unknown; conclusion?: unknown };
       return candidateCheck(status, conclusion);
     });
-    checks.push(...combinedStatus.statuses.map((status) => {
+    checks.push(...rawStatuses.map((status) => {
       if (typeof status !== "object" || status === null || Array.isArray(status)) {
         throw new Error("invalid status inspection");
       }
@@ -352,24 +449,13 @@ export function createGithubIssueDelivery(
   environment: NodeJS.ProcessEnv,
   runCommand: IssueDeliveryCommandReader = runCommandForStdout,
   runGit?: GitDeliveryCommandRunner,
+  workspace: IssueDeliveryWorkspace = createGitIssueDeliveryWorkspace(runGit),
 ): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
-  const workspace = createGitIssueDeliveryWorkspace(runGit);
   return async (request) =>
     deliverIssue(
       request,
       (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
       workspace,
       (inspection) => readDeliveryInspection(inspection, request.cwd, runCommand),
-    );
-}
-
-export function createGithubIssueDeliveryQualifier(
-  environment: NodeJS.ProcessEnv,
-  runCommand: IssueDeliveryCommandReader = runCommandForStdout,
-): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
-  return async (request) =>
-    qualifyIssueDelivery(
-      request,
-      (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
     );
 }

@@ -149,8 +149,13 @@ test("candidate checks are aggregated without exposing hostile provider data", a
 test("ambiguous PRs and remote candidate drift return fixed Exception Briefs", async (context) => {
   const otherSha = "2222222222222222222222222222222222222222";
   const cases: Array<[string, IssueDeliveryInspection, string]> = [
-    ["ambiguous", inspection({ pullRequests: [{ headSha: CANDIDATE_SHA }, { headSha: CANDIDATE_SHA }] }), "delivery-pr-ambiguous"],
-    ["PR drift", inspection({ pullRequests: [{ headSha: otherSha }] }), "delivery-candidate-drift"],
+    ["ambiguous", inspection({ pullRequests: [
+      { compatibility: "compatible", headSha: CANDIDATE_SHA },
+      { compatibility: "compatible", headSha: CANDIDATE_SHA },
+    ] }), "delivery-pr-ambiguous"],
+    ["PR drift", inspection({ pullRequests: [
+      { compatibility: "compatible", headSha: otherSha },
+    ] }), "delivery-candidate-drift"],
     ["remote branch drift", inspection({ remoteBranches: { deliverySha: otherSha, integrationSha: BASE_SHA } }), "delivery-candidate-drift"],
   ];
   for (const [name, facts, code] of cases) {

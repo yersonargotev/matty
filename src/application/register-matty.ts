@@ -40,10 +40,6 @@ export interface MattyRegistrationOptions {
   deliverIssue?: (
     request: IssueDeliveryRequest,
   ) => Promise<IssueDeliveryOutcome>;
-  /** @deprecated Use deliverIssue. */
-  qualifyIssueDelivery?: (
-    request: IssueDeliveryRequest,
-  ) => Promise<IssueDeliveryOutcome>;
 }
 
 export interface MattyHost {
@@ -176,9 +172,8 @@ export function registerMatty(
       }
 
       const delivery = /^deliver ([^\s]+)( --status)?$/.exec(args);
-      const issueDelivery = options.deliverIssue ?? options.qualifyIssueDelivery;
-      if (delivery && issueDelivery) {
-        const outcome = await issueDelivery({
+      if (delivery && options.deliverIssue) {
+        const outcome = await options.deliverIssue({
           intent: delivery[2] ? "status" : "deliver",
           issue: delivery[1]!,
           cwd: context?.cwd ?? "",

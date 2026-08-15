@@ -85,9 +85,13 @@ export interface IssueDeliveryWorkspace {
   ): Promise<IssueDeliveryWorkspaceResult>;
 }
 
+export type DeliveryPullRequestFact =
+  | { compatibility: "compatible"; headSha: string }
+  | { compatibility: "incompatible" };
+
 export interface IssueDeliveryInspection {
   issue: { state: "open" | "closed" };
-  pullRequests: Array<{ headSha: string }>;
+  pullRequests: DeliveryPullRequestFact[];
   remoteBranches: {
     deliverySha: string | null;
     integrationSha: string;
@@ -147,8 +151,8 @@ function reconciliationBlocked(
       recommendation: "Do not replay delivery effects while required facts are unavailable.",
     },
     "delivery-pr-ambiguous": {
-      need: "More than one pull request matches the owned delivery branch.",
-      option: "Resolve the duplicate owned-branch pull requests.",
+      need: "Owned delivery pull request facts are ambiguous.",
+      option: "Resolve incompatible or duplicate pull requests related to the owned delivery branch.",
       recommendation: "Preserve the candidate and reconcile the ambiguity before continuing.",
     },
     "delivery-candidate-drift": {
@@ -193,7 +197,10 @@ function activeReport(
     (delivery.candidateSha !== null && !isCommitSha(delivery.candidateSha)) ||
     (facts.issue.state !== "open" && facts.issue.state !== "closed") ||
     !Array.isArray(facts.pullRequests) ||
-    facts.pullRequests.some((pullRequest) => !isCommitSha(pullRequest.headSha)) ||
+    facts.pullRequests.some((pullRequest) =>
+      pullRequest.compatibility !== "incompatible" &&
+      (pullRequest.compatibility !== "compatible" || !isCommitSha(pullRequest.headSha))
+    ) ||
     typeof facts.remoteBranches !== "object" || facts.remoteBranches === null ||
     !(facts.remoteBranches.deliverySha === null ||
       isCommitSha(facts.remoteBranches.deliverySha)) ||
@@ -206,13 +213,19 @@ function activeReport(
     candidateCheck(check.status, check.conclusion);
   }
   const gate = delivery.candidateSha === null ? "implementation" : "verification";
-  if (facts.pullRequests.length > 1) {
+  const compatiblePullRequests = facts.pullRequests.filter(
+    (pullRequest) => pullRequest.compatibility === "compatible",
+  );
+  if (
+    facts.pullRequests.some((pullRequest) => pullRequest.compatibility === "incompatible") ||
+    facts.pullRequests.length > 1
+  ) {
     return reconciliationBlocked(gate, "delivery-pr-ambiguous");
   }
   const ownedCandidate = delivery.candidateSha ?? delivery.integrationSha;
   if (
-    (facts.pullRequests.length === 1 &&
-      facts.pullRequests[0]!.headSha !== ownedCandidate) ||
+    (compatiblePullRequests.length === 1 &&
+      compatiblePullRequests[0]!.headSha !== ownedCandidate) ||
     (facts.remoteBranches.deliverySha !== null &&
       facts.remoteBranches.deliverySha !== ownedCandidate)
   ) {
@@ -310,7 +323,7 @@ export async function deliverIssue(
   return { ...qualification, status: "prepared", workspace: preparation.workspace };
 }
 
-export async function qualifyIssueDelivery(
+async function qualifyIssueDelivery(
   request: IssueDeliveryRequest,
   readPreflight: ReadIssueDeliveryPreflight,
 ): Promise<IssueDeliveryOutcome> {

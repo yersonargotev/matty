@@ -2,12 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  qualifyIssueDelivery,
+  deliverIssue,
   type IssueDeliveryPreflight,
+  type IssueDeliveryWorkspace,
 } from "../src/application/issue-delivery.ts";
 import {
   ISSUE_DELIVERY_WORKFLOW,
 } from "../src/domain/issue-delivery.ts";
+
+const qualificationWorkspace: IssueDeliveryWorkspace = {
+  inspect: async () => ({ status: "absent" }),
+  prepare: async () => ({
+    status: "prepared",
+    workspace: {
+      root: "/repo",
+      path: "/repo",
+      branch: "matty/deliver-34-owned",
+      isolation: "in-place",
+      resumed: false,
+      startingCheckout: {
+        root: "/repo",
+        ref: "main",
+        sha: "0000000000000000000000000000000000000000",
+      },
+    },
+  }),
+};
 
 function readyPreflight(): IssueDeliveryPreflight {
   return {
@@ -36,20 +56,21 @@ function readyPreflight(): IssueDeliveryPreflight {
   };
 }
 
-test("Issue Delivery qualifies one exact ready GitHub issue without effects", async () => {
+test("Issue Delivery prepares one exact ready GitHub issue through its controller", async () => {
   let reads = 0;
-  const outcome = await qualifyIssueDelivery(
+  const outcome = await deliverIssue(
     { intent: "deliver", issue: "#34", cwd: "/repo" },
     async () => {
       reads += 1;
       return readyPreflight();
     },
+    qualificationWorkspace,
   );
 
   assert.equal(reads, 1);
   assert.deepEqual(outcome, {
     schemaVersion: 1,
-    status: "qualified",
+    status: "prepared",
     workflow: {
       id: "issue-delivery",
       definitionVersion: 1,
@@ -67,17 +88,30 @@ test("Issue Delivery qualifies one exact ready GitHub issue without effects", as
       "issue-ready",
       "workflow-dependencies-certified",
     ],
+    workspace: {
+      root: "/repo",
+      path: "/repo",
+      branch: "matty/deliver-34-owned",
+      isolation: "in-place",
+      resumed: false,
+      startingCheckout: {
+        root: "/repo",
+        ref: "main",
+        sha: "0000000000000000000000000000000000000000",
+      },
+    },
   });
 });
 
 test("Issue Delivery rejects ambiguous input before capability reads", async () => {
   let reads = 0;
-  const outcome = await qualifyIssueDelivery(
+  const outcome = await deliverIssue(
     { intent: "deliver", issue: "34 35", cwd: "/repo" },
     async () => {
       reads += 1;
       return readyPreflight();
     },
+    qualificationWorkspace,
   );
 
   assert.equal(reads, 0);
@@ -106,9 +140,10 @@ test("failed qualification reports exact remediation and cannot produce delivery
   };
   const effects: string[] = [];
 
-  const outcome = await qualifyIssueDelivery(
+  const outcome = await deliverIssue(
     { intent: "deliver", issue: "34", cwd: "/repo" },
     async () => preflight,
+    qualificationWorkspace,
   );
 
   assert.deepEqual(effects, []);
@@ -131,11 +166,12 @@ test("failed qualification reports exact remediation and cannot produce delivery
 });
 
 test("unexpected inspection failures become a closed Exception Brief", async () => {
-  const outcome = await qualifyIssueDelivery(
+  const outcome = await deliverIssue(
     { intent: "deliver", issue: "34", cwd: "/repo" },
     async () => {
       throw new Error("secret provider output");
     },
+    qualificationWorkspace,
   );
 
   assert.equal(outcome.status, "blocked");
