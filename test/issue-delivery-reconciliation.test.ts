@@ -104,6 +104,25 @@ test("an owned branch at the integration SHA remains at implementation", async (
   }
 });
 
+test("a completed startup_failure Check Run is a failed candidate check", async () => {
+  const outcome = await deliverIssue(
+    { intent: "status", issue: "36", cwd: "/repo" },
+    async () => { throw new Error("unused"); },
+    activeWorkspace(CANDIDATE_SHA),
+    async () => inspection({
+      checks: [{ status: "completed", conclusion: "startup_failure" }],
+    }),
+  );
+
+  assert.equal(outcome.status, "active");
+  if (outcome.status === "active") {
+    assert.deepEqual(outcome.checks, {
+      state: "failing", total: 1, passed: 0, pending: 0, failed: 1,
+    });
+    assert.deepEqual(outcome.blockers, ["checks-failing"]);
+  }
+});
+
 test("candidate checks are aggregated without exposing hostile provider data", async () => {
   const hostile = "https://secret.invalid token=ghp_secret /private/path check-name";
   const outcome = await deliverIssue(

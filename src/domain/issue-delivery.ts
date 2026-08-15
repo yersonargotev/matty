@@ -44,6 +44,7 @@ export type IssueDeliveryEvidenceCode =
   | "delivery-inspection-unavailable"
   | "delivery-pr-ambiguous"
   | "delivery-candidate-drift"
+  | "delivery-candidate-ancestry-unproven"
   | `workflow-dependency-missing:${string}`
   | `workflow-dependency-identity-mismatch:${string}`
   | `workflow-dependency-provenance-mismatch:${string}`
@@ -115,7 +116,8 @@ export type DeliveryBlockerCode =
 export interface CandidateCheck {
   status: "queued" | "in_progress" | "completed";
   conclusion: "success" | "neutral" | "skipped" | "failure" |
-    "cancelled" | "timed_out" | "action_required" | "stale" | null;
+    "cancelled" | "timed_out" | "action_required" | "stale" |
+    "startup_failure" | null;
 }
 
 /** Constructs one closed candidate check while discarding provider-owned fields. */
@@ -126,7 +128,7 @@ export function candidateCheck(
   const statuses = new Set(["queued", "in_progress", "completed"]);
   const conclusions = new Set([
     "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
-    "action_required", "stale",
+    "action_required", "stale", "startup_failure",
   ]);
   if (
     typeof status !== "string" || !statuses.has(status) ||

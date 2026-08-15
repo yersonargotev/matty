@@ -39,6 +39,8 @@ function gitFailure(message: string, exitCode: number): Error & { exitCode: numb
 function fakeGit(options: {
   fail?: (args: string[]) => Error | undefined;
   detached?: boolean;
+  remote?: string;
+  ancestor?: boolean;
 } = {}) {
   const refs = new Map<string, string>();
   const objects = new Map<string, string>();
@@ -51,6 +53,13 @@ function fakeGit(options: {
     const failure = options.fail?.(args);
     if (failure) throw failure;
     if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return "/repo";
+    if (args[0] === "remote" && args[1] === "get-url") {
+      return options.remote ?? "git@github.com:yersonargotev/matty.git";
+    }
+    if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+      if (options.ancestor === false) throw gitFailure("not an ancestor", 1);
+      return "";
+    }
     if (args[0] === "rev-parse" && args[1] === "HEAD") return "base-sha";
     if (args[0] === "rev-parse" && args[1] === "refs/remotes/origin/main") return "base-sha";
     if (args[0] === "rev-parse" && args[1] === "--verify") {
@@ -197,6 +206,64 @@ test("active delivery inspection reads owned markers and candidate without Git e
   });
   const reads = git.calls.slice(before);
   assert.equal(reads.some(({ args }) =>
+    ["hash-object", "update-ref", "switch"].includes(args[0]!) ||
+    (args[0] === "worktree" && args[1] === "add")
+  ), false);
+});
+
+test("active re-entry rejects a canonical origin that disagrees with the Delivery Identity before effects", async () => {
+  const git = fakeGit({ remote: "https://github.com/other/REPOSITORY.git" });
+  const workspace = createGitIssueDeliveryWorkspace(git.run);
+  assert.equal((await workspace.prepare({ cwd: "/repo", identity })).status, "prepared");
+  const before = git.calls.length;
+
+  const result = await workspace.inspect({ cwd: "/repo", issue: 35 });
+
+  assert.equal(result.status, "blocked");
+  if (result.status === "blocked") {
+    assert.deepEqual(result.exceptionBrief.evidence, ["delivery-ownership-mismatch"]);
+  }
+  const reads = git.calls.slice(before);
+  assert.equal(reads.some(({ args }) =>
+    ["hash-object", "update-ref", "switch"].includes(args[0]!) ||
+    (args[0] === "worktree" && args[1] === "add")
+  ), false);
+  assert.equal(JSON.stringify(result).includes("other/REPOSITORY"), false);
+});
+
+test("active re-entry rejects an unparseable canonical origin before effects", async () => {
+  const git = fakeGit({ remote: "file:///private/hostile/token" });
+  const workspace = createGitIssueDeliveryWorkspace(git.run);
+  assert.equal((await workspace.prepare({ cwd: "/repo", identity })).status, "prepared");
+  const before = git.calls.length;
+
+  const result = await workspace.inspect({ cwd: "/repo", issue: 35 });
+
+  assert.equal(result.status, "blocked");
+  if (result.status === "blocked") {
+    assert.deepEqual(result.exceptionBrief.evidence, ["delivery-ownership-mismatch"]);
+  }
+  assert.doesNotMatch(JSON.stringify(result), /private|hostile|token/);
+  assert.equal(git.calls.slice(before).some(({ args }) =>
+    ["hash-object", "update-ref", "switch"].includes(args[0]!)
+  ), false);
+});
+
+test("a stale or diverged owned branch blocks before it becomes a candidate", async () => {
+  const git = fakeGit({ ancestor: false });
+  const workspace = createGitIssueDeliveryWorkspace(git.run);
+  assert.equal((await workspace.prepare({ cwd: "/repo", identity })).status, "prepared");
+  git.refs.set(`refs/heads/matty/deliver-35-${key.slice(0, 8)}`, "stale-local-sha");
+  const before = git.calls.length;
+
+  const result = await workspace.inspect({ cwd: "/repo", issue: 35 });
+
+  assert.equal(result.status, "blocked");
+  if (result.status === "blocked") {
+    assert.deepEqual(result.exceptionBrief.evidence, ["delivery-candidate-ancestry-unproven"]);
+  }
+  assert.doesNotMatch(JSON.stringify(result), /stale-local-sha|not an ancestor/);
+  assert.equal(git.calls.slice(before).some(({ args }) =>
     ["hash-object", "update-ref", "switch"].includes(args[0]!) ||
     (args[0] === "worktree" && args[1] === "add")
   ), false);
@@ -373,8 +440,12 @@ async function temporaryRepository(): Promise<{ container: string; repository: s
   const repository = join(container, "repository");
   await mkdir(repository);
   await git(repository, "init", "-b", "main");
+  await git(repository, "remote", "add", "origin", "https://github.com/YersonArgoteV/Matty.git");
   await git(repository, "config", "user.name", "Matty Test");
   await git(repository, "config", "user.email", "matty@example.invalid");
+  await writeFile(join(repository, "tracked.txt"), "initial\n");
+  await git(repository, "add", "tracked.txt");
+  await git(repository, "commit", "-m", "initial");
   await writeFile(join(repository, "tracked.txt"), "base\n");
   await git(repository, "add", "tracked.txt");
   await git(repository, "commit", "-m", "base");
@@ -445,6 +516,53 @@ test("a lookalike unowned branch blocks in a real repository", async () => {
     assert.equal(await git(fixture.repository, "symbolic-ref", "--short", "HEAD"), "main");
   } finally {
     await rm(fixture.container, { recursive: true, force: true });
+  }
+});
+
+test("real Git blocks behind and diverged owned branches without inspection effects", async (context) => {
+  for (const state of ["behind", "diverged"] as const) {
+    await context.test(state, async () => {
+      const fixture = await temporaryRepository();
+      try {
+        const workspace = createGitIssueDeliveryWorkspace();
+        const prepared = await workspace.prepare({ cwd: fixture.repository, identity });
+        assert.equal(prepared.status, "prepared");
+        if (prepared.status !== "prepared") return;
+
+        await git(fixture.repository, "switch", "main");
+        if (state === "behind") {
+          await git(fixture.repository, "branch", "older-history", `${fixture.integrationSha}^`);
+          await git(fixture.repository, "switch", "older-history");
+        } else {
+          await git(fixture.repository, "switch", "--orphan", "diverged-history");
+          await writeFile(join(fixture.repository, "tracked.txt"), "diverged\n");
+          await git(fixture.repository, "add", "tracked.txt");
+          await git(fixture.repository, "commit", "-m", "diverged root");
+        }
+        const staleSha = await git(fixture.repository, "rev-parse", "HEAD");
+        await git(fixture.repository, "switch", "main");
+        await git(fixture.repository, "branch", "-f", prepared.workspace.branch, staleSha);
+        const before = {
+          refs: await git(fixture.repository, "for-each-ref", "--format=%(refname) %(objectname)"),
+          head: await git(fixture.repository, "rev-parse", "HEAD"),
+          status: await git(fixture.repository, "status", "--porcelain=v1"),
+        };
+
+        const result = await workspace.inspect({ cwd: fixture.repository, issue: identity.issue });
+
+        assert.equal(result.status, "blocked");
+        if (result.status === "blocked") {
+          assert.deepEqual(result.exceptionBrief.evidence, ["delivery-candidate-ancestry-unproven"]);
+        }
+        assert.deepEqual({
+          refs: await git(fixture.repository, "for-each-ref", "--format=%(refname) %(objectname)"),
+          head: await git(fixture.repository, "rev-parse", "HEAD"),
+          status: await git(fixture.repository, "status", "--porcelain=v1"),
+        }, before);
+      } finally {
+        await rm(fixture.container, { recursive: true, force: true });
+      }
+    });
   }
 });
 

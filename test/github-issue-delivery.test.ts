@@ -53,6 +53,10 @@ test("production status binds checks to the exact candidate SHA and emits closed
   const runGit: GitDeliveryCommandRunner = async (args) => {
     gitCalls.push(args);
     if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return "/repo";
+    if (args[0] === "remote" && args[1] === "get-url") {
+      return "https://github.com/YersonArgoteV/Matty.git";
+    }
+    if (args[0] === "merge-base" && args[1] === "--is-ancestor") return "";
     if (args[0] === "rev-parse" && args[1] === "--verify") {
       if (args.at(-1) === "refs/matty/issue-delivery/active") return "active-object";
       if (args.at(-1) === `refs/matty/issue-delivery/owners/${key}`) return "owner-object";
@@ -78,7 +82,7 @@ test("production status binds checks to the exact candidate SHA and emits closed
     }
     if (args[1] === "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/check-runs?per_page=100") {
       return JSON.stringify({ check_runs: [
-        { status: "completed", conclusion: "success", name: "hostile secret check" },
+        { status: "completed", conclusion: "startup_failure", name: "hostile secret check" },
         { status: "queued", conclusion: null, output: { text: "/private/token" } },
       ] });
     }
@@ -99,7 +103,7 @@ test("production status binds checks to the exact candidate SHA and emits closed
   assert.doesNotMatch(JSON.stringify(outcome), /hostile|private|secret|https/);
   if (outcome.status === "active") {
     assert.deepEqual(outcome.checks, {
-      state: "failing", total: 4, passed: 1, pending: 2, failed: 1,
+      state: "failing", total: 4, passed: 0, pending: 2, failed: 2,
     });
     assert.deepEqual(outcome.blockers, ["checks-failing", "checks-pending"]);
   }
@@ -112,6 +116,7 @@ test("production status binds checks to the exact candidate SHA and emits closed
     "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/status?per_page=100",
   ]);
   assert.equal(gitCalls.some((args) => ["hash-object", "update-ref", "switch"].includes(args[0]!)), false);
+  assert.equal(gitCalls.some((args) => args[0] === "merge-base" && args[1] === "--is-ancestor"), true);
 });
 
 test("blocked production qualification performs only Git and GitHub reads", async () => {

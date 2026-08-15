@@ -20,6 +20,7 @@ import {
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
 import {
+  canonicalGithubRemote,
   createGitIssueDeliveryWorkspace,
   type GitDeliveryCommandRunner,
 } from "./git-issue-delivery-workspace.ts";
@@ -44,13 +45,6 @@ async function runCommandForStdout(
     maxBuffer: 1024 * 1024,
   });
   return result.stdout.trim();
-}
-
-function canonicalGithubRemote(remote: string): string | undefined {
-  const match = /^(?:git@github\.com:|https:\/\/github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(
-    remote.trim(),
-  );
-  return match ? `github.com/${match[1]!.toLowerCase()}` : undefined;
 }
 
 async function inspectRepository(
@@ -200,13 +194,7 @@ async function readPreflight(
         };
       }
     } catch (error) {
-      const stderr = error && typeof error === "object" &&
-          "stderr" in error && typeof error.stderr === "string"
-        ? error.stderr
-        : "";
-      issueInspection = /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr)
-        ? "not-found"
-        : "failed";
+      issueInspection = githubNotFound(error) ? "not-found" : "failed";
     }
   }
 
