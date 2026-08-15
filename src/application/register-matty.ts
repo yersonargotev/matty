@@ -180,7 +180,7 @@ export function registerMatty(
         });
         notify(
           JSON.stringify(outcome),
-          outcome.status === "qualified" ? "info" : "warning",
+          outcome.status === "blocked" ? "warning" : "info",
         );
         return;
       }

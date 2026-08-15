@@ -25,6 +25,8 @@ const INSTALL_LIFECYCLE_SCRIPTS = [
   "dependencies",
 ];
 const EXPECTED_DIST_FILES = [
+  "dist/adapters/git-issue-delivery-workspace.d.ts",
+  "dist/adapters/git-issue-delivery-workspace.js",
   "dist/adapters/github-issue-delivery.d.ts",
   "dist/adapters/github-issue-delivery.js",
   "dist/adapters/pi-extension.d.ts",
@@ -39,6 +41,8 @@ const EXPECTED_DIST_FILES = [
   "dist/application/explorer-delegation.js",
   "dist/application/inspection-role-delegation.d.ts",
   "dist/application/inspection-role-delegation.js",
+  "dist/application/issue-delivery-workspace.d.ts",
+  "dist/application/issue-delivery-workspace.js",
   "dist/application/issue-delivery.d.ts",
   "dist/application/issue-delivery.js",
   "dist/application/register-matty.d.ts",

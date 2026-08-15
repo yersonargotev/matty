@@ -2,6 +2,8 @@ import {
   ISSUE_DELIVERY_WORKFLOW,
   type ExceptionBrief,
   type IssueDeliveryEvidenceCode,
+  type DeliveryIdentity,
+  type DeliveryWorkspace,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
 
@@ -49,6 +51,21 @@ export type ReadIssueDeliveryPreflight = (
   cwd: string,
 ) => Promise<IssueDeliveryPreflight>;
 
+export interface IssueDeliveryWorkspaceRequest {
+  cwd: string;
+  identity: DeliveryIdentity;
+}
+
+export type IssueDeliveryWorkspaceResult =
+  | { status: "prepared"; workspace: DeliveryWorkspace }
+  | { status: "blocked"; exceptionBrief: ExceptionBrief };
+
+export interface IssueDeliveryWorkspace {
+  prepare(
+    request: IssueDeliveryWorkspaceRequest,
+  ): Promise<IssueDeliveryWorkspaceResult>;
+}
+
 function parseIssueReference(value: string): ParsedIssueReference | undefined {
   const short = /^(?:#)?([1-9]\d*)$/.exec(value);
   if (short) {
@@ -80,6 +97,41 @@ function invalidIssueReference(): IssueDeliveryOutcome {
     recommendation:
       "Choose the intended issue, then run /matty deliver <issue-number>.",
   });
+}
+
+export async function deliverIssue(
+  request: IssueDeliveryRequest,
+  readPreflight: ReadIssueDeliveryPreflight,
+  workspace: IssueDeliveryWorkspace,
+): Promise<IssueDeliveryOutcome> {
+  const qualification = await qualifyIssueDelivery(request, readPreflight);
+  if (qualification.status !== "qualified") {
+    return qualification;
+  }
+  let preparation: IssueDeliveryWorkspaceResult;
+  try {
+    preparation = await workspace.prepare({
+      cwd: request.cwd,
+      identity: qualification.deliveryIdentity,
+    });
+  } catch {
+    return blocked({
+      schemaVersion: 1,
+      gate: "workspace-preparation",
+      evidence: ["workspace-preparation-failed"],
+      need: "The qualified delivery workspace could not be prepared safely.",
+      options: [`Inspect the Git checkout, then repeat /matty deliver ${qualification.deliveryIdentity.issue}.`],
+      recommendation: "Resolve the workspace preparation failure without changing unrelated work.",
+    });
+  }
+  if (preparation.status === "blocked") {
+    return { schemaVersion: 1, status: "blocked", exceptionBrief: preparation.exceptionBrief };
+  }
+  return {
+    ...qualification,
+    status: "prepared",
+    workspace: preparation.workspace,
+  };
 }
 
 export async function qualifyIssueDelivery(
