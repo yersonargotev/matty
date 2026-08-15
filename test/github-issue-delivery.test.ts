@@ -68,12 +68,24 @@ test("production status binds checks to the exact candidate SHA and emits closed
       return JSON.stringify({ number: 36, state: "open", title: "token=secret" });
     }
     if (args[1]?.startsWith("repos/yersonargotev/matty/pulls?")) {
-      return JSON.stringify([{ head: { sha: "1111111111111111111111111111111111111111", ref: branch }, html_url: "https://secret.invalid" }]);
+      return JSON.stringify([]);
     }
-    if (args[1] === "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/check-runs") {
+    if (args[1] === `repos/yersonargotev/matty/git/ref/heads/${encodeURIComponent(branch)}`) {
+      throw Object.assign(new Error("redacted missing branch"), { stderr: "HTTP 404" });
+    }
+    if (args[1] === "repos/yersonargotev/matty/git/ref/heads/main") {
+      return JSON.stringify({ object: { sha: "0000000000000000000000000000000000000000" }, url: "https://secret.invalid/main" });
+    }
+    if (args[1] === "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/check-runs?per_page=100") {
       return JSON.stringify({ check_runs: [
         { status: "completed", conclusion: "success", name: "hostile secret check" },
         { status: "queued", conclusion: null, output: { text: "/private/token" } },
+      ] });
+    }
+    if (args[1] === "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/status?per_page=100") {
+      return JSON.stringify({ statuses: [
+        { state: "failure", context: "hostile classic secret", description: "/private/classic", target_url: "https://secret.invalid/status" },
+        { state: "pending", context: "waiting secret" },
       ] });
     }
     throw new Error("unexpected command");
@@ -85,10 +97,19 @@ test("production status binds checks to the exact candidate SHA and emits closed
 
   assert.equal(outcome.status, "active");
   assert.doesNotMatch(JSON.stringify(outcome), /hostile|private|secret|https/);
+  if (outcome.status === "active") {
+    assert.deepEqual(outcome.checks, {
+      state: "failing", total: 4, passed: 1, pending: 2, failed: 1,
+    });
+    assert.deepEqual(outcome.blockers, ["checks-failing", "checks-pending"]);
+  }
   assert.deepEqual(calls.map(({ args }) => args[1]), [
     "repos/yersonargotev/matty/issues/36",
     `repos/yersonargotev/matty/pulls?state=all&head=${encodeURIComponent(`yersonargotev:${branch}`)}&per_page=100`,
-    "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/check-runs",
+    `repos/yersonargotev/matty/git/ref/heads/${encodeURIComponent(branch)}`,
+    "repos/yersonargotev/matty/git/ref/heads/main",
+    "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/check-runs?per_page=100",
+    "repos/yersonargotev/matty/commits/1111111111111111111111111111111111111111/status?per_page=100",
   ]);
   assert.equal(gitCalls.some((args) => ["hash-object", "update-ref", "switch"].includes(args[0]!)), false);
 });

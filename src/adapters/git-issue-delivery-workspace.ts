@@ -192,6 +192,7 @@ export function createGitIssueDeliveryWorkspace(
         delivery: {
           identity: active.identity,
           branch: active.branch,
+          integrationBranch: active.integration.branch,
           integrationSha: active.integration.sha,
           candidateSha: candidateSha === active.integration.sha ? null : candidateSha,
         },

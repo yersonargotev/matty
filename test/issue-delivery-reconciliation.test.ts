@@ -25,6 +25,7 @@ function activeWorkspace(candidateSha: string | null): IssueDeliveryWorkspace {
         delivery: {
           identity,
           branch: "matty/deliver-36-owned",
+          integrationBranch: "main",
           integrationSha: BASE_SHA,
           candidateSha,
         },
@@ -40,6 +41,10 @@ function inspection(change: Partial<IssueDeliveryInspection> = {}): IssueDeliver
   return {
     issue: { state: "open" },
     pullRequests: [],
+    remoteBranches: {
+      deliverySha: null,
+      integrationSha: BASE_SHA,
+    },
     checks: [],
     ...change,
   };
@@ -123,9 +128,11 @@ test("candidate checks are aggregated without exposing hostile provider data", a
 });
 
 test("ambiguous PRs and remote candidate drift return fixed Exception Briefs", async (context) => {
+  const otherSha = "2222222222222222222222222222222222222222";
   const cases: Array<[string, IssueDeliveryInspection, string]> = [
     ["ambiguous", inspection({ pullRequests: [{ headSha: CANDIDATE_SHA }, { headSha: CANDIDATE_SHA }] }), "delivery-pr-ambiguous"],
-    ["drift", inspection({ pullRequests: [{ headSha: "2222222222222222222222222222222222222222" }] }), "delivery-candidate-drift"],
+    ["PR drift", inspection({ pullRequests: [{ headSha: otherSha }] }), "delivery-candidate-drift"],
+    ["remote branch drift", inspection({ remoteBranches: { deliverySha: otherSha, integrationSha: BASE_SHA } }), "delivery-candidate-drift"],
   ];
   for (const [name, facts, code] of cases) {
     await context.test(name, async () => {
@@ -143,6 +150,28 @@ test("ambiguous PRs and remote candidate drift return fixed Exception Briefs", a
   }
 });
 
+test("an advanced remote integration branch is visible without changing the qualified base", async () => {
+  const advancedSha = "3333333333333333333333333333333333333333";
+  let inspectedBase: string | undefined;
+  const outcome = await deliverIssue(
+    { intent: "status", issue: "36", cwd: "/repo" },
+    async () => { throw new Error("unused"); },
+    activeWorkspace(CANDIDATE_SHA),
+    async (request) => {
+      inspectedBase = request.integrationSha;
+      return inspection({
+        remoteBranches: { deliverySha: CANDIDATE_SHA, integrationSha: advancedSha },
+      });
+    },
+  );
+
+  assert.equal(inspectedBase, BASE_SHA);
+  assert.equal(outcome.status, "active");
+  if (outcome.status === "active") {
+    assert.deepEqual(outcome.blockers, ["integration-advanced"]);
+  }
+});
+
 test("malformed required inspection returns a fixed redacted Exception Brief", async () => {
   const outcome = await deliverIssue(
     { intent: "status", issue: "36", cwd: "/repo" },
@@ -152,6 +181,26 @@ test("malformed required inspection returns a fixed redacted Exception Brief", a
   );
   assert.equal(outcome.status, "blocked");
   assert.doesNotMatch(JSON.stringify(outcome), /not-a-commit|private|token/);
+  if (outcome.status === "blocked") {
+    assert.deepEqual(outcome.exceptionBrief.evidence, ["delivery-inspection-unavailable"]);
+  }
+});
+
+test("malformed candidate checks block without exposing provider fields", async () => {
+  const outcome = await deliverIssue(
+    { intent: "status", issue: "36", cwd: "/repo" },
+    async () => { throw new Error("unused"); },
+    activeWorkspace(CANDIDATE_SHA),
+    async () => inspection({
+      checks: [{
+        status: "completed",
+        conclusion: "ghp_secret /private/provider",
+      } as never],
+    }),
+  );
+
+  assert.equal(outcome.status, "blocked");
+  assert.doesNotMatch(JSON.stringify(outcome), /secret|private|provider/);
   if (outcome.status === "blocked") {
     assert.deepEqual(outcome.exceptionBrief.evidence, ["delivery-inspection-unavailable"]);
   }

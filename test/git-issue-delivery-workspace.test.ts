@@ -182,13 +182,15 @@ test("active delivery inspection reads owned markers and candidate without Git e
   assert.equal(prepared.status, "prepared");
   const before = git.calls.length;
 
-  const result = await workspace.inspect?.({ cwd: "/repo", issue: 35 });
+  const restartedWorkspace = createGitIssueDeliveryWorkspace(git.run);
+  const result = await restartedWorkspace.inspect({ cwd: "/repo", issue: 35 });
 
   assert.deepEqual(result, {
     status: "active",
     delivery: {
       identity,
       branch: "matty/deliver-35-4533aa2a",
+      integrationBranch: "main",
       integrationSha: "base-sha",
       candidateSha: null,
     },
@@ -207,10 +209,10 @@ test("stale active state with a missing owner marker blocks read-only inspection
   git.refs.delete(ownerRef);
   const before = git.calls.length;
 
-  const result = await workspace.inspect?.({ cwd: "/repo", issue: 35 });
+  const result = await workspace.inspect({ cwd: "/repo", issue: 35 });
 
-  assert.equal(result?.status, "blocked");
-  if (result?.status === "blocked") {
+  assert.equal(result.status, "blocked");
+  if (result.status === "blocked") {
     assert.deepEqual(result.exceptionBrief.evidence, ["delivery-ownership-mismatch"]);
   }
   assert.equal(git.calls.slice(before).some(({ args }) =>

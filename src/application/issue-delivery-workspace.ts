@@ -39,7 +39,7 @@ export interface DeliveryOwnershipRecord {
 
 export interface IssueDeliveryWorkspacePort {
   inspect(cwd: string): Promise<WorkspaceCheckoutFacts>;
-  inspectActive?(
+  inspectActive(
     cwd: string,
     issue: number,
   ): Promise<ExistingIssueDeliveryResult>;
@@ -138,9 +138,7 @@ export function createIssueDeliveryWorkspace(
 ): IssueDeliveryWorkspace {
   return {
     async inspect(request) {
-      return port.inspectActive
-        ? await port.inspectActive(request.cwd, request.issue)
-        : { status: "absent" };
+      return await port.inspectActive(request.cwd, request.issue);
     },
     async prepare(request) {
       const facts = await port.inspect(request.cwd);

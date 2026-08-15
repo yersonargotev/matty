@@ -1,5 +1,7 @@
 import {
+  candidateCheck,
   ISSUE_DELIVERY_WORKFLOW,
+  type CandidateCheck,
   type ExceptionBrief,
   type IssueDeliveryEvidenceCode,
   type DeliveryBlockerCode,
@@ -64,6 +66,7 @@ export type IssueDeliveryWorkspaceResult =
 export interface ActiveDeliveryInspection {
   identity: DeliveryIdentity;
   branch: string;
+  integrationBranch: string;
   integrationSha: string;
   candidateSha: string | null;
 }
@@ -74,7 +77,7 @@ export type ExistingIssueDeliveryResult =
   | { status: "blocked"; exceptionBrief: ExceptionBrief };
 
 export interface IssueDeliveryWorkspace {
-  inspect?(
+  inspect(
     request: { cwd: string; issue: number },
   ): Promise<ExistingIssueDeliveryResult>;
   prepare(
@@ -85,11 +88,11 @@ export interface IssueDeliveryWorkspace {
 export interface IssueDeliveryInspection {
   issue: { state: "open" | "closed" };
   pullRequests: Array<{ headSha: string }>;
-  checks: Array<{
-    status: "queued" | "in_progress" | "completed";
-    conclusion: "success" | "neutral" | "skipped" | "failure" |
-      "cancelled" | "timed_out" | "action_required" | "stale" | null;
-  }>;
+  remoteBranches: {
+    deliverySha: string | null;
+    integrationSha: string;
+  };
+  checks: CandidateCheck[];
 }
 
 export interface IssueDeliveryInspectionRequest extends ActiveDeliveryInspection {}
@@ -184,35 +187,34 @@ function activeReport(
   facts: IssueDeliveryInspection,
 ): IssueDeliveryOutcome {
   if (
+    typeof delivery.integrationBranch !== "string" ||
+    delivery.integrationBranch.length === 0 ||
     !isCommitSha(delivery.integrationSha) ||
     (delivery.candidateSha !== null && !isCommitSha(delivery.candidateSha)) ||
     (facts.issue.state !== "open" && facts.issue.state !== "closed") ||
     !Array.isArray(facts.pullRequests) ||
     facts.pullRequests.some((pullRequest) => !isCommitSha(pullRequest.headSha)) ||
+    typeof facts.remoteBranches !== "object" || facts.remoteBranches === null ||
+    !(facts.remoteBranches.deliverySha === null ||
+      isCommitSha(facts.remoteBranches.deliverySha)) ||
+    !isCommitSha(facts.remoteBranches.integrationSha) ||
     !Array.isArray(facts.checks)
   ) {
     throw new Error("malformed delivery inspection");
   }
-  const statuses = new Set(["queued", "in_progress", "completed"]);
-  const conclusions = new Set([
-    "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
-    "action_required", "stale",
-  ]);
-  if (facts.checks.some((check) =>
-    !statuses.has(check.status) ||
-    !(check.conclusion === null || conclusions.has(check.conclusion)) ||
-    (check.status === "completed") === (check.conclusion === null)
-  )) {
-    throw new Error("malformed delivery inspection");
+  for (const check of facts.checks) {
+    candidateCheck(check.status, check.conclusion);
   }
   const gate = delivery.candidateSha === null ? "implementation" : "verification";
   if (facts.pullRequests.length > 1) {
     return reconciliationBlocked(gate, "delivery-pr-ambiguous");
   }
+  const ownedCandidate = delivery.candidateSha ?? delivery.integrationSha;
   if (
-    facts.pullRequests.length === 1 &&
-    facts.pullRequests[0]!.headSha !==
-      (delivery.candidateSha ?? delivery.integrationSha)
+    (facts.pullRequests.length === 1 &&
+      facts.pullRequests[0]!.headSha !== ownedCandidate) ||
+    (facts.remoteBranches.deliverySha !== null &&
+      facts.remoteBranches.deliverySha !== ownedCandidate)
   ) {
     return reconciliationBlocked(gate, "delivery-candidate-drift");
   }
@@ -227,6 +229,9 @@ function activeReport(
   const blockers: DeliveryBlockerCode[] = [];
   if (gate === "implementation") blockers.push("implementation-required");
   if (facts.issue.state === "closed") blockers.push("issue-closed");
+  if (facts.remoteBranches.integrationSha !== delivery.integrationSha) {
+    blockers.push("integration-advanced");
+  }
   if (failed > 0) blockers.push("checks-failing");
   if (pending > 0) blockers.push("checks-pending");
   const state = failed > 0 ? "failing" : pending > 0 ? "pending" :
@@ -251,7 +256,7 @@ export async function deliverIssue(
   const issueReference = parseIssueReference(request.issue);
   if (!issueReference) return invalidIssueReference();
 
-  if (workspace.inspect) {
+  {
     let existing: ExistingIssueDeliveryResult;
     try {
       existing = await workspace.inspect({ cwd: request.cwd, issue: issueReference.number });
@@ -282,8 +287,6 @@ export async function deliverIssue(
     if (request.intent === "status") {
       return reconciliationBlocked("implementation", "delivery-not-active");
     }
-  } else if (request.intent === "status") {
-    return reconciliationBlocked("implementation", "delivery-inspection-unavailable");
   }
 
   const qualification = await qualifyIssueDelivery(request, readPreflight);

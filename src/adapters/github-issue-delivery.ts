@@ -15,6 +15,7 @@ import {
   type ParsedIssueReference,
 } from "../application/issue-delivery.ts";
 import {
+  candidateCheck,
   ISSUE_DELIVERY_WORKFLOW,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
@@ -224,6 +225,14 @@ async function readPreflight(
   };
 }
 
+function githubNotFound(error: unknown): boolean {
+  const stderr = error && typeof error === "object" &&
+      "stderr" in error && typeof error.stderr === "string"
+    ? error.stderr
+    : "";
+  return /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr);
+}
+
 async function readDeliveryInspection(
   request: IssueDeliveryInspectionRequest,
   cwd: string,
@@ -273,43 +282,80 @@ async function readDeliveryInspection(
     return { headSha: sha };
   });
 
+  const readBranchSha = async (
+    branch: string,
+    missingIsNormal: boolean,
+  ): Promise<string | null> => {
+    try {
+      const raw = await runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/git/ref/heads/${encodeURIComponent(branch)}`],
+        cwd,
+      );
+      const value = JSON.parse(raw) as { object?: unknown };
+      if (
+        typeof value.object !== "object" || value.object === null ||
+        Array.isArray(value.object) ||
+        typeof (value.object as { sha?: unknown }).sha !== "string"
+      ) {
+        throw new Error("invalid branch inspection");
+      }
+      return (value.object as { sha: string }).sha;
+    } catch (error) {
+      if (missingIsNormal && githubNotFound(error)) return null;
+      throw error;
+    }
+  };
+  const deliverySha = await readBranchSha(request.branch, true);
+  const integrationSha = await readBranchSha(request.integrationBranch, false);
+  if (integrationSha === null) throw new Error("integration branch is unavailable");
+
   let checks: IssueDeliveryInspection["checks"] = [];
   if (request.candidateSha !== null) {
-    const checksRaw = await runCommand(
-      "gh",
-      ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs`],
-      cwd,
-    );
-    const value = JSON.parse(checksRaw) as { check_runs?: unknown };
-    if (!Array.isArray(value.check_runs)) throw new Error("invalid check inspection");
-    const statuses = new Set(["queued", "in_progress", "completed"]);
-    const conclusions = new Set([
-      "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
-      "action_required", "stale",
+    const [checksRaw, statusesRaw] = await Promise.all([
+      runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs?per_page=100`],
+        cwd,
+      ),
+      runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/status?per_page=100`],
+        cwd,
+      ),
     ]);
-    checks = value.check_runs.map((run) => {
+    const checkRuns = JSON.parse(checksRaw) as { check_runs?: unknown };
+    if (!Array.isArray(checkRuns.check_runs)) {
+      throw new Error("invalid check inspection");
+    }
+    const combinedStatus = JSON.parse(statusesRaw) as { statuses?: unknown };
+    if (!Array.isArray(combinedStatus.statuses)) {
+      throw new Error("invalid status inspection");
+    }
+    checks = checkRuns.check_runs.map((run) => {
       if (typeof run !== "object" || run === null || Array.isArray(run)) {
         throw new Error("invalid check inspection");
       }
       const { status, conclusion } = run as { status?: unknown; conclusion?: unknown };
-      if (
-        typeof status !== "string" || !statuses.has(status) ||
-        !(conclusion === null ||
-          (typeof conclusion === "string" && conclusions.has(conclusion))) ||
-        (status === "completed" && conclusion === null) ||
-        (status !== "completed" && conclusion !== null)
-      ) {
-        throw new Error("invalid check inspection");
-      }
-      return {
-        status: status as IssueDeliveryInspection["checks"][number]["status"],
-        conclusion: conclusion as IssueDeliveryInspection["checks"][number]["conclusion"],
-      };
+      return candidateCheck(status, conclusion);
     });
+    checks.push(...combinedStatus.statuses.map((status) => {
+      if (typeof status !== "object" || status === null || Array.isArray(status)) {
+        throw new Error("invalid status inspection");
+      }
+      const state = (status as { state?: unknown }).state;
+      if (state === "pending") return candidateCheck("queued", null);
+      if (state === "success") return candidateCheck("completed", "success");
+      if (state === "failure" || state === "error") {
+        return candidateCheck("completed", "failure");
+      }
+      throw new Error("invalid status inspection");
+    }));
   }
   return {
     issue: { state: issue.state as "open" | "closed" },
     pullRequests,
+    remoteBranches: { deliverySha, integrationSha },
     checks,
   };
 }
