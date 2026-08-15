@@ -148,6 +148,37 @@ test("returns malformed assistant events as protocol failure data", async () => 
   assert.equal(outcome.failure.kind, "protocol-failed");
 });
 
+test("accepts custom string message content without replacing the assistant result", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("custom-message-content", {
+    onProgress(event) {
+      progress.push(event);
+    },
+  });
+
+  assert.equal(
+    outcome.status,
+    "succeeded",
+    outcome.status === "failed"
+      ? outcome.failure.kind
+      : `unexpected status: ${outcome.status}`,
+  );
+  const observed = JSON.parse(outcome.output);
+  assert.deepEqual(observed, {
+    pid: outcome.child.pid,
+    ppid: process.pid,
+    provider: "controlled-provider",
+    model: "controlled-model",
+    thinking: "high",
+    cwd: canonicalRoot,
+    authDigest,
+  });
+  assert.deepEqual(
+    progress.map((event) => event.type),
+    ["started", "identified", "message"],
+  );
+});
+
 test("reports real Pi tool execution completion as ordered progress", async () => {
   const progress: DelegatedTaskProgress[] = [];
   const outcome = await createRunner().run("tool-progress", {
