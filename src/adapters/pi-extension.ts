@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
-import { createGithubIssueDeliveryQualifier } from "./github-issue-delivery.ts";
+import { createGithubIssueDelivery } from "./github-issue-delivery.ts";
 import {
   createChildPiRunner,
   type PiInvocation,
@@ -1690,7 +1690,7 @@ export function registerPiMatty(
       ),
     },
   }, {
-    qualifyIssueDelivery: createGithubIssueDeliveryQualifier(environment),
+    qualifyIssueDelivery: createGithubIssueDelivery(environment),
   });
 }
 

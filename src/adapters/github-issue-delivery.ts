@@ -6,6 +6,7 @@ import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  deliverIssue,
   qualifyIssueDelivery,
   type IssueDeliveryPreflight,
   type IssueDeliveryRequest,
@@ -15,6 +16,10 @@ import {
   ISSUE_DELIVERY_WORKFLOW,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
+import {
+  createGitIssueDeliveryWorkspace,
+  type GitDeliveryCommandRunner,
+} from "./git-issue-delivery-workspace.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -215,6 +220,20 @@ async function readPreflight(
     ...(issue ? { issue } : {}),
     skills: await inspectSkills(environment),
   };
+}
+
+export function createGithubIssueDelivery(
+  environment: NodeJS.ProcessEnv,
+  runCommand: IssueDeliveryCommandReader = runCommandForStdout,
+  runGit?: GitDeliveryCommandRunner,
+): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
+  const workspace = createGitIssueDeliveryWorkspace(runGit);
+  return async (request) =>
+    deliverIssue(
+      request,
+      (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
+      workspace,
+    );
 }
 
 export function createGithubIssueDeliveryQualifier(

@@ -424,6 +424,8 @@ async function main() {
     assert.equal(packMetadata.name, "@yargote/matty");
     assert.equal(packMetadata.version, "0.2.0");
     const expectedDistFiles = [
+      "dist/adapters/git-issue-delivery-workspace.d.ts",
+      "dist/adapters/git-issue-delivery-workspace.js",
       "dist/adapters/github-issue-delivery.d.ts",
       "dist/adapters/github-issue-delivery.js",
       "dist/adapters/pi-extension.d.ts",
@@ -438,6 +440,8 @@ async function main() {
       "dist/application/explorer-delegation.js",
       "dist/application/inspection-role-delegation.d.ts",
       "dist/application/inspection-role-delegation.js",
+      "dist/application/issue-delivery-workspace.d.ts",
+      "dist/application/issue-delivery-workspace.js",
       "dist/application/issue-delivery.d.ts",
       "dist/application/issue-delivery.js",
       "dist/application/register-matty.d.ts",

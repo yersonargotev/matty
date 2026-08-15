@@ -37,6 +37,9 @@ export type IssueDeliveryEvidenceCode =
   | "issue-not-open"
   | "issue-not-ready"
   | "qualification-inspection-failed"
+  | "delivery-active"
+  | "delivery-ownership-mismatch"
+  | "workspace-preparation-failed"
   | `workflow-dependency-missing:${string}`
   | `workflow-dependency-identity-mismatch:${string}`
   | `workflow-dependency-provenance-mismatch:${string}`
@@ -44,7 +47,10 @@ export type IssueDeliveryEvidenceCode =
 
 export interface ExceptionBrief {
   schemaVersion: 1;
-  gate: "delivery-authorization" | "capability-preflight";
+  gate:
+    | "delivery-authorization"
+    | "capability-preflight"
+    | "workspace-preparation";
   evidence: IssueDeliveryEvidenceCode[];
   need: string;
   options: string[];
@@ -59,12 +65,36 @@ export interface QualifiedIssueDelivery {
     definitionVersion: 1;
     guidanceVersion: 1;
   };
-  deliveryIdentity: {
-    repository: string;
-    tracker: "github";
-    issue: number;
-  };
+  deliveryIdentity: DeliveryIdentity;
   evidence: IssueDeliveryEvidenceCode[];
+}
+
+export interface DeliveryIdentity {
+  repository: string;
+  tracker: "github";
+  issue: number;
+}
+
+export interface DeliveryWorkspace {
+  root: string;
+  path: string;
+  branch: string;
+  isolation: "in-place" | "worktree";
+  resumed: boolean;
+  startingCheckout: {
+    root: string;
+    ref: string | null;
+    sha: string;
+  };
+}
+
+export interface PreparedIssueDelivery {
+  schemaVersion: 1;
+  status: "prepared";
+  workflow: QualifiedIssueDelivery["workflow"];
+  deliveryIdentity: DeliveryIdentity;
+  evidence: IssueDeliveryEvidenceCode[];
+  workspace: DeliveryWorkspace;
 }
 
 export interface BlockedIssueDelivery {
@@ -75,4 +105,5 @@ export interface BlockedIssueDelivery {
 
 export type IssueDeliveryOutcome =
   | QualifiedIssueDelivery
+  | PreparedIssueDelivery
   | BlockedIssueDelivery;
