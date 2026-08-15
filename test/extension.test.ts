@@ -190,6 +190,43 @@ test("only explicit /matty deliver input invokes Issue Delivery", async () => {
   assert.equal(harness.notifications.at(-1)?.level, "info");
 });
 
+test("delivery status is explicit and general diagnostics remain offline", async () => {
+  const harness = createPiHarness();
+  const requests: Array<{ intent: string; issue: string }> = [];
+  registerMatty(harness.host, {
+    packageVersion: "0.2.0",
+    piVersion: "0.83.0",
+    platform: "darwin",
+    arch: "arm64",
+    web: { state: "unavailable", registeredTools: [] },
+  }, {
+    deliverIssue: async (request) => {
+      requests.push({ intent: request.intent, issue: request.issue });
+      return {
+        schemaVersion: 1,
+        status: "active",
+        deliveryIdentity: {
+          repository: "github.com/yersonargotev/matty",
+          tracker: "github",
+          issue: 34,
+        },
+        gate: "implementation",
+        candidateSha: null,
+        checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
+        blockers: ["implementation-required"],
+      };
+    },
+  });
+
+  await harness.handlers.get("session_start")?.({ reason: "startup" });
+  await harness.commands.get("matty")?.handle("status");
+  await harness.commands.get("matty")?.handle("doctor");
+  assert.deepEqual(requests, []);
+
+  await harness.commands.get("matty")?.handle("deliver 34 --status");
+  assert.deepEqual(requests, [{ intent: "status", issue: "34" }]);
+});
+
 test("status and doctor render the same Redacted Diagnostic snapshot", async () => {
   const harness = createPiHarness();
   registerMatty(harness.host, {

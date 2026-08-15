@@ -164,6 +164,40 @@ export function createGitIssueDeliveryWorkspace(
   };
 
   const port: IssueDeliveryWorkspacePort = {
+    async inspectActive(cwd) {
+      const root = await run(["rev-parse", "--show-toplevel"], cwd);
+      const active = await readRecord(ACTIVE_REF, root);
+      if (!active) return { status: "absent" };
+      const owner = await readRecord(ownerRef(active.key), root);
+      if (!owner || !sameOwnership(owner, active)) {
+        return {
+          status: "blocked",
+          exceptionBrief: {
+            schemaVersion: 1,
+            gate: "implementation",
+            evidence: ["delivery-ownership-mismatch"],
+            need: "Active and owner delivery markers disagree.",
+            options: ["Restore one matching pair of durable delivery ownership markers."],
+            recommendation: "Do not infer ownership from branch or worktree names.",
+          },
+        };
+      }
+      const candidateSha = await run(
+        ["rev-parse", "--verify", `refs/heads/${active.branch}`],
+        root,
+      );
+      if (!candidateSha) throw new Error("owned delivery branch is unavailable");
+      return {
+        status: "active",
+        delivery: {
+          identity: active.identity,
+          branch: active.branch,
+          integrationSha: active.integration.sha,
+          candidateSha: candidateSha === active.integration.sha ? null : candidateSha,
+        },
+      };
+    },
+
     async inspect(cwd): Promise<WorkspaceCheckoutFacts> {
       const root = await run(["rev-parse", "--show-toplevel"], cwd);
       const [ref, sha, status, remoteHead] = await Promise.all([

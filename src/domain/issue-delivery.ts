@@ -40,6 +40,10 @@ export type IssueDeliveryEvidenceCode =
   | "delivery-active"
   | "delivery-ownership-mismatch"
   | "workspace-preparation-failed"
+  | "delivery-not-active"
+  | "delivery-inspection-unavailable"
+  | "delivery-pr-ambiguous"
+  | "delivery-candidate-drift"
   | `workflow-dependency-missing:${string}`
   | `workflow-dependency-identity-mismatch:${string}`
   | `workflow-dependency-provenance-mismatch:${string}`
@@ -50,7 +54,9 @@ export interface ExceptionBrief {
   gate:
     | "delivery-authorization"
     | "capability-preflight"
-    | "workspace-preparation";
+    | "workspace-preparation"
+    | "implementation"
+    | "verification";
   evidence: IssueDeliveryEvidenceCode[];
   need: string;
   options: string[];
@@ -97,6 +103,30 @@ export interface PreparedIssueDelivery {
   workspace: DeliveryWorkspace;
 }
 
+export type DeliveryGate = "implementation" | "verification";
+
+export type DeliveryBlockerCode =
+  | "implementation-required"
+  | "issue-closed"
+  | "checks-pending"
+  | "checks-failing";
+
+export interface ActiveIssueDelivery {
+  schemaVersion: 1;
+  status: "active";
+  deliveryIdentity: DeliveryIdentity;
+  gate: DeliveryGate;
+  candidateSha: string | null;
+  checks: {
+    state: "none" | "passing" | "pending" | "failing";
+    total: number;
+    passed: number;
+    pending: number;
+    failed: number;
+  };
+  blockers: DeliveryBlockerCode[];
+}
+
 export interface BlockedIssueDelivery {
   schemaVersion: 1;
   status: "blocked";
@@ -106,4 +136,5 @@ export interface BlockedIssueDelivery {
 export type IssueDeliveryOutcome =
   | QualifiedIssueDelivery
   | PreparedIssueDelivery
+  | ActiveIssueDelivery
   | BlockedIssueDelivery;

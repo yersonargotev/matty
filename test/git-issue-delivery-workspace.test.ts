@@ -175,6 +175,49 @@ test("the Git adapter atomically publishes blob-valued owner and active refs bef
   );
 });
 
+test("active delivery inspection reads owned markers and candidate without Git effects", async () => {
+  const git = fakeGit();
+  const workspace = createGitIssueDeliveryWorkspace(git.run);
+  const prepared = await workspace.prepare({ cwd: "/repo", identity });
+  assert.equal(prepared.status, "prepared");
+  const before = git.calls.length;
+
+  const result = await workspace.inspect?.({ cwd: "/repo", issue: 35 });
+
+  assert.deepEqual(result, {
+    status: "active",
+    delivery: {
+      identity,
+      branch: "matty/deliver-35-4533aa2a",
+      integrationSha: "base-sha",
+      candidateSha: null,
+    },
+  });
+  const reads = git.calls.slice(before);
+  assert.equal(reads.some(({ args }) =>
+    ["hash-object", "update-ref", "switch"].includes(args[0]!) ||
+    (args[0] === "worktree" && args[1] === "add")
+  ), false);
+});
+
+test("stale active state with a missing owner marker blocks read-only inspection", async () => {
+  const git = fakeGit();
+  const workspace = createGitIssueDeliveryWorkspace(git.run);
+  assert.equal((await workspace.prepare({ cwd: "/repo", identity })).status, "prepared");
+  git.refs.delete(ownerRef);
+  const before = git.calls.length;
+
+  const result = await workspace.inspect?.({ cwd: "/repo", issue: 35 });
+
+  assert.equal(result?.status, "blocked");
+  if (result?.status === "blocked") {
+    assert.deepEqual(result.exceptionBrief.evidence, ["delivery-ownership-mismatch"]);
+  }
+  assert.equal(git.calls.slice(before).some(({ args }) =>
+    ["hash-object", "update-ref", "switch"].includes(args[0]!)
+  ), false);
+});
+
 test("expected missing active, owner, and branch refs allow normal preparation", async () => {
   const git = fakeGit();
 
@@ -214,7 +257,11 @@ test("non-missing Git inspection failures block without ref or workspace effects
 
       assert.equal(result.status, "blocked");
       if (result.status === "blocked") {
-        assert.deepEqual(result.exceptionBrief.evidence, ["workspace-preparation-failed"]);
+        assert.deepEqual(result.exceptionBrief.evidence, [
+          name === "active ref"
+            ? "delivery-inspection-unavailable"
+            : "workspace-preparation-failed",
+        ]);
         assert.equal(JSON.stringify(result).includes("inspection denied"), false);
       }
       assert.equal(git.calls.some(({ args }) => args[0] === "update-ref"), false);

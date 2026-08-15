@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import {
   deliverIssue,
   qualifyIssueDelivery,
+  type IssueDeliveryInspection,
+  type IssueDeliveryInspectionRequest,
   type IssueDeliveryPreflight,
   type IssueDeliveryRequest,
   type ParsedIssueReference,
@@ -222,6 +224,96 @@ async function readPreflight(
   };
 }
 
+async function readDeliveryInspection(
+  request: IssueDeliveryInspectionRequest,
+  cwd: string,
+  runCommand: IssueDeliveryCommandReader,
+): Promise<IssueDeliveryInspection> {
+  const repositoryName = request.identity.repository.slice("github.com/".length);
+  const owner = repositoryName.split("/")[0];
+  if (!owner || !repositoryName.includes("/")) {
+    throw new Error("invalid canonical repository identity");
+  }
+  const issueRaw = await runCommand(
+    "gh",
+    ["api", `repos/${repositoryName}/issues/${request.identity.issue}`],
+    cwd,
+  );
+  const issue = JSON.parse(issueRaw) as Record<string, unknown>;
+  if (
+    issue.number !== request.identity.issue ||
+    (issue.state !== "open" && issue.state !== "closed") ||
+    issue.pull_request !== undefined
+  ) {
+    throw new Error("invalid issue inspection");
+  }
+
+  const pullsRaw = await runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${repositoryName}/pulls?state=all&head=${encodeURIComponent(`${owner}:${request.branch}`)}&per_page=100`,
+    ],
+    cwd,
+  );
+  const pullsValue: unknown = JSON.parse(pullsRaw);
+  if (!Array.isArray(pullsValue)) throw new Error("invalid pull request inspection");
+  const pullRequests = pullsValue.map((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("invalid pull request inspection");
+    }
+    const head = (value as { head?: unknown }).head;
+    if (typeof head !== "object" || head === null || Array.isArray(head)) {
+      throw new Error("invalid pull request inspection");
+    }
+    const { sha, ref } = head as { sha?: unknown; ref?: unknown };
+    if (typeof sha !== "string" || sha.length === 0 || ref !== request.branch) {
+      throw new Error("invalid pull request inspection");
+    }
+    return { headSha: sha };
+  });
+
+  let checks: IssueDeliveryInspection["checks"] = [];
+  if (request.candidateSha !== null) {
+    const checksRaw = await runCommand(
+      "gh",
+      ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs`],
+      cwd,
+    );
+    const value = JSON.parse(checksRaw) as { check_runs?: unknown };
+    if (!Array.isArray(value.check_runs)) throw new Error("invalid check inspection");
+    const statuses = new Set(["queued", "in_progress", "completed"]);
+    const conclusions = new Set([
+      "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
+      "action_required", "stale",
+    ]);
+    checks = value.check_runs.map((run) => {
+      if (typeof run !== "object" || run === null || Array.isArray(run)) {
+        throw new Error("invalid check inspection");
+      }
+      const { status, conclusion } = run as { status?: unknown; conclusion?: unknown };
+      if (
+        typeof status !== "string" || !statuses.has(status) ||
+        !(conclusion === null ||
+          (typeof conclusion === "string" && conclusions.has(conclusion))) ||
+        (status === "completed" && conclusion === null) ||
+        (status !== "completed" && conclusion !== null)
+      ) {
+        throw new Error("invalid check inspection");
+      }
+      return {
+        status: status as IssueDeliveryInspection["checks"][number]["status"],
+        conclusion: conclusion as IssueDeliveryInspection["checks"][number]["conclusion"],
+      };
+    });
+  }
+  return {
+    issue: { state: issue.state as "open" | "closed" },
+    pullRequests,
+    checks,
+  };
+}
+
 export function createGithubIssueDelivery(
   environment: NodeJS.ProcessEnv,
   runCommand: IssueDeliveryCommandReader = runCommandForStdout,
@@ -233,6 +325,7 @@ export function createGithubIssueDelivery(
       request,
       (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
       workspace,
+      (inspection) => readDeliveryInspection(inspection, request.cwd, runCommand),
     );
 }
 
