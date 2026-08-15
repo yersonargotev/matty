@@ -26,6 +26,36 @@ The Matty-owned capability for bounded delegated execution with structured
 progress and terminal outcomes.
 _Avoid_: In-process agent simulation, stable Pi subagent API
 
+**Delegation**:
+One parent-requested `subagent` operation containing one or more Delegated Tasks
+under a shared requirement and failure policy.
+_Avoid_: Child process, individual task, capability contract
+
+**Delegation ID**:
+The opaque session identity assigned when Matty accepts a Delegation. A short
+form may be displayed, but process and tool-call identifiers never substitute for it.
+_Avoid_: PID, run ID, task index, tool call ID
+
+**Delegated Task**:
+One role-bound unit of work within a Delegation.
+_Avoid_: Delegation, child session
+
+**Child Execution**:
+One isolated Pi process attempting a Delegated Task. Its PID and run ID are
+diagnostic identity rather than the user-facing unit of management.
+_Avoid_: Delegation, agent identity
+
+**Delegation Registry**:
+The session-scoped, bounded record of active and recently completed Delegations
+used for observation and control. It retains every active Delegation and the 50
+most recent terminal Delegations.
+_Avoid_: Persistent history, child transcript, telemetry store
+
+**Delegation Console**:
+The user-facing `/matty delegations` view of the Delegation Registry, with
+Delegations as its primary unit and Delegated Tasks available for inspection.
+_Avoid_: Agents console, child process monitor, persistent fleet database
+
 **Matty Role**:
 One of five least-privilege child profiles: `explorer`, `reviewer`, `designer`,
 `researcher`, or `worker`.
