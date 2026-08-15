@@ -57,6 +57,10 @@ class MemoryWorkspacePort implements IssueDeliveryWorkspacePort {
     return this.facts;
   }
 
+  async inspectActive() {
+    return { status: "absent" as const };
+  }
+
   async readActive(): Promise<DeliveryOwnershipRecord | undefined> {
     return this.active;
   }

@@ -18,6 +18,14 @@ export type GitDeliveryCommandRunner = (
   input?: string,
 ) => Promise<string>;
 
+/** Returns the closed, case-normalized repository identity for a GitHub Git remote. */
+export function canonicalGithubRemote(remote: string): string | undefined {
+  const match = /^(?:(?:git@github\.com:)|(?:ssh:\/\/git@github\.com\/)|(?:https:\/\/github\.com\/))([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(
+    remote.trim(),
+  );
+  return match ? `github.com/${match[1]!.toLowerCase()}` : undefined;
+}
+
 export class GitDeliveryCommandError extends Error {
   readonly exitCode: number | null;
   readonly args: readonly string[];
@@ -164,6 +172,76 @@ export function createGitIssueDeliveryWorkspace(
   };
 
   const port: IssueDeliveryWorkspacePort = {
+    async inspectActive(cwd) {
+      const root = await run(["rev-parse", "--show-toplevel"], cwd);
+      const active = await readRecord(ACTIVE_REF, root);
+      if (!active) return { status: "absent" };
+      const owner = await readRecord(ownerRef(active.key), root);
+      if (!owner || !sameOwnership(owner, active)) {
+        return {
+          status: "blocked",
+          exceptionBrief: {
+            schemaVersion: 1,
+            gate: "implementation",
+            evidence: ["delivery-ownership-mismatch"],
+            need: "Active and owner delivery markers disagree.",
+            options: ["Restore one matching pair of durable delivery ownership markers."],
+            recommendation: "Do not infer ownership from branch or worktree names.",
+          },
+        };
+      }
+      const remoteIdentity = canonicalGithubRemote(
+        await run(["remote", "get-url", "origin"], root),
+      );
+      if (remoteIdentity !== active.identity.repository.toLowerCase()) {
+        return {
+          status: "blocked",
+          exceptionBrief: {
+            schemaVersion: 1,
+            gate: "implementation",
+            evidence: ["delivery-ownership-mismatch"],
+            need: "The current canonical Git origin disagrees with the active Delivery Identity.",
+            options: ["Open the repository owned by the active Delivery Identity or restore its canonical origin."],
+            recommendation: "Do not trust copied delivery markers or infer repository ownership from an issue number.",
+          },
+        };
+      }
+      let candidateSha: string;
+      try {
+        candidateSha = await run(
+          ["rev-parse", "--verify", `refs/heads/${active.branch}`],
+          root,
+        );
+        if (!candidateSha) throw new Error("owned delivery branch is unavailable");
+        await run(
+          ["merge-base", "--is-ancestor", active.integration.sha, candidateSha],
+          root,
+        );
+      } catch {
+        return {
+          status: "blocked",
+          exceptionBrief: {
+            schemaVersion: 1,
+            gate: "implementation",
+            evidence: ["delivery-candidate-ancestry-unproven"],
+            need: "The owned branch cannot be proven to descend from its recorded integration commit.",
+            options: ["Restore inspectable owned branch ancestry before requesting delivery status."],
+            recommendation: "Do not treat a stale, diverged, or uncertain branch head as a delivery candidate.",
+          },
+        };
+      }
+      return {
+        status: "active",
+        delivery: {
+          identity: active.identity,
+          branch: active.branch,
+          integrationBranch: active.integration.branch,
+          integrationSha: active.integration.sha,
+          candidateSha: candidateSha === active.integration.sha ? null : candidateSha,
+        },
+      };
+    },
+
     async inspect(cwd): Promise<WorkspaceCheckoutFacts> {
       const root = await run(["rev-parse", "--show-toplevel"], cwd);
       const [ref, sha, status, remoteHead] = await Promise.all([

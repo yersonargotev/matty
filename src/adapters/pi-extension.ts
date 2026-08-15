@@ -1690,7 +1690,7 @@ export function registerPiMatty(
       ),
     },
   }, {
-    qualifyIssueDelivery: createGithubIssueDelivery(environment),
+    deliverIssue: createGithubIssueDelivery(environment),
   });
 }
 

@@ -7,16 +7,20 @@ import { promisify } from "node:util";
 
 import {
   deliverIssue,
-  qualifyIssueDelivery,
+  type IssueDeliveryInspection,
+  type IssueDeliveryInspectionRequest,
   type IssueDeliveryPreflight,
   type IssueDeliveryRequest,
+  type IssueDeliveryWorkspace,
   type ParsedIssueReference,
 } from "../application/issue-delivery.ts";
 import {
+  candidateCheck,
   ISSUE_DELIVERY_WORKFLOW,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
 import {
+  canonicalGithubRemote,
   createGitIssueDeliveryWorkspace,
   type GitDeliveryCommandRunner,
 } from "./git-issue-delivery-workspace.ts";
@@ -41,13 +45,6 @@ async function runCommandForStdout(
     maxBuffer: 1024 * 1024,
   });
   return result.stdout.trim();
-}
-
-function canonicalGithubRemote(remote: string): string | undefined {
-  const match = /^(?:git@github\.com:|https:\/\/github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(
-    remote.trim(),
-  );
-  return match ? `github.com/${match[1]!.toLowerCase()}` : undefined;
 }
 
 async function inspectRepository(
@@ -197,13 +194,7 @@ async function readPreflight(
         };
       }
     } catch (error) {
-      const stderr = error && typeof error === "object" &&
-          "stderr" in error && typeof error.stderr === "string"
-        ? error.stderr
-        : "";
-      issueInspection = /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr)
-        ? "not-found"
-        : "failed";
+      issueInspection = githubNotFound(error) ? "not-found" : "failed";
     }
   }
 
@@ -222,27 +213,252 @@ async function readPreflight(
   };
 }
 
+function githubNotFound(error: unknown): boolean {
+  const stderr = error && typeof error === "object" &&
+      "stderr" in error && typeof error.stderr === "string"
+    ? error.stderr
+    : "";
+  return /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr);
+}
+
+function parsePaginatedPages(raw: string, kind: string): unknown[] {
+  const value: unknown = JSON.parse(raw);
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`invalid ${kind} pagination`);
+  }
+  return value;
+}
+
+async function readDeliveryInspection(
+  request: IssueDeliveryInspectionRequest,
+  cwd: string,
+  runCommand: IssueDeliveryCommandReader,
+): Promise<IssueDeliveryInspection> {
+  const repositoryName = request.identity.repository.slice("github.com/".length);
+  const owner = repositoryName.split("/")[0];
+  if (!owner || !repositoryName.includes("/")) {
+    throw new Error("invalid canonical repository identity");
+  }
+  const issueRaw = await runCommand(
+    "gh",
+    ["api", `repos/${repositoryName}/issues/${request.identity.issue}`],
+    cwd,
+  );
+  const issue = JSON.parse(issueRaw) as Record<string, unknown>;
+  if (
+    issue.number !== request.identity.issue ||
+    (issue.state !== "open" && issue.state !== "closed") ||
+    issue.pull_request !== undefined
+  ) {
+    throw new Error("invalid issue inspection");
+  }
+
+  const pullsRaw = await runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${repositoryName}/pulls?state=all&head=${encodeURIComponent(`${owner}:${request.branch}`)}&per_page=100`,
+      "--paginate",
+      "--slurp",
+    ],
+    cwd,
+  );
+  const pullPages = parsePaginatedPages(pullsRaw, "pull request");
+  const pullRequests: IssueDeliveryInspection["pullRequests"] = [];
+  for (const page of pullPages) {
+    if (!Array.isArray(page)) throw new Error("invalid pull request inspection");
+    for (const value of page) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error("invalid pull request inspection");
+      }
+      const pull = value as {
+        head?: unknown;
+        base?: unknown;
+        state?: unknown;
+        merged_at?: unknown;
+      };
+      if (
+        typeof pull.head !== "object" || pull.head === null || Array.isArray(pull.head) ||
+        typeof pull.base !== "object" || pull.base === null || Array.isArray(pull.base) ||
+        (pull.state !== "open" && pull.state !== "closed") ||
+        !(pull.merged_at === null || typeof pull.merged_at === "string")
+      ) {
+        throw new Error("invalid pull request inspection");
+      }
+      const head = pull.head as { sha?: unknown; ref?: unknown; repo?: unknown };
+      const base = pull.base as { ref?: unknown };
+      if (
+        typeof head.sha !== "string" || head.sha.length === 0 ||
+        typeof head.ref !== "string" || !Object.hasOwn(head, "repo") ||
+        !(head.repo === null ||
+          (typeof head.repo === "object" && !Array.isArray(head.repo) &&
+            typeof (head.repo as { full_name?: unknown }).full_name === "string")) ||
+        typeof base.ref !== "string"
+      ) {
+        throw new Error("invalid pull request inspection");
+      }
+      const headRepository = head.repo === null
+        ? null
+        : `github.com/${
+          (head.repo as { full_name: string }).full_name.toLowerCase()
+        }`;
+      const compatible =
+        headRepository === request.identity.repository &&
+        head.ref === request.branch &&
+        base.ref === request.integrationBranch &&
+        pull.state === "open" &&
+        pull.merged_at === null;
+      pullRequests.push(compatible
+        ? { compatibility: "compatible", headSha: head.sha }
+        : { compatibility: "incompatible" });
+    }
+  }
+
+  const readBranchSha = async (
+    branch: string,
+    missingIsNormal: boolean,
+  ): Promise<string | null> => {
+    try {
+      const raw = await runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/git/ref/heads/${encodeURIComponent(branch)}`],
+        cwd,
+      );
+      const value = JSON.parse(raw) as { object?: unknown };
+      if (
+        typeof value.object !== "object" || value.object === null ||
+        Array.isArray(value.object) ||
+        typeof (value.object as { sha?: unknown }).sha !== "string"
+      ) {
+        throw new Error("invalid branch inspection");
+      }
+      return (value.object as { sha: string }).sha;
+    } catch (error) {
+      if (missingIsNormal && githubNotFound(error)) return null;
+      throw error;
+    }
+  };
+  const deliverySha = await readBranchSha(request.branch, true);
+  const integrationSha = await readBranchSha(request.integrationBranch, false);
+  if (integrationSha === null) throw new Error("integration branch is unavailable");
+
+  let checks: IssueDeliveryInspection["checks"] = [];
+  if (
+    request.candidateSha !== null &&
+    deliverySha === request.candidateSha
+  ) {
+    const [checksRaw, statusesRaw] = await Promise.all([
+      runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/check-runs?per_page=100`, "--paginate", "--slurp"],
+        cwd,
+      ),
+      runCommand(
+        "gh",
+        ["api", `repos/${repositoryName}/commits/${request.candidateSha}/status?per_page=100`, "--paginate", "--slurp"],
+        cwd,
+      ),
+    ]);
+    const checkRunPages = parsePaginatedPages(checksRaw, "check run");
+    const rawCheckRuns: unknown[] = [];
+    let expectedTotal: number | undefined;
+    let hasTotalCount: boolean | undefined;
+    for (const page of checkRunPages) {
+      if (typeof page !== "object" || page === null || Array.isArray(page)) {
+        throw new Error("invalid check inspection");
+      }
+      const { check_runs: pageRuns, total_count: totalCount } = page as {
+        check_runs?: unknown;
+        total_count?: unknown;
+      };
+      if (!Array.isArray(pageRuns)) throw new Error("invalid check inspection");
+      const pageHasTotalCount = totalCount !== undefined;
+      if (hasTotalCount !== undefined && hasTotalCount !== pageHasTotalCount) {
+        throw new Error("inconsistent check inspection");
+      }
+      hasTotalCount = pageHasTotalCount;
+      if (pageHasTotalCount) {
+        if (!Number.isSafeInteger(totalCount) || (totalCount as number) < 0) {
+          throw new Error("invalid check inspection");
+        }
+        if (expectedTotal !== undefined && expectedTotal !== totalCount) {
+          throw new Error("inconsistent check inspection");
+        }
+        expectedTotal = totalCount as number;
+      }
+      rawCheckRuns.push(...pageRuns);
+    }
+    if (expectedTotal !== undefined && rawCheckRuns.length !== expectedTotal) {
+      throw new Error("incomplete check inspection");
+    }
+
+    const statusPages = parsePaginatedPages(statusesRaw, "status");
+    const rawStatuses: unknown[] = [];
+    let expectedStatusTotal: number | undefined;
+    let hasStatusTotalCount: boolean | undefined;
+    for (const page of statusPages) {
+      if (typeof page !== "object" || page === null || Array.isArray(page)) {
+        throw new Error("invalid status inspection");
+      }
+      const { statuses: pageStatuses, total_count: totalCount } = page as {
+        statuses?: unknown;
+        total_count?: unknown;
+      };
+      if (!Array.isArray(pageStatuses)) throw new Error("invalid status inspection");
+      const pageHasTotalCount = totalCount !== undefined;
+      if (
+        (hasStatusTotalCount !== undefined && hasStatusTotalCount !== pageHasTotalCount) ||
+        (pageHasTotalCount && (!Number.isSafeInteger(totalCount) || (totalCount as number) < 0)) ||
+        (expectedStatusTotal !== undefined && expectedStatusTotal !== totalCount)
+      ) {
+        throw new Error("inconsistent status inspection");
+      }
+      hasStatusTotalCount = pageHasTotalCount;
+      if (pageHasTotalCount) expectedStatusTotal = totalCount as number;
+      rawStatuses.push(...pageStatuses);
+    }
+    if (expectedStatusTotal !== undefined && rawStatuses.length !== expectedStatusTotal) {
+      throw new Error("incomplete status inspection");
+    }
+    checks = rawCheckRuns.map((run) => {
+      if (typeof run !== "object" || run === null || Array.isArray(run)) {
+        throw new Error("invalid check inspection");
+      }
+      const { status, conclusion } = run as { status?: unknown; conclusion?: unknown };
+      return candidateCheck(status, conclusion);
+    });
+    checks.push(...rawStatuses.map((status) => {
+      if (typeof status !== "object" || status === null || Array.isArray(status)) {
+        throw new Error("invalid status inspection");
+      }
+      const state = (status as { state?: unknown }).state;
+      if (state === "pending") return candidateCheck("queued", null);
+      if (state === "success") return candidateCheck("completed", "success");
+      if (state === "failure" || state === "error") {
+        return candidateCheck("completed", "failure");
+      }
+      throw new Error("invalid status inspection");
+    }));
+  }
+  return {
+    issue: { state: issue.state as "open" | "closed" },
+    pullRequests,
+    remoteBranches: { deliverySha, integrationSha },
+    checks,
+  };
+}
+
 export function createGithubIssueDelivery(
   environment: NodeJS.ProcessEnv,
   runCommand: IssueDeliveryCommandReader = runCommandForStdout,
   runGit?: GitDeliveryCommandRunner,
+  workspace: IssueDeliveryWorkspace = createGitIssueDeliveryWorkspace(runGit),
 ): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
-  const workspace = createGitIssueDeliveryWorkspace(runGit);
   return async (request) =>
     deliverIssue(
       request,
       (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
       workspace,
-    );
-}
-
-export function createGithubIssueDeliveryQualifier(
-  environment: NodeJS.ProcessEnv,
-  runCommand: IssueDeliveryCommandReader = runCommandForStdout,
-): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
-  return async (request) =>
-    qualifyIssueDelivery(
-      request,
-      (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
+      (inspection) => readDeliveryInspection(inspection, request.cwd, runCommand),
     );
 }

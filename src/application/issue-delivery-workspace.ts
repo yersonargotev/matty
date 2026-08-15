@@ -7,6 +7,7 @@ import type {
   ExceptionBrief,
 } from "../domain/issue-delivery.ts";
 import type {
+  ExistingIssueDeliveryResult,
   IssueDeliveryWorkspace,
   IssueDeliveryWorkspaceRequest,
   IssueDeliveryWorkspaceResult,
@@ -38,6 +39,10 @@ export interface DeliveryOwnershipRecord {
 
 export interface IssueDeliveryWorkspacePort {
   inspect(cwd: string): Promise<WorkspaceCheckoutFacts>;
+  inspectActive(
+    cwd: string,
+    issue: number,
+  ): Promise<ExistingIssueDeliveryResult>;
   readActive(root: string): Promise<DeliveryOwnershipRecord | undefined>;
   inspectOwnership(
     record: DeliveryOwnershipRecord,
@@ -132,6 +137,9 @@ export function createIssueDeliveryWorkspace(
   port: IssueDeliveryWorkspacePort,
 ): IssueDeliveryWorkspace {
   return {
+    async inspect(request) {
+      return await port.inspectActive(request.cwd, request.issue);
+    },
     async prepare(request) {
       const facts = await port.inspect(request.cwd);
       const proposal = proposedRecord(request, facts);

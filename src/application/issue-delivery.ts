@@ -1,14 +1,17 @@
 import {
+  candidateCheck,
   ISSUE_DELIVERY_WORKFLOW,
+  type CandidateCheck,
   type ExceptionBrief,
   type IssueDeliveryEvidenceCode,
+  type DeliveryBlockerCode,
   type DeliveryIdentity,
   type DeliveryWorkspace,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
 
 export interface IssueDeliveryRequest {
-  intent: "deliver";
+  intent: "deliver" | "status";
   issue: string;
   cwd: string;
 }
@@ -60,11 +63,47 @@ export type IssueDeliveryWorkspaceResult =
   | { status: "prepared"; workspace: DeliveryWorkspace }
   | { status: "blocked"; exceptionBrief: ExceptionBrief };
 
+export interface ActiveDeliveryInspection {
+  identity: DeliveryIdentity;
+  branch: string;
+  integrationBranch: string;
+  integrationSha: string;
+  candidateSha: string | null;
+}
+
+export type ExistingIssueDeliveryResult =
+  | { status: "absent" }
+  | { status: "active"; delivery: ActiveDeliveryInspection }
+  | { status: "blocked"; exceptionBrief: ExceptionBrief };
+
 export interface IssueDeliveryWorkspace {
+  inspect(
+    request: { cwd: string; issue: number },
+  ): Promise<ExistingIssueDeliveryResult>;
   prepare(
     request: IssueDeliveryWorkspaceRequest,
   ): Promise<IssueDeliveryWorkspaceResult>;
 }
+
+export type DeliveryPullRequestFact =
+  | { compatibility: "compatible"; headSha: string }
+  | { compatibility: "incompatible" };
+
+export interface IssueDeliveryInspection {
+  issue: { state: "open" | "closed" };
+  pullRequests: DeliveryPullRequestFact[];
+  remoteBranches: {
+    deliverySha: string | null;
+    integrationSha: string;
+  };
+  checks: CandidateCheck[];
+}
+
+export interface IssueDeliveryInspectionRequest extends ActiveDeliveryInspection {}
+
+export type ReadIssueDeliveryInspection = (
+  request: IssueDeliveryInspectionRequest,
+) => Promise<IssueDeliveryInspection>;
 
 function parseIssueReference(value: string): ParsedIssueReference | undefined {
   const short = /^(?:#)?([1-9]\d*)$/.exec(value);
@@ -99,21 +138,175 @@ function invalidIssueReference(): IssueDeliveryOutcome {
   });
 }
 
+function reconciliationBlocked(
+  gate: "implementation" | "verification",
+  evidence: "delivery-inspection-unavailable" | "delivery-pr-ambiguous" |
+    "delivery-candidate-drift" | "delivery-not-active" |
+    "delivery-ownership-mismatch",
+): IssueDeliveryOutcome {
+  const messages = {
+    "delivery-inspection-unavailable": {
+      need: "Required delivery facts could not be inspected safely.",
+      option: "Restore read access to the owned Git and GitHub delivery facts.",
+      recommendation: "Do not replay delivery effects while required facts are unavailable.",
+    },
+    "delivery-pr-ambiguous": {
+      need: "Owned delivery pull request facts are ambiguous.",
+      option: "Resolve incompatible or duplicate pull requests related to the owned delivery branch.",
+      recommendation: "Preserve the candidate and reconcile the ambiguity before continuing.",
+    },
+    "delivery-candidate-drift": {
+      need: "The pull request head disagrees with the owned local candidate.",
+      option: "Reconcile the owned branch with its remote pull request head.",
+      recommendation: "Do not infer which candidate is authoritative.",
+    },
+    "delivery-not-active": {
+      need: "No active owned Issue Delivery matches this issue.",
+      option: "Run /matty deliver for a ready issue before requesting delivery status.",
+      recommendation: "Inspect only an explicitly owned Delivery Identity.",
+    },
+    "delivery-ownership-mismatch": {
+      need: "The requested issue disagrees with the active Delivery Identity.",
+      option: "Request status for the issue named by the active ownership marker.",
+      recommendation: "Do not infer ownership from branch names.",
+    },
+  } as const;
+  const message = messages[evidence];
+  return blocked({
+    schemaVersion: 1,
+    gate,
+    evidence: [evidence],
+    need: message.need,
+    options: [message.option],
+    recommendation: message.recommendation,
+  });
+}
+
+function isCommitSha(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
+function activeReport(
+  delivery: ActiveDeliveryInspection,
+  facts: IssueDeliveryInspection,
+): IssueDeliveryOutcome {
+  if (
+    typeof delivery.integrationBranch !== "string" ||
+    delivery.integrationBranch.length === 0 ||
+    !isCommitSha(delivery.integrationSha) ||
+    (delivery.candidateSha !== null && !isCommitSha(delivery.candidateSha)) ||
+    (facts.issue.state !== "open" && facts.issue.state !== "closed") ||
+    !Array.isArray(facts.pullRequests) ||
+    facts.pullRequests.some((pullRequest) =>
+      pullRequest.compatibility !== "incompatible" &&
+      (pullRequest.compatibility !== "compatible" || !isCommitSha(pullRequest.headSha))
+    ) ||
+    typeof facts.remoteBranches !== "object" || facts.remoteBranches === null ||
+    !(facts.remoteBranches.deliverySha === null ||
+      isCommitSha(facts.remoteBranches.deliverySha)) ||
+    !isCommitSha(facts.remoteBranches.integrationSha) ||
+    !Array.isArray(facts.checks)
+  ) {
+    throw new Error("malformed delivery inspection");
+  }
+  for (const check of facts.checks) {
+    candidateCheck(check.status, check.conclusion);
+  }
+  const gate = delivery.candidateSha === null ? "implementation" : "verification";
+  const compatiblePullRequests = facts.pullRequests.filter(
+    (pullRequest) => pullRequest.compatibility === "compatible",
+  );
+  if (
+    facts.pullRequests.some((pullRequest) => pullRequest.compatibility === "incompatible") ||
+    facts.pullRequests.length > 1
+  ) {
+    return reconciliationBlocked(gate, "delivery-pr-ambiguous");
+  }
+  const ownedCandidate = delivery.candidateSha ?? delivery.integrationSha;
+  if (
+    (compatiblePullRequests.length === 1 &&
+      compatiblePullRequests[0]!.headSha !== ownedCandidate) ||
+    (facts.remoteBranches.deliverySha !== null &&
+      facts.remoteBranches.deliverySha !== ownedCandidate)
+  ) {
+    return reconciliationBlocked(gate, "delivery-candidate-drift");
+  }
+
+  const passed = facts.checks.filter((check) =>
+    check.status === "completed" &&
+    (check.conclusion === "success" || check.conclusion === "neutral" ||
+      check.conclusion === "skipped")
+  ).length;
+  const pending = facts.checks.filter((check) => check.status !== "completed").length;
+  const failed = facts.checks.length - passed - pending;
+  const blockers: DeliveryBlockerCode[] = [];
+  if (gate === "implementation") blockers.push("implementation-required");
+  if (facts.issue.state === "closed") blockers.push("issue-closed");
+  if (facts.remoteBranches.integrationSha !== delivery.integrationSha) {
+    blockers.push("integration-advanced");
+  }
+  if (failed > 0) blockers.push("checks-failing");
+  if (pending > 0) blockers.push("checks-pending");
+  const state = failed > 0 ? "failing" : pending > 0 ? "pending" :
+    facts.checks.length === 0 ? "none" : "passing";
+  return {
+    schemaVersion: 1,
+    status: "active",
+    deliveryIdentity: delivery.identity,
+    gate,
+    candidateSha: delivery.candidateSha,
+    checks: { state, total: facts.checks.length, passed, pending, failed },
+    blockers,
+  };
+}
+
 export async function deliverIssue(
   request: IssueDeliveryRequest,
   readPreflight: ReadIssueDeliveryPreflight,
   workspace: IssueDeliveryWorkspace,
+  readInspection?: ReadIssueDeliveryInspection,
 ): Promise<IssueDeliveryOutcome> {
-  const qualification = await qualifyIssueDelivery(request, readPreflight);
-  if (qualification.status !== "qualified") {
-    return qualification;
+  const issueReference = parseIssueReference(request.issue);
+  if (!issueReference) return invalidIssueReference();
+
+  {
+    let existing: ExistingIssueDeliveryResult;
+    try {
+      existing = await workspace.inspect({ cwd: request.cwd, issue: issueReference.number });
+    } catch {
+      return reconciliationBlocked("implementation", "delivery-inspection-unavailable");
+    }
+    if (existing.status === "blocked") {
+      return blocked(existing.exceptionBrief);
+    }
+    if (existing.status === "active") {
+      const gate = existing.delivery.candidateSha === null ? "implementation" : "verification";
+      if (
+        existing.delivery.identity.issue !== issueReference.number ||
+        (issueReference.repository !== undefined &&
+          existing.delivery.identity.repository !== issueReference.repository)
+      ) {
+        return reconciliationBlocked(gate, "delivery-ownership-mismatch");
+      }
+      if (!readInspection) {
+        return reconciliationBlocked(gate, "delivery-inspection-unavailable");
+      }
+      try {
+        return activeReport(existing.delivery, await readInspection(existing.delivery));
+      } catch {
+        return reconciliationBlocked(gate, "delivery-inspection-unavailable");
+      }
+    }
+    if (request.intent === "status") {
+      return reconciliationBlocked("implementation", "delivery-not-active");
+    }
   }
+
+  const qualification = await qualifyIssueDelivery(request, readPreflight);
+  if (qualification.status !== "qualified") return qualification;
   let preparation: IssueDeliveryWorkspaceResult;
   try {
-    preparation = await workspace.prepare({
-      cwd: request.cwd,
-      identity: qualification.deliveryIdentity,
-    });
+    preparation = await workspace.prepare({ cwd: request.cwd, identity: qualification.deliveryIdentity });
   } catch {
     return blocked({
       schemaVersion: 1,
@@ -127,14 +320,10 @@ export async function deliverIssue(
   if (preparation.status === "blocked") {
     return { schemaVersion: 1, status: "blocked", exceptionBrief: preparation.exceptionBrief };
   }
-  return {
-    ...qualification,
-    status: "prepared",
-    workspace: preparation.workspace,
-  };
+  return { ...qualification, status: "prepared", workspace: preparation.workspace };
 }
 
-export async function qualifyIssueDelivery(
+async function qualifyIssueDelivery(
   request: IssueDeliveryRequest,
   readPreflight: ReadIssueDeliveryPreflight,
 ): Promise<IssueDeliveryOutcome> {

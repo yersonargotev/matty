@@ -37,7 +37,7 @@ export interface DiagnosticContext {
 export type RuntimeFactInputs = Omit<RuntimeFacts, "activation">;
 
 export interface MattyRegistrationOptions {
-  qualifyIssueDelivery?: (
+  deliverIssue?: (
     request: IssueDeliveryRequest,
   ) => Promise<IssueDeliveryOutcome>;
 }
@@ -171,10 +171,10 @@ export function registerMatty(
         return;
       }
 
-      const delivery = /^deliver ([^\s]+)$/.exec(args);
-      if (delivery && options.qualifyIssueDelivery) {
-        const outcome = await options.qualifyIssueDelivery({
-          intent: "deliver",
+      const delivery = /^deliver ([^\s]+)( --status)?$/.exec(args);
+      if (delivery && options.deliverIssue) {
+        const outcome = await options.deliverIssue({
+          intent: delivery[2] ? "status" : "deliver",
           issue: delivery[1]!,
           cwd: context?.cwd ?? "",
         });
@@ -185,7 +185,7 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor> [--json] | /matty deliver <issue>", "warning");
+      notify("Usage: /matty <status|doctor> [--json] | /matty deliver <issue> [--status]", "warning");
     },
   });
 

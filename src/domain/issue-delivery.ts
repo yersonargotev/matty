@@ -40,6 +40,11 @@ export type IssueDeliveryEvidenceCode =
   | "delivery-active"
   | "delivery-ownership-mismatch"
   | "workspace-preparation-failed"
+  | "delivery-not-active"
+  | "delivery-inspection-unavailable"
+  | "delivery-pr-ambiguous"
+  | "delivery-candidate-drift"
+  | "delivery-candidate-ancestry-unproven"
   | `workflow-dependency-missing:${string}`
   | `workflow-dependency-identity-mismatch:${string}`
   | `workflow-dependency-provenance-mismatch:${string}`
@@ -50,7 +55,9 @@ export interface ExceptionBrief {
   gate:
     | "delivery-authorization"
     | "capability-preflight"
-    | "workspace-preparation";
+    | "workspace-preparation"
+    | "implementation"
+    | "verification";
   evidence: IssueDeliveryEvidenceCode[];
   need: string;
   options: string[];
@@ -97,6 +104,65 @@ export interface PreparedIssueDelivery {
   workspace: DeliveryWorkspace;
 }
 
+export type DeliveryGate = "implementation" | "verification";
+
+export type DeliveryBlockerCode =
+  | "implementation-required"
+  | "issue-closed"
+  | "integration-advanced"
+  | "checks-pending"
+  | "checks-failing";
+
+export interface CandidateCheck {
+  status: "queued" | "in_progress" | "waiting" | "requested" | "pending" |
+    "completed";
+  conclusion: "success" | "neutral" | "skipped" | "failure" |
+    "cancelled" | "timed_out" | "action_required" | "stale" |
+    "startup_failure" | null;
+}
+
+/** Constructs one closed candidate check while discarding provider-owned fields. */
+export function candidateCheck(
+  status: unknown,
+  conclusion: unknown,
+): CandidateCheck {
+  const statuses = new Set([
+    "queued", "in_progress", "waiting", "requested", "pending", "completed",
+  ]);
+  const conclusions = new Set([
+    "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
+    "action_required", "stale", "startup_failure",
+  ]);
+  if (
+    typeof status !== "string" || !statuses.has(status) ||
+    !(conclusion === null ||
+      (typeof conclusion === "string" && conclusions.has(conclusion))) ||
+    (status === "completed") === (conclusion === null)
+  ) {
+    throw new Error("invalid candidate check");
+  }
+  return {
+    status: status as CandidateCheck["status"],
+    conclusion: conclusion as CandidateCheck["conclusion"],
+  };
+}
+
+export interface ActiveIssueDelivery {
+  schemaVersion: 1;
+  status: "active";
+  deliveryIdentity: DeliveryIdentity;
+  gate: DeliveryGate;
+  candidateSha: string | null;
+  checks: {
+    state: "none" | "passing" | "pending" | "failing";
+    total: number;
+    passed: number;
+    pending: number;
+    failed: number;
+  };
+  blockers: DeliveryBlockerCode[];
+}
+
 export interface BlockedIssueDelivery {
   schemaVersion: 1;
   status: "blocked";
@@ -106,4 +172,5 @@ export interface BlockedIssueDelivery {
 export type IssueDeliveryOutcome =
   | QualifiedIssueDelivery
   | PreparedIssueDelivery
+  | ActiveIssueDelivery
   | BlockedIssueDelivery;
