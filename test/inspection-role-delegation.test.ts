@@ -11,6 +11,7 @@ import type {
 import {
   INSPECTION_TOOLS,
 } from "../src/domain/capability-contract.ts";
+import { commitSha } from "../src/domain/commit-sha.ts";
 
 function availableExecution(
   runner: DelegatedTaskRunner,
@@ -36,7 +37,12 @@ test("runs designer and reviewer as independent roles with structured output", a
       return {
         status: "succeeded",
         child: { pid: 42, runId: "run-42" },
-        output: JSON.stringify({
+        output: JSON.stringify(task.startsWith("Reviewer") ? {
+          schemaVersion: 1,
+          candidateSha: "1111111111111111111111111111111111111111",
+          summary: "role findings",
+          findings: [{ axis: "spec", severity: "blocking", requirement: "Issue 9", evidence: "verified" }],
+        } : {
           summary: "role findings",
           evidence: [{ observation: "verified" }],
         }),
@@ -54,6 +60,15 @@ test("runs designer and reviewer as independent roles with structured output", a
     "reviewer",
     "Review issue 9",
     availableExecution(runner),
+    { reviewScope: {
+      schemaVersion: 1,
+      issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+      requirements: ["Issue 9"],
+      outOfScope: [{ reference: "#42", reason: "dependent publication behavior" }],
+      baseSha: commitSha("0000000000000000000000000000000000000000"),
+      candidateSha: commitSha("1111111111111111111111111111111111111111"),
+      axes: ["spec"],
+    } },
   );
 
   assert.match(observedTasks[0] ?? "", /Designer assignment/);
@@ -66,8 +81,53 @@ test("runs designer and reviewer as independent roles with structured output", a
   assert.equal(reviewer.outcome.status, "succeeded");
   if (reviewer.outcome.status === "succeeded") {
     assert.deepEqual(reviewer.outcome.output, {
+      schemaVersion: 1,
+      candidateSha: "1111111111111111111111111111111111111111",
       summary: "role findings",
-      evidence: [{ observation: "verified" }],
+      findings: [{ axis: "spec", severity: "blocking", requirement: "Issue 9", evidence: "verified" }],
+    });
+  }
+});
+
+test("reviewer rejects findings outside exact requirements or targeting excluded #42", async (context) => {
+  const scope = {
+    schemaVersion: 1 as const,
+    issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+    requirements: ["Implement the bounded contract"],
+    outOfScope: [{ reference: "https://github.com/acme/repo/issues/42", reason: "dependent publication behavior" }],
+    baseSha: commitSha("0000000000000000000000000000000000000000"),
+    candidateSha: commitSha("1111111111111111111111111111111111111111"),
+    axes: ["spec" as const],
+  };
+  for (const [name, requirement, evidence] of [
+    ["unmatched requirement", "Prompt compliance", "local evidence"],
+    ["excluded dependency", "Implement the bounded contract", "This instead requires #42 publication"],
+  ] as const) {
+    await context.test(name, async () => {
+      const terminal = await runInspectionDelegation(
+        "reviewer",
+        "Review",
+        availableExecution({
+          async run() {
+            return {
+              status: "succeeded",
+              child: { pid: 42, runId: "run-42" },
+              output: JSON.stringify({
+                schemaVersion: 1,
+                candidateSha: scope.candidateSha,
+                summary: "review",
+                findings: [{ axis: "spec", severity: "blocking", requirement, evidence }],
+              }),
+              exit: { code: 0, signal: null },
+            };
+          },
+        }),
+        { reviewScope: scope },
+      );
+      assert.equal(terminal.outcome.status, "failed");
+      if (terminal.outcome.status === "failed") {
+        assert.equal(terminal.outcome.failure.kind, "invalid-role-output");
+      }
     });
   }
 });

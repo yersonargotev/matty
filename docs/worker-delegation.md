@@ -17,7 +17,12 @@ mutation, global installation, writes outside the validated roots, and writes
 to real user-configuration paths. It is a best-effort command and path policy,
 not a security sandbox or a boundary against a malicious child process.
 
-The parent remains responsible for reviewing the worker's filesystem changes
-and for all integration and external-state operations, including commits,
-pushes, pull requests, review submission, merges, releases, and user
-configuration.
+The worker returns a closed completion report whose `evidenceRole` is
+`supporting-only-parent-verification-required`. Its optional full-gate result is
+named `reportedFullGate`; this records only what the worker ran and never grants
+verification or parent authority.
+
+The parent remains responsible for reviewing the worker's filesystem changes,
+independently running the repository-authoritative full gate, and for all
+integration and external-state operations, including commits, pushes, pull
+requests, review submission, merges, releases, and user configuration.

@@ -1,3 +1,4 @@
+import { reviewScope, type ReviewScopeContract } from "./review-scope.ts";
 import {
   isInspectionRole,
   isMattyRole,
@@ -9,6 +10,7 @@ export interface DelegationTaskDeclaration {
   task: string;
   web?: "required" | "optional";
   report?: string;
+  reviewScope?: ReviewScopeContract;
 }
 
 export interface DelegationGroupContract {
@@ -122,7 +124,7 @@ export function validateDelegationGroupContract(
         continue;
       }
       const declaration = task as Partial<DelegationTaskDeclaration>;
-      if (!hasOnlyKeys(declaration, ["role", "task", "web", "report"])) {
+      if (!hasOnlyKeys(declaration, ["role", "task", "web", "report", "reviewScope"])) {
         errors.push({ code: "invalid-task", taskIndex });
       }
       if (!isMattyRole(declaration.role)) {
@@ -166,6 +168,13 @@ export function validateDelegationGroupContract(
         if (declaration.report !== undefined) {
           errors.push({ code: "report-role-incompatible", taskIndex });
         }
+      }
+      if (declaration.role === "reviewer") {
+        try { reviewScope(declaration.reviewScope); } catch {
+          errors.push({ code: "invalid-task", taskIndex });
+        }
+      } else if (declaration.reviewScope !== undefined) {
+        errors.push({ code: "invalid-task", taskIndex });
       }
       if (
         candidate.requirement === "optional" &&

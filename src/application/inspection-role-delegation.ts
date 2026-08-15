@@ -12,6 +12,12 @@ import {
   type InspectionCapabilityContract,
   type InspectionRole,
 } from "../domain/capability-contract.ts";
+import {
+  reviewScope,
+  reviewerFindings,
+  type ReviewScopeContract,
+  type ReviewerFindings,
+} from "../domain/review-scope.ts";
 
 export interface InspectionDelegationExecution {
   availability: CapabilityAvailability;
@@ -21,6 +27,7 @@ export interface InspectionDelegationExecution {
 export interface InspectionDelegationOptions {
   signal?: AbortSignal;
   onProgress?: (progress: DelegatedTaskProgress) => void;
+  reviewScope?: ReviewScopeContract;
 }
 
 export interface BlockedInspectionOutcome {
@@ -35,7 +42,7 @@ export interface InspectionRoleFindings {
 
 type SuccessfulInspectionOutcome =
   Extract<DelegatedTaskOutcome, { status: "succeeded" }> extends infer Outcome
-    ? Omit<Outcome, "output"> & { output: InspectionRoleFindings }
+    ? Omit<Outcome, "output"> & { output: InspectionRoleFindings | ReviewerFindings }
     : never;
 
 interface InvalidInspectionOutput {
@@ -78,7 +85,11 @@ export function blockedInspectionDelegation(
   };
 }
 
-function inspectionTask(role: InspectionRole, task: string): string {
+function inspectionTask(
+  role: InspectionRole,
+  task: string,
+  scope?: ReviewScopeContract,
+): string {
   const roleGuidance = role === "reviewer"
     ? "You may use guarded bash for read-only GitHub inspection after preflight."
     : "Do not use GitHub CLI.";
@@ -86,10 +97,19 @@ function inspectionTask(role: InspectionRole, task: string): string {
     `${role[0]?.toUpperCase()}${role.slice(1)} assignment:`,
     task.trim(),
     "",
-    "Inspect only. Use read, grep, find, ls, or guarded bash for local Git, CodeGraph, shell, and diagnostics.",
+    "Inspect only. Use read, grep, find, ls, or guarded bash for local Git, shell, and diagnostics.",
     roleGuidance,
+    ...(role === "reviewer" && scope
+      ? [
+        "Review Scope Contract (exact JSON; do not expand it):",
+        JSON.stringify(scope),
+        "Bind every finding to candidateSha. Treat listed dependent/out-of-scope issues as excluded.",
+      ]
+      : []),
     role === "explorer"
       ? "Do not mutate local or remote state. Return concise evidence to the parent."
+      : role === "reviewer"
+      ? 'Do not mutate local or remote state. Return JSON exactly {"schemaVersion":1,"candidateSha":string,"summary":string,"findings":[{"axis":string,"severity":"blocking"|"non-blocking","requirement":string,"evidence":string}]}. The parent adjudicates scope and contradictions.'
       : 'Do not mutate local or remote state. Return JSON exactly {"summary": string, "evidence": array}.',
   ].join("\n");
 }
@@ -97,12 +117,16 @@ function inspectionTask(role: InspectionRole, task: string): string {
 function structuredOutcome(
   outcome: DelegatedTaskOutcome,
   required: boolean,
+  scope?: ReviewScopeContract,
 ): InspectionDelegationOutcome {
   if (outcome.status !== "succeeded") {
     return outcome;
   }
   try {
     const output = JSON.parse(outcome.output) as unknown;
+    if (scope) {
+      return { ...outcome, output: reviewerFindings(output, scope) };
+    }
     if (
       typeof output === "object" &&
       output !== null &&
@@ -140,11 +164,20 @@ export async function runInspectionDelegation(
   if (!preflight.ok) {
     return blockedInspectionDelegation(role, preflight.diagnostic.unmet);
   }
+  let scope: ReviewScopeContract | undefined;
+  if (role === "reviewer") {
+    try {
+      scope = reviewScope(options.reviewScope);
+    } catch {
+      return blockedInspectionDelegation(role, ["valid Review Scope Contract is required"]);
+    }
+  }
 
   const runner = execution.createRunner();
   const outcome = structuredOutcome(
-    await runner.run(inspectionTask(role, task), options),
+    await runner.run(inspectionTask(role, task, scope), options),
     role !== "explorer",
+    scope,
   );
   return {
     contract: preflight.contract,
