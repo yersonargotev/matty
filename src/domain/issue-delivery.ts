@@ -40,8 +40,7 @@ export type IssueDeliveryEvidenceCode =
   | `workflow-dependency-missing:${string}`
   | `workflow-dependency-identity-mismatch:${string}`
   | `workflow-dependency-provenance-mismatch:${string}`
-  | `workflow-dependency-content-mismatch:${string}`
-  | `workflow-dependency-digest-mismatch:${string}`;
+  | `workflow-dependency-content-digest-mismatch:${string}`;
 
 export interface ExceptionBrief {
   schemaVersion: 1;

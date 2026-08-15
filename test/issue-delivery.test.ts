@@ -17,7 +17,9 @@ function readyPreflight(): IssueDeliveryPreflight {
       prepared: true,
       tracker: "github",
       canonical: "github.com/yersonargotev/matty",
+      readyLabel: "ready-for-agent",
     },
+    issueInspection: "available",
     issue: {
       kind: "issue",
       number: 34,
@@ -29,7 +31,6 @@ function readyPreflight(): IssueDeliveryPreflight {
       id: dependency.id,
       identity: dependency.id,
       provenance: dependency.provenance,
-      contentDigest: dependency.digest,
       digest: dependency.digest,
     })),
   };
@@ -101,7 +102,7 @@ test("failed qualification reports exact remediation and cannot produce delivery
   preflight.issue!.labels = ["needs-info"];
   preflight.skills[0] = {
     ...preflight.skills[0]!,
-    contentDigest: "modified",
+    digest: "modified",
   };
   const effects: string[] = [];
 
@@ -117,7 +118,7 @@ test("failed qualification reports exact remediation and cannot produce delivery
       "github-authentication-missing",
       "prepared-repository-missing",
       "issue-not-ready",
-      "workflow-dependency-content-mismatch:implement",
+      "workflow-dependency-content-digest-mismatch:implement",
     ]);
     assert.match(outcome.exceptionBrief.need, /Issue Delivery only/);
     assert.deepEqual(outcome.exceptionBrief.options, [

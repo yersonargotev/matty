@@ -26,7 +26,9 @@ export interface IssueDeliveryPreflight {
     prepared: boolean;
     tracker: "github" | "unsupported";
     canonical?: string;
+    readyLabel?: string;
   };
+  issueInspection?: "available" | "not-found" | "failed";
   issue?: {
     kind: "issue" | "pull-request";
     number: number;
@@ -38,7 +40,6 @@ export interface IssueDeliveryPreflight {
     id: string;
     identity: string;
     provenance: string;
-    contentDigest: string;
     digest: string;
   }>;
 }
@@ -144,17 +145,30 @@ export async function qualifyIssueDelivery(
       "Use Issue Delivery only in a Prepared Repository configured for GitHub.",
     );
   }
-  if (!preflight.issue || preflight.issue.kind !== "issue" ||
-      preflight.issue.number !== issueReference.number) {
-    add("issue-not-found", `Confirm issue #${issueReference.number} exists, then repeat ${command}.`);
-  } else {
+  if (preflight.issueInspection === "failed") {
+    add(
+      "github-capability-missing",
+      `Verify GitHub connectivity and issue access, then repeat ${command}.`,
+    );
+  } else if (
+    preflight.github.available &&
+    preflight.github.authenticated &&
+    preflight.repository.tracker === "github" &&
+    (!preflight.issue || preflight.issue.kind !== "issue" ||
+      preflight.issue.number !== issueReference.number)
+  ) {
+    add("issue-not-found", `Confirm issue #${issueReference.number} exists in the current repository, then repeat ${command}.`);
+  } else if (preflight.issue) {
     if (preflight.issue.state !== "open") {
       add("issue-not-open", `Reopen issue #${issueReference.number} or choose an open ready issue.`);
     }
-    if (!preflight.issue.labels.includes("ready-for-agent")) {
+    const readyLabel = preflight.repository.readyLabel;
+    if (!readyLabel || !preflight.issue.labels.includes(readyLabel)) {
       add(
         "issue-not-ready",
-        `Apply the repository's ready-for-agent triage label to issue #${issueReference.number}, then repeat ${command}.`,
+        readyLabel
+          ? `Apply the repository's ${readyLabel} triage label to issue #${issueReference.number}, then repeat ${command}.`
+          : `Restore the repository's canonical ready-for-agent triage mapping, then repeat ${command}.`,
       );
     }
   }
@@ -185,14 +199,9 @@ export async function qualifyIssueDelivery(
         `workflow-dependency-provenance-mismatch:${dependency.id}`,
         `Restore the Packy-provisioned certified ${dependency.id} skill, then repeat ${command}.`,
       );
-    } else if (actual.contentDigest !== dependency.digest) {
-      add(
-        `workflow-dependency-content-mismatch:${dependency.id}`,
-        `Restore the Packy-provisioned certified ${dependency.id} skill, then repeat ${command}.`,
-      );
     } else if (actual.digest !== dependency.digest) {
       add(
-        `workflow-dependency-digest-mismatch:${dependency.id}`,
+        `workflow-dependency-content-digest-mismatch:${dependency.id}`,
         `Restore the Packy-provisioned certified ${dependency.id} skill, then repeat ${command}.`,
       );
     }

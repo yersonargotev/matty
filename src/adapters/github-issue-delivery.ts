@@ -18,7 +18,13 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-async function runRead(
+export type IssueDeliveryCommandReader = (
+  command: string,
+  args: string[],
+  cwd: string,
+) => Promise<string>;
+
+async function runCommandForStdout(
   command: string,
   args: string[],
   cwd: string,
@@ -39,16 +45,20 @@ function canonicalGithubRemote(remote: string): string | undefined {
   return match ? `github.com/${match[1]!.toLowerCase()}` : undefined;
 }
 
-async function inspectRepository(cwd: string): Promise<{
+async function inspectRepository(
+  cwd: string,
+  runCommand: IssueDeliveryCommandReader,
+): Promise<{
   root: string;
   canonical?: string;
   prepared: boolean;
   trusted: boolean;
+  readyLabel?: string;
 }> {
-  const root = resolve(await runRead("git", ["rev-parse", "--show-toplevel"], cwd));
+  const root = resolve(await runCommand("git", ["rev-parse", "--show-toplevel"], cwd));
   const fromRoot = relative(root, resolve(cwd));
   const inside = fromRoot === "" || (!fromRoot.startsWith("..") && fromRoot !== "..");
-  const remote = await runRead("git", ["remote", "get-url", "origin"], root);
+  const remote = await runCommand("git", ["remote", "get-url", "origin"], root);
   const canonical = canonicalGithubRemote(remote);
   const required = [
     "AGENTS.md",
@@ -74,17 +84,22 @@ async function inspectRepository(cwd: string): Promise<{
       prepared = false;
     }
   }
+  const readyLabel = /^\|\s*`ready-for-agent`\s*\|\s*`([^`]+)`\s*\|/m.exec(
+    contents.get("docs/agents/triage-labels.md") ?? "",
+  )?.[1];
   const trusted = inside && canonical !== undefined &&
     /issue-tracker\.md/.test(contents.get("AGENTS.md") ?? "") &&
     /triage-labels\.md/.test(contents.get("AGENTS.md") ?? "") &&
     /domain\.md/.test(contents.get("AGENTS.md") ?? "") &&
-    /GitHub/.test(contents.get("docs/agents/issue-tracker.md") ?? "") &&
-    /ready-for-agent/.test(contents.get("docs/agents/triage-labels.md") ?? "");
+    /issues and PRDs.*GitHub/i.test(
+      contents.get("docs/agents/issue-tracker.md") ?? "",
+    ) && readyLabel !== undefined;
   return {
     root,
     ...(canonical ? { canonical } : {}),
     prepared,
     trusted,
+    ...(readyLabel ? { readyLabel } : {}),
   };
 }
 
@@ -107,7 +122,6 @@ async function inspectSkills(environment: NodeJS.ProcessEnv) {
         provenance: actualPath.endsWith(expectedSuffix)
           ? dependency.provenance
           : "unsupported",
-        contentDigest: digest,
         digest,
       });
     } catch {
@@ -121,29 +135,35 @@ async function readPreflight(
   issueReference: ParsedIssueReference,
   cwd: string,
   environment: NodeJS.ProcessEnv,
+  runCommand: IssueDeliveryCommandReader,
 ): Promise<IssueDeliveryPreflight> {
-  const repository = await inspectRepository(cwd);
+  const repository = await inspectRepository(cwd, runCommand);
   let available = true;
   let authenticated = true;
   try {
-    await runRead("gh", ["--version"], repository.root);
+    await runCommand("gh", ["--version"], repository.root);
   } catch {
     available = false;
     authenticated = false;
   }
   if (available) {
     try {
-      await runRead("gh", ["auth", "status"], repository.root);
+      await runCommand(
+        "gh",
+        ["auth", "status", "--hostname", "github.com"],
+        repository.root,
+      );
     } catch {
       authenticated = false;
     }
   }
 
   let issue: IssueDeliveryPreflight["issue"];
+  let issueInspection: IssueDeliveryPreflight["issueInspection"];
   if (authenticated && repository.canonical) {
     const repositoryName = repository.canonical.slice("github.com/".length);
     try {
-      const raw = await runRead(
+      const raw = await runCommand(
         "gh",
         ["api", `repos/${repositoryName}/issues/${issueReference.number}`],
         repository.root,
@@ -160,6 +180,7 @@ async function readPreflight(
         (value.state === "open" || value.state === "closed") &&
         typeof value.html_url === "string"
       ) {
+        issueInspection = "available";
         issue = {
           kind: value.pull_request ? "pull-request" : "issue",
           number: value.number,
@@ -170,8 +191,14 @@ async function readPreflight(
           url: value.html_url,
         };
       }
-    } catch {
-      // Missing or inaccessible issues remain absent from the closed facts.
+    } catch (error) {
+      const stderr = error && typeof error === "object" &&
+          "stderr" in error && typeof error.stderr === "string"
+        ? error.stderr
+        : "";
+      issueInspection = /(?:HTTP\s+404|status\s+404|not found)/i.test(stderr)
+        ? "not-found"
+        : "failed";
     }
   }
 
@@ -182,7 +209,9 @@ async function readPreflight(
       prepared: repository.prepared,
       tracker: repository.canonical ? "github" : "unsupported",
       ...(repository.canonical ? { canonical: repository.canonical } : {}),
+      ...(repository.readyLabel ? { readyLabel: repository.readyLabel } : {}),
     },
+    ...(issueInspection ? { issueInspection } : {}),
     ...(issue ? { issue } : {}),
     skills: await inspectSkills(environment),
   };
@@ -190,10 +219,11 @@ async function readPreflight(
 
 export function createGithubIssueDeliveryQualifier(
   environment: NodeJS.ProcessEnv,
+  runCommand: IssueDeliveryCommandReader = runCommandForStdout,
 ): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
   return async (request) =>
     qualifyIssueDelivery(
       request,
-      (issue, cwd) => readPreflight(issue, cwd, environment),
+      (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
     );
 }
