@@ -113,6 +113,10 @@ function startRpc(pi, extension, cwd, env) {
     },
     waitFor,
     async close() {
+      if (child.exitCode !== null) {
+        if (child.exitCode === 0) return;
+        throw new Error(`Pi RPC exited with ${child.exitCode}\n${stderr}`);
+      }
       child.stdin.end();
       await new Promise((resolveClose, rejectClose) => {
         child.once("close", (code) => {
@@ -281,6 +285,9 @@ import { registerPiMatty } from ${JSON.stringify(mattyExtension)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
 const childRole = process.env.MATTY_CHILD_ROLE;
+// Acceptance fixtures capture transport facts before Matty scrubs the real child environment.
+const workerTemporaryPaths = JSON.parse(process.env.MATTY_WORKER_TEMPORARY_PATHS ?? "[]");
+const workerProtectedPaths = JSON.parse(process.env.MATTY_WORKER_PROTECTED_PATHS ?? "[]");
 const childMode = ["explorer", "designer", "reviewer", "researcher", "worker"].includes(childRole);
 const requestedRole = process.env.MATTY_T07_ROLE ?? "explorer";
 const startMarker = "<!-- matty:rules -->";
@@ -426,13 +433,22 @@ export default function t07Acceptance(pi) {
               requirement: "required",
               tasks: [{
                 role: requestedRole,
-                task: "Inspect Git, CodeGraph, shell, and diagnostics; then probe each recognized mutation family.",
+                task: "Inspect Git, shell, and diagnostics; then probe each recognized mutation family.",
                 ...(requestedRole === "researcher"
                   ? {
                     web: "required",
                     report: "docs/research/t15-packed-research.md",
                   }
                   : {}),
+                ...(requestedRole === "reviewer" ? { reviewScope: {
+                  schemaVersion: 1,
+                  issue: { repository: "github.com/example/project", number: 9, reference: "#9" },
+                  requirements: ["Inspect guarded behavior"],
+                  outOfScope: [{ reference: "#42", reason: "dependent publication behavior" }],
+                  baseSha: "0000000000000000000000000000000000000000",
+                  candidateSha: "1111111111111111111111111111111111111111",
+                  axes: ["standards", "spec"],
+                } } : {}),
               }],
             },
           }], "toolUse")));
@@ -463,8 +479,7 @@ export default function t07Acceptance(pi) {
         }
         const allowedCommands = [
           ["allowed-git", "git status --short"],
-          ["allowed-codegraph", "codegraph status"],
-          ["allowed-shell", "pwd"],
+          ["allowed-shell", "pwd && test -z $MATTY_CHILD_ROLE$MATTY_RESEARCH_CONTRACT$MATTY_RESEARCH_SCOPE$MATTY_WORKER_WORKING_TREE$MATTY_WORKER_TEMPORARY_PATHS$MATTY_WORKER_PROTECTED_PATHS$MATTY_WORKER_USER_HOME$MATTY_WORKER_USER_CONFIGURATION_PATHS"],
           ["allowed-diagnostic", "node --version"],
           ...(childRole === "reviewer"
             ? [["allowed-github", "gh issue view 9"]]
@@ -488,9 +503,7 @@ export default function t07Acceptance(pi) {
           return stream;
         }
         if (results.length === 2) {
-          const [temporaryPath] = JSON.parse(
-            process.env.MATTY_WORKER_TEMPORARY_PATHS ?? "[]",
-          );
+          const [temporaryPath] = workerTemporaryPaths;
           queueMicrotask(() => stream.end(assistant(model, [
             toolCall("allowed-temporary", "write", {
               path: temporaryPath + "/worker-temporary.txt",
@@ -504,7 +517,7 @@ export default function t07Acceptance(pi) {
             ["allowed-install", "npm install --offline --ignore-scripts --package-lock=false --no-audit --no-fund"],
             ["allowed-check", "node --test"],
             ["allowed-git", "git status --short"],
-            ["allowed-shell", "pwd"],
+            ["allowed-shell", "pwd && test -z $MATTY_CHILD_ROLE$MATTY_RESEARCH_CONTRACT$MATTY_RESEARCH_SCOPE$MATTY_WORKER_WORKING_TREE$MATTY_WORKER_TEMPORARY_PATHS$MATTY_WORKER_PROTECTED_PATHS$MATTY_WORKER_USER_HOME$MATTY_WORKER_USER_CONFIGURATION_PATHS"],
           ]), "toolUse")));
           return stream;
         }
@@ -521,9 +534,7 @@ export default function t07Acceptance(pi) {
               ],
               [
                 "blocked-single-writer",
-                "rm -rf " + JSON.parse(
-                  process.env.MATTY_WORKER_PROTECTED_PATHS ?? "[]",
-                )[0],
+                "rm -rf " + workerProtectedPaths[0],
               ],
             ]),
             toolCall("blocked-user-config", "write", {
@@ -573,8 +584,12 @@ export default function t07Acceptance(pi) {
           [{
             type: "text",
             text: JSON.stringify({
-              summary: "worker implementation completed",
-              evidence: [payload],
+              schemaVersion: 1,
+              summary: JSON.stringify(payload),
+              changedPaths: ["worker-output.txt"],
+              checks: [{ command: "node --test", status: "passed" }],
+              evidenceRole: "supporting-only-parent-verification-required",
+              reportedFullGate: { status: "not-run" },
             }),
           }],
         )));
@@ -603,7 +618,7 @@ export default function t07Acceptance(pi) {
         }])));
         return stream;
       }
-      const allowedCount = childRole === "reviewer" ? 5 : 4;
+      const allowedCount = childRole === "reviewer" ? 4 : 3;
       if (results.length === allowedCount) {
         queueMicrotask(() => stream.end(assistant(model, toolCalls([
           ["blocked-filesystem", "touch forbidden.txt"],
@@ -623,7 +638,6 @@ export default function t07Acceptance(pi) {
       const byId = new Map(results.map((result) => [result.toolCallId, result]));
       const allowedIds = [
         "allowed-git",
-        "allowed-codegraph",
         "allowed-shell",
         "allowed-diagnostic",
         ...(childRole === "reviewer" ? ["allowed-github"] : []),
@@ -655,7 +669,12 @@ export default function t07Acceptance(pi) {
         model,
         [{
           type: "text",
-          text: JSON.stringify({
+          text: JSON.stringify(childRole === "reviewer" ? {
+            schemaVersion: 1,
+            candidateSha: "1111111111111111111111111111111111111111",
+            summary: "review completed",
+            findings: [{ axis: "spec", severity: "non-blocking", requirement: "Inspect guarded behavior", evidence: JSON.stringify(payload) }],
+          } : {
             summary: childRole + " inspection completed",
             evidence: [payload],
           }),
@@ -759,7 +778,6 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
       "tool-result",
       "tool-result",
       "tool-result",
-      "tool-result",
       "message",
       "tool-result",
       "tool-result",
@@ -771,7 +789,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   const observed = successLeaf.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });
-  assert.ok(Object.values(observed.allowed).every(Boolean));
+  assert.ok(Object.values(observed.allowed).every(Boolean), JSON.stringify(observed.allowed));
   assert.ok(Object.values(observed.blocked).every(Boolean));
   await assert.rejects(access(forbidden));
 
@@ -785,7 +803,9 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
       "succeeded",
       JSON.stringify(roleResult.terminal),
     );
-    const roleObserved = roleLeaf.outcome.output.evidence[0];
+    const roleObserved = role === "reviewer"
+      ? JSON.parse(roleLeaf.outcome.output.findings[0].evidence)
+      : roleLeaf.outcome.output.evidence[0];
     assert.deepEqual(roleObserved.rules, { start: 1, end: 1 });
     assert.ok(Object.values(roleObserved.allowed).every(Boolean));
     assert.ok(Object.values(roleObserved.blocked).every(Boolean));
@@ -801,8 +821,8 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     "succeeded",
     JSON.stringify(worker.terminal),
   );
-  const workerOutput = JSON.parse(workerLeaf.outcome.output);
-  const workerObserved = workerOutput.evidence[0];
+  const workerOutput = workerLeaf.outcome.output;
+  const workerObserved = JSON.parse(workerOutput.summary);
   assert.deepEqual(workerObserved.rules, { start: 1, end: 1 });
   assert.ok(Object.values(workerObserved.allowed).every(Boolean));
   assert.ok(Object.values(workerObserved.blocked).every(Boolean));
@@ -870,7 +890,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
       "Capability Contract/preflight: validated and diagnosable",
       "real Subagent Runtime: structured progress and terminal output",
       "delegation groups: validated, atomic, bounded, and redacted",
-      "Git/CodeGraph/shell/diagnostics: inspected",
+      "Git/shell/diagnostics: inspected",
       "designer: gh blocked",
       "reviewer: gh availability/auth/read inspection passed; mutation blocked",
       "filesystem/shell/Git/GitHub/network mutations: blocked",

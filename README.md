@@ -2,7 +2,7 @@
 
 **Bounded delegation for [Pi](https://github.com/earendil-works/pi).**
 
-Matty gives Pi a dependable runtime for delegating engineering work to isolated child processes. It ships five least-privilege roles, capability preflight, bounded concurrency, web research, CodeGraph tools, and local diagnostics. Your workflows and project policy remain yours.
+Matty gives Pi a dependable runtime for delegating engineering work to isolated child processes. It ships five least-privilege roles, capability preflight, bounded concurrency, web research, and local diagnostics. Your workflows and project policy remain yours.
 
 ## Install
 
@@ -71,7 +71,9 @@ A call accepts one to eight tasks and runs at most four child processes concurre
 | `researcher` | Gather cited web evidence | Four web tools plus `research_file`; temporary workspace files and one approved Markdown report |
 | `worker` | Implement a bounded change | Trusted working tree and validated temporary paths |
 
-At most one `worker` may be active per repository. The parent agent reviews and integrates delegated changes.
+Every `reviewer` task must include a closed `reviewScope` with exactly `schemaVersion`, `issue` (`repository`, `number`, `reference`), `requirements`, `outOfScope` (`reference`, `reason`), `baseSha`, `candidateSha`, and `axes`. Reviewer findings must bind to that candidate and one exact listed requirement; dependent and out-of-scope references remain excluded.
+
+At most one `worker` may be active per repository. A worker returns a structured completion report; its process success and checks are supporting evidence only. The parent inspects the diff and independently runs the repository-authoritative full gate before claiming success or integrating.
 
 For cited research, declare web access and an approved report path:
 
@@ -88,10 +90,6 @@ For cited research, declare web access and an approved report path:
   ]
 }
 ```
-
-## CodeGraph
-
-Matty adds CodeGraph search, navigation, caller/callee, impact, and exploration tools to the parent agent. On session start, Matty uses the nearest existing CodeGraph index or creates `.codegraph/` by default in the current project. It refuses unsafe roots such as your home directory or the filesystem root; initialization failure leaves the rest of Matty available.
 
 ## Safety and privacy
 
