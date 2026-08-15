@@ -74,7 +74,7 @@ test("production status binds checks to the exact candidate SHA and emits closed
       return JSON.stringify([[]]);
     }
     if (args[1] === `repos/yersonargotev/matty/git/ref/heads/${encodeURIComponent(branch)}`) {
-      throw Object.assign(new Error("redacted missing branch"), { stderr: "HTTP 404" });
+      return JSON.stringify({ object: { sha: "1111111111111111111111111111111111111111" } });
     }
     if (args[1] === "repos/yersonargotev/matty/git/ref/heads/main") {
       return JSON.stringify({ object: { sha: "0000000000000000000000000000000000000000" }, url: "https://secret.invalid/main" });
@@ -127,6 +127,100 @@ test("production status binds checks to the exact candidate SHA and emits closed
   }
   assert.equal(gitCalls.some((args) => ["hash-object", "update-ref", "switch"].includes(args[0]!)), false);
   assert.equal(gitCalls.some((args) => args[0] === "merge-base" && args[1] === "--is-ancestor"), true);
+});
+
+test("an unpublished local candidate does not query GitHub checks or statuses", async () => {
+  const candidateSha = "1111111111111111111111111111111111111111";
+  const baseSha = "0000000000000000000000000000000000000000";
+  const identity = {
+    repository: "github.com/yersonargotev/matty",
+    tracker: "github" as const,
+    issue: 36,
+  };
+  const branch = "matty/deliver-36-owned";
+  const workspace = {
+    inspect: async () => ({
+      status: "active" as const,
+      delivery: { identity, branch, integrationBranch: "main", integrationSha: baseSha, candidateSha },
+    }),
+    prepare: async () => { throw new Error("active delivery must not prepare"); },
+  };
+  const calls: string[] = [];
+  const runCommand: IssueDeliveryCommandReader = async (_command, args) => {
+    const endpoint = args[1]!;
+    calls.push(endpoint);
+    if (endpoint === "repos/yersonargotev/matty/issues/36") {
+      return JSON.stringify({ number: 36, state: "open" });
+    }
+    if (endpoint.startsWith("repos/yersonargotev/matty/pulls?")) return JSON.stringify([[]]);
+    if (endpoint === `repos/yersonargotev/matty/git/ref/heads/${encodeURIComponent(branch)}`) {
+      throw Object.assign(new Error("missing branch token=secret"), { stderr: "HTTP 404" });
+    }
+    if (endpoint === "repos/yersonargotev/matty/git/ref/heads/main") {
+      return JSON.stringify({ object: { sha: baseSha } });
+    }
+    throw new Error(`candidate-bound endpoint must not be queried: ${endpoint}`);
+  };
+
+  const outcome = await createGithubIssueDelivery({}, runCommand, undefined, workspace)(
+    { intent: "status", issue: "36", cwd: "/repo" },
+  );
+
+  assert.deepEqual(outcome, {
+    schemaVersion: 1,
+    status: "active",
+    deliveryIdentity: identity,
+    gate: "verification",
+    candidateSha,
+    checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
+    blockers: [],
+  });
+  assert.equal(calls.some((endpoint) => /check-runs|\/status\?/.test(endpoint)), false);
+});
+
+test("a remote delivery candidate mismatch returns drift without querying stale checks", async () => {
+  const candidateSha = "1111111111111111111111111111111111111111";
+  const remoteSha = "2222222222222222222222222222222222222222";
+  const baseSha = "0000000000000000000000000000000000000000";
+  const identity = {
+    repository: "github.com/yersonargotev/matty",
+    tracker: "github" as const,
+    issue: 36,
+  };
+  const branch = "matty/deliver-36-owned";
+  const workspace = {
+    inspect: async () => ({
+      status: "active" as const,
+      delivery: { identity, branch, integrationBranch: "main", integrationSha: baseSha, candidateSha },
+    }),
+    prepare: async () => { throw new Error("active delivery must not prepare"); },
+  };
+  const calls: string[] = [];
+  const runCommand: IssueDeliveryCommandReader = async (_command, args) => {
+    const endpoint = args[1]!;
+    calls.push(endpoint);
+    if (endpoint === "repos/yersonargotev/matty/issues/36") {
+      return JSON.stringify({ number: 36, state: "open" });
+    }
+    if (endpoint.startsWith("repos/yersonargotev/matty/pulls?")) return JSON.stringify([[]]);
+    if (endpoint === `repos/yersonargotev/matty/git/ref/heads/${encodeURIComponent(branch)}`) {
+      return JSON.stringify({ object: { sha: remoteSha } });
+    }
+    if (endpoint === "repos/yersonargotev/matty/git/ref/heads/main") {
+      return JSON.stringify({ object: { sha: baseSha } });
+    }
+    throw new Error(`stale candidate endpoint must not be queried: ${endpoint}`);
+  };
+
+  const outcome = await createGithubIssueDelivery({}, runCommand, undefined, workspace)(
+    { intent: "status", issue: "36", cwd: "/repo" },
+  );
+
+  assert.equal(outcome.status, "blocked");
+  if (outcome.status === "blocked") {
+    assert.deepEqual(outcome.exceptionBrief.evidence, ["delivery-candidate-drift"]);
+  }
+  assert.equal(calls.some((endpoint) => /check-runs|\/status\?/.test(endpoint)), false);
 });
 
 test("a later pull-request page containing a related incompatible PR is ambiguous", async () => {

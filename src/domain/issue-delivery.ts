@@ -114,7 +114,8 @@ export type DeliveryBlockerCode =
   | "checks-failing";
 
 export interface CandidateCheck {
-  status: "queued" | "in_progress" | "completed";
+  status: "queued" | "in_progress" | "waiting" | "requested" | "pending" |
+    "completed";
   conclusion: "success" | "neutral" | "skipped" | "failure" |
     "cancelled" | "timed_out" | "action_required" | "stale" |
     "startup_failure" | null;
@@ -125,7 +126,9 @@ export function candidateCheck(
   status: unknown,
   conclusion: unknown,
 ): CandidateCheck {
-  const statuses = new Set(["queued", "in_progress", "completed"]);
+  const statuses = new Set([
+    "queued", "in_progress", "waiting", "requested", "pending", "completed",
+  ]);
   const conclusions = new Set([
     "success", "neutral", "skipped", "failure", "cancelled", "timed_out",
     "action_required", "stale", "startup_failure",

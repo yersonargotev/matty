@@ -85,6 +85,34 @@ test("repeating delivery resumes its durable identity without replaying workspac
   });
 });
 
+test("an unpublished local candidate remains active without candidate-bound checks", async () => {
+  let inspectionReads = 0;
+  const outcome = await deliverIssue(
+    { intent: "status", issue: "36", cwd: "/repo" },
+    async () => { throw new Error("status must not qualify"); },
+    activeWorkspace(CANDIDATE_SHA),
+    async () => {
+      inspectionReads += 1;
+      return inspection({
+        pullRequests: [],
+        remoteBranches: { deliverySha: null, integrationSha: BASE_SHA },
+        checks: [],
+      });
+    },
+  );
+
+  assert.equal(inspectionReads, 1);
+  assert.deepEqual(outcome, {
+    schemaVersion: 1,
+    status: "active",
+    deliveryIdentity: identity,
+    gate: "verification",
+    candidateSha: CANDIDATE_SHA,
+    checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
+    blockers: [],
+  });
+});
+
 test("an owned branch at the integration SHA remains at implementation", async () => {
   const outcome = await deliverIssue(
     { intent: "status", issue: "36", cwd: "/repo" },
@@ -101,6 +129,30 @@ test("an owned branch at the integration SHA remains at implementation", async (
       state: "none", total: 0, passed: 0, pending: 0, failed: 0,
     });
     assert.deepEqual(outcome.blockers, ["implementation-required"]);
+  }
+});
+
+test("valid nonterminal Check Run statuses aggregate as pending", async (context) => {
+  for (const status of ["waiting", "requested", "pending"] as const) {
+    await context.test(status, async () => {
+      const outcome = await deliverIssue(
+        { intent: "status", issue: "36", cwd: "/repo" },
+        async () => { throw new Error("unused"); },
+        activeWorkspace(CANDIDATE_SHA),
+        async () => inspection({
+          remoteBranches: { deliverySha: CANDIDATE_SHA, integrationSha: BASE_SHA },
+          checks: [{ status, conclusion: null }],
+        }),
+      );
+
+      assert.equal(outcome.status, "active");
+      if (outcome.status === "active") {
+        assert.deepEqual(outcome.checks, {
+          state: "pending", total: 1, passed: 0, pending: 1, failed: 0,
+        });
+        assert.deepEqual(outcome.blockers, ["checks-pending"]);
+      }
+    });
   }
 });
 

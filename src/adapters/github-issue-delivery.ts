@@ -343,7 +343,10 @@ async function readDeliveryInspection(
   if (integrationSha === null) throw new Error("integration branch is unavailable");
 
   let checks: IssueDeliveryInspection["checks"] = [];
-  if (request.candidateSha !== null) {
+  if (
+    request.candidateSha !== null &&
+    deliverySha === request.candidateSha
+  ) {
     const [checksRaw, statusesRaw] = await Promise.all([
       runCommand(
         "gh",
