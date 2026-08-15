@@ -1,3 +1,7 @@
+import type {
+  IssueDeliveryRequest,
+} from "./issue-delivery.ts";
+import type { IssueDeliveryOutcome } from "../domain/issue-delivery.ts";
 import {
   isCertifiedHost,
   STARTUP_HINT,
@@ -20,6 +24,7 @@ export type Notify = (
 ) => void;
 
 export interface DiagnosticContext {
+  cwd?: string;
   activeModel?: {
     provider: string;
     model: string;
@@ -30,6 +35,12 @@ export interface DiagnosticContext {
 }
 
 export type RuntimeFactInputs = Omit<RuntimeFacts, "activation">;
+
+export interface MattyRegistrationOptions {
+  qualifyIssueDelivery?: (
+    request: IssueDeliveryRequest,
+  ) => Promise<IssueDeliveryOutcome>;
+}
 
 export interface MattyHost {
   registerCommand(
@@ -55,6 +66,7 @@ export interface MattyHost {
 export function registerMatty(
   host: MattyHost,
   runtimeFacts: RuntimeFactInputs,
+  options: MattyRegistrationOptions = {},
 ): StatusDiagnostic {
   const activation = createActivation(runtimeFacts);
   let snapshot = createDiagnosticSnapshot({
@@ -159,7 +171,21 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor> [--json]", "warning");
+      const delivery = /^deliver ([^\s]+)$/.exec(args);
+      if (delivery && options.qualifyIssueDelivery) {
+        const outcome = await options.qualifyIssueDelivery({
+          intent: "deliver",
+          issue: delivery[1]!,
+          cwd: context?.cwd ?? "",
+        });
+        notify(
+          JSON.stringify(outcome),
+          outcome.status === "qualified" ? "info" : "warning",
+        );
+        return;
+      }
+
+      notify("Usage: /matty <status|doctor> [--json] | /matty deliver <issue>", "warning");
     },
   });
 

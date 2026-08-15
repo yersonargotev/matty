@@ -17,6 +17,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
+import { createGithubIssueDeliveryQualifier } from "./github-issue-delivery.ts";
 import {
   createChildPiRunner,
   type PiInvocation,
@@ -86,6 +87,7 @@ import {
   inspectWorkerPath,
   type WorkerGuardScope,
 } from "../domain/worker-guard.ts";
+import { injectIssueDeliveryGuidance } from "../domain/workflow-guidance.ts";
 import {
   MATTY_PACKAGE_VERSION,
 } from "../domain/package-contract.ts";
@@ -178,6 +180,7 @@ function createPiHost(
         ? "chatgpt-codex-subscription" as const
         : undefined;
     return {
+      cwd: context.cwd,
       ...(context.model
         ? {
           activeModel: {
@@ -875,11 +878,14 @@ export function registerPiMatty(
   let rulesConflict: string | undefined;
   pi.on("before_agent_start", (event) => {
     rulesConflict = detectMattyRulesConflict(event.systemPrompt);
+    const systemPrompt = injectMattyRules(
+      event.systemPrompt,
+      childRole ?? "parent",
+    );
     return {
-      systemPrompt: injectMattyRules(
-        event.systemPrompt,
-        childRole ?? "parent",
-      ),
+      systemPrompt: childRole
+        ? systemPrompt
+        : injectIssueDeliveryGuidance(systemPrompt),
     };
   });
 
@@ -1683,6 +1689,8 @@ export function registerPiMatty(
         WEB_CAPABILITY_TOOLS.some((certified) => certified === tool)
       ),
     },
+  }, {
+    qualifyIssueDelivery: createGithubIssueDeliveryQualifier(environment),
   });
 }
 

@@ -6,6 +6,7 @@ import {
   type MattyHost,
   type NotificationLevel,
 } from "../src/application/register-matty.ts";
+import type { IssueDeliveryOutcome } from "../src/domain/issue-delivery.ts";
 
 function createPiHarness() {
   const handlers = new Map<
@@ -146,6 +147,47 @@ test("an unsupported host stays diagnosable and replaces the active hint", async
     reason: "unsupported-host",
     codes: ["host-uncertified"],
   });
+});
+
+test("only explicit /matty deliver input invokes Issue Delivery", async () => {
+  const harness = createPiHarness();
+  const requests: string[] = [];
+  const qualified: IssueDeliveryOutcome = {
+    schemaVersion: 1,
+    status: "qualified",
+    workflow: {
+      id: "issue-delivery",
+      definitionVersion: 1,
+      guidanceVersion: 1,
+    },
+    deliveryIdentity: {
+      repository: "github.com/yersonargotev/matty",
+      tracker: "github",
+      issue: 34,
+    },
+    evidence: [],
+  };
+  registerMatty(harness.host, {
+    packageVersion: "0.2.0",
+    piVersion: "0.83.0",
+    platform: "darwin",
+    arch: "arm64",
+    web: { state: "unavailable", registeredTools: [] },
+  }, {
+    qualifyIssueDelivery: async (request) => {
+      requests.push(request.issue);
+      return qualified;
+    },
+  });
+
+  await harness.commands.get("matty")?.handle("ask-matt deliver 34");
+  await harness.commands.get("matty")?.handle("deliver 34 35");
+  assert.deepEqual(requests, []);
+
+  await harness.commands.get("matty")?.handle("deliver #34");
+  assert.deepEqual(requests, ["#34"]);
+  assert.equal(harness.notifications.at(-1)?.message, JSON.stringify(qualified));
+  assert.equal(harness.notifications.at(-1)?.level, "info");
 });
 
 test("status and doctor render the same Redacted Diagnostic snapshot", async () => {
