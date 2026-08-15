@@ -28,6 +28,10 @@ import {
   MATTY_RULES_START,
 } from "../src/domain/matty-rules.ts";
 import {
+  ISSUE_DELIVERY_GUIDANCE_END,
+  ISSUE_DELIVERY_GUIDANCE_START,
+} from "../src/domain/workflow-guidance.ts";
+import {
   INSPECTION_TOOLS,
   WORKER_TOOLS,
 } from "../src/domain/capability-contract.ts";
@@ -119,6 +123,14 @@ test("parent registration exposes explicit delegated roles", async () => {
 
   assert.equal(result.systemPrompt.split(MATTY_RULES_START).length - 1, 1);
   assert.equal(result.systemPrompt.split(MATTY_RULES_END).length - 1, 1);
+  assert.equal(
+    result.systemPrompt.split(ISSUE_DELIVERY_GUIDANCE_START).length - 1,
+    1,
+  );
+  assert.equal(
+    result.systemPrompt.split(ISSUE_DELIVERY_GUIDANCE_END).length - 1,
+    1,
+  );
   assert.deepEqual(harness.tools.map((tool) => tool.name), [
     "web_search",
     "source_check",
