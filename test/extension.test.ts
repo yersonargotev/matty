@@ -6,7 +6,7 @@ import {
   type MattyHost,
   type NotificationLevel,
 } from "../src/application/register-matty.ts";
-import type { IssueDeliveryOutcome } from "../src/domain/issue-delivery.ts";
+import { initialRepairBudget, renderIssueDeliveryOutcome, type IssueDeliveryOutcome } from "../src/domain/issue-delivery.ts";
 
 function createPiHarness() {
   const handlers = new Map<
@@ -165,6 +165,7 @@ test("only explicit /matty deliver input invokes Issue Delivery", async () => {
       tracker: "github",
       issue: 34,
     },
+    scope: { schemaVersion: 1, reference: "https://github.com/yersonargotev/matty/issues/34", title: "Issue", body: "", requirements: [], dependencies: [] },
     evidence: [],
   };
   registerMatty(harness.host, {
@@ -186,7 +187,7 @@ test("only explicit /matty deliver input invokes Issue Delivery", async () => {
 
   await harness.commands.get("matty")?.handle("deliver #34");
   assert.deepEqual(requests, ["#34"]);
-  assert.equal(harness.notifications.at(-1)?.message, JSON.stringify(qualified));
+  assert.equal(harness.notifications.at(-1)?.message, renderIssueDeliveryOutcome(qualified));
   assert.equal(harness.notifications.at(-1)?.level, "info");
 });
 
@@ -212,6 +213,8 @@ test("delivery status is explicit and general diagnostics remain offline", async
         },
         gate: "implementation",
         candidateSha: null,
+        candidateState: "none",
+        repairBudget: initialRepairBudget(),
         checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
         blockers: ["implementation-required"],
       };

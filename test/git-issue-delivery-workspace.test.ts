@@ -12,12 +12,14 @@ import {
 } from "../src/adapters/git-issue-delivery-workspace.ts";
 import { runInspectionDelegation } from "../src/application/inspection-role-delegation.ts";
 import {
-  deliverIssue,
+  deliverIssue as deliverIssueWithObserver,
   type IssueDeliveryPreflight,
 } from "../src/application/issue-delivery.ts";
 import { deliveryIdentityKey } from "../src/application/issue-delivery-workspace.ts";
 import { INSPECTION_TOOLS } from "../src/domain/capability-contract.ts";
+import { commitSha } from "../src/domain/commit-sha.ts";
 import {
+  initialRepairBudget,
   ISSUE_DELIVERY_WORKFLOW,
   type DeliveryIdentity,
 } from "../src/domain/issue-delivery.ts";
@@ -31,6 +33,17 @@ const identity: DeliveryIdentity = {
 const key = "4533aa2af6ba5a0fdc6550948150a95638ef5a61c0a4241ca3e5b26c995d6727";
 const activeRef = "refs/matty/issue-delivery/active";
 const ownerRef = `refs/matty/issue-delivery/owners/${key}`;
+
+async function deliverIssue(
+  request: Parameters<typeof deliverIssueWithObserver>[0],
+  qualify: () => Promise<IssueDeliveryPreflight>,
+  workspace: Parameters<typeof deliverIssueWithObserver>[2],
+) {
+  return await deliverIssueWithObserver(request, {
+    observeQualification: qualify,
+    observeActive: async () => { throw new Error("active observation must not run"); },
+  }, workspace);
+}
 
 function gitFailure(message: string, exitCode: number): Error & { exitCode: number } {
   return Object.assign(new Error(message), { exitCode });
@@ -60,8 +73,8 @@ function fakeGit(options: {
       if (options.ancestor === false) throw gitFailure("not an ancestor", 1);
       return "";
     }
-    if (args[0] === "rev-parse" && args[1] === "HEAD") return "base-sha";
-    if (args[0] === "rev-parse" && args[1] === "refs/remotes/origin/main") return "base-sha";
+    if (args[0] === "rev-parse" && args[1] === "HEAD") return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    if (args[0] === "rev-parse" && args[1] === "refs/remotes/origin/main") return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     if (args[0] === "rev-parse" && args[1] === "--verify") {
       const value = refs.get(args.at(-1)!);
       if (!value) throw gitFailure("missing ref", 1);
@@ -74,7 +87,7 @@ function fakeGit(options: {
     if (args[0] === "symbolic-ref") return "origin/main";
     if (args[0] === "status") return "";
     if (args[0] === "worktree" && args[1] === "list") {
-      return `worktree /repo\nHEAD base-sha\nbranch refs/heads/${currentBranch}\n`;
+      return `worktree /repo\nHEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nbranch refs/heads/${currentBranch}\n`;
     }
     if (args[0] === "show-ref") {
       const ref = args.at(-1)!;
@@ -200,8 +213,9 @@ test("active delivery inspection reads owned markers and candidate without Git e
       identity,
       branch: "matty/deliver-35-4533aa2a",
       integrationBranch: "main",
-      integrationSha: "base-sha",
+      integrationSha: commitSha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
       candidateSha: null,
+      repairBudget: initialRepairBudget(),
     },
   });
   const reads = git.calls.slice(before);
@@ -385,12 +399,13 @@ test("the Git adapter rejects mismatched starting and integration authority with
         branch: "matty/deliver-35-4533aa2a",
         path: "/repo",
         isolation: "in-place",
-        startingCheckout: { root: "/repo", ref: "main", sha: "base-sha" },
-        integration: { branch: "main", sha: "base-sha" },
+        startingCheckout: { root: "/repo", ref: "main", sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        integration: { branch: "main", sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        repairBudget: initialRepairBudget(),
       };
       const mismatched = structuredClone(active);
-      if (field === "starting checkout") mismatched.startingCheckout.sha = "other-start";
-      else mismatched.integration.sha = "other-integration";
+      if (field === "starting checkout") mismatched.startingCheckout.sha = "cccccccccccccccccccccccccccccccccccccccc";
+      else mismatched.integration.sha = "dddddddddddddddddddddddddddddddddddddddd";
       git.objects.set("active-record", JSON.stringify(active));
       git.objects.set("mismatched-owner", JSON.stringify(mismatched));
       git.refs.set(activeRef, "active-record");

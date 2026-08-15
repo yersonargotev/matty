@@ -8,6 +8,8 @@ import {
   type WorkspaceCheckoutFacts,
 } from "../application/issue-delivery-workspace.ts";
 import type { IssueDeliveryWorkspace } from "../application/issue-delivery.ts";
+import { commitSha } from "../domain/commit-sha.ts";
+import { repairBudget } from "../domain/issue-delivery.ts";
 
 const ACTIVE_REF = "refs/matty/issue-delivery/active";
 const OWNER_REF_PREFIX = "refs/matty/issue-delivery/owners";
@@ -94,6 +96,7 @@ function isRecord(value: unknown): value is DeliveryOwnershipRecord {
     typeof record.integration === "object" && record.integration !== null &&
     typeof record.integration.branch === "string" &&
     typeof record.integration.sha === "string" &&
+    (() => { try { commitSha(record.startingCheckout.sha); commitSha(record.integration.sha); repairBudget(record.repairBudget); return true; } catch { return false; } })() &&
     record.key === deliveryIdentityKey(record.identity as DeliveryOwnershipRecord["identity"]);
 }
 
@@ -111,7 +114,8 @@ function sameOwnership(
     actual.startingCheckout.ref === expected.startingCheckout.ref &&
     actual.startingCheckout.sha === expected.startingCheckout.sha &&
     actual.integration.branch === expected.integration.branch &&
-    actual.integration.sha === expected.integration.sha;
+    actual.integration.sha === expected.integration.sha &&
+    JSON.stringify(actual.repairBudget) === JSON.stringify(expected.repairBudget);
 }
 
 function isExpectedAbsence(error: unknown): boolean {
@@ -237,7 +241,8 @@ export function createGitIssueDeliveryWorkspace(
           branch: active.branch,
           integrationBranch: active.integration.branch,
           integrationSha: active.integration.sha,
-          candidateSha: candidateSha === active.integration.sha ? null : candidateSha,
+          candidateSha: candidateSha === active.integration.sha ? null : commitSha(candidateSha),
+          repairBudget: repairBudget(active.repairBudget),
         },
       };
     },
@@ -263,10 +268,10 @@ export function createGitIssueDeliveryWorkspace(
       return {
         root,
         ref: ref ?? null,
-        sha,
+        sha: commitSha(sha),
         clean: status === "",
         integrationBranch,
-        integrationSha,
+        integrationSha: commitSha(integrationSha),
       };
     },
 

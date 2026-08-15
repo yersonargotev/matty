@@ -9,6 +9,7 @@ import {
 import {
   ISSUE_DELIVERY_WORKFLOW,
 } from "../src/domain/issue-delivery.ts";
+import { commitSha } from "../src/domain/commit-sha.ts";
 
 const qualificationWorkspace: IssueDeliveryWorkspace = {
   inspect: async () => ({ status: "absent" }),
@@ -23,11 +24,18 @@ const qualificationWorkspace: IssueDeliveryWorkspace = {
       startingCheckout: {
         root: "/repo",
         ref: "main",
-        sha: "0000000000000000000000000000000000000000",
+        sha: commitSha("0000000000000000000000000000000000000000"),
       },
     },
   }),
 };
+
+function qualificationObserver(read: () => Promise<IssueDeliveryPreflight>) {
+  return {
+    observeQualification: read,
+    observeActive: async () => { throw new Error("active observation must not run"); },
+  };
+}
 
 function readyPreflight(): IssueDeliveryPreflight {
   return {
@@ -60,10 +68,10 @@ test("Issue Delivery prepares one exact ready GitHub issue through its controlle
   let reads = 0;
   const outcome = await deliverIssue(
     { intent: "deliver", issue: "#34", cwd: "/repo" },
-    async () => {
+    qualificationObserver(async () => {
       reads += 1;
       return readyPreflight();
-    },
+    }),
     qualificationWorkspace,
   );
 
@@ -81,6 +89,14 @@ test("Issue Delivery prepares one exact ready GitHub issue through its controlle
       tracker: "github",
       issue: 34,
     },
+    scope: {
+      schemaVersion: 1,
+      reference: "https://github.com/yersonargotev/matty/issues/34",
+      title: "Issue #34",
+      body: "",
+      requirements: [],
+      dependencies: [],
+    },
     evidence: [
       "delivery-intent-explicit",
       "github-authenticated",
@@ -97,20 +113,46 @@ test("Issue Delivery prepares one exact ready GitHub issue through its controlle
       startingCheckout: {
         root: "/repo",
         ref: "main",
-        sha: "0000000000000000000000000000000000000000",
+        sha: commitSha("0000000000000000000000000000000000000000"),
       },
     },
   });
+});
+
+test("Issue scope extracts only explicit Markdown task-list acceptance items", async () => {
+  const preflight = readyPreflight();
+  preflight.issue!.body = [
+    "## Acceptance criteria",
+    "This prose is evidence, not a requirement.",
+    "- [ ] First explicit requirement",
+    "- [x] Completed explicit requirement",
+    "- [X] Uppercase completed requirement",
+    "* [ ] wrong bullet marker",
+  ].join("\n");
+  const outcome = await deliverIssue(
+    { intent: "deliver", issue: "34", cwd: "/repo" },
+    qualificationObserver(async () => preflight),
+    qualificationWorkspace,
+  );
+  assert.equal(outcome.status, "prepared");
+  if (outcome.status === "prepared") {
+    assert.equal(outcome.scope.body, preflight.issue!.body);
+    assert.deepEqual(outcome.scope.requirements, [
+      "First explicit requirement",
+      "Completed explicit requirement",
+      "Uppercase completed requirement",
+    ]);
+  }
 });
 
 test("Issue Delivery rejects ambiguous input before capability reads", async () => {
   let reads = 0;
   const outcome = await deliverIssue(
     { intent: "deliver", issue: "34 35", cwd: "/repo" },
-    async () => {
+    qualificationObserver(async () => {
       reads += 1;
       return readyPreflight();
-    },
+    }),
     qualificationWorkspace,
   );
 
@@ -142,7 +184,7 @@ test("failed qualification reports exact remediation and cannot produce delivery
 
   const outcome = await deliverIssue(
     { intent: "deliver", issue: "34", cwd: "/repo" },
-    async () => preflight,
+    qualificationObserver(async () => preflight),
     qualificationWorkspace,
   );
 
@@ -165,12 +207,30 @@ test("failed qualification reports exact remediation and cannot produce delivery
   }
 });
 
+test("a ready label cannot bypass an open native dependency such as #42", async () => {
+  const preflight = readyPreflight();
+  preflight.issue!.dependencies = [{
+    reference: "https://github.com/yersonargotev/matty/issues/42",
+    title: "Dependent publication behavior",
+    state: "open",
+  }];
+  const outcome = await deliverIssue(
+    { intent: "deliver", issue: "34", cwd: "/repo" },
+    qualificationObserver(async () => preflight),
+    qualificationWorkspace,
+  );
+  assert.equal(outcome.status, "blocked");
+  if (outcome.status === "blocked") {
+    assert.ok(outcome.exceptionBrief.evidence.includes("issue-blocked-by-dependency"));
+  }
+});
+
 test("unexpected inspection failures become a closed Exception Brief", async () => {
   const outcome = await deliverIssue(
     { intent: "deliver", issue: "34", cwd: "/repo" },
-    async () => {
+    qualificationObserver(async () => {
       throw new Error("secret provider output");
-    },
+    }),
     qualificationWorkspace,
   );
 

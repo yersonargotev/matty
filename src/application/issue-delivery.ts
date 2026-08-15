@@ -7,8 +7,11 @@ import {
   type DeliveryBlockerCode,
   type DeliveryIdentity,
   type DeliveryWorkspace,
+  initialRepairBudget,
+  repairBudget,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
+import { isCommitSha, type CommitSha } from "../domain/commit-sha.ts";
 
 export interface IssueDeliveryRequest {
   intent: "deliver" | "status";
@@ -40,6 +43,9 @@ export interface IssueDeliveryPreflight {
     state: "open" | "closed";
     labels: string[];
     url: string;
+    title?: string;
+    body?: string;
+    dependencies?: Array<{ reference: string; title: string; state: "open" | "closed" }>;
   };
   skills: Array<{
     id: string;
@@ -49,10 +55,6 @@ export interface IssueDeliveryPreflight {
   }>;
 }
 
-export type ReadIssueDeliveryPreflight = (
-  issue: ParsedIssueReference,
-  cwd: string,
-) => Promise<IssueDeliveryPreflight>;
 
 export interface IssueDeliveryWorkspaceRequest {
   cwd: string;
@@ -67,8 +69,9 @@ export interface ActiveDeliveryInspection {
   identity: DeliveryIdentity;
   branch: string;
   integrationBranch: string;
-  integrationSha: string;
-  candidateSha: string | null;
+  integrationSha: CommitSha;
+  candidateSha: CommitSha | null;
+  repairBudget?: import("../domain/issue-delivery.ts").RepairBudget;
 }
 
 export type ExistingIssueDeliveryResult =
@@ -86,24 +89,31 @@ export interface IssueDeliveryWorkspace {
 }
 
 export type DeliveryPullRequestFact =
-  | { compatibility: "compatible"; headSha: string }
+  | { compatibility: "compatible"; headSha: CommitSha }
   | { compatibility: "incompatible" };
 
 export interface IssueDeliveryInspection {
   issue: { state: "open" | "closed" };
   pullRequests: DeliveryPullRequestFact[];
   remoteBranches: {
-    deliverySha: string | null;
-    integrationSha: string;
+    deliverySha: CommitSha | null;
+    integrationSha: CommitSha;
   };
   checks: CandidateCheck[];
 }
 
 export interface IssueDeliveryInspectionRequest extends ActiveDeliveryInspection {}
 
-export type ReadIssueDeliveryInspection = (
-  request: IssueDeliveryInspectionRequest,
-) => Promise<IssueDeliveryInspection>;
+export interface IssueDeliveryObserver {
+  observeQualification(
+    issue: ParsedIssueReference,
+    cwd: string,
+  ): Promise<IssueDeliveryPreflight>;
+  observeActive(
+    request: IssueDeliveryInspectionRequest,
+    cwd: string,
+  ): Promise<IssueDeliveryInspection>;
+}
 
 function parseIssueReference(value: string): ParsedIssueReference | undefined {
   const short = /^(?:#)?([1-9]\d*)$/.exec(value);
@@ -182,10 +192,6 @@ function reconciliationBlocked(
   });
 }
 
-function isCommitSha(value: unknown): value is string {
-  return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
-}
-
 function activeReport(
   delivery: ActiveDeliveryInspection,
   facts: IssueDeliveryInspection,
@@ -195,6 +201,7 @@ function activeReport(
     delivery.integrationBranch.length === 0 ||
     !isCommitSha(delivery.integrationSha) ||
     (delivery.candidateSha !== null && !isCommitSha(delivery.candidateSha)) ||
+    (delivery.repairBudget !== undefined && (() => { try { repairBudget(delivery.repairBudget); return false; } catch { return true; } })()) ||
     (facts.issue.state !== "open" && facts.issue.state !== "closed") ||
     !Array.isArray(facts.pullRequests) ||
     facts.pullRequests.some((pullRequest) =>
@@ -255,6 +262,12 @@ function activeReport(
     deliveryIdentity: delivery.identity,
     gate,
     candidateSha: delivery.candidateSha,
+    candidateState: delivery.candidateSha === null
+      ? "none"
+      : (compatiblePullRequests.length === 1 || facts.remoteBranches.deliverySha !== null)
+      ? "published"
+      : "local-unpublished",
+    repairBudget: delivery.repairBudget ?? initialRepairBudget(),
     checks: { state, total: facts.checks.length, passed, pending, failed },
     blockers,
   };
@@ -262,9 +275,8 @@ function activeReport(
 
 export async function deliverIssue(
   request: IssueDeliveryRequest,
-  readPreflight: ReadIssueDeliveryPreflight,
+  observer: IssueDeliveryObserver,
   workspace: IssueDeliveryWorkspace,
-  readInspection?: ReadIssueDeliveryInspection,
 ): Promise<IssueDeliveryOutcome> {
   const issueReference = parseIssueReference(request.issue);
   if (!issueReference) return invalidIssueReference();
@@ -288,11 +300,8 @@ export async function deliverIssue(
       ) {
         return reconciliationBlocked(gate, "delivery-ownership-mismatch");
       }
-      if (!readInspection) {
-        return reconciliationBlocked(gate, "delivery-inspection-unavailable");
-      }
       try {
-        return activeReport(existing.delivery, await readInspection(existing.delivery));
+        return activeReport(existing.delivery, await observer.observeActive(existing.delivery, request.cwd));
       } catch {
         return reconciliationBlocked(gate, "delivery-inspection-unavailable");
       }
@@ -302,7 +311,7 @@ export async function deliverIssue(
     }
   }
 
-  const qualification = await qualifyIssueDelivery(request, readPreflight);
+  const qualification = await qualifyIssueDelivery(request, observer);
   if (qualification.status !== "qualified") return qualification;
   let preparation: IssueDeliveryWorkspaceResult;
   try {
@@ -325,7 +334,7 @@ export async function deliverIssue(
 
 async function qualifyIssueDelivery(
   request: IssueDeliveryRequest,
-  readPreflight: ReadIssueDeliveryPreflight,
+  observer: IssueDeliveryObserver,
 ): Promise<IssueDeliveryOutcome> {
   const issueReference = parseIssueReference(request.issue);
   if (request.intent !== "deliver" || !issueReference) {
@@ -334,7 +343,7 @@ async function qualifyIssueDelivery(
 
   let preflight: IssueDeliveryPreflight;
   try {
-    preflight = await readPreflight(issueReference, request.cwd);
+    preflight = await observer.observeQualification(issueReference, request.cwd);
   } catch {
     return blocked({
       schemaVersion: 1,
@@ -388,7 +397,7 @@ async function qualifyIssueDelivery(
   }
   if (preflight.issueInspection === "failed") {
     add(
-      "github-capability-missing",
+      "qualification-inspection-failed",
       `Verify GitHub connectivity and issue access, then repeat ${command}.`,
     );
   } else if (
@@ -402,6 +411,12 @@ async function qualifyIssueDelivery(
   } else if (preflight.issue) {
     if (preflight.issue.state !== "open") {
       add("issue-not-open", `Reopen issue #${issueReference.number} or choose an open ready issue.`);
+    }
+    if (preflight.issue.dependencies?.some((dependency) => dependency.state === "open")) {
+      add(
+        "issue-blocked-by-dependency",
+        `Close or resolve every open native blocker for issue #${issueReference.number}, then repeat ${command}.`,
+      );
     }
     const readyLabel = preflight.repository.readyLabel;
     if (!readyLabel || !preflight.issue.labels.includes(readyLabel)) {
@@ -453,7 +468,8 @@ async function qualifyIssueDelivery(
       schemaVersion: 1,
       gate: evidence.some((code) =>
           code.startsWith("workflow-dependency-") ||
-          code.startsWith("github-")
+          code.startsWith("github-") ||
+          code === "qualification-inspection-failed"
         )
         ? "capability-preflight"
         : "delivery-authorization",
@@ -489,6 +505,17 @@ async function qualifyIssueDelivery(
       repository: canonical,
       tracker: "github",
       issue: issueReference.number,
+    },
+    scope: {
+      schemaVersion: 1,
+      reference: preflight.issue!.url,
+      title: preflight.issue!.title ?? `Issue #${issueReference.number}`,
+      body: preflight.issue!.body ?? "",
+      requirements: (preflight.issue!.body ?? "").split("\n").flatMap((line) => {
+        const item = /^\s*-\s*\[(?: |x)\]\s+(.+?)\s*$/i.exec(line);
+        return item?.[1]?.trim() ? [item[1].trim()] : [];
+      }),
+      dependencies: (preflight.issue!.dependencies ?? []).map((dependency) => ({ ...dependency })),
     },
     evidence: [
       "delivery-intent-explicit",

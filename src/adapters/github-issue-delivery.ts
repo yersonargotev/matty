@@ -13,12 +13,14 @@ import {
   type IssueDeliveryRequest,
   type IssueDeliveryWorkspace,
   type ParsedIssueReference,
+  type IssueDeliveryObserver,
 } from "../application/issue-delivery.ts";
 import {
   candidateCheck,
   ISSUE_DELIVERY_WORKFLOW,
   type IssueDeliveryOutcome,
 } from "../domain/issue-delivery.ts";
+import { commitSha, type CommitSha } from "../domain/commit-sha.ts";
 import {
   canonicalGithubRemote,
   createGitIssueDeliveryWorkspace,
@@ -133,6 +135,16 @@ async function inspectSkills(environment: NodeJS.ProcessEnv) {
   return skills;
 }
 
+function blockedByFallbackReferences(body: string): number[] {
+  const firstContentLine = body.split("\n").find((line) => line.trim().length > 0)?.trim();
+  if (!firstContentLine) return [];
+  const match = /^Blocked by:\s*(#[1-9]\d*(?:\s*,\s*#[1-9]\d*)*)$/i.exec(firstContentLine);
+  if (!match?.[1]) return [];
+  return [...new Set(match[1].split(",").map((reference) =>
+    Number(reference.trim().slice(1))
+  ))];
+}
+
 async function readPreflight(
   issueReference: ParsedIssueReference,
   cwd: string,
@@ -175,13 +187,68 @@ async function readPreflight(
         state?: unknown;
         labels?: Array<{ name?: unknown }>;
         html_url?: unknown;
+        title?: unknown;
+        body?: unknown;
         pull_request?: unknown;
       };
       if (
         typeof value.number === "number" &&
         (value.state === "open" || value.state === "closed") &&
-        typeof value.html_url === "string"
+        typeof value.html_url === "string" &&
+        typeof value.title === "string" &&
+        (typeof value.body === "string" || value.body === null)
       ) {
+        const dependencies: NonNullable<IssueDeliveryPreflight["issue"]>["dependencies"] = [];
+        let nativeDependenciesUnavailable = false;
+        try {
+          const rawDependencies = await runCommand(
+            "gh",
+            [
+              "api",
+              `repos/${repositoryName}/issues/${issueReference.number}/dependencies/blocked_by?per_page=100`,
+              "--paginate",
+              "--slurp",
+            ],
+            repository.root,
+          );
+          const pages = parsePaginatedPages(rawDependencies, "issue dependency");
+          for (const page of pages) {
+            if (!Array.isArray(page)) throw new Error("invalid issue dependency pagination");
+            for (const dependency of page) {
+              if (typeof dependency !== "object" || dependency === null || Array.isArray(dependency)) throw new Error("invalid issue dependency");
+              const item = dependency as Record<string, unknown>;
+              if (!Number.isSafeInteger(item.number) || (item.number as number) < 1 ||
+                typeof item.title !== "string" ||
+                (item.state !== "open" && item.state !== "closed") || typeof item.html_url !== "string") {
+                throw new Error("invalid issue dependency");
+              }
+              dependencies.push({ reference: item.html_url, title: item.title, state: item.state });
+            }
+          }
+        } catch (error) {
+          if (!githubNotFound(error)) throw error;
+          nativeDependenciesUnavailable = true;
+        }
+        if (nativeDependenciesUnavailable) {
+          for (const number of blockedByFallbackReferences(value.body ?? "")) {
+            const rawDependency = await runCommand(
+              "gh",
+              ["api", `repos/${repositoryName}/issues/${number}`],
+              repository.root,
+            );
+            const dependency: unknown = JSON.parse(rawDependency);
+            if (typeof dependency !== "object" || dependency === null || Array.isArray(dependency)) {
+              throw new Error("invalid fallback issue dependency");
+            }
+            const item = dependency as Record<string, unknown>;
+            if (item.number !== number || typeof item.title !== "string" ||
+              (item.state !== "open" && item.state !== "closed") ||
+              typeof item.html_url !== "string" || item.pull_request !== undefined) {
+              throw new Error("invalid fallback issue dependency");
+            }
+            dependencies.push({ reference: item.html_url, title: item.title, state: item.state });
+          }
+        }
         issueInspection = "available";
         issue = {
           kind: value.pull_request ? "pull-request" : "issue",
@@ -191,6 +258,9 @@ async function readPreflight(
             typeof label.name === "string" ? [label.name] : []
           ),
           url: value.html_url,
+          title: value.title,
+          body: value.body ?? "",
+          dependencies,
         };
       }
     } catch (error) {
@@ -309,7 +379,7 @@ async function readDeliveryInspection(
         pull.state === "open" &&
         pull.merged_at === null;
       pullRequests.push(compatible
-        ? { compatibility: "compatible", headSha: head.sha }
+        ? { compatibility: "compatible", headSha: commitSha(head.sha) }
         : { compatibility: "incompatible" });
     }
   }
@@ -317,7 +387,7 @@ async function readDeliveryInspection(
   const readBranchSha = async (
     branch: string,
     missingIsNormal: boolean,
-  ): Promise<string | null> => {
+  ): Promise<CommitSha | null> => {
     try {
       const raw = await runCommand(
         "gh",
@@ -332,7 +402,7 @@ async function readDeliveryInspection(
       ) {
         throw new Error("invalid branch inspection");
       }
-      return (value.object as { sha: string }).sha;
+      return commitSha((value.object as { sha: string }).sha);
     } catch (error) {
       if (missingIsNormal && githubNotFound(error)) return null;
       throw error;
@@ -454,11 +524,9 @@ export function createGithubIssueDelivery(
   runGit?: GitDeliveryCommandRunner,
   workspace: IssueDeliveryWorkspace = createGitIssueDeliveryWorkspace(runGit),
 ): (request: IssueDeliveryRequest) => Promise<IssueDeliveryOutcome> {
-  return async (request) =>
-    deliverIssue(
-      request,
-      (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
-      workspace,
-      (inspection) => readDeliveryInspection(inspection, request.cwd, runCommand),
-    );
+  const observer: IssueDeliveryObserver = {
+    observeQualification: (issue, cwd) => readPreflight(issue, cwd, environment, runCommand),
+    observeActive: (inspection, cwd) => readDeliveryInspection(inspection, cwd, runCommand),
+  };
+  return async (request) => deliverIssue(request, observer, workspace);
 }

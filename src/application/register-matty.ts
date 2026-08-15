@@ -1,7 +1,7 @@
 import type {
   IssueDeliveryRequest,
 } from "./issue-delivery.ts";
-import type { IssueDeliveryOutcome } from "../domain/issue-delivery.ts";
+import { renderIssueDeliveryOutcome, type IssueDeliveryOutcome } from "../domain/issue-delivery.ts";
 import {
   isCertifiedHost,
   STARTUP_HINT,
@@ -179,7 +179,7 @@ export function registerMatty(
           cwd: context?.cwd ?? "",
         });
         notify(
-          JSON.stringify(outcome),
+          renderIssueDeliveryOutcome(outcome),
           outcome.status === "blocked" ? "warning" : "info",
         );
         return;

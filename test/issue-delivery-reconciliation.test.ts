@@ -2,14 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  deliverIssue,
+  deliverIssue as deliverIssueWithObserver,
   type IssueDeliveryInspection,
+  type IssueDeliveryPreflight,
   type IssueDeliveryWorkspace,
+  type ParsedIssueReference,
 } from "../src/application/issue-delivery.ts";
-import type { DeliveryIdentity } from "../src/domain/issue-delivery.ts";
+import { initialRepairBudget, type DeliveryIdentity } from "../src/domain/issue-delivery.ts";
+import { commitSha, type CommitSha } from "../src/domain/commit-sha.ts";
 
-const BASE_SHA = "0000000000000000000000000000000000000000";
-const CANDIDATE_SHA = "1111111111111111111111111111111111111111";
+const BASE_SHA = commitSha("0000000000000000000000000000000000000000");
+const CANDIDATE_SHA = commitSha("1111111111111111111111111111111111111111");
+
+async function deliverIssue(
+  request: Parameters<typeof deliverIssueWithObserver>[0],
+  qualify: (issue: ParsedIssueReference, cwd: string) => Promise<IssueDeliveryPreflight>,
+  workspace: IssueDeliveryWorkspace,
+  inspect: (request: Parameters<NonNullable<Parameters<typeof deliverIssueWithObserver>[1]>["observeActive"]>[0]) => Promise<IssueDeliveryInspection>,
+) {
+  return await deliverIssueWithObserver(request, {
+    observeQualification: qualify,
+    observeActive: inspect,
+  }, workspace);
+}
 
 const identity: DeliveryIdentity = {
   repository: "github.com/yersonargotev/matty",
@@ -17,7 +32,7 @@ const identity: DeliveryIdentity = {
   issue: 36,
 };
 
-function activeWorkspace(candidateSha: string | null): IssueDeliveryWorkspace {
+function activeWorkspace(candidateSha: CommitSha | null): IssueDeliveryWorkspace {
   return {
     async inspect() {
       return {
@@ -80,6 +95,8 @@ test("repeating delivery resumes its durable identity without replaying workspac
     deliveryIdentity: identity,
     gate: "verification",
     candidateSha: CANDIDATE_SHA,
+    candidateState: "local-unpublished",
+    repairBudget: initialRepairBudget(),
     checks: { state: "pending", total: 2, passed: 1, pending: 1, failed: 0 },
     blockers: ["checks-pending"],
   });
@@ -108,6 +125,8 @@ test("an unpublished local candidate remains active without candidate-bound chec
     deliveryIdentity: identity,
     gate: "verification",
     candidateSha: CANDIDATE_SHA,
+    candidateState: "local-unpublished",
+    repairBudget: initialRepairBudget(),
     checks: { state: "none", total: 0, passed: 0, pending: 0, failed: 0 },
     blockers: [],
   });
@@ -199,7 +218,7 @@ test("candidate checks are aggregated without exposing hostile provider data", a
 });
 
 test("ambiguous PRs and remote candidate drift return fixed Exception Briefs", async (context) => {
-  const otherSha = "2222222222222222222222222222222222222222";
+  const otherSha = commitSha("2222222222222222222222222222222222222222");
   const cases: Array<[string, IssueDeliveryInspection, string]> = [
     ["ambiguous", inspection({ pullRequests: [
       { compatibility: "compatible", headSha: CANDIDATE_SHA },
@@ -227,7 +246,7 @@ test("ambiguous PRs and remote candidate drift return fixed Exception Briefs", a
 });
 
 test("an advanced remote integration branch is visible without changing the qualified base", async () => {
-  const advancedSha = "3333333333333333333333333333333333333333";
+  const advancedSha = commitSha("3333333333333333333333333333333333333333");
   let inspectedBase: string | undefined;
   const outcome = await deliverIssue(
     { intent: "status", issue: "36", cwd: "/repo" },
@@ -252,7 +271,7 @@ test("malformed required inspection returns a fixed redacted Exception Brief", a
   const outcome = await deliverIssue(
     { intent: "status", issue: "36", cwd: "/repo" },
     async () => { throw new Error("unused"); },
-    activeWorkspace("not-a-commit /private/token"),
+    activeWorkspace("not-a-commit /private/token" as never),
     async () => inspection(),
   );
   assert.equal(outcome.status, "blocked");
