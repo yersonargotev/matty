@@ -1,127 +1,20 @@
 # Matty
 
-Matty is an opinionated Pi package for dependable day-to-day software
-development. Matty Core provides the runtime foundation, while later
-Matty-owned workflows provide maintained development experiences; version
-`0.1` ships only Core.
+Matty Core is a small, opinionated runtime layer for Pi. Version `0.1` provides
+bounded delegation, web research, runtime rules, diagnostics, and a
+releaseable package without owning higher-level engineering processes.
 
 ## Language
 
-**Matty**:
-The product that combines Matty Core with a selected set of opinionated,
-Matty-owned development workflows.
-_Avoid_: Runtime only, general workflow marketplace
-
-**Matt Skill**:
-A skill sourced from Matt Pocock's upstream collection and distributed as a
-traceable, reviewed snapshot without competing extension-owned activation.
-_Avoid_: Matty-owned skill, floating upstream skill
-
-**Matty Skill Pack**:
-The Packy-managed projection that installs one authoritative global copy of the
-curated skills for Pi and other supported agent surfaces.
-_Avoid_: Extension-bundled catalog, competing skill copy
-
-**Supported Skill Set**:
-The versioned subset of the Matty Skill Pack whose identity, provenance,
-content, and availability Matty validates as workflow dependencies.
-_Avoid_: Certified model behavior, every installed skill, implicit support
-
-**Experimental Skill**:
-A skill distributed for evaluation without inheriting the compatibility or
-outcome guarantees of the Supported Skill Set.
-_Avoid_: Supported workflow dependency, silently supported skill
-
-**Matty Setup**:
-A visible, user-directed operation that validates the Matty Skill Pack and a
-Prepared Repository and may guide explicitly approved remediation.
-_Avoid_: Startup installation, background update
-
-**Matty Workflow**:
-A versioned engineering procedure that composes unchanged skills with Matty
-control while Matty maintains the resulting experience and outcome quality.
-_Avoid_: Agent Skill, modified Matt Skill, unowned third-party recipe
-
-**Workflow Definition**:
-The versioned package-owned pairing of Workflow Guidance with enforceable
-workflow policy, with no fact assigned authoritatively to both.
-_Avoid_: Globally activated skill, duplicated prompt-and-code specification
-
-**Workflow Guidance**:
-The non-authoritative reasoning guidance that tells an agent how to clarify,
-apply unchanged Matt Skills, and recognize decisions requiring a human.
-_Avoid_: Effect authorization, gate state, executable policy
-
-**Workflow Controller**:
-The Matty authority that advances a workflow only when its authorization,
-evidence, policy, and effect preconditions are satisfied.
-_Avoid_: Prompt interpreter, general Agent Skill runtime
-
-**Workflow Dependency**:
-A Supported Skill Set member that a named Matty Workflow requires at a specific
-gate; other relevant skills remain optional aids selected by the agent.
-_Avoid_: Every available skill, implicit dependency
-
-**Supported Workflow**:
-A Matty Workflow that has passed its scenario suite and audited real deliveries
-on the exact certified capability set.
-_Avoid_: Demonstrated workflow, prompt that worked once
-
-**Issue Delivery**:
-The Matty Workflow that takes one explicitly authorized ready issue through
-implementation, protected integration, issue closure, and owned-resource cleanup.
-_Avoid_: Issue-to-PR, PR preparation, autonomous release
-
-**Delivery Authorization**:
-The combination of an exact issue, explicit delivery intent, ready triage state,
-and trusted repository that permits Issue Delivery to mutate Git and tracker state.
-_Avoid_: Implicit task inference, blanket repository autonomy
-
-**Exception Brief**:
-A structured blocked outcome that states the active gate, evidence, decision or
-capability needed, available options, and Matty's recommendation.
-_Avoid_: Generic failure, guessed fallback, free-form steering request
-
-**Delivery Identity**:
-The stable combination of canonical repository, tracker, and issue that binds
-one Issue Delivery to its verifiable branches, PRs, comments, and artifacts.
-_Avoid_: Pi session, branch name, worktree path
-
-**Current Work Adoption**:
-The explicit human decision that binds existing commits or uncommitted changes
-to a Delivery Identity before Matty treats them as an unverified candidate.
-_Avoid_: Automatic scope inference, inherited verification
-
-**Prepared Repository**:
-A repository whose consumer-owned agent instructions, tracker policy, domain
-documentation policy, and canonical triage mapping were materialized through
-the supported setup workflow and remain inspectable by its maintainers.
-_Avoid_: Matty-owned repository configuration, inferred repository policy
-
 **Matty User**:
-An experienced Pi user who wants dependable daily development workflows across
-trusted repositories and accepts explicit control and verification steps.
+An experienced Pi user who wants dependable delegated work across trusted
+repositories.
 _Avoid_: General developer, beginner developer
-
-**Dependable Outcome**:
-A development result accompanied by inspectable changes, executed verification,
-remaining risks, and explicit requests for any required human decision.
-_Avoid_: Plausible completion, autonomous completion, fastest completion
-
-**Manual Validation**:
-An evidence-producing check of public behavior performed by the agent unless
-repository policy, access, or risk requires a human to perform or approve it.
-_Avoid_: Mandatory approval for every delivery, unrecorded spot check
-
-**Repair Budget**:
-The fixed number of candidate repair cycles permitted at one workflow gate
-before Issue Delivery blocks with an Exception Brief.
-_Avoid_: Unlimited retries, silent retry loop
 
 **Matty Core**:
 The versioned runtime capabilities shipped by Matty: the Subagent Runtime,
 Matty Roles and guards, Matty Rules, Web Capability, and diagnostics.
-_Avoid_: Workflow catalog, skill distribution
+_Avoid_: Process catalog, skill distribution
 
 **Supported Installation**:
 A Matty package installed globally through Pi. Project-local installation is
@@ -164,7 +57,7 @@ _Avoid_: Unlimited delegation, eight-way parallelism
 **Capability Contract**:
 Versioned Matty-owned policy for one Core operation, covering its role, tools,
 write authority, web requirement, cardinality, concurrency, and failure behavior.
-_Avoid_: Skill contract, workflow hint
+_Avoid_: Skill contract, task hint
 
 **Capability Preflight**:
 The evaluation of a Capability Contract before its operation produces effects.
@@ -172,8 +65,8 @@ An unmet required capability blocks only that operation.
 _Avoid_: Startup capability gate, global Core disablement
 
 **Matty Rules**:
-Versioned runtime and workflow invariants applied consistently to parent and
-child agents without becoming project-owned policy.
+Versioned Core runtime invariants applied consistently to parent and child
+agents without becoming project-owned policy.
 _Avoid_: Matty configuration file, project rules patch
 
 **Web Capability**:
@@ -228,7 +121,7 @@ probes, or background network requests.
 _Avoid_: Anonymous telemetry, silent update check
 
 **User-Directed Network Operation**:
-A network request attributable to a visible user or workflow action, including
+A network request attributable to a visible user or delegated action, including
 Pi model calls, delegated execution, web research, reviewer GitHub inspection,
 or project-local dependency installation.
 _Avoid_: Background Matty request
@@ -239,7 +132,7 @@ package `@yargote/matty`, published with provenance.
 _Avoid_: Private registry, unverifiable artifact
 
 **Staged Release**:
-A post-bootstrap release submitted by the canonical GitHub Actions workflow
+A post-bootstrap release submitted by the canonical GitHub Actions automation
 through npm trusted publishing, inspected as an exact staged artifact, and made
 public only after explicit maintainer approval.
 _Avoid_: Direct CI publication, automatic approval
@@ -252,7 +145,7 @@ _Avoid_: Routine token publication, placeholder release
 
 **OIDC Trusted Publishing**:
 The tokenless identity relationship between the canonical GitHub Actions
-workflow and npm used for routine releases with provenance.
+release automation and npm used for routine releases with provenance.
 _Avoid_: Long-lived npm token, local maintainer publication
 
 **Matty Source License**:
