@@ -1,6 +1,6 @@
 # Propuesta: gestión nativa de Delegations
 
-**Estado:** diseño confirmado; spike #56 validado; implementación productiva pendiente
+**Estado:** Incrementos 1 y 2 implementados; aceptación PTY empaquetada y validación subjetiva en terminal real completadas
 
 **Fecha:** 2026-08-15
 
@@ -93,27 +93,21 @@ El registro y la UI guardan sólo metadatos de lifecycle. El primer incremento n
 
 ### Gate de salida
 
-El Incremento 1 se considera aceptado únicamente cuando:
+La implementación productiva conserva la frontera de procesos, cubre estados, transiciones, retención, redacción y cancelación atómica, y forma parte de `npm run check`. La aceptación automatizada empaqueta el candidato y ejercita la TUI sobre Pi `0.84.2` en `darwin/arm64`.
 
-- no cambia la frontera de procesos;
-- estados, transiciones, límites y desalojo tienen tests;
-- cancelar conserva atomicidad y SIGTERM→SIGKILL;
-- ninguna vista expone payloads sensibles;
-- pasa `npm run check` completo;
-- pasa aceptación con el artefacto empaquetado en el Pi certificado;
-- una prueba manual confirma que la TUI no se corrompe ni presenta controles ambiguos.
+El gate subjetivo se validó por separado en un terminal real: el operador confirmó ausencia de corrupción visual, controles claros, cursor y foco correctos al cerrar con `q` y `Esc`, y entrada inmediata de `/matty status`. La evidencia conserva artefacto, SHA-256, versión de Pi, target, fecha y resultado en [`docs/acceptance/delegation-tui-manual.md`](../acceptance/delegation-tui-manual.md). El procedimiento reproducible permanece en [`scripts/acceptance/manual-delegation-tui.sh`](../../scripts/acceptance/manual-delegation-tui.sh).
 
-## Incremento 2 — Fleet observable
+## Incremento 2 — Fleet observable (implementado)
 
-Este es el siguiente incremento explícito después de superar el gate anterior:
+La implementación productiva incluye:
 
 1. widget compacto de actividad global;
 2. timeline navegable por Delegated Task;
-3. resúmenes seguros de herramientas y actividad;
-4. mejor inspección de concurrencia, cola y consumo;
-5. controles adicionales sólo cuando no contradigan atomicidad ni autoridad de roles.
+3. resúmenes cerrados y redactados de herramientas y actividad;
+4. inspección de concurrencia y cola;
+5. ausencia deliberada de controles que contradigan atomicidad o autoridad de roles.
 
-Antes de implementarlo se debe definir una política cerrada de redacción para los resúmenes y validar interacción de teclado, modo headless/print, coste de render y convivencia con otras extensiones.
+La redacción usa un allowlist cerrado y las vistas comparten snapshots deterministas. La interacción, truncación, lifecycle del widget y modos headless/print están cubiertos en los seams públicos de aplicación y registro Pi.
 
 ## Incremento 3 — Control avanzado
 
@@ -147,12 +141,12 @@ Antes de la implementación definitiva se hizo un spike desechable que validó �
 
 El código del spike no se convierte directamente en arquitectura de producción. Superado el spike, el Incremento 1 se implementa con tests sobre seams explícitos.
 
-El issue tracker separa las fronteras de entrega:
+El issue tracker separó las fronteras ya implementadas:
 
-1. #56 conserva el spike desechable ya validado;
-2. #57 y #58 implementan observación y cancelación como gestión esencial;
-3. #59 mantiene el Incremento 2 — Fleet observable — bloqueado por la gestión esencial;
-4. #60 conserva la frontera posterior de actividad redactada.
+1. #56 conserva el spike desechable validado;
+2. #57 y #58 entregaron observación y cancelación como gestión esencial;
+3. #59 entregó el Fleet observable;
+4. #60 entregó actividad redactada.
 
 El Incremento 3 permanece en esta propuesta hasta contar con evidencia suficiente para dividirlo en trabajo implementable.
 
@@ -196,9 +190,22 @@ shutdown()
 
 El adaptador Pi debe limitarse a conectar el tool público y lifecycle del host con ese registro. Una presentación pura conserva `selectedId`/expansión y produce filas ordenadas; una capa TUI delgada maneja teclado, render e invalidación. Los modos no interactivos consumen el mismo snapshot determinista sin exponer controllers ni ofrecer cancelación sin confirmación.
 
+## Aceptación productiva empaquetada
+
+`scripts/acceptance/t10-delegation-tui.mjs`, integrado en `npm run check`, exige exactamente Pi `0.84.2`, `darwin/arm64` y `/usr/bin/expect`; una precondición ausente falla con un diagnóstico de target certificado. En un HOME y proyecto aislados instala el artefacto npm empaquetado y una extensión fixture determinista junto a la extensión productiva. El PTY:
+
+- inicia una Delegation viva de cinco tareas con cuatro activas y una en cola;
+- abre `/matty delegations` durante streaming y observa texto de estado y conteos;
+- rechaza una confirmación, vuelve a solicitarla y confirma la cancelación completa;
+- observa rerender `cancelling` y `cancelled`;
+- cierra con `q` y ejecuta `/matty status` para probar restauración de foco e input;
+- usa matches por fase y adjunta el transcript PTY al diagnóstico de fallo.
+
+Esta aceptación automatiza comportamiento observable, no la apreciación humana de corrupción visual o cursor en un emulador de terminal real. Para esa revisión, `scripts/acceptance/manual-delegation-tui.sh [evidence.md]` ejecuta el mismo candidato empaquetado y fixture en el target certificado y registra nombre y SHA-256 del artefacto, Pi, target y fecha. La revisión completada se conserva en [`docs/acceptance/delegation-tui-manual.md`](../acceptance/delegation-tui-manual.md), con resultado satisfactorio para render, controles, cursor, foco y entrada posterior al cierre.
+
 ## Estado del diseño
 
-Diseño confirmado. El spec y sus tracer bullets están publicados en GitHub:
+Diseño confirmado e Incrementos 1 y 2 implementados. El spec y sus fronteras están publicados en GitHub:
 
 - [#55 — Specify native Delegation management](https://github.com/yersonargotev/matty/issues/55)
 - [#56 — Spike the Delegation Console interaction](https://github.com/yersonargotev/matty/issues/56)
@@ -207,4 +214,4 @@ Diseño confirmado. El spec y sus tracer bullets están publicados en GitHub:
 - [#59 — Show an observable Delegation fleet](https://github.com/yersonargotev/matty/issues/59)
 - [#60 — Add redacted Child Execution activity summaries](https://github.com/yersonargotev/matty/issues/60)
 
-Los issues son sub-issues de #55 y forman una cadena de dependencias nativas en el orden listado. El spike #56 validó la frontera TUI; #57 es la siguiente frontera de implementación.
+Los issues son sub-issues de #55 y formaron la cadena de entrega nativa. #56 conserva el spike histórico; #57, #58, #59 y #60 delimitan la implementación productiva completada. El target certificado actual es Pi `0.84.2` en `darwin/arm64`; el resultado histórico del spike sobre `0.83.0` permanece documentado como antecedente, no como certificación actual.

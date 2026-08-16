@@ -54,18 +54,16 @@ import {
 } from "../application/register-matty.ts";
 import {
   DelegationRegistry,
-  type DelegationCancellationResult,
   type DelegationRegistryOptions,
   type DelegationSnapshotEntry,
 } from "../application/delegation-registry.ts";
 import { createDelegationObserver } from "../application/delegation-observer.ts";
 import {
   delegationCard,
-  renderDelegationConsole,
   renderDelegationHumanSnapshot,
   renderDelegationJson,
-  renderDelegationWidget,
 } from "../application/delegation-presentation.ts";
+import { createPiDelegationManagement } from "./pi-delegation-management.ts";
 import {
   INSPECTION_TOOLS,
   DELEGATION_INPUT_GUIDANCE,
@@ -141,118 +139,6 @@ export interface PiMattyRegistrationOptions {
 
 type WriterRelease = () => void | Promise<void>;
 
-async function openDelegationConsole(
-  context: ExtensionContext,
-  registry: DelegationRegistry,
-  activeClosers: Set<() => void>,
-): Promise<void> {
-  await context.ui.custom<void>((tui, _theme, _keybindings, done) => {
-    let snapshot = registry.snapshot();
-    let selectedId = snapshot.delegations[0]?.id;
-    let confirmation: { id: string; displayId: string; active: number; queued: number } | undefined;
-    let cancellationStatus: string | undefined;
-    const cancellationMessages = {
-      "cancelling": (displayId: string) => `Cancellation requested for ${displayId}.`,
-      "already-cancelling": (displayId: string) =>
-        `Cancellation is already in progress for ${displayId}.`,
-      "already-finished": (displayId: string) => `${displayId} is already finished.`,
-    } satisfies Record<DelegationCancellationResult, (displayId: string) => string>;
-    const reportCancellation = (id: string, displayId: string) => {
-      const result = registry.cancel(id);
-      cancellationStatus = cancellationMessages[result](displayId);
-      tui.requestRender();
-    };
-    const expandedIds = new Set<string>();
-    let closed = false;
-    const unsubscribe = registry.subscribe(() => {
-      snapshot = registry.snapshot();
-      if (selectedId && !snapshot.delegations.some((entry) => entry.id === selectedId)) {
-        selectedId = snapshot.delegations[0]?.id;
-      }
-      tui.requestRender();
-    });
-    const close = () => {
-      if (closed) return;
-      closed = true;
-      unsubscribe();
-      activeClosers.delete(close);
-      done();
-    };
-    activeClosers.add(close);
-    return {
-      render(width: number) {
-        const lines = renderDelegationConsole(snapshot, {
-          ...(selectedId ? { selectedId } : {}),
-          expandedIds,
-        });
-        if (confirmation) {
-          lines.push(
-            `Confirm cancellation of ${confirmation.displayId}: ${confirmation.active} active, ${confirmation.queued} queued?`,
-            "y confirm · n/Esc keep running",
-          );
-        } else if (cancellationStatus) {
-          lines.push(cancellationStatus);
-        }
-        return lines.map((line) => piTui.truncateToWidth(line, Math.max(1, width)));
-      },
-      handleInput(data: string) {
-        if (confirmation) {
-          if (piTui.matchesKey(data, "y")) {
-            const target = confirmation;
-            confirmation = undefined;
-            reportCancellation(target.id, target.displayId);
-          } else if (
-            piTui.matchesKey(data, "n") ||
-            piTui.matchesKey(data, piTui.Key.escape)
-          ) {
-            confirmation = undefined;
-            tui.requestRender();
-          }
-          return;
-        }
-        if (piTui.matchesKey(data, "q") || piTui.matchesKey(data, piTui.Key.escape)) {
-          close();
-          return;
-        }
-        const entries = snapshot.delegations;
-        const index = Math.max(0, entries.findIndex((entry) => entry.id === selectedId));
-        if (piTui.matchesKey(data, piTui.Key.up) || piTui.matchesKey(data, "k")) {
-          selectedId = entries[Math.max(0, index - 1)]?.id ?? selectedId;
-          tui.requestRender();
-        } else if (piTui.matchesKey(data, piTui.Key.down) || piTui.matchesKey(data, "j")) {
-          selectedId = entries[Math.min(entries.length - 1, index + 1)]?.id ?? selectedId;
-          tui.requestRender();
-        } else if (piTui.matchesKey(data, piTui.Key.enter) && selectedId) {
-          if (expandedIds.has(selectedId)) expandedIds.delete(selectedId);
-          else expandedIds.add(selectedId);
-          tui.requestRender();
-        } else if (piTui.matchesKey(data, "c") && selectedId) {
-          const target = entries.find((entry) => entry.id === selectedId);
-          if (!target) return;
-          if (target.state === "queued" || target.state === "running") {
-            cancellationStatus = undefined;
-            confirmation = {
-              id: target.id,
-              displayId: target.displayId,
-              active: target.tasks.filter((task) => task.state === "running").length,
-              queued: target.tasks.filter((task) => task.state === "queued").length,
-            };
-            tui.requestRender();
-          } else {
-            reportCancellation(target.id, target.displayId);
-          }
-        }
-      },
-      invalidate() {},
-      dispose() {
-        closed = true;
-        unsubscribe();
-        activeClosers.delete(close);
-      },
-    };
-  }, { overlay: false });
-}
-
 interface PreparedWorkerExecution {
   contract: WorkerCapabilityContract;
   takeWriterLease(): WriterRelease | undefined;
@@ -282,7 +168,7 @@ function createPiHost(
   > = () => ({}),
   management?: {
     registry: DelegationRegistry;
-    activeConsoleClosers: Set<() => void>;
+    openConsole(context: ExtensionContext): Promise<void>;
     output(text: string): void;
   },
 ): MattyHost {
@@ -312,11 +198,7 @@ function createPiHost(
           },
           emitOutput: management.output,
           openDelegations: async () => {
-            await openDelegationConsole(
-              context,
-              management.registry,
-              management.activeConsoleClosers,
-            );
+            await management.openConsole(context);
           },
         }
         : {}),
@@ -840,7 +722,7 @@ export function registerPiMatty(
   options: PiMattyRegistrationOptions = {},
 ): void {
   const delegationRegistry = new DelegationRegistry(options.delegationRegistryOptions);
-  const activeConsoleClosers = new Set<() => void>();
+  const delegationManagement = createPiDelegationManagement(delegationRegistry);
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
@@ -1051,41 +933,6 @@ export function registerPiMatty(
       "research",
     );
     let researchCleanup: Promise<void> | undefined;
-    const delegationWidgetId = "matty-delegations";
-    let widgetContext: ExtensionContext | undefined;
-    let unsubscribeWidget: (() => void) | undefined;
-    const clearDelegationWidget = () => {
-      unsubscribeWidget?.();
-      unsubscribeWidget = undefined;
-      widgetContext?.ui.setWidget(delegationWidgetId, undefined);
-      widgetContext = undefined;
-    };
-    const bindDelegationWidget = (context: ExtensionContext) => {
-      if (context.mode !== "tui") return;
-      widgetContext = context;
-      const update = () => {
-        const lines = renderDelegationWidget(
-          delegationRegistry.snapshot(),
-          delegationRegistry.now(),
-          4,
-        );
-        context.ui.setWidget(
-          delegationWidgetId,
-          lines.length > 0
-            ? () => ({
-              render(width: number) {
-                return lines.map((line) =>
-                  piTui.truncateToWidth(line, Math.max(1, width))
-                );
-              },
-              invalidate() {},
-            })
-            : undefined,
-        );
-      };
-      unsubscribeWidget = delegationRegistry.subscribe(update);
-      update();
-    };
     const prepareResearchRoot = async () => {
       researchCleanup ??= cleanupStaleResearchWorkspaces({
         temporaryRoot: researchTemporaryRoot,
@@ -1093,16 +940,10 @@ export function registerPiMatty(
       await researchCleanup;
     };
     pi.on("session_start", (event, context) => {
-      clearDelegationWidget();
-      if (event.reason === "new" || event.reason === "resume" || event.reason === "reload") {
-        delegationRegistry.reset();
-      }
-      bindDelegationWidget(context);
+      delegationManagement.startSession(event.reason, context);
     });
     pi.on("session_shutdown", async () => {
-      clearDelegationWidget();
-      for (const close of [...activeConsoleClosers]) close();
-      delegationRegistry.shutdown();
+      delegationManagement.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
           await cleanupResearchWorkspace(scope);
@@ -1946,7 +1787,7 @@ export function registerPiMatty(
     },
   }), {
     registry: delegationRegistry,
-    activeConsoleClosers,
+    openConsole: (context) => delegationManagement.openConsole(context),
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {
     packageVersion: MATTY_PACKAGE_VERSION,

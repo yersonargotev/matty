@@ -25,6 +25,8 @@ const INSTALL_LIFECYCLE_SCRIPTS = [
   "dependencies",
 ];
 const EXPECTED_DIST_FILES = [
+  "dist/adapters/pi-delegation-management.d.ts",
+  "dist/adapters/pi-delegation-management.js",
   "dist/adapters/pi-extension.d.ts",
   "dist/adapters/pi-extension.js",
   "dist/application/child-control-environment.d.ts",

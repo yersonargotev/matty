@@ -743,6 +743,81 @@ test("delegation TUI confirms selected whole-group cancellation with active and 
   await opening;
 });
 
+test("delegation TUI cancellation finishes an active optional Delegation and task as cancelled", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let startedResolve: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+  const running = execute(
+    "cancel-optional-group" as never,
+    {
+      requirement: "optional",
+      tasks: [{ role: "explorer", task: "hold" }],
+    } as never,
+    undefined as never,
+    ((update: { details: { type?: string } }) => {
+      if (update.details.type === "started") startedResolve?.();
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+  await started;
+
+  let component: { handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  component.handleInput("c");
+  component.handleInput("y");
+
+  const result = await running;
+  const details = result.details as { status: string; tasks: Array<{ status: string }> };
+  assert.equal(details.status, "cancelled");
+  assert.deepEqual(details.tasks.map((task) => task.status), ["cancelled"]);
+
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const delegation = JSON.parse(notifications.at(-1) ?? "{}").delegations[0];
+  assert.equal(delegation.state, "cancelled");
+  assert.equal(delegation.tasks[0].state, "cancelled");
+
+  component.handleInput("q");
+  await opening;
+});
+
 test("delegation TUI reports a Delegation that finishes while cancellation confirmation is open", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
