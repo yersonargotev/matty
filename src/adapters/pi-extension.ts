@@ -153,6 +153,11 @@ async function openDelegationConsole(
         `Cancellation is already in progress for ${displayId}.`,
       "already-finished": (displayId: string) => `${displayId} is already finished.`,
     } satisfies Record<DelegationCancellationResult, (displayId: string) => string>;
+    const reportCancellation = (id: string, displayId: string) => {
+      const result = registry.cancel(id);
+      cancellationStatus = cancellationMessages[result](displayId);
+      tui.requestRender();
+    };
     const expandedIds = new Set<string>();
     let closed = false;
     const unsubscribe = registry.subscribe(() => {
@@ -191,9 +196,7 @@ async function openDelegationConsole(
           if (piTui.matchesKey(data, "y")) {
             const target = confirmation;
             confirmation = undefined;
-            const result = registry.cancel(target.id);
-            cancellationStatus = cancellationMessages[result](target.displayId);
-            tui.requestRender();
+            reportCancellation(target.id, target.displayId);
           } else if (
             piTui.matchesKey(data, "n") ||
             piTui.matchesKey(data, piTui.Key.escape)
@@ -221,7 +224,8 @@ async function openDelegationConsole(
           tui.requestRender();
         } else if (piTui.matchesKey(data, "c") && selectedId) {
           const target = entries.find((entry) => entry.id === selectedId);
-          if (target && (target.state === "queued" || target.state === "running")) {
+          if (!target) return;
+          if (target.state === "queued" || target.state === "running") {
             cancellationStatus = undefined;
             confirmation = {
               id: target.id,
@@ -230,6 +234,8 @@ async function openDelegationConsole(
               queued: target.tasks.filter((task) => task.state === "queued").length,
             };
             tui.requestRender();
+          } else {
+            reportCancellation(target.id, target.displayId);
           }
         }
       },

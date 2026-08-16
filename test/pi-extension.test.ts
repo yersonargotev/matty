@@ -477,6 +477,51 @@ test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, 
   await opening;
 });
 
+test("delegation TUI reports cancellation of an already-terminal Delegation without confirmation or state overwrite", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    delegationRegistryOptions: {
+      now: () => 5_000,
+      idFactory: () => "00000001-0000-4000-8000-000000000000",
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  await execute(
+    "terminal-delegation" as never,
+    { requirement: "required", tasks: [] } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  );
+
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  assert.match(component.render(200).join("\n"), /blocked/i);
+
+  component.handleInput("c");
+
+  const rendered = component.render(200).join("\n");
+  assert.match(rendered, /D-00000001 is already finished\./);
+  assert.match(rendered, /blocked/i);
+  assert.doesNotMatch(rendered, /Confirm cancellation|cancelling/i);
+  component.handleInput("q");
+  await opening;
+});
+
 test("delegation TUI confirms selected whole-group cancellation with active and queued counts", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
@@ -544,6 +589,10 @@ test("delegation TUI confirms selected whole-group cancellation with active and 
   const cancellationResult = component.render(200).join("\n");
   assert.match(cancellationResult, /Cancellation requested for D-[0-9a-f]{8}\./);
   assert.doesNotMatch(cancellationResult, /hold|fixture-secret/);
+  component.handleInput("c");
+  const repeatedCancellation = component.render(200).join("\n");
+  assert.match(repeatedCancellation, /Cancellation is already in progress/);
+  assert.doesNotMatch(repeatedCancellation, /Confirm cancellation/i);
 
   const result = await running;
   const details = result.details as { status: string; tasks: Array<{ status: string }> };
