@@ -1,7 +1,8 @@
-import type {
-  DelegatedTaskOutcome,
-  DelegatedTaskProgress,
-  DelegatedTaskRunner,
+import {
+  transferChildTranscript,
+  type DelegatedTaskOutcome,
+  type DelegatedTaskProgress,
+  type DelegatedTaskRunner,
 } from "./child-pi-runtime.ts";
 import { workerCompletionReport, type WorkerCompletionReport } from "../domain/worker-completion.ts";
 import {
@@ -106,12 +107,15 @@ export async function runWorkerDelegation(
     try {
       return {
         contract: preflight.contract,
-        outcome: { ...outcome, output: workerCompletionReport(JSON.parse(outcome.output)) },
+        outcome: transferChildTranscript(
+          outcome,
+          { ...outcome, output: workerCompletionReport(JSON.parse(outcome.output)) },
+        ),
       };
     } catch {
       return {
         contract: preflight.contract,
-        outcome: {
+        outcome: transferChildTranscript(outcome, {
           status: "failed",
           child: outcome.child,
           failure: {
@@ -119,7 +123,7 @@ export async function runWorkerDelegation(
             message: "worker completed without a valid structured completion report",
           },
           exit: outcome.exit,
-        },
+        }),
       };
     }
   } finally {

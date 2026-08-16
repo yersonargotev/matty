@@ -19,6 +19,11 @@ export type DelegationState = (typeof DELEGATION_STATES)[number];
 declare const delegationIdBrand: unique symbol;
 /** Opaque session-scoped identity. Its JSON/runtime representation remains a string. */
 export type DelegationId = string & { readonly [delegationIdBrand]: "DelegationId" };
+declare const delegatedTaskIdBrand: unique symbol;
+/** Opaque identity for one Delegated Task. It never aliases PID or runId. */
+export type DelegatedTaskId = string & {
+  readonly [delegatedTaskIdBrand]: "DelegatedTaskId";
+};
 export type TerminalDelegationState = Extract<
   DelegationState,
   "blocked" | "succeeded" | "partial" | "failed" | "cancelled"
@@ -50,6 +55,8 @@ export interface DelegatedActivitySnapshot {
 }
 
 export interface DelegatedTaskSnapshot {
+  id: DelegatedTaskId;
+  displayId: string;
   index: number;
   role?: MattyRole;
   state: DelegatedTaskState;
@@ -95,6 +102,7 @@ export type DelegationLifecycleEvent =
 export interface DelegationRegistryOptions {
   now?: () => number;
   idFactory?: () => string;
+  taskIdFactory?: () => string;
   terminalLimit?: number;
   activityLimitPerTask?: number;
 }
@@ -150,14 +158,15 @@ export function isTerminalDelegationState(
   return terminalStates.has(state);
 }
 
-function shortCandidate(id: DelegationId): string {
+function shortCandidate(prefix: "D" | "T", id: string): string {
   const hex = id.replaceAll("-", "").toLowerCase();
-  return `D-${hex.slice(0, 8).padEnd(8, "0")}`;
+  return `${prefix}-${hex.slice(0, 8).padEnd(8, "0")}`;
 }
 
 export class DelegationRegistry {
   readonly #now: () => number;
   readonly #idFactory: () => string;
+  readonly #taskIdFactory: () => string;
   readonly #terminalLimit: number;
   readonly #activityLimitPerTask: number;
   readonly #entries = new Map<DelegationId, StoredDelegation>();
@@ -167,6 +176,7 @@ export class DelegationRegistry {
   constructor(options: DelegationRegistryOptions = {}) {
     this.#now = options.now ?? Date.now;
     this.#idFactory = options.idFactory ?? randomUUID;
+    this.#taskIdFactory = options.taskIdFactory ?? randomUUID;
     this.#terminalLimit = options.terminalLimit ?? 50;
     this.#activityLimitPerTask = Math.max(1, Math.trunc(options.activityLimitPerTask ?? 100));
   }
@@ -177,16 +187,20 @@ export class DelegationRegistry {
   ): DelegationSnapshotEntry {
     let id = this.#nextId();
     while (this.#entries.has(id)) id = this.#nextId();
-    let displayId = shortCandidate(id);
+    let displayId = shortCandidate("D", id);
     while ([...this.#entries.values()].some((entry) => entry.displayId === displayId)) {
       id = this.#nextId();
       if (this.#entries.has(id)) continue;
-      displayId = shortCandidate(id);
+      displayId = shortCandidate("D", id);
     }
     const acceptedAt = this.#now();
-    const tasks = declaration.tasks.map((task) => ({ ...task }));
-    const roles = tasks.flatMap((task) => task.role ? [task.role] : []);
-    const taskCount = tasks.length;
+    const declarations = declaration.tasks.map((task) => ({ ...task }));
+    const taskIdentities: Array<{ id: DelegatedTaskId; displayId: string }> = [];
+    for (const _declaration of declarations) {
+      taskIdentities.push(this.#nextTaskIdentity(id, taskIdentities));
+    }
+    const roles = declarations.flatMap((task) => task.role ? [task.role] : []);
+    const taskCount = declarations.length;
     const maxActive = Math.max(1, Math.trunc(declaration.maxActive ?? 4));
     const entry: StoredDelegation = {
       id,
@@ -198,7 +212,8 @@ export class DelegationRegistry {
       acceptedAt,
       diagnostics: [],
       activities: [],
-      tasks: tasks.map((declaration, index) => ({
+      tasks: declarations.map((declaration, index) => ({
+        ...taskIdentities[index]!,
         index,
         ...(declaration.role ? { role: declaration.role } : {}),
         state: "queued" as const,
@@ -415,6 +430,23 @@ export class DelegationRegistry {
 
   #nextId(): DelegationId {
     return this.#idFactory() as DelegationId;
+  }
+
+  #nextTaskIdentity(
+    delegationId: DelegationId,
+    pending: readonly { id: DelegatedTaskId; displayId: string }[],
+  ): { id: DelegatedTaskId; displayId: string } {
+    const retainedTasks = [...this.#entries.values()].flatMap((entry) => entry.tasks);
+    while (true) {
+      const id = this.#taskIdFactory() as DelegatedTaskId;
+      const displayId = shortCandidate("T", id);
+      const collides = [...retainedTasks, ...pending].some((task) =>
+        task.id === id || task.displayId === displayId
+      );
+      const aliasesDelegation = id === (delegationId as unknown as DelegatedTaskId) ||
+        this.#entries.has(id as unknown as DelegationId);
+      if (!collides && !aliasesDelegation) return { id, displayId };
+    }
   }
 
   #copy(entry: StoredDelegation): DelegationSnapshotEntry {

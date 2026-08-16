@@ -122,7 +122,8 @@ export function renderDelegationConsole(
           task.pid !== undefined ? `PID ${task.pid}` : undefined,
           task.runId ? `runId ${task.runId}` : undefined,
         ].filter(Boolean).join(" · ");
-        lines.push(`    ${task.index + 1}. ${task.role ?? "unknown"} · ${task.state}${identity ? ` · ${identity}` : ""}`);
+        lines.push(`    ${task.displayId} · ${task.role ?? "unknown"} · ${task.state}${identity ? ` · ${identity}` : ""}`);
+        lines.push(`      Delegated Task ID: ${task.id}`);
         lines.push("      Timeline:");
         lines.push(...delegatedTaskTimeline(task).map((event) => `        ${event}`));
         if (task.queuePosition !== undefined) lines.push(`      Queue position: ${task.queuePosition}`);

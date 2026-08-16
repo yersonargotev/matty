@@ -210,10 +210,10 @@ try {
     { cwd: project, env: isolatedEnv },
   );
   const pi = join(host, "node_modules/.bin/pi");
-  const runtime = pathToFileURL(
+  const adapter = pathToFileURL(
     join(
       host,
-      "node_modules/@yargote/matty/dist/application/child-pi-runtime.js",
+      "node_modules/@yargote/matty/dist/adapters/pi-extension.js",
     ),
   ).href;
   const piAi = pathToFileURL(
@@ -230,10 +230,11 @@ try {
     `
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createChildPiRunner } from ${JSON.stringify(runtime)};
+import { registerPiMatty } from ${JSON.stringify(adapter)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
 const childMode = process.env.MATTY_T03_CHILD === "1";
+let registeredSubagent;
 let thinking = "unknown";
 let parentCredentialDigest = "unobserved";
 
@@ -313,64 +314,65 @@ export default function t03Acceptance(pi) {
     },
   });
 
+  const registeredPi = new Proxy(pi, {
+    get(target, property) {
+      if (property === "registerTool") {
+        return (tool) => {
+          if (tool.name === "subagent") registeredSubagent = tool;
+          return target.registerTool(tool);
+        };
+      }
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  registerPiMatty(registeredPi, process.env, {
+    hostPiVersion: "0.84.2",
+    invocation: {
+      command: process.env.MATTY_T03_PI,
+      arguments: ["--no-extensions", "-e", process.env.MATTY_T03_EXTENSION],
+    },
+    childEnvironment: {
+      MATTY_T03_CHILD: "1",
+      MATTY_T03_PI: process.env.MATTY_T03_PI,
+      MATTY_T03_EXTENSION: process.env.MATTY_T03_EXTENSION,
+      MATTY_T03_AUTH_PATH: process.env.MATTY_T03_AUTH_PATH,
+      MATTY_NETWORK_GUARD_READY: process.env.MATTY_NETWORK_GUARD_READY,
+      MATTY_NETWORK_GUARD_VIOLATION: process.env.MATTY_NETWORK_GUARD_VIOLATION,
+    },
+  });
   if (childMode) return;
 
   pi.registerCommand("t03-accept", {
     description: "Exercise the packed Matty child runtime",
     handler: async (args, ctx) => {
       const scenario = args.trim();
-      const runner = createChildPiRunner({
-        invocation: {
-          command: process.env.MATTY_T03_PI,
-          arguments: [
-            "--no-extensions",
-            "-e",
-            process.env.MATTY_T03_EXTENSION,
-          ],
-        },
-        parent: {
-          provider: ctx.model.provider,
-          model: ctx.model.id,
-          thinking: ctx.thinkingLevel,
-          cwd: ctx.cwd,
-        },
-        authentication: {
-          provider: ctx.model.provider,
-          environment: {
-            PATH: process.env.PATH,
-            HOME: process.env.HOME,
-            XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-            PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-            PI_OFFLINE: "1",
-            NO_UPDATE_NOTIFIER: "1",
-            MATTY_T03_CHILD: "1",
-            MATTY_T03_PI: process.env.MATTY_T03_PI,
-            MATTY_T03_EXTENSION: process.env.MATTY_T03_EXTENSION,
-            MATTY_T03_AUTH_PATH: process.env.MATTY_T03_AUTH_PATH,
-          },
-        },
-        terminationGraceMs: 100,
-      });
-      ctx.ui.notify(
-        "T03_PARENT_AUTH:" + parentCredentialDigest,
-        "info",
-      );
+      if (!registeredSubagent?.execute) throw new Error("registered subagent unavailable");
+      ctx.ui.notify("T03_PARENT_AUTH:" + parentCredentialDigest, "info");
       const controller = new AbortController();
       const timer = scenario === "cancel"
         ? setTimeout(() => controller.abort(), 5_000)
         : undefined;
-      const outcome = await runner.run("T03_" + scenario.toUpperCase(), {
-        signal: controller.signal,
-        onProgress(progress) {
+      const result = await registeredSubagent.execute(
+        "t03-" + scenario,
+        {
+          requirement: "required",
+          tasks: [{ role: "explorer", task: "T03_" + scenario.toUpperCase() }],
+        },
+        controller.signal,
+        (update) => {
+          const progress = update.details?.progress ?? update.details;
+          if (!progress?.type) return;
           ctx.ui.notify("T03_PROGRESS:" + JSON.stringify(progress), "info");
           if (scenario === "cancel" && progress.type === "identified") {
             controller.abort();
           }
         },
-      });
+        ctx,
+      );
       if (timer) clearTimeout(timer);
       ctx.ui.notify(
-        "T03_RESULT:" + scenario + ":" + JSON.stringify(outcome),
+        "T03_RESULT:" + scenario + ":" + JSON.stringify(result.details),
         "info",
       );
     },
@@ -460,7 +462,13 @@ export default function t03Acceptance(pi) {
   }
 
   const success = await scenario("success");
-  assert.equal(success.outcome.status, "succeeded");
+  assert.equal(
+    success.outcome.status,
+    "succeeded",
+    `registered subagent failed: ${JSON.stringify({ outcome: success.outcome, progress: success.progress })}`,
+  );
+  const successfulChild = success.outcome.tasks[0].value.outcome;
+  assert.equal(successfulChild.status, "succeeded");
   assert.deepEqual(
     success.progress.map((progress) => progress.type),
     ["started", "identified", "activity"],
@@ -473,8 +481,8 @@ export default function t03Acceptance(pi) {
   assert.equal(success.progress[2]?.observation.schemaVersion, 1);
   assert.equal(success.progress[2]?.observation.sequence, 1);
   assert.ok(Number.isSafeInteger(success.progress[2]?.observation.observedAt));
-  const observed = JSON.parse(success.outcome.output);
-  assert.equal(observed.pid, success.outcome.child.pid);
+  const observed = JSON.parse(successfulChild.output);
+  assert.equal(observed.pid, successfulChild.child.pid);
   assert.equal(observed.ppid, rpc.child.pid);
   assert.equal(observed.provider, "t03-acceptance");
   assert.equal(observed.model, "observable");
@@ -487,7 +495,7 @@ export default function t03Acceptance(pi) {
 
   const failure = await scenario("failure");
   assert.equal(failure.outcome.status, "failed");
-  assert.equal(failure.outcome.failure.kind, "child-failed");
+  assert.equal(failure.outcome.tasks[0].diagnostic.code, "child-failed");
 
   const cancellation = await scenario("cancel");
   assert.equal(cancellation.outcome.status, "cancelled");
@@ -515,7 +523,7 @@ export default function t03Acceptance(pi) {
   );
   process.stdout.write(
     [
-      "T03 packed-runtime acceptance passed",
+      "T03 packed registered-extension acceptance passed",
       `artifact: ${metadata.filename}`,
       "Pi source: 0.84.2 @ 914cf1472e715297caa30db4b9535d534a9eb718",
       "independent PID/context: proven",

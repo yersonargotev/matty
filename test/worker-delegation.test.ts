@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { DelegatedTaskRunner } from "../src/application/child-pi-runtime.ts";
+import {
+  childTranscript,
+  type DelegatedTaskRunner,
+} from "../src/application/child-pi-runtime.ts";
 import {
   runWorkerDelegation,
   type WorkerDelegationExecution,
@@ -11,6 +14,7 @@ import {
   createWorkerCapabilityContract,
 } from "../src/domain/capability-contract.ts";
 import { workerCompletionReport } from "../src/domain/worker-completion.ts";
+import { createRoleSeamChildRunner } from "./support/child-pi-runner.ts";
 
 function execution(
   runner: DelegatedTaskRunner,
@@ -65,6 +69,23 @@ test("runs a worker over the trusted tree through the guarded runtime", async ()
   assert.match(observedTask, /parent reviews and integrates all changes/);
   assert.equal(terminal.contract.role, "worker");
   assert.equal(terminal.outcome.status, "succeeded");
+});
+
+test("preserves the private transcript when an invalid worker report becomes a failure", async () => {
+  const source = await createRoleSeamChildRunner().run("success");
+  assert.equal(source.status, "succeeded");
+
+  const terminal = await runWorkerDelegation(
+    "Implement",
+    execution({ async run() { return source; } }),
+  );
+
+  assert.equal(terminal.outcome.status, "failed");
+  assert.deepEqual(
+    childTranscript(terminal.outcome)?.entries.map((entry) => entry.type),
+    ["message_end", "agent_settled"],
+  );
+  assert.doesNotMatch(JSON.stringify(terminal.outcome), /transcript/);
 });
 
 test("worker completion is closed and cannot claim an authoritative gate", () => {

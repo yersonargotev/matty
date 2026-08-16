@@ -1,5 +1,4 @@
-// Process-launch and JSONL behavior adapted from Pi's subagent example:
-// https://github.com/earendil-works/pi-mono/tree/845d6ff1f6643aba440341cce877ce1c43ebbc39/packages/coding-agent/examples/extensions/subagent
+// Process-launch and JSONL behavior adapted from Pi's RPC documentation and subagent example.
 // Pi is MIT licensed. Matty owns this adapted runtime and its invariants.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -11,13 +10,7 @@ import {
   type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
 
-export type PiThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface ParentPiExecutionContext {
   provider: string;
@@ -46,30 +39,20 @@ export interface ChildExit {
   signal: NodeJS.Signals | null;
 }
 
+export interface ChildTranscript {
+  readonly entries: readonly Readonly<Record<string, unknown>>[];
+}
+
 export type DelegatedTaskProgress =
-  | {
-      type: "started";
-      child: Pick<ChildIdentity, "pid">;
-    }
-  | {
-      type: "identified";
-      child: ChildIdentity;
-    }
+  | { type: "started"; child: Pick<ChildIdentity, "pid"> }
+  | { type: "identified"; child: ChildIdentity }
   | {
       type: "activity";
       child: ChildIdentity;
       observation: ChildExecutionActivityObservation;
     }
-  | {
-      type: "terminating";
-      child: ChildIdentity;
-      signal: "SIGTERM";
-    }
-  | {
-      type: "killing";
-      child: ChildIdentity;
-      signal: "SIGKILL";
-    };
+  | { type: "terminating"; child: ChildIdentity; signal: "SIGTERM" }
+  | { type: "killing"; child: ChildIdentity; signal: "SIGKILL" };
 
 export type DelegatedTaskOutcome =
   | {
@@ -99,6 +82,30 @@ export type DelegatedTaskOutcome =
       exit?: ChildExit;
     };
 
+const transcripts = new WeakMap<object, ChildTranscript>();
+
+/** Returns sensitive in-memory data only to an explicit runtime caller. It is never serialized. */
+export function childTranscript(outcome: object): ChildTranscript | undefined {
+  return transcripts.get(outcome);
+}
+
+function withTranscript<T extends DelegatedTaskOutcome>(
+  outcome: T,
+  entries: readonly Readonly<Record<string, unknown>>[],
+): T {
+  transcripts.set(outcome, {
+    entries: Object.freeze(entries.map((entry) => Object.freeze(structuredClone(entry)))),
+  });
+  return outcome;
+}
+
+/** Transfers the private in-memory transcript when replacing an outcome object. */
+export function transferChildTranscript<T extends object>(source: object, target: T): T {
+  const transcript = transcripts.get(source);
+  if (transcript) transcripts.set(target, transcript);
+  return target;
+}
+
 export interface DelegatedTaskRunner {
   run(
     task: string,
@@ -116,100 +123,79 @@ export interface ChildPiRunnerOptions {
   terminationGraceMs?: number;
 }
 
-interface PiSessionHeader {
-  type: "session";
-  id: string;
-  cwd: string;
-}
-
-interface PiMessageEnd {
+interface PiMessageEnd extends Record<string, unknown> {
   type: "message_end";
-  message?: {
-    role?: string;
-    content?: Array<{ type?: string; text?: string }> | string;
+  message: {
+    role: string;
+    content: Array<Record<string, unknown>> | string;
     stopReason?: string;
     errorMessage?: string;
   };
 }
 
-function isSessionHeader(value: unknown): value is PiSessionHeader {
-  if (typeof value !== "object" || value === null) {
-    return false;
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function validAssistantContentPart(value: unknown): value is Record<string, unknown> {
+  const part = record(value);
+  if (!part) return false;
+  switch (part.type) {
+    case "text":
+      return typeof part.text === "string";
+    case "thinking":
+      return typeof part.thinking === "string";
+    case "toolCall":
+      return nonemptyString(part.id) && nonemptyString(part.name) &&
+        record(part.arguments) !== undefined;
+    default:
+      return false;
   }
-  const candidate = value as Partial<PiSessionHeader>;
-  return (
-    candidate.type === "session" &&
-    typeof candidate.id === "string" &&
-    typeof candidate.cwd === "string"
-  );
+}
+
+function validNonAssistantContentPart(value: unknown): value is Record<string, unknown> {
+  const part = record(value);
+  return part !== undefined && typeof part.type === "string" &&
+    (part.text === undefined || typeof part.text === "string");
+}
+
+function validMessage(value: unknown): value is PiMessageEnd["message"] {
+  const message = record(value);
+  if (!message || typeof message.role !== "string" || message.role.length === 0) return false;
+  if (message.role === "assistant") {
+    return Array.isArray(message.content) &&
+      message.content.every(validAssistantContentPart);
+  }
+  if (typeof message.content === "string") return true;
+  return Array.isArray(message.content) &&
+    message.content.every(validNonAssistantContentPart);
 }
 
 function isMessageEnd(value: unknown): value is PiMessageEnd {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Partial<PiMessageEnd>;
-  if (candidate.type !== "message_end") {
-    return false;
-  }
-  if (
-    typeof candidate.message !== "object" ||
-    candidate.message === null ||
-    Array.isArray(candidate.message) ||
-    typeof candidate.message.role !== "string"
-  ) {
-    return false;
-  }
-  if (
-    (candidate.message.stopReason !== undefined &&
-      typeof candidate.message.stopReason !== "string") ||
-    (candidate.message.errorMessage !== undefined &&
-      typeof candidate.message.errorMessage !== "string")
-  ) {
-    return false;
-  }
-  if (
-    candidate.message.role === "custom" &&
-    typeof candidate.message.content === "string"
-  ) {
-    return true;
-  }
-  if (!Array.isArray(candidate.message.content)) {
-    return false;
-  }
-  return candidate.message.content.every(
-    (part) =>
-      typeof part === "object" &&
-      part !== null &&
-      typeof part.type === "string" &&
-      (part.text === undefined || typeof part.text === "string"),
-  );
+  const candidate = record(value);
+  const message = record(candidate?.message);
+  if (candidate?.type !== "message_end" || !validMessage(message)) return false;
+  return (message.stopReason === undefined || typeof message.stopReason === "string") &&
+    (message.errorMessage === undefined || typeof message.errorMessage === "string");
 }
 
 function assistantText(message: PiMessageEnd["message"]): string {
-  const content = Array.isArray(message?.content) ? message.content : [];
-  return content
-    .filter(
-      (part): part is { type: "text"; text: string } =>
-        part.type === "text" && typeof part.text === "string",
-    )
-    .map((part) => part.text)
-    .join("\n");
+  return Array.isArray(message.content)
+    ? message.content.flatMap((part) =>
+      part.type === "text" && typeof part.text === "string" ? [part.text] : []
+    ).join("\n")
+    : "";
 }
 
 async function invalidParentContext(
   parent: ParentPiExecutionContext,
   authentication: ChildSafePiAuthentication,
 ): Promise<string | undefined> {
-  if (!parent.provider.trim()) {
-    return "The parent provider is unavailable";
-  }
-  if (!parent.model.trim()) {
-    return "The parent model is unavailable";
-  }
-  if (!isAbsolute(parent.cwd)) {
-    return "The parent working directory must be absolute";
-  }
+  if (!parent.provider.trim()) return "The parent provider is unavailable";
+  if (!parent.model.trim()) return "The parent model is unavailable";
+  if (!isAbsolute(parent.cwd)) return "The parent working directory must be absolute";
   try {
     if ((await realpath(parent.cwd)) !== parent.cwd) {
       return "The parent working directory must be canonical";
@@ -234,69 +220,52 @@ function emitProgress(
   }
 }
 
-export function createChildPiRunner(
-  runnerOptions: ChildPiRunnerOptions,
-): DelegatedTaskRunner {
-  const graceMs = runnerOptions.terminationGraceMs ?? 5_000;
-  const parent = { ...runnerOptions.parent };
+export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTaskRunner {
+  const graceMs = options.terminationGraceMs ?? 5_000;
+  const parent = { ...options.parent };
   const invocation = {
-    command: runnerOptions.invocation.command,
-    arguments: [...(runnerOptions.invocation.arguments ?? [])],
+    command: options.invocation.command,
+    arguments: [...(options.invocation.arguments ?? [])],
   };
   const authentication = {
-    provider: runnerOptions.authentication.provider,
-    environment: { ...runnerOptions.authentication.environment },
+    provider: options.authentication.provider,
+    environment: { ...options.authentication.environment },
   };
 
   return {
-    async run(task, options = {}) {
-      if (options.signal?.aborted) {
-        return {
-          status: "cancelled",
-          child: null,
-          phase: "before-spawn",
-        };
+    async run(task, runOptions = {}) {
+      if (runOptions.signal?.aborted) {
+        return { status: "cancelled", child: null, phase: "before-spawn" };
       }
-
       const parentError = await invalidParentContext(parent, authentication);
       if (parentError) {
         return {
           status: "failed",
           child: null,
-          failure: {
-            kind: "invalid-parent-context",
-            message: parentError,
-          },
+          failure: { kind: "invalid-parent-context", message: parentError },
         };
       }
 
       const runId = randomUUID();
-      const invocationArguments = [
-        ...invocation.arguments,
-        "--mode",
-        "json",
-        "-p",
-        "--no-session",
-        "--session-id",
-        runId,
-        "--provider",
-        parent.provider,
-        "--model",
-        parent.model,
-        "--thinking",
-        parent.thinking,
-        task,
-      ];
-
       return await superviseChild({
         command: invocation.command,
-        arguments: invocationArguments,
+        arguments: [
+          ...invocation.arguments,
+          "--mode", "rpc",
+          "--no-session",
+          "--session-id", runId,
+          "--provider", parent.provider,
+          "--model", parent.model,
+          "--thinking", parent.thinking,
+        ],
         cwd: parent.cwd,
         environment: authentication.environment,
-        expectedRunId: runId,
+        task,
+        runId,
+        promptId: randomUUID(),
         graceMs,
-        signal: options.signal,
-        onProgress: options.onProgress,
+        signal: runOptions.signal,
+        onProgress: runOptions.onProgress,
       });
     },
   };
@@ -307,24 +276,126 @@ interface SupervisionOptions {
   arguments: string[];
   cwd: string;
   environment: NodeJS.ProcessEnv;
-  expectedRunId: string;
+  task: string;
+  runId: string;
+  promptId: string;
   graceMs: number;
   signal: AbortSignal | undefined;
-  onProgress:
-    | ((progress: DelegatedTaskProgress) => void)
-    | undefined;
+  onProgress: ((progress: DelegatedTaskProgress) => void) | undefined;
 }
 
-async function superviseChild(
-  options: SupervisionOptions,
-): Promise<DelegatedTaskOutcome> {
+const TRANSCRIPT_TYPES = new Set([
+  "agent_start", "agent_end", "agent_settled", "turn_start", "turn_end",
+  "message_start", "message_update", "message_end", "tool_execution_start",
+  "tool_execution_update", "tool_execution_end", "queue_update", "compaction_start",
+  "compaction_end", "auto_retry_start", "auto_retry_end",
+  "summarization_retry_scheduled", "summarization_retry_attempt_start",
+  "summarization_retry_finished", "extension_error",
+]);
+const terminalAssistantStopReasons = new Set([
+  "stop", "length", "deferred", "error", "aborted",
+]);
+const compactionReasons = new Set(["manual", "threshold", "overflow"]);
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function nonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function validMessageUpdate(value: unknown): boolean {
+  const update = record(value);
+  if (!update || typeof update.type !== "string") return false;
+  switch (update.type) {
+    case "text_start":
+    case "thinking_start":
+      return Number.isSafeInteger(update.contentIndex);
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta":
+      return Number.isSafeInteger(update.contentIndex) && typeof update.delta === "string";
+    case "text_end":
+      return Number.isSafeInteger(update.contentIndex) && typeof update.content === "string";
+    case "thinking_end":
+      return Number.isSafeInteger(update.contentIndex) && typeof update.content === "string";
+    case "toolcall_start":
+      return Number.isSafeInteger(update.contentIndex);
+    case "toolcall_end":
+      return Number.isSafeInteger(update.contentIndex) && record(update.toolCall) !== undefined;
+    default:
+      return false;
+  }
+}
+
+function validKnownTranscriptEvent(event: Record<string, unknown>): boolean {
+  switch (event.type) {
+    case "agent_start":
+    case "agent_settled":
+    case "turn_start":
+    case "summarization_retry_finished":
+      return true;
+    case "agent_end":
+      return Array.isArray(event.messages) && event.messages.every(validMessage) &&
+        typeof event.willRetry === "boolean";
+    case "turn_end":
+      return validMessage(event.message) && Array.isArray(event.toolResults) &&
+        event.toolResults.every(validMessage);
+    case "message_start":
+      return validMessage(event.message);
+    case "message_update":
+      return record(event.usage) !== undefined && validMessageUpdate(event.assistantMessageEvent);
+    case "message_end":
+      return isMessageEnd(event);
+    case "tool_execution_start":
+      return nonemptyString(event.toolCallId) && nonemptyString(event.toolName) &&
+        record(event.args) !== undefined;
+    case "tool_execution_update":
+      return nonemptyString(event.toolCallId) && nonemptyString(event.toolName) &&
+        record(event.args) !== undefined && "partialResult" in event;
+    case "tool_execution_end":
+      return nonemptyString(event.toolCallId) && nonemptyString(event.toolName) &&
+        "result" in event && typeof event.isError === "boolean";
+    case "queue_update":
+      return stringArray(event.steering) && stringArray(event.followUp);
+    case "compaction_start":
+      return typeof event.reason === "string" && compactionReasons.has(event.reason);
+    case "compaction_end":
+      return typeof event.reason === "string" && compactionReasons.has(event.reason) &&
+        (event.result === undefined || event.result === null || record(event.result) !== undefined) &&
+        typeof event.aborted === "boolean" && typeof event.willRetry === "boolean" &&
+        (event.errorMessage === undefined || typeof event.errorMessage === "string");
+    case "auto_retry_start":
+    case "summarization_retry_scheduled":
+      return Number.isSafeInteger(event.attempt) && Number.isSafeInteger(event.maxAttempts) &&
+        Number.isSafeInteger(event.delayMs) && typeof event.errorMessage === "string";
+    case "auto_retry_end":
+      return typeof event.success === "boolean" && Number.isSafeInteger(event.attempt) &&
+        (event.finalError === undefined || typeof event.finalError === "string");
+    case "summarization_retry_attempt_start":
+      return event.source === "branchSummary" ||
+        (event.source === "compaction" && typeof event.reason === "string" &&
+          compactionReasons.has(event.reason));
+    case "extension_error":
+      return typeof event.extensionPath === "string" && typeof event.event === "string" &&
+        typeof event.error === "string";
+    default:
+      return false;
+  }
+}
+
+const MAX_FRAME_BYTES = 4 * 1024 * 1024;
+const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+async function superviseChild(options: SupervisionOptions): Promise<DelegatedTaskOutcome> {
   let child;
   try {
     child = spawn(options.command, options.arguments, {
       cwd: options.cwd,
       env: options.environment,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (error) {
     return {
@@ -340,108 +411,101 @@ async function superviseChild(
   return await new Promise<DelegatedTaskOutcome>((resolve) => {
     let identity: ChildIdentity | null = null;
     let stdout = "";
-    let finalMessage: PiMessageEnd["message"];
+    let finalMessage: PiMessageEnd["message"] | undefined;
+    const transcriptEntries: Readonly<Record<string, unknown>>[] = [];
     let sequence = 0;
+    let promptAccepted = false;
+    let agentSettled = false;
     let protocolFailure: string | undefined;
     let cancellationRequested = false;
     let closed = false;
-    let settled = false;
+    let resolved = false;
     let terminationTimer: NodeJS.Timeout | undefined;
     let spawned = false;
-    let processControlFailureHandled = false;
 
     const settle = (outcome: DelegatedTaskOutcome): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (terminationTimer) {
-        clearTimeout(terminationTimer);
-      }
+      if (resolved) return;
+      resolved = true;
+      if (terminationTimer) clearTimeout(terminationTimer);
       options.signal?.removeEventListener("abort", cancel);
-      resolve(outcome);
+      resolve(withTranscript(outcome, transcriptEntries));
     };
 
-    const terminateForProtocolFailure = (message: string): void => {
+    const terminate = (message: string): void => {
       protocolFailure ??= message;
-      if (!closed) {
-        child.kill("SIGTERM");
-        terminationTimer ??= setTimeout(() => {
-          if (!closed) {
-            child.kill("SIGKILL");
-          }
-        }, options.graceMs);
-      }
+      if (closed) return;
+      child.stdin.destroy();
+      child.kill("SIGTERM");
+      terminationTimer ??= setTimeout(() => {
+        if (!closed) child.kill("SIGKILL");
+      }, options.graceMs);
     };
 
-    const consumeLine = (line: string): void => {
-      if (!line.trim() || protocolFailure) {
+    const consumeLine = (framedLine: string): void => {
+      if (protocolFailure) return;
+      const line = framedLine.endsWith("\r") ? framedLine.slice(0, -1) : framedLine;
+      if (!line || Buffer.byteLength(line) > MAX_FRAME_BYTES) {
+        terminate("Pi emitted an invalid JSONL frame");
         return;
       }
-
-      let event: unknown;
+      let parsed: unknown;
       try {
-        event = JSON.parse(line);
+        parsed = JSON.parse(line);
       } catch {
-        terminateForProtocolFailure("Pi emitted invalid JSONL");
+        terminate("Pi emitted invalid JSONL");
+        return;
+      }
+      const event = record(parsed);
+      if (!event || typeof event.type !== "string") {
+        terminate("Pi emitted a malformed RPC frame");
         return;
       }
 
-      if (isSessionHeader(event)) {
+      if (event.type === "response") {
         if (
-          identity ||
-          event.id !== options.expectedRunId ||
-          event.cwd !== options.cwd ||
-          child.pid === undefined
+          promptAccepted || event.id !== options.promptId || event.command !== "prompt" ||
+          typeof event.success !== "boolean"
         ) {
-          terminateForProtocolFailure(
-            "Pi emitted a mismatched session header",
-          );
+          terminate("Pi emitted an uncorrelated prompt response");
           return;
         }
-        identity = {
-          runId: event.id,
-          pid: child.pid,
-        };
-        emitProgress(options.onProgress, {
-          type: "identified",
-          child: identity,
-        });
+        if (!event.success) {
+          terminate("Pi rejected the delegated prompt");
+          return;
+        }
+        promptAccepted = true;
+        if (identity) {
+          emitProgress(options.onProgress, { type: "identified", child: identity });
+        }
         return;
       }
 
-      if (!identity) {
-        terminateForProtocolFailure(
-          "Pi emitted an event before its session header",
-        );
-        return;
+      if (TRANSCRIPT_TYPES.has(event.type)) {
+        if (!promptAccepted) {
+          terminate("Pi emitted an event before accepting the delegated prompt");
+          return;
+        }
+        if (agentSettled) {
+          terminate("Pi emitted a transcript event after agent settled");
+          return;
+        }
+        if (!validKnownTranscriptEvent(event)) {
+          terminate(`Pi emitted a malformed ${event.type} event`);
+          return;
+        }
       }
-
-      if (
-        typeof event === "object" &&
-        event !== null &&
-        (event as { type?: unknown }).type === "message_end" &&
-        !isMessageEnd(event)
-      ) {
-        terminateForProtocolFailure(
-          "Pi emitted a malformed message_end event",
-        );
-        return;
-      }
-
       const activity = classifyChildExecutionActivity(event);
       if (activity.recognized && !activity.valid) {
-        terminateForProtocolFailure(
-          "Pi emitted a malformed child activity event",
-        );
+        terminate("Pi emitted a malformed child activity event");
         return;
       }
-
-      if (isMessageEnd(event) && event.message?.role === "assistant") {
+      if (TRANSCRIPT_TYPES.has(event.type)) {
+        transcriptEntries.push(event);
+      }
+      if (isMessageEnd(event) && event.message.role === "assistant") {
         finalMessage = event.message;
       }
-
-      if (activity.recognized && activity.valid) {
+      if (activity.recognized && activity.valid && identity) {
         sequence += 1;
         emitProgress(options.onProgress, {
           type: "activity",
@@ -454,30 +518,41 @@ async function superviseChild(
           },
         });
       }
+      if (event.type === "agent_settled") {
+        if (
+          agentSettled || !finalMessage ||
+          !terminalAssistantStopReasons.has(finalMessage.stopReason ?? "")
+        ) {
+          terminate("Pi settled without a terminal correlated assistant result");
+          return;
+        }
+        agentSettled = true;
+        child.stdin.end();
+        terminationTimer ??= setTimeout(() => {
+          if (closed) return;
+          child.kill("SIGTERM");
+          terminationTimer = setTimeout(() => {
+            if (!closed) child.kill("SIGKILL");
+          }, options.graceMs);
+        }, options.graceMs);
+      }
     };
 
     const cancel = (): void => {
-      if (cancellationRequested || closed) {
-        return;
-      }
+      if (cancellationRequested || closed) return;
       cancellationRequested = true;
       if (identity) {
         emitProgress(options.onProgress, {
-          type: "terminating",
-          child: identity,
-          signal: "SIGTERM",
+          type: "terminating", child: identity, signal: "SIGTERM",
         });
       }
+      child.stdin.destroy();
       child.kill("SIGTERM");
       terminationTimer ??= setTimeout(() => {
-        if (closed) {
-          return;
-        }
+        if (closed) return;
         if (identity) {
           emitProgress(options.onProgress, {
-            type: "killing",
-            child: identity,
-            signal: "SIGKILL",
+            type: "killing", child: identity, signal: "SIGKILL",
           });
         }
         child.kill("SIGKILL");
@@ -487,9 +562,15 @@ async function superviseChild(
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
-      const lines = stdout.split("\n");
-      stdout = lines.pop() ?? "";
-      for (const line of lines) {
+      if (Buffer.byteLength(stdout) > MAX_BUFFER_BYTES) {
+        terminate("Pi exceeded the JSONL buffer limit");
+        return;
+      }
+      while (true) {
+        const newline = stdout.indexOf("\n");
+        if (newline === -1) break;
+        const line = stdout.slice(0, newline);
+        stdout = stdout.slice(newline + 1);
         consumeLine(line);
       }
     });
@@ -498,128 +579,86 @@ async function superviseChild(
     child.once("spawn", () => {
       spawned = true;
       if (child.pid === undefined) {
-        terminateForProtocolFailure("Pi spawned without an observable PID");
+        terminate("Pi spawned without an observable PID");
         return;
       }
-      emitProgress(options.onProgress, {
-        type: "started",
-        child: { pid: child.pid },
-      });
+      identity = { runId: options.runId, pid: child.pid };
+      emitProgress(options.onProgress, { type: "started", child: { pid: child.pid } });
       if (options.signal?.aborted) {
         cancel();
+        return;
       }
+      const command = JSON.stringify({
+        id: options.promptId,
+        type: "prompt",
+        message: options.task,
+      });
+      child.stdin.write(`${command}\n`, (error) => {
+        if (error && !closed && !cancellationRequested) {
+          terminate("Pi rejected the RPC prompt stream");
+        }
+      });
     });
 
     child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
+      if (resolved) return;
       if (!spawned) {
         settle({
           status: "failed",
           child: null,
-          failure: {
-            kind: "spawn-failed",
-            message: error.message,
-          },
+          failure: { kind: "spawn-failed", message: error.message },
         });
-        return;
+      } else {
+        terminate("Pi child process control failed");
       }
-
-      if (processControlFailureHandled) {
-        return;
-      }
-      processControlFailureHandled = true;
-      terminateForProtocolFailure(
-        `Pi child process control failed: ${error.message}`,
-      );
     });
 
     child.once("close", (code, signal) => {
       closed = true;
-      if (stdout.trim()) {
-        consumeLine(stdout);
+      if (stdout.length > 0 && !protocolFailure) {
+        protocolFailure = "Pi closed with an unterminated JSONL frame";
       }
       const exit = { code, signal };
-
       if (cancellationRequested) {
+        settle({ status: "cancelled", child: identity, phase: "running", exit });
+      } else if (protocolFailure) {
         settle({
-          status: "cancelled",
+          status: "failed",
           child: identity,
-          phase: "running",
+          failure: { kind: "protocol-failed", message: protocolFailure },
           exit,
         });
-        return;
-      }
-
-      if (protocolFailure) {
+      } else if (!identity || !promptAccepted || !agentSettled || !finalMessage) {
         settle({
           status: "failed",
           child: identity,
           failure: {
-            kind: "protocol-failed",
-            message: protocolFailure,
+            kind: "child-exited",
+            message: "Pi child exited before producing a settled assistant result",
           },
           exit,
         });
-        return;
-      }
-
-      if (!identity) {
-        settle({
-          status: "failed",
-          child: null,
-          failure: {
-            kind: "protocol-failed",
-            message: "Pi exited before confirming its session identity",
-          },
-          exit,
-        });
-        return;
-      }
-
-      if (
-        code !== 0 ||
-        signal !== null ||
-        finalMessage?.stopReason === "error" ||
-        finalMessage?.stopReason === "aborted"
+      } else if (
+        code !== 0 || signal !== null || finalMessage.stopReason === "error" ||
+        finalMessage.stopReason === "aborted"
       ) {
         settle({
           status: "failed",
           child: identity,
           failure: {
             kind: "child-failed",
-            message:
-              finalMessage?.errorMessage ??
-              `Pi child exited with code ${String(code)}`,
+            message: finalMessage.errorMessage ?? `Pi child exited with code ${String(code)}`,
           },
           exit,
         });
-        return;
-      }
-
-      if (!finalMessage) {
+      } else {
         settle({
-          status: "failed",
+          status: "succeeded",
           child: identity,
-          failure: {
-            kind: "child-exited",
-            message: "Pi child completed without an assistant result",
-          },
-          exit,
+          output: assistantText(finalMessage),
+          exit: { code: 0, signal: null },
         });
-        return;
       }
-
-      settle({
-        status: "succeeded",
-        child: identity,
-        output: assistantText(finalMessage),
-        exit: {
-          code: 0,
-          signal: null,
-        },
-      });
     });
 
     options.signal?.addEventListener("abort", cancel, { once: true });

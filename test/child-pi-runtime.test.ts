@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  childTranscript,
   createChildPiRunner,
   type DelegatedTaskProgress,
 } from "../src/application/child-pi-runtime.ts";
@@ -18,7 +19,7 @@ const repositoryRoot = resolve(
 );
 const fixture = resolve(
   repositoryRoot,
-  "test/fixtures/child-pi-fixture.mjs",
+  "test/fixtures/child-pi-rpc-fixture.mjs",
 );
 const canonicalRoot = await realpath(repositoryRoot);
 const authMarker = "child-safe-auth-marker";
@@ -84,6 +85,16 @@ test("runs a distinct child with explicit inherited context and ordered progress
   assert.equal(observed.thinking, "high");
   assert.equal(observed.cwd, canonicalRoot);
   assert.equal(observed.authDigest, authDigest);
+  assert.deepEqual(observed.modeArguments, ["--mode", "rpc"]);
+  assert.equal(observed.promptTerminatedByLf, true);
+
+  const transcript = childTranscript(outcome);
+  assert.ok(transcript);
+  assert.deepEqual(
+    transcript.entries.map((entry) => entry.type),
+    ["message_end", "agent_settled"],
+  );
+  assert.doesNotMatch(JSON.stringify(outcome), /transcript|auth-marker/);
 });
 
 test("returns child failure as data and remains reusable", async () => {
@@ -120,6 +131,14 @@ test("cancels the owned child and escalates only while it remains open", async (
   );
 });
 
+test("settled RPC children cannot remain as idle processes", async () => {
+  const outcome = await createRunner(25).run("ignore-settled-exit");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "child-failed");
+  assert.equal(outcome.exit?.signal, "SIGKILL");
+});
+
 test("does not spawn when cancellation is already requested", async () => {
   const controller = new AbortController();
   controller.abort();
@@ -146,21 +165,83 @@ test("rejects authentication for a different provider before spawning", async ()
   assert.equal(outcome.failure.kind, "invalid-parent-context");
 });
 
-test("requires the Pi session header to be the first JSONL record", async () => {
-  const outcome = await createRunner().run("message-before-header");
+test("closes malformed JSONL as a protocol failure without fallback", async () => {
+  const outcome = await createRunner().run("malformed-json");
 
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.failure.kind, "protocol-failed");
+});
+
+test("accepts protocol-valid CRLF frames while splitting only on LF", async () => {
+  const outcome = await createRunner().run("crlf-output");
+
+  assert.equal(outcome.status, "succeeded");
+});
+
+test("rejects known events but ignores extension notifications before the prompt response", async () => {
+  const knownEvent = await createRunner().run("pre-response-event");
+  assert.equal(knownEvent.status, "failed");
+  assert.equal(knownEvent.failure.kind, "protocol-failed");
+
+  const extensionNotification = await createRunner().run("pre-response-extension-notification");
+  assert.equal(extensionNotification.status, "succeeded");
+});
+
+test("requires the correlated prompt response and settled event", async () => {
+  for (const task of ["uncorrelated-response", "no-settlement"]) {
+    const outcome = await createRunner().run(task);
+    assert.equal(outcome.status, "failed");
+    assert.equal(
+      outcome.failure.kind,
+      task === "uncorrelated-response" ? "protocol-failed" : "child-exited",
+    );
+  }
 });
 
 test("returns malformed assistant events as protocol failure data", async () => {
-  const outcome = await createRunner().run("malformed-message");
+  for (const task of [
+    "malformed-message",
+    "malformed-known-event",
+    "unknown-assistant-part",
+    "assistant-text-without-text",
+    "malformed-thinking-part",
+    "malformed-tool-call-part",
+  ]) {
+    const outcome = await createRunner().run(task);
+
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.failure.kind, "protocol-failed");
+  }
+});
+
+test("accepts assistant thinking and tool-call parts with their minimum protocol shapes", async () => {
+  const outcome = await createRunner().run("valid-assistant-parts");
+
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(JSON.parse(outcome.output).provider, "controlled-provider");
+});
+
+test("fails closed when a message arrives after agent settlement", async () => {
+  const outcome = await createRunner().run("post-settlement-message");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "protocol-failed");
+  assert.match(outcome.failure.message, /settled/);
+  assert.deepEqual(
+    childTranscript(outcome)?.entries.map((entry) => entry.type),
+    ["message_end", "agent_settled"],
+  );
+  assert.doesNotMatch(JSON.stringify(childTranscript(outcome)), /late replacement/);
+});
+
+test("fails closed when Pi settles on an intermediate tool-use assistant message", async () => {
+  const outcome = await createRunner().run("tool-use-settled");
 
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.failure.kind, "protocol-failed");
 });
 
-test("accepts custom string message content without replacing the assistant result", async () => {
+test("accepts fixture-valid custom, user, and tool-result messages without replacing the assistant result", async () => {
   const progress: DelegatedTaskProgress[] = [];
   const outcome = await createRunner().run("custom-message-content", {
     onProgress(event) {
@@ -184,10 +265,16 @@ test("accepts custom string message content without replacing the assistant resu
     thinking: "high",
     cwd: canonicalRoot,
     authDigest,
+    modeArguments: ["--mode", "rpc"],
+    promptTerminatedByLf: true,
   });
   assert.deepEqual(
     progress.map((event) => event.type),
     ["started", "identified", "activity"],
+  );
+  assert.deepEqual(
+    childTranscript(outcome)?.entries.map((entry) => entry.type),
+    ["message_end", "message_end", "message_end", "message_end", "agent_settled"],
   );
 });
 
@@ -219,6 +306,11 @@ test("reports real Pi tool execution completion as ordered progress", async () =
       { schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" },
     ],
   );
+  assert.deepEqual(
+    childTranscript(outcome)?.entries.map((entry) => entry.type),
+    ["tool_execution_end", "tool_execution_end", "message_end", "agent_settled"],
+  );
+  assert.doesNotMatch(JSON.stringify(outcome), /secret-tool-call-id|transcript/);
 });
 
 test("redacts sensitive activity fields and categorizes valid unknown tools", async () => {
@@ -268,17 +360,26 @@ test("ignores delta-only message_update and keeps message_end authoritative", as
   );
 });
 
-test("accepts Pi deferred assistant completion", async () => {
-  const progress: DelegatedTaskProgress[] = [];
-  const outcome = await createRunner().run("deferred-assistant", {
-    onProgress(event) { progress.push(event); },
-  });
+test("accepts Pi length and deferred assistant completion", async () => {
+  for (const task of ["length-assistant", "deferred-assistant"]) {
+    const progress: DelegatedTaskProgress[] = [];
+    const outcome = await createRunner().run(task, {
+      onProgress(event) { progress.push(event); },
+    });
 
-  assert.equal(outcome.status, "succeeded");
-  assert.deepEqual(
-    progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
-    [{ schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" }],
-  );
+    assert.equal(outcome.status, "succeeded");
+    assert.deepEqual(
+      progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
+      [{ schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" }],
+    );
+  }
+});
+
+test("keeps aborted terminal assistant completion as a child failure", async () => {
+  const outcome = await createRunner().run("aborted-assistant");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "child-failed");
 });
 
 test("rejects absent or unknown assistant stop reasons as a protocol failure", async () => {

@@ -19,13 +19,18 @@ function uuid(index: number): string {
   return `${index.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`;
 }
 
-test("registry assigns opaque UUIDs and unique display IDs without retaining declarations", () => {
+test("registry assigns distinct opaque Delegation and Delegated Task identities before preflight", () => {
   const ids = [
     "aaaaaaaa-0000-4000-8000-000000000001",
     "aaaaaaaa-0000-4000-8000-000000000002",
     "bbbbbbbb-0000-4000-8000-000000000003",
   ];
-  const registry = new DelegationRegistry({ idFactory: () => ids.shift()!, now: () => 10 });
+  let nextTaskId = 1;
+  const registry = new DelegationRegistry({
+    idFactory: () => ids.shift()!,
+    taskIdFactory: () => `${(0xc0000000 + nextTaskId++).toString(16)}-0000-4000-8000-000000000000`,
+    now: () => 10,
+  });
   registry.accept({
     requirement: "required",
     tasks: Array.from({ length: 9 }, () => ({ role: "explorer" as const })),
@@ -41,8 +46,35 @@ test("registry assigns opaque UUIDs and unique display IDs without retaining dec
   for (const entry of entries) {
     assert.match(entry.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.match(entry.displayId, /^D-[0-9a-f]{8}$/);
+    for (const task of entry.tasks) {
+      assert.match(task.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+      assert.match(task.displayId, /^T-[0-9a-f]{8}$/);
+      assert.notEqual(task.id, entry.id);
+      assert.notEqual(task.id, task.runId);
+    }
   }
+  assert.equal(new Set(entries.flatMap((entry) => entry.tasks.map((task) => task.id))).size, 10);
+  assert.equal(new Set(entries.flatMap((entry) => entry.tasks.map((task) => task.displayId))).size, 10);
   assert.doesNotMatch(serialized, /prompt|command|argument|response|transcript|secret task/i);
+});
+
+test("registry collision-checks short Delegated Task display IDs", () => {
+  const taskIds = [
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "aaaaaaaa-0000-4000-8000-000000000002",
+    "bbbbbbbb-0000-4000-8000-000000000003",
+  ];
+  const registry = new DelegationRegistry({
+    idFactory: () => uuid(1),
+    taskIdFactory: () => taskIds.shift()!,
+  });
+
+  const entry = registry.accept({ tasks: [{ role: "explorer" }, { role: "designer" }] });
+  assert.deepEqual(entry.tasks.map((task) => task.displayId), ["T-aaaaaaaa", "T-bbbbbbbb"]);
+  assert.deepEqual(entry.tasks.map((task) => task.id), [
+    "aaaaaaaa-0000-4000-8000-000000000001",
+    "bbbbbbbb-0000-4000-8000-000000000003",
+  ]);
 });
 
 test("registry bounds collision tracking to retained entries and reset clears it", () => {
@@ -174,7 +206,12 @@ test("registry releases an active slot when a task completes before queue promot
   registry.finishTask(entry.id, 0, "succeeded");
   assert.deepEqual(registry.snapshot().concurrency, { activeTasks: 3, queuedTasks: 1 });
   assert.equal(registry.get(entry.id)?.state, "running");
-  assert.deepEqual(registry.get(entry.id)?.tasks[0], {
+  const completed = registry.get(entry.id)?.tasks[0];
+  assert.match(completed?.id ?? "", /^[0-9a-f-]{36}$/);
+  assert.match(completed?.displayId ?? "", /^T-[0-9a-f]{8}$/);
+  assert.deepEqual(completed && { ...completed, id: undefined, displayId: undefined }, {
+    id: undefined,
+    displayId: undefined,
     index: 0,
     role: "explorer",
     state: "succeeded",
@@ -347,6 +384,8 @@ test("expanded task details show safe lifecycle timing, duration, diagnostics, a
     selectedId: entry.id,
     expandedIds: new Set([entry.id]),
   }, now).join("\n");
+  assert.match(lines, /T-[0-9a-f]{8} · explorer · failed/);
+  assert.match(lines, /Delegated Task ID: [0-9a-f-]{36}/);
   assert.match(lines, /Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
   assert.match(lines, /2026-02-01T12:00:01\.000Z · started/);
   assert.match(lines, /2026-02-01T12:00:03\.500Z · failed/);
@@ -398,8 +437,8 @@ test("each expanded Delegated Task has an ordered lifecycle timeline from safe R
     selectedId: entry.id,
     expandedIds: new Set([entry.id]),
   }, now).join("\n");
-  assert.match(expanded, /1\. explorer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
-  assert.match(expanded, /2\. designer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(expanded, /T-[0-9a-f]{8} · explorer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(expanded, /T-[0-9a-f]{8} · designer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
   assert.doesNotMatch(expanded, /prompt|command|response|transcript/i);
 });
 

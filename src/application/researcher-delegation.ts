@@ -1,7 +1,8 @@
-import type {
-  DelegatedTaskOutcome,
-  DelegatedTaskProgress,
-  DelegatedTaskRunner,
+import {
+  transferChildTranscript,
+  type DelegatedTaskOutcome,
+  type DelegatedTaskProgress,
+  type DelegatedTaskRunner,
 } from "./child-pi-runtime.ts";
 import {
   createCapabilityPreflightDiagnostic,
@@ -118,7 +119,7 @@ export async function runResearcherDelegation(
     return {
       contract: preflight.contract,
       artifacts: artifacts(preflight.contract),
-      outcome: {
+      outcome: transferChildTranscript(outcome, {
         status: "failed",
         child: outcome.child,
         failure: {
@@ -126,7 +127,7 @@ export async function runResearcherDelegation(
           message: "researcher did not create the approved Research Report",
         },
         exit: outcome.exit,
-      },
+      }),
     };
   }
   return {
