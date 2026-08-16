@@ -771,21 +771,19 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   assert.deepEqual(
     success.progress.map((progress) => progress.progress.type),
-    [
-      "started",
-      "identified",
-      "message",
-      "tool-result",
-      "tool-result",
-      "tool-result",
-      "message",
-      "tool-result",
-      "tool-result",
-      "tool-result",
-      "tool-result",
-      "tool-result",
-      "message",
-    ],
+    ["started", "identified"],
+  );
+  assert.ok(
+    success.progress.every((progress) =>
+      /^D-[0-9a-f]{8}$/.test(progress.delegation.displayId) &&
+      progress.delegation.roles[0] === "explorer" &&
+      progress.delegation.taskCount === 1
+    ),
+    JSON.stringify(success.progress),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(success.progress),
+    /tool-result|allowed-git|blocked-filesystem|inspection completed/,
   );
   const observed = successLeaf.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });
@@ -874,8 +872,14 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   }]);
   assert.deepEqual(
     blocked.progress.map((progress) => progress.code),
-    ["preflight-failed"],
+    [undefined],
   );
+  assert.deepEqual(blocked.progress[0]?.delegation.diagnostics, [{
+    code: "preflight-failed",
+    taskIndex: 0,
+    role: "explorer",
+    reason: "runtime-unavailable",
+  }]);
 
   await access(guardReady);
   await assert.rejects(

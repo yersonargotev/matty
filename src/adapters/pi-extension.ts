@@ -53,6 +53,18 @@ import {
   type MattyHost,
 } from "../application/register-matty.ts";
 import {
+  DelegationRegistry,
+  type DelegationRegistryOptions,
+  type DelegationSnapshotEntry,
+} from "../application/delegation-registry.ts";
+import { createDelegationObserver } from "../application/delegation-observer.ts";
+import {
+  delegationCard,
+  renderDelegationConsole,
+  renderDelegationHumanSnapshot,
+  renderDelegationJson,
+} from "../application/delegation-presentation.ts";
+import {
   INSPECTION_TOOLS,
   DELEGATION_INPUT_GUIDANCE,
   INSPECTION_ROLES,
@@ -118,9 +130,61 @@ export interface PiMattyRegistrationOptions {
     authenticated: boolean;
   }>;
   diagnosticFailures?: RuntimeFacts["failures"];
+  delegationRegistryOptions?: DelegationRegistryOptions;
+  hostOutput?: (text: string) => void;
 }
 
 type WriterRelease = () => void | Promise<void>;
+
+async function openDelegationConsole(
+  context: ExtensionContext,
+  registry: DelegationRegistry,
+): Promise<void> {
+  await context.ui.custom<void>((tui, _theme, _keybindings, done) => {
+    let snapshot = registry.snapshot();
+    let selectedId = snapshot.delegations[0]?.id;
+    const expandedIds = new Set<string>();
+    const unsubscribe = registry.subscribe(() => {
+      snapshot = registry.snapshot();
+      if (selectedId && !snapshot.delegations.some((entry) => entry.id === selectedId)) {
+        selectedId = snapshot.delegations[0]?.id;
+      }
+      tui.requestRender();
+    });
+    return {
+      render(width: number) {
+        return renderDelegationConsole(snapshot, {
+          ...(selectedId ? { selectedId } : {}),
+          expandedIds,
+        }).map((line) => piTui.truncateToWidth(line, Math.max(1, width)));
+      },
+      handleInput(data: string) {
+        if (piTui.matchesKey(data, "q") || piTui.matchesKey(data, piTui.Key.escape)) {
+          unsubscribe();
+          done();
+          return;
+        }
+        const entries = snapshot.delegations;
+        const index = Math.max(0, entries.findIndex((entry) => entry.id === selectedId));
+        if (piTui.matchesKey(data, piTui.Key.up) || piTui.matchesKey(data, "k")) {
+          selectedId = entries[Math.max(0, index - 1)]?.id ?? selectedId;
+          tui.requestRender();
+        } else if (piTui.matchesKey(data, piTui.Key.down) || piTui.matchesKey(data, "j")) {
+          selectedId = entries[Math.min(entries.length - 1, index + 1)]?.id ?? selectedId;
+          tui.requestRender();
+        } else if (piTui.matchesKey(data, piTui.Key.enter) && selectedId) {
+          if (expandedIds.has(selectedId)) expandedIds.delete(selectedId);
+          else expandedIds.add(selectedId);
+          tui.requestRender();
+        }
+      },
+      invalidate() {},
+      dispose() {
+        unsubscribe();
+      },
+    };
+  }, { overlay: false });
+}
 
 interface PreparedWorkerExecution {
   contract: WorkerCapabilityContract;
@@ -149,6 +213,10 @@ function createPiHost(
     DiagnosticContext,
     "failures" | "concurrency"
   > = () => ({}),
+  management?: {
+    registry: DelegationRegistry;
+    output(text: string): void;
+  },
 ): MattyHost {
   function diagnosticContext(
     context: ExtensionContext,
@@ -160,6 +228,26 @@ function createPiHost(
         ? "chatgpt-codex-subscription" as const
         : undefined;
     return {
+      mode: context.mode,
+      ...(management
+        ? {
+          delegationSnapshot: () => {
+            const snapshot = management.registry.snapshot();
+            return {
+              human: renderDelegationHumanSnapshot(snapshot, management.registry.now()),
+              json: renderDelegationJson(snapshot),
+              jsonEvent: JSON.stringify({
+                type: "matty.delegations",
+                snapshot,
+              }),
+            };
+          },
+          emitOutput: management.output,
+          openDelegations: async () => {
+            await openDelegationConsole(context, management.registry);
+          },
+        }
+        : {}),
       ...(context.model
         ? {
           activeModel: {
@@ -625,21 +713,11 @@ export function registerPiMatty(
   environment: NodeJS.ProcessEnv = process.env,
   options: PiMattyRegistrationOptions = {},
 ): void {
-  let diagnosticActiveChildren = 0;
-  let diagnosticQueuedChildren = 0;
+  const delegationRegistry = new DelegationRegistry(options.delegationRegistryOptions);
+  const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
   > = [...(options.diagnosticFailures ?? [])];
-  async function trackDiagnosticChild<T>(
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    diagnosticActiveChildren += 1;
-    try {
-      return await operation();
-    } finally {
-      diagnosticActiveChildren -= 1;
-    }
-  }
   const childRoleValue = environment[CONTROL_ENV.role];
   const childRole = isMattyRole(childRoleValue) ? childRoleValue : undefined;
   const research = childRole === "researcher" ? researcherScope(environment) : undefined;
@@ -852,7 +930,13 @@ export function registerPiMatty(
       }).then(() => undefined);
       await researchCleanup;
     };
+    pi.on("session_start", (event) => {
+      if (event.reason === "new" || event.reason === "resume" || event.reason === "reload") {
+        delegationRegistry.reset();
+      }
+    });
     pi.on("session_shutdown", async () => {
+      delegationRegistry.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
           await cleanupResearchWorkspace(scope);
@@ -1077,10 +1161,9 @@ export function registerPiMatty(
           const configurationPaths = userConfigurationPaths(environment);
           const writerStateRoot = contract.temporaryPaths.at(-1) ?? tmpdir();
           const protectedPaths = [singleWriterStatePath(writerStateRoot)];
-          return await trackDiagnosticChild(async () => {
-            const terminal = await runWorkerDelegation(
-              params.task,
-              {
+          const terminal = await runWorkerDelegation(
+            params.task,
+            {
               contract,
               availability: {
                 availableTools: invocationTools(workerInvocation),
@@ -1127,11 +1210,10 @@ export function registerPiMatty(
                   },
                 });
               },
-              },
-              progressOptions as never,
-            );
-            return delegationResult(terminal);
-          });
+            },
+            progressOptions as never,
+          );
+          return delegationResult(terminal);
         }
 
         if (role === "researcher") {
@@ -1193,10 +1275,9 @@ export function registerPiMatty(
             : invocation;
           activeResearchers += 1;
           try {
-            return await trackDiagnosticChild(async () => {
-              const terminal = await runResearcherDelegation(
-                params.task,
-                {
+            const terminal = await runResearcherDelegation(
+              params.task,
+              {
                 contract,
                 availability: {
                   availableTools: invocationTools(researcherInvocation),
@@ -1237,11 +1318,10 @@ export function registerPiMatty(
                     return false;
                   }
                 },
-                },
-                progressOptions as never,
-              );
-              return delegationResult(terminal);
-            });
+              },
+              progressOptions as never,
+            );
+            return delegationResult(terminal);
           } finally {
             activeResearchers -= 1;
           }
@@ -1276,11 +1356,10 @@ export function registerPiMatty(
           : invocation;
         activeInvocations[role] += 1;
         try {
-          return await trackDiagnosticChild(async () => {
-            const terminal = await runInspectionDelegation(
-              role,
-              params.task,
-              {
+          const terminal = await runInspectionDelegation(
+            role,
+            params.task,
+            {
               availability: {
                 availableTools: invocationTools(inspectionInvocation),
                 independentRuntime: independentRuntimeAvailable,
@@ -1309,14 +1388,13 @@ export function registerPiMatty(
                   },
                 });
               },
-              },
-              {
-                ...progressOptions,
-                ...(role === "reviewer" ? { reviewScope: params.reviewScope } : {}),
-              } as never,
-            );
-            return delegationResult(terminal);
-          });
+            },
+            {
+              ...progressOptions,
+              ...(role === "reviewer" ? { reviewScope: params.reviewScope } : {}),
+            } as never,
+          );
+          return delegationResult(terminal);
         } finally {
           activeInvocations[role] -= 1;
         }
@@ -1340,6 +1418,25 @@ export function registerPiMatty(
         "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
       ],
       parameters: parameters as never,
+      renderShell: "self",
+      renderCall(args: unknown) {
+        const candidate = isUnknownRecord(args) ? args : {};
+        const tasks = Array.isArray(candidate.tasks) ? candidate.tasks : [candidate];
+        const safeRoles = tasks.flatMap((task) =>
+          isUnknownRecord(task) && isMattyRole(task.role) ? [task.role] : []
+        );
+        const text = `Delegation · ${[...new Set(safeRoles)].join(",") || "unknown"} · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`;
+        return new piTui.Text(text, 0, 0);
+      },
+      renderResult(result: { details?: unknown }) {
+        const details = result.details;
+        const entry = isUnknownRecord(details)
+          ? resultCards.get(details) ?? (isUnknownRecord(details.delegation)
+            ? details.delegation as unknown as DelegationSnapshotEntry
+            : undefined)
+          : undefined;
+        return new piTui.Text(entry ? delegationCard(entry, delegationRegistry.now()) : "Delegation · lifecycle unavailable", 0, 0);
+      },
       async execute(
         toolCallId: string,
         params:
@@ -1357,14 +1454,43 @@ export function registerPiMatty(
           | undefined,
         ctx: ExtensionContext,
       ) {
+        const observer = createDelegationObserver({
+          registry: delegationRegistry,
+          declaration: params,
+          ...(signal ? { signal } : {}),
+          ...(onUpdate ? { onUpdate } : {}),
+        });
+        const finishResult = <T extends { details?: unknown; content?: unknown }>(result: T): T => {
+          const finished = observer.finish(result.details);
+          if (finished.entry && isUnknownRecord(finished.safeDetails)) {
+            resultCards.set(finished.safeDetails, finished.entry);
+          }
+          return {
+            ...result,
+            details: finished.safeDetails,
+            ...(Array.isArray(result.content)
+              ? {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify(finished.safeDetails),
+                }],
+              }
+              : {}),
+          };
+        };
         if ("role" in params) {
-          return await singleTaskTool.execute(
-            toolCallId,
-            params,
-            signal,
-            onUpdate,
-            ctx,
-          );
+          try {
+            return finishResult(await singleTaskTool.execute(
+              toolCallId,
+              params,
+              observer.controller.signal,
+              (update) => observer.observeProgress(update.details),
+              ctx,
+            ));
+          } catch (error) {
+            observer.fail();
+            throw error;
+          }
         }
         const contract: DelegationGroupContract = {
           schemaVersion: 1,
@@ -1393,11 +1519,6 @@ export function registerPiMatty(
           number,
           PreparedResearcherExecution
         >();
-        let groupQueuedChildren = Math.max(
-          0,
-          contract.tasks.length - contract.concurrency.maxActive,
-        );
-        diagnosticQueuedChildren += groupQueuedChildren;
         const result = await (async () => {
           try {
             return await runDelegationGroup(contract, {
@@ -1559,16 +1680,6 @@ export function registerPiMatty(
                   : { ok: false, reason: "tool-surface-incompatible" };
               },
               async run(task, taskIndex, taskOptions) {
-                if (taskIndex >= contract.concurrency.maxActive) {
-                  groupQueuedChildren = Math.max(
-                    0,
-                    groupQueuedChildren - 1,
-                  );
-                  diagnosticQueuedChildren = Math.max(
-                    0,
-                    diagnosticQueuedChildren - 1,
-                  );
-                }
                 const preparedWorker = preparedWorkers.get(taskIndex);
                 const preparedResearcher = preparedResearchers.get(taskIndex);
                 const leafResult = await singleTaskTool.execute(
@@ -1580,50 +1691,40 @@ export function registerPiMatty(
                     ...(preparedResearcher ? { preparedResearcher } : {}),
                   },
                   taskOptions.signal,
-                  onUpdate
-                    ? (update) => {
-                      onUpdate({
-                        content: update.content,
-                        details: { taskIndex, progress: update.details },
-                      });
-                    }
-                    : undefined,
+                  (update) => observer.observeProgress({
+                    taskIndex,
+                    progress: update.details,
+                  }),
                   ctx,
-                );
+                ).catch((error: unknown) => {
+                  observer.completeTask(taskIndex, "failed");
+                  throw error;
+                });
                 const outcome = leafOutcome(leafResult.details);
-                if (outcome.status === "cancelled") {
-                  return { status: "cancelled" };
-                }
-                if (leafResult.isError) {
-                  return {
-                    status: "failed",
-                    ...(outcome.failureCode
-                      ? { code: outcome.failureCode }
-                      : {}),
-                  };
-                }
-                return {
-                  status: "succeeded",
-                  value: leafResult.details,
-                } satisfies DelegationTaskExecution<unknown>;
+                const executionOutcome: DelegationTaskExecution<unknown> =
+                  outcome.status === "cancelled"
+                    ? { status: "cancelled" }
+                    : leafResult.isError
+                      ? {
+                        status: "failed",
+                        ...(outcome.failureCode
+                          ? { code: outcome.failureCode }
+                          : {}),
+                      }
+                      : {
+                        status: "succeeded",
+                        value: leafResult.details,
+                      };
+                observer.completeTask(taskIndex, executionOutcome.status);
+                return executionOutcome;
               },
             }, {
-              ...(signal ? { signal } : {}),
+              signal: observer.controller.signal,
               onDiagnostic(diagnostic) {
-                onUpdate?.({
-                  content: [{
-                    type: "text",
-                    text: JSON.stringify(diagnostic),
-                  }],
-                  details: diagnostic,
-                });
+                observer.recordDiagnostic(diagnostic);
               },
             });
           } finally {
-            diagnosticQueuedChildren = Math.max(
-              0,
-              diagnosticQueuedChildren - groupQueuedChildren,
-            );
             await Promise.all(
               [...preparedWorkers.values()].map(async (preparation) => {
                 try {
@@ -1646,14 +1747,14 @@ export function registerPiMatty(
             );
           }
         })();
-        return {
+        return finishResult({
           content: [{ type: "text", text: JSON.stringify(result) }],
           details: result,
           isError:
             result.status === "blocked" ||
             result.status === "failed" ||
             result.status === "cancelled",
-        };
+        });
       },
     } as never);
   }
@@ -1664,10 +1765,13 @@ export function registerPiMatty(
       ...(rulesConflict ? [{ source: "rule-injection" as const }] : []),
     ],
     concurrency: {
-      activeChildren: diagnosticActiveChildren,
-      queuedChildren: diagnosticQueuedChildren,
+      activeChildren: delegationRegistry.snapshot().concurrency.activeTasks,
+      queuedChildren: delegationRegistry.snapshot().concurrency.queuedTasks,
     },
-  })), {
+  }), {
+    registry: delegationRegistry,
+    output: options.hostOutput ?? ((text) => process.stdout.write(text)),
+  }), {
     packageVersion: MATTY_PACKAGE_VERSION,
     piVersion: PI_VERSION,
     platform: process.platform,

@@ -20,6 +20,10 @@ export type Notify = (
 ) => void;
 
 export interface DiagnosticContext {
+  mode?: "tui" | "rpc" | "json" | "print";
+  openDelegations?: () => Promise<void>;
+  delegationSnapshot?: () => { human: string; json: string; jsonEvent: string };
+  emitOutput?: (text: string) => void;
   activeModel?: {
     provider: string;
     model: string;
@@ -159,7 +163,27 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor> [--json]", "warning");
+      if (args === "delegations" || args === "delegations --json") {
+        const delegation = context?.delegationSnapshot?.();
+        if (!delegation) {
+          notify("Delegation Registry is unavailable", "warning");
+          return;
+        }
+        if (context?.mode === "tui" && args === "delegations" && context.openDelegations) {
+          await context.openDelegations();
+          return;
+        }
+        if (context?.mode === "json") {
+          context.emitOutput?.(`${delegation.jsonEvent}\n`);
+        } else if (context?.mode === "print") {
+          context.emitOutput?.(`${delegation.human}\n`);
+        } else {
+          notify(args.endsWith("--json") ? delegation.json : delegation.human, "info");
+        }
+        return;
+      }
+
+      notify("Usage: /matty <status|doctor|delegations> [--json]", "warning");
     },
   });
 
