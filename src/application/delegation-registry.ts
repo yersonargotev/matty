@@ -159,8 +159,6 @@ export class DelegationRegistry {
   readonly #activityLimitPerTask: number;
   readonly #entries = new Map<string, StoredDelegation>();
   readonly #listeners = new Set<() => void>();
-  readonly #sessionIds = new Set<string>();
-  readonly #sessionDisplayIds = new Set<string>();
   #terminalOrder = 0;
 
   constructor(options: DelegationRegistryOptions = {}) {
@@ -175,15 +173,13 @@ export class DelegationRegistry {
     controller?: AbortController,
   ): DelegationSnapshotEntry {
     let id = this.#idFactory();
-    while (this.#sessionIds.has(id)) id = this.#idFactory();
+    while (this.#entries.has(id)) id = this.#idFactory();
     let displayId = shortCandidate(id);
-    while (this.#sessionDisplayIds.has(displayId)) {
+    while ([...this.#entries.values()].some((entry) => entry.displayId === displayId)) {
       id = this.#idFactory();
-      if (this.#sessionIds.has(id)) continue;
+      if (this.#entries.has(id)) continue;
       displayId = shortCandidate(id);
     }
-    this.#sessionIds.add(id);
-    this.#sessionDisplayIds.add(displayId);
     const acceptedAt = this.#now();
     const tasks = declaration.tasks.map((task) => ({ ...task }));
     const roles = tasks.flatMap((task) => task.role ? [task.role] : []);
@@ -405,8 +401,6 @@ export class DelegationRegistry {
   reset(): void {
     for (const entry of this.#entries.values()) entry.controller?.abort();
     this.#entries.clear();
-    this.#sessionIds.clear();
-    this.#sessionDisplayIds.clear();
     this.#terminalOrder = 0;
     this.#changed();
   }

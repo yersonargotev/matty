@@ -45,30 +45,44 @@ test("registry assigns opaque UUIDs and unique display IDs without retaining dec
   assert.doesNotMatch(serialized, /prompt|command|argument|response|transcript|secret task/i);
 });
 
-test("registry reserves opaque and display IDs for the whole session", () => {
+test("registry bounds collision tracking to retained entries and reset clears it", () => {
+  const firstId = "aaaaaaaa-0000-4000-8000-000000000001";
+  const secondId = "bbbbbbbb-0000-4000-8000-000000000002";
   const ids = [
-    "aaaaaaaa-0000-4000-8000-000000000001",
-    "aaaaaaaa-0000-4000-8000-000000000002",
+    firstId,
+    secondId,
+    firstId,
+    firstId,
     "bbbbbbbb-0000-4000-8000-000000000003",
-    "aaaaaaaa-0000-4000-8000-000000000001",
     "cccccccc-0000-4000-8000-000000000004",
+    firstId,
   ];
   const registry = new DelegationRegistry({
     idFactory: () => ids.shift()!,
-    terminalLimit: 0,
+    terminalLimit: 1,
   });
   const first = registry.accept({ tasks: [{ role: "explorer" }] });
   registry.finish(first.id, "succeeded");
-  assert.equal(registry.snapshot().delegations.length, 0);
+  assert.equal(registry.get(first.id)?.id, firstId);
 
   const second = registry.accept({ tasks: [{ role: "designer" }] });
-  assert.equal(second.id, "bbbbbbbb-0000-4000-8000-000000000003");
-  assert.equal(second.displayId, "D-bbbbbbbb");
+  registry.finish(second.id, "succeeded");
+  assert.equal(registry.get(second.id)?.displayId, "D-bbbbbbbb");
+  assert.equal(registry.get(first.id), undefined);
+
+  const reused = registry.accept({ tasks: [{ role: "reviewer" }] });
+  assert.equal(reused.id, firstId);
+  assert.equal(reused.displayId, "D-aaaaaaaa");
+
+  const collisionChecked = registry.accept({ tasks: [{ role: "researcher" }] });
+  assert.equal(collisionChecked.id, "cccccccc-0000-4000-8000-000000000004");
+  assert.equal(collisionChecked.displayId, "D-cccccccc");
 
   registry.reset();
+  assert.equal(registry.snapshot().delegations.length, 0);
   const afterReset = registry.accept({ tasks: [{ role: "worker" }] });
-  assert.equal(afterReset.id, first.id);
-  assert.equal(afterReset.displayId, first.displayId);
+  assert.equal(afterReset.id, firstId);
+  assert.equal(afterReset.displayId, "D-aaaaaaaa");
 });
 
 test("registry retains active entries and only the newest fifty terminal entries", () => {

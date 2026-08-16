@@ -365,7 +365,9 @@ export async function runDelegationGroup<T>(
   return {
     status: requiredTaskFailed
       ? "failed"
-      : completed.every((result) => result.status === "succeeded")
+      : stopped
+        ? "cancelled"
+        : completed.every((result) => result.status === "succeeded")
         ? "succeeded"
         : completed.some((result) => result.status === "cancelled") &&
             contract.requirement === "required"
