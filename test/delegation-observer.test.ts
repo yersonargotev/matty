@@ -16,7 +16,7 @@ import {
 
 const id = "aaaaaaaa-0000-4000-8000-000000000001";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const fixture = resolve(repositoryRoot, "test/fixtures/child-pi-fixture.mjs");
+const fixture = resolve(repositoryRoot, "test/fixtures/child-pi-rpc-fixture.mjs");
 const canonicalRoot = await realpath(repositoryRoot);
 
 function blocked(unmet: string[]) {

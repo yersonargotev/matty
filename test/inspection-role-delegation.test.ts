@@ -5,13 +5,15 @@ import {
   runInspectionDelegation,
   type InspectionDelegationExecution,
 } from "../src/application/inspection-role-delegation.ts";
-import type {
-  DelegatedTaskRunner,
+import {
+  childTranscript,
+  type DelegatedTaskRunner,
 } from "../src/application/child-pi-runtime.ts";
 import {
   INSPECTION_TOOLS,
 } from "../src/domain/capability-contract.ts";
 import { commitSha } from "../src/domain/commit-sha.ts";
+import { createRoleSeamChildRunner } from "./support/child-pi-runner.ts";
 
 function availableExecution(
   runner: DelegatedTaskRunner,
@@ -132,6 +134,43 @@ test("reviewer rejects findings outside exact requirements or targeting excluded
         assert.equal(terminal.outcome.failure.kind, "invalid-role-output");
       }
     });
+  }
+});
+
+test("preserves the private transcript when invalid inspection output becomes a role failure", async () => {
+  const source = await createRoleSeamChildRunner().run("success");
+  assert.equal(source.status, "succeeded");
+  const scope = {
+    schemaVersion: 1 as const,
+    issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+    requirements: ["Issue 9"],
+    outOfScope: [],
+    baseSha: commitSha("0000000000000000000000000000000000000000"),
+    candidateSha: commitSha("1111111111111111111111111111111111111111"),
+    axes: ["spec" as const],
+  };
+
+  const terminals = await Promise.all([
+    runInspectionDelegation(
+      "designer",
+      "Design",
+      availableExecution({ async run() { return source; } }),
+    ),
+    runInspectionDelegation(
+      "reviewer",
+      "Review",
+      availableExecution({ async run() { return source; } }),
+      { reviewScope: scope },
+    ),
+  ]);
+
+  for (const terminal of terminals) {
+    assert.equal(terminal.outcome.status, "failed");
+    assert.deepEqual(
+      childTranscript(terminal.outcome)?.entries.map((entry) => entry.type),
+      ["message_end", "agent_settled"],
+    );
+    assert.doesNotMatch(JSON.stringify(terminal.outcome), /transcript/);
   }
 });
 

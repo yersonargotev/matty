@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { DelegatedTaskRunner } from "../src/application/child-pi-runtime.ts";
+import {
+  childTranscript,
+  type DelegatedTaskRunner,
+} from "../src/application/child-pi-runtime.ts";
 import {
   runResearcherDelegation,
   type ResearcherDelegationExecution,
@@ -10,6 +13,7 @@ import {
   RESEARCHER_TOOLS,
   createResearcherCapabilityContract,
 } from "../src/domain/capability-contract.ts";
+import { createRoleSeamChildRunner } from "./support/child-pi-runner.ts";
 
 function execution(
   runner: DelegatedTaskRunner,
@@ -101,6 +105,24 @@ test("does not report success when the approved Research Report is missing", asy
     },
     exit: { code: 0, signal: null },
   });
+});
+
+test("preserves the private transcript when a missing report becomes a failure", async () => {
+  const source = await createRoleSeamChildRunner().run("success");
+  assert.equal(source.status, "succeeded");
+  const available = execution({ async run() { return source; } });
+
+  const terminal = await runResearcherDelegation("Research", {
+    ...available,
+    async reportDelivered() { return false; },
+  });
+
+  assert.equal(terminal.outcome.status, "failed");
+  assert.deepEqual(
+    childTranscript(terminal.outcome)?.entries.map((entry) => entry.type),
+    ["message_end", "agent_settled"],
+  );
+  assert.doesNotMatch(JSON.stringify(terminal.outcome), /transcript/);
 });
 
 test("required researcher web preflight blocks before constructing a runner", async () => {

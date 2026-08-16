@@ -26,6 +26,7 @@ import {
   detectLauncherPiVersion,
   registerPiMatty,
 } from "../src/adapters/pi-extension.ts";
+import { childTranscript } from "../src/application/child-pi-runtime.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
   MATTY_GUIDANCE_END,
@@ -465,6 +466,11 @@ test("registered delegation seam exposes safe cards, deterministic modes, and li
   for (const entry of event.snapshot.delegations) {
     assert.match(entry.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.match(entry.displayId, /^D-[0-9a-f]{8}$/);
+    for (const task of entry.tasks) {
+      assert.match(task.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      assert.match(task.displayId, /^T-[0-9a-f]{8}$/);
+      assert.notEqual(task.id, task.runId);
+    }
   }
   assert.doesNotMatch(hostOutput[0]!, /never expose|dangerous|host-call-id/);
   assert.equal(notifications.length, 0);
@@ -695,7 +701,7 @@ test("delegation TUI confirms selected whole-group cancellation with active and 
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -775,7 +781,7 @@ test("delegation TUI cancellation finishes an active optional Delegation and tas
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -850,7 +856,7 @@ test("delegation TUI reports a Delegation that finishes while cancellation confi
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -921,7 +927,7 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -982,13 +988,61 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
   assert.equal(JSON.parse(notifications.at(-1) ?? "{}").delegations.length, 0);
 });
 
+test("registered terminal Candidate Result retains its private Child Transcript after validation", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"),
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+
+  const result = await execute(
+    "rpc-group" as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "success" }] } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "high",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  ) as unknown as {
+    details: {
+      status: string;
+      tasks: Array<{ value?: { outcome?: Parameters<typeof childTranscript>[0] } }>;
+    };
+  };
+
+  assert.equal(result.details.status, "succeeded");
+  const candidate = result.details.tasks[0]?.value?.outcome;
+  assert.ok(candidate);
+  assert.deepEqual(
+    childTranscript(candidate)?.entries.map((entry) => entry.type),
+    ["message_end", "agent_settled"],
+  );
+  assert.match(JSON.stringify(candidate), /validated designer result/);
+  assert.doesNotMatch(JSON.stringify(result), /transcript|secret-tool-call-id/);
+});
+
 test("subagent group preserves a redacted child failure code", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
     invocation: {
       command: process.execPath,
       arguments: [
-        join(process.cwd(), "test/fixtures/child-pi-fixture.mjs"),
+        join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"),
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -1035,7 +1089,7 @@ test("required group authentication preflight blocks before spawning", async () 
     delegationRegistryOptions: { now: () => now },
     invocation: {
       command: process.execPath,
-      arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs")],
     },
   });
   const execute = harness.tools.find((tool) => tool.name === "subagent")
@@ -1125,7 +1179,7 @@ test("standalone preflight failures expose only closed reasons through the regis
       options: {
         invocation: {
           command: process.execPath,
-          arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+          arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs")],
         },
       },
       context: {
@@ -1146,7 +1200,7 @@ test("standalone preflight failures expose only closed reasons through the regis
         invocation: {
           command: process.execPath,
           arguments: [
-            join(process.cwd(), "test/fixtures/child-pi-fixture.mjs"),
+            join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"),
             "--tools",
             INSPECTION_TOOLS.join(","),
           ],
@@ -1252,7 +1306,7 @@ test("required group artifact preflight blocks before a sibling spawns", async (
     registerPiMatty(harness.pi, { TMPDIR: join(root, "temporary") }, {
       invocation: {
         command: process.execPath,
-        arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs")],
       },
       registerWebExtension(pi) {
         for (
@@ -1422,7 +1476,7 @@ test("researcher delegation returns normalized artifacts and cleans only workspa
     registerPiMatty(harness.pi, { TMPDIR: isolated }, {
       invocation: {
         command: process.execPath,
-        arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs")],
       },
       registerWebExtension(pi) {
         for (
@@ -1778,7 +1832,7 @@ test("one subagent call queues a fifth child behind four active children", async
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -1879,7 +1933,7 @@ test("group task completion releases its registry slot before queue promotion", 
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -1947,7 +2001,7 @@ test("each inspection Capability Contract permits only one active invocation", a
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -2026,7 +2080,7 @@ test("Single Writer permits at most one active worker for a repository", async (
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         WORKER_TOOLS.join(","),
       ],
@@ -2135,7 +2189,7 @@ test("required reviewer group blocks atomically when a review commit is unavaila
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -2225,7 +2279,7 @@ test("reviewer invalid output remains a closed-allowlist group diagnostic", asyn
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -2287,7 +2341,7 @@ test("reviewer gh preflight blocks before spawning and returns a diagnostic", as
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         INSPECTION_TOOLS.join(","),
       ],
@@ -2335,7 +2389,7 @@ test("spawn preflight rejects tools outside the selected contract", async () => 
     invocation: {
       command: process.execPath,
       arguments: [
-        "test/fixtures/child-pi-fixture.mjs",
+        "test/fixtures/child-pi-rpc-fixture.mjs",
         "--tools",
         [...INSPECTION_TOOLS, "write"].join(","),
       ],

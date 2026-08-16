@@ -1,7 +1,8 @@
-import type {
-  DelegatedTaskOutcome,
-  DelegatedTaskProgress,
-  DelegatedTaskRunner,
+import {
+  transferChildTranscript,
+  type DelegatedTaskOutcome,
+  type DelegatedTaskProgress,
+  type DelegatedTaskRunner,
 } from "./child-pi-runtime.ts";
 import {
   createCapabilityPreflightDiagnostic,
@@ -126,7 +127,10 @@ function structuredOutcome(
   try {
     const output = JSON.parse(outcome.output) as unknown;
     if (scope) {
-      return { ...outcome, output: reviewerFindings(output, scope) };
+      return transferChildTranscript(
+        outcome,
+        { ...outcome, output: reviewerFindings(output, scope) },
+      );
     }
     if (
       typeof output === "object" &&
@@ -135,7 +139,10 @@ function structuredOutcome(
       typeof (output as Partial<InspectionRoleFindings>).summary === "string" &&
       Array.isArray((output as Partial<InspectionRoleFindings>).evidence)
     ) {
-      return { ...outcome, output: output as InspectionRoleFindings };
+      return transferChildTranscript(
+        outcome,
+        { ...outcome, output: output as InspectionRoleFindings },
+      );
     }
   } catch {
     // Converted to a structured role failure below.
@@ -143,7 +150,7 @@ function structuredOutcome(
   if (!required) {
     return outcome;
   }
-  return {
+  return transferChildTranscript(outcome, {
     status: "failed",
     child: outcome.child,
     failure: {
@@ -151,7 +158,7 @@ function structuredOutcome(
       message: "inspection role output must be structured JSON findings",
     },
     exit: outcome.exit,
-  };
+  });
 }
 
 export async function runInspectionDelegation(
