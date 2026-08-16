@@ -126,6 +126,95 @@ function escapeSandboxLiteral(value) {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
+function tclLiteral(value) {
+  return `{${value.replaceAll("\\", "/").replaceAll("}", "\\}")}}`;
+}
+
+async function exerciseInteractiveTheme(
+  piBinary,
+  cwd,
+  env,
+  sandboxRoot,
+  colorMode,
+) {
+  const expectScript = join(sandboxRoot, `theme-${colorMode}.expect`);
+  const transcriptPath = join(sandboxRoot, `theme-${colorMode}.log`);
+  const colorTerm = colorMode === "truecolor" ? "truecolor" : "";
+  await writeFile(
+    expectScript,
+    `
+set timeout 30
+log_user 1
+log_file -noappend ${tclLiteral(transcriptPath)}
+proc phase {name pattern} {
+  expect {
+    -re $pattern { puts "T01_THEME_PHASE:$name" }
+    timeout { puts stderr "T01_THEME_TIMEOUT:$name"; exit 70 }
+    eof { puts stderr "T01_THEME_EOF:$name"; exit 71 }
+  }
+}
+spawn -noecho ${tclLiteral(piBinary)} --no-session --offline
+stty rows 40 columns 160
+phase startup {Matty active}
+send -- "/settings\\r"
+phase settings {Type to search}
+send -- "Theme"
+phase filtered {Color theme for the interface}
+send -- "\\r"
+phase discovered {matty-catppuccin-mocha}
+send -- "\\033\\[B\\033\\[B"
+after 250
+send -- "\\r"
+after 250
+send -- "\\033"
+after 100
+send -- "\\004"
+expect eof
+`,
+    "utf8",
+  );
+
+  await run("theme", "/usr/bin/expect", [expectScript], {
+    cwd,
+    env: {
+      ...env,
+      TERM: "xterm-256color",
+      COLORTERM: colorTerm,
+      NODE_OPTIONS: `--import=${NETWORK_GUARD_PATH}`,
+      MATTY_NETWORK_GUARD_READY: join(
+        sandboxRoot,
+        `network-guard-theme-${colorMode}.ready`,
+      ),
+      MATTY_NETWORK_GUARD_VIOLATION: join(
+        sandboxRoot,
+        `network-guard-theme-${colorMode}.violation`,
+      ),
+    },
+    timeoutMs: 45_000,
+  });
+
+  const transcript = await readFile(transcriptPath, "utf8");
+  assert.match(
+    transcript,
+    /matty-catppuccin-mocha/,
+    `[T01:theme-${colorMode}] installed theme was not discoverable in /settings`,
+  );
+  const expectedAccent = colorMode === "truecolor"
+    ? "\u001b[38;2;245;224;220m"
+    : "\u001b[38;5;224m";
+  assert.ok(
+    transcript.includes(expectedAccent),
+    `[T01:theme-${colorMode}] selected theme did not render its Catppuccin Mocha accent`,
+  );
+  if (colorMode === "256color") {
+    assert.equal(
+      transcript.includes("\u001b[38;2;245;224;220m"),
+      false,
+      "[T01:theme-256color] selected theme unexpectedly rendered truecolor output",
+    );
+  }
+}
+
 function startRpc(
   piBinary,
   cwd,
@@ -601,6 +690,31 @@ async function main() {
       "Matty acceptance project sentinel\n",
       "utf8",
     );
+    const settingsPath = join(homeRoot, ".pi", "agent", "settings.json");
+    for (const colorMode of ["truecolor", "256color"]) {
+      const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+      settings.theme = "dark";
+      await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      await exerciseInteractiveTheme(
+        piBinary,
+        projectRoot,
+        isolatedEnv,
+        sandboxRoot,
+        colorMode,
+      );
+      const selectedSettings = JSON.parse(await readFile(settingsPath, "utf8"));
+      assert.equal(
+        selectedSettings.theme,
+        "matty-catppuccin-mocha",
+        `[T01:theme-${colorMode}] interactive selection was not persisted`,
+      );
+      await access(join(sandboxRoot, `network-guard-theme-${colorMode}.ready`));
+      await assert.rejects(
+        access(join(sandboxRoot, `network-guard-theme-${colorMode}.violation`)),
+        `[T01:theme-${colorMode}] interactive startup attempted a network operation`,
+      );
+    }
+
     const projectBeforeStartup = await snapshotTree(projectRoot);
     const homeBeforeStartup = await snapshotTree(homeRoot);
     const rpc = startRpc(
@@ -609,7 +723,6 @@ async function main() {
       isolatedEnv,
       sandboxRoot,
       operatorHome,
-      ["--use-theme", "matty-catppuccin-mocha"],
     );
 
     let rpcFailure;
@@ -1003,7 +1116,6 @@ export default function unsupportedHostAcceptance(pi) {
       await nonReferenceRpc.close();
     }
 
-    const settingsPath = join(homeRoot, ".pi", "agent", "settings.json");
     const settings = JSON.parse(await readFile(settingsPath, "utf8"));
     const installedSource = settings.packages?.find((entry) =>
       (typeof entry === "string" ? entry : entry.source) === mattySource
@@ -1097,6 +1209,7 @@ export default function unsupportedHostAcceptance(pi) {
         "target: darwin/arm64",
         "activation: active",
         "Web Capability: available (pi-web-access 0.15.0)",
+        "installed theme: interactively selected in truecolor and 256-color",
         "network during startup/status/doctor: denied",
         "project writes during startup/status/doctor: none",
         "unsupported host: Matty degraded, Pi usable",
