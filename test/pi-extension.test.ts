@@ -923,7 +923,7 @@ test("delegation TUI reports a Delegation that finishes while cancellation confi
 
 test("session shutdown aborts active delegation and safe onUpdate cards disclose no progress payload", async () => {
   const harness = createExtensionHarness();
-  registerPiMatty(harness.pi, {}, {
+  const control = registerPiMatty(harness.pi, {}, {
     invocation: {
       command: process.execPath,
       arguments: [
@@ -937,15 +937,19 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
   assert.ok(execute);
   const updates: unknown[] = [];
   let startedResolve: (() => void) | undefined;
+  let delegatedTaskId = "";
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   const secret = "private delegated task text";
   const running = execute(
     "shutdown-call" as never,
     { role: "explorer", task: secret } as never,
     undefined as never,
-    ((update: { content: Array<{ text: string }>; details: { type?: string } }) => {
+    ((update: { content: Array<{ text: string }>; details: { type?: string; delegatedTaskId: string } }) => {
       updates.push(update);
-      if (update.details.type === "started") startedResolve?.();
+      if (update.details.type === "started") {
+        delegatedTaskId = update.details.delegatedTaskId;
+        startedResolve?.();
+      }
     }) as never,
     {
       cwd: process.cwd(),
@@ -978,6 +982,11 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
   }
   await opening;
   assert.equal(consoleClosed, true);
+  assert.equal(control.taskPresentation(delegatedTaskId), undefined);
+  assert.deepEqual(await control.interact(delegatedTaskId, { type: "steer", message: "late" }), {
+    status: "rejected",
+    code: "delegated-task-unavailable",
+  });
   const result = await running;
   assert.equal((result.details as { outcome: { status: string } }).outcome.status, "cancelled");
   const notifications: string[] = [];
@@ -986,6 +995,300 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
     ui: { notify(message: string) { notifications.push(message); } },
   });
   assert.equal(JSON.parse(notifications.at(-1) ?? "{}").delegations.length, 0);
+});
+
+test("registered control correlates accepted interaction, freezes once, and replaces Candidate Result", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let taskId = "";
+  let delegationId = "";
+  let startedResolve!: () => void;
+  const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+  const running = execute(
+    "interactive-candidate" as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "interactive-candidate" }] } as never,
+    undefined as never,
+    ((update: { details: { type?: string; delegatedTaskId: string; delegation: { id: string } } }) => {
+      if (update.details.type === "identified") {
+        taskId = update.details.delegatedTaskId;
+        delegationId = update.details.delegation.id;
+        startedResolve();
+      }
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  await started;
+  const accepted = await control.interact(taskId, { type: "steer", message: "finish-valid" });
+  assert.equal(accepted.status, "accepted");
+  if (accepted.status === "accepted") assert.match(accepted.commandId, /^[0-9a-f-]{36}$/);
+  const frozen = control.freeze(delegationId);
+  assert.deepEqual(
+    await control.interact(taskId, { type: "follow_up", message: "too late" }),
+    { status: "rejected", code: "delegation-closing" },
+  );
+  const result = await running as unknown as {
+    details: { tasks: Array<{ value: { outcome: { output: { summary: string } } } }> };
+  };
+  assert.equal(result.details.tasks[0]?.value.outcome.output.summary, "replacement candidate");
+  assert.equal(await frozen, result);
+  assert.equal(await control.freeze(delegationId), result);
+  assert.equal(Object.isFrozen(result), true);
+});
+
+test("standalone thrown paths close and complete their control", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+
+  await assert.rejects(execute(
+    "standalone-throw" as never,
+    { role: "explorer", task: "never starts" } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      modelRegistry: { async getApiKeyAndHeaders() { throw new Error("controlled preflight throw"); } },
+    } as never,
+  ), /controlled preflight throw/);
+
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const delegationId = JSON.parse(notifications.at(-1) ?? "{}").delegations[0].id;
+  assert.deepEqual(await control.freeze(delegationId), { status: "failed" });
+});
+
+test("group cleanup throws still complete an already-closing control", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+    async resourceCleanupBarrier() {
+      throw new Error("controlled cleanup throw");
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let delegationId = "";
+  await assert.rejects(execute(
+    "group-cleanup-throw" as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "success" }] } as never,
+    undefined as never,
+    ((update: { details: { delegation?: { id: string } } }) => {
+      delegationId ||= update.details.delegation?.id ?? "";
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  ), /controlled cleanup throw/);
+  assert.ok(delegationId);
+  assert.deepEqual(await control.freeze(delegationId), { status: "failed" });
+});
+
+test("production closes at scheduler completion before asynchronous resource cleanup", async () => {
+  const harness = createExtensionHarness();
+  let cleanupStartedResolve!: () => void;
+  const cleanupStarted = new Promise<void>((resolve) => { cleanupStartedResolve = resolve; });
+  let releaseCleanup!: () => void;
+  const cleanupBarrier = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+    async resourceCleanupBarrier() {
+      cleanupStartedResolve();
+      await cleanupBarrier;
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let taskId = "";
+  let delegationId = "";
+  const running = execute(
+    "automatic-closing-boundary" as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "success" }] } as never,
+    undefined as never,
+    ((update: { details: { type?: string; delegatedTaskId: string; delegation: { id: string } } }) => {
+      if (update.details.type !== "identified") return;
+      taskId = update.details.delegatedTaskId;
+      delegationId = update.details.delegation.id;
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+
+  await cleanupStarted;
+  assert.ok(taskId);
+  assert.deepEqual(await control.interact(taskId, { type: "follow_up", message: "too late" }), {
+    status: "rejected",
+    code: "delegation-closing",
+  });
+  const frozen = control.freeze(delegationId);
+  releaseCleanup();
+  const result = await running;
+  assert.equal(await frozen, result);
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(Object.isFrozen(result.details), true);
+});
+
+test("invalid later response remains private and preserves the last valid Candidate Result", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let taskId = "";
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = execute(
+    "interactive-invalid" as never,
+    { requirement: "optional", tasks: [{ role: "designer", task: "interactive-candidate" }] } as never,
+    undefined as never,
+    ((update: { details: { type?: string; delegatedTaskId: string } }) => {
+      if (update.details.type === "identified") {
+        taskId = update.details.delegatedTaskId;
+        identifiedResolve();
+      }
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  await identified;
+  assert.equal((await control.interact(taskId, {
+    type: "follow_up",
+    message: "finish-invalid",
+  })).status, "accepted");
+  const result = await running as unknown as {
+    details: { tasks: Array<{ value: { outcome: object & { output: { summary: string }; diagnostic: { code: string } } } }> };
+  };
+  const outcome = result.details.tasks[0]?.value.outcome;
+  assert.ok(outcome);
+  assert.equal(outcome.output.summary, "initial candidate");
+  assert.equal(outcome.diagnostic.code, "invalid-role-output");
+  assert.match(JSON.stringify(childTranscript(outcome)), /not structured JSON/);
+  assert.doesNotMatch(JSON.stringify(result), /not structured JSON/);
+});
+
+test("task abort preserves required atomicity and optional sibling independence", async () => {
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+  };
+  for (const requirement of ["required", "optional"] as const) {
+    const harness = createExtensionHarness();
+    const control = registerPiMatty(harness.pi, {}, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute);
+    const taskIds = new Map<number, string>();
+    let readyResolve!: () => void;
+    const ready = new Promise<void>((resolve) => { readyResolve = resolve; });
+    const running = execute(
+      `abort-${requirement}` as never,
+      {
+        requirement,
+        tasks: requirement === "required"
+          ? Array.from({ length: 5 }, (_, index) => ({
+            role: index % 2 === 0 ? "explorer" : "designer",
+            task: "hold",
+          }))
+          : [{ role: "explorer", task: "hold" }, { role: "designer", task: "success" }],
+      } as never,
+      undefined as never,
+      ((update: { details: { type?: string; taskIndex: number; delegatedTaskId: string } }) => {
+        if (update.details.type === "identified") {
+          taskIds.set(update.details.taskIndex, update.details.delegatedTaskId);
+          if (taskIds.has(0) && (requirement === "optional" || taskIds.size === 4)) readyResolve();
+        }
+      }) as never,
+      context as never,
+    );
+    await ready;
+    assert.deepEqual(control.abortTask(taskIds.get(0)!), { status: "accepted" });
+    const result = await running as unknown as { details: { status: string; tasks: Array<{ status: string }> } };
+    assert.deepEqual(
+      result.details.tasks.map((task) => task.status),
+      requirement === "required"
+        ? Array.from({ length: 5 }, () => "cancelled")
+        : ["cancelled", "succeeded"],
+    );
+  }
+});
+
+test("optional group isolates malformed, oversized, and stderr child failures", async () => {
+  for (const failedTask of ["malformed-json", "oversized-frame", "stderr-overflow"]) {
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, {}, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute);
+    const result = await execute(
+      `isolated-${failedTask}` as never,
+      {
+        requirement: "optional",
+        tasks: [{ role: "designer", task: failedTask }, { role: "designer", task: "success" }],
+      } as never,
+      undefined as never,
+      undefined as never,
+      {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      } as never,
+    ) as unknown as { details: { status: string; tasks: Array<{ status: string }> } };
+    assert.equal(result.details.status, "partial");
+    assert.deepEqual(result.details.tasks.map((task) => task.status), ["failed", "succeeded"]);
+  }
 });
 
 test("registered terminal Candidate Result retains its private Child Transcript after validation", async () => {
@@ -1824,6 +2127,78 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
     ),
     false,
   );
+});
+
+test("registered control privately assembles interleaved live state by exact Delegated Task ID", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: ["test/fixtures/child-pi-rpc-fixture.mjs", "--tools", INSPECTION_TOOLS.join(",")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const updates: Array<{ details?: { type?: string; taskIndex?: number; delegatedTaskId?: string } }> = [];
+  const taskIds = new Map<number, string>();
+  const observed = new Map<string, unknown[]>();
+  const unsubscribers: Array<() => void> = [];
+
+  const result = await execute(
+    "live-correlation" as never,
+    {
+      requirement: "required",
+      tasks: [
+        { role: "designer", task: "interleaved-live-updates-A" },
+        { role: "designer", task: "interleaved-live-updates-B" },
+      ],
+    } as never,
+    undefined as never,
+    ((update: typeof updates[number]) => {
+      updates.push(update);
+      const details = update.details;
+      if (details?.type !== "identified" || details.taskIndex === undefined ||
+          !details.delegatedTaskId || taskIds.has(details.taskIndex)) return;
+      taskIds.set(details.taskIndex, details.delegatedTaskId);
+      const states: unknown[] = [];
+      observed.set(details.delegatedTaskId, states);
+      unsubscribers.push(control.subscribeTaskPresentation(
+        details.delegatedTaskId,
+        (presentation) => states.push(presentation),
+      ));
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  unsubscribers.forEach((unsubscribe) => unsubscribe());
+
+  assert.equal((result.details as { status: string }).status, "succeeded");
+  assert.equal(taskIds.size, 2);
+  for (const [taskIndex, marker] of ["A", "B"].entries()) {
+    const taskId = taskIds.get(taskIndex);
+    assert.ok(taskId);
+    const presentation = control.taskPresentation(taskId);
+    assert.ok(presentation);
+    assert.deepEqual(presentation.assistant.map((part) => part.contentIndex), [0]);
+    assert.equal(presentation.assistant[0]?.type, "text");
+    assert.match(presentation.assistant[0]?.content ?? "", new RegExp(`result ${marker}`));
+    assert.deepEqual(presentation.tools, [{
+      toolCallId: `call-live-${marker}`,
+      toolName: "read",
+      status: "running",
+      content: JSON.stringify({ content: `${marker}-new` }),
+    }]);
+    assert.ok((observed.get(taskId)?.length ?? 0) > 0);
+    assert.doesNotMatch(JSON.stringify(presentation), new RegExp(`${marker === "A" ? "B" : "A"}-(?:first|second|thinking|new)`));
+    assert.doesNotMatch(JSON.stringify(presentation), new RegExp(`${marker}-old`));
+  }
+  assert.doesNotMatch(JSON.stringify(updates), /A-first|B-first|A-new|B-new|call-live/);
+  assert.equal(control.taskPresentation("not-an-authorized-task"), undefined);
 });
 
 test("one subagent call queues a fifth child behind four active children", async () => {

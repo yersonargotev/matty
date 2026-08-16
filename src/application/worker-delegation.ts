@@ -1,4 +1,5 @@
 import {
+  childTerminalResponses,
   transferChildTranscript,
   type DelegatedTaskOutcome,
   type DelegatedTaskProgress,
@@ -104,28 +105,40 @@ export async function runWorkerDelegation(
     if (outcome.status !== "succeeded") {
       return { contract: preflight.contract, outcome };
     }
-    try {
-      return {
-        contract: preflight.contract,
-        outcome: transferChildTranscript(
-          outcome,
-          { ...outcome, output: workerCompletionReport(JSON.parse(outcome.output)) },
-        ),
-      };
-    } catch {
+    let candidate: WorkerCompletionReport | undefined;
+    let invalidAfterCandidate = false;
+    for (const response of childTerminalResponses(outcome)) {
+      try {
+        candidate = workerCompletionReport(JSON.parse(response));
+        invalidAfterCandidate = false;
+      } catch {
+        if (candidate) invalidAfterCandidate = true;
+      }
+    }
+    if (candidate) {
       return {
         contract: preflight.contract,
         outcome: transferChildTranscript(outcome, {
-          status: "failed",
-          child: outcome.child,
-          failure: {
-            kind: "protocol-failed",
-            message: "worker completed without a valid structured completion report",
-          },
-          exit: outcome.exit,
+          ...outcome,
+          output: candidate,
+          ...(invalidAfterCandidate
+            ? { diagnostic: { kind: "candidate", code: "invalid-role-output" } }
+            : {}),
         }),
       };
     }
+    return {
+      contract: preflight.contract,
+      outcome: transferChildTranscript(outcome, {
+        status: "failed",
+        child: outcome.child,
+        failure: {
+          kind: "protocol-failed",
+          message: "worker completed without a valid structured completion report",
+        },
+        exit: outcome.exit,
+      }),
+    };
   } finally {
     await releaseWriter();
   }

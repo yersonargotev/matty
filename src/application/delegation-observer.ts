@@ -20,11 +20,14 @@ export interface DelegationObserverUpdate {
   details: {
     delegation: DelegationSnapshotEntry;
     taskIndex: number;
+    delegatedTaskId: string;
     code?: "queued";
-    type?: "started" | "identified" | "terminating" | "killing" | "activity";
+    type?: "started" | "identified" | "terminating" | "killing" | "activity" | "live";
     observation?: ChildExecutionActivityObservation;
+    revision?: number;
     progress?:
       | { type: "started" | "identified" | "terminating" | "killing" }
+      | { type: "live"; revision: number }
       | { type: "activity"; observation: ChildExecutionActivityObservation };
   };
 }
@@ -32,6 +35,8 @@ export interface DelegationObserverUpdate {
 export interface DelegationObserver {
   readonly id: DelegationId;
   readonly signal: AbortSignal;
+  taskId(taskIndex: number): string;
+  abort(): void;
   observeProgress(details: unknown): void;
   completeTask(taskIndex: number, status: DelegatedTaskCompletionState): void;
   recordDiagnostic(diagnostic: DelegationDiagnostic): void;
@@ -173,22 +178,28 @@ export function createDelegationObserver(
 
   const emit = (
     taskIndex: number,
-    lifecycle?: "started" | "identified" | "terminating" | "killing",
+    lifecycle?: "started" | "identified" | "terminating" | "killing" | "live",
     queued = false,
     nested = false,
     observation?: ChildExecutionActivityObservation,
+    revision?: number,
   ) => {
     const entry = options.registry.get(accepted.id);
-    if (!entry) return;
+    const task = entry?.tasks[taskIndex];
+    if (!entry || !task) return;
     options.onUpdate?.({
       content: [{ type: "text", text: delegationCard(entry, options.registry.now()) }],
       details: {
         delegation: entry,
         taskIndex,
+        delegatedTaskId: task.id,
         ...(queued ? { code: "queued" as const } : {}),
         ...(lifecycle ? { type: lifecycle } : {}),
         ...(observation ? { type: "activity" as const, observation } : {}),
-        ...(lifecycle && nested ? { progress: { type: lifecycle } } : {}),
+        ...(revision !== undefined ? { revision } : {}),
+        ...(lifecycle && nested
+          ? { progress: lifecycle === "live" ? { type: lifecycle, revision: revision! } : { type: lifecycle } }
+          : {}),
         ...(observation && nested
           ? { progress: { type: "activity" as const, observation } }
           : {}),
@@ -199,6 +210,14 @@ export function createDelegationObserver(
   return {
     id: accepted.id,
     signal: controller.signal,
+    taskId(taskIndex) {
+      const task = options.registry.get(accepted.id)?.tasks[taskIndex];
+      if (!task) throw new Error("Delegated Task ID is unavailable");
+      return task.id;
+    },
+    abort() {
+      controller.abort();
+    },
     observeProgress(value) {
       const details = record(value) ?? {};
       const taskIndex = typeof details.taskIndex === "number" ? details.taskIndex : 0;
@@ -211,7 +230,10 @@ export function createDelegationObserver(
       }
       const child = record(progress.child);
       const type = progress.type;
-      if (type === "activity") {
+      if (type === "live" && Number.isSafeInteger(progress.revision) &&
+          (progress.revision as number) > 0) {
+        emit(taskIndex, "live", false, nested !== undefined, undefined, progress.revision as number);
+      } else if (type === "activity") {
         const observation = safeChildExecutionActivityObservation(progress.observation);
         if (!observation) return;
         options.registry.recordActivity(accepted.id, taskIndex, observation);

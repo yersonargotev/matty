@@ -59,6 +59,10 @@ import {
 } from "../application/delegation-registry.ts";
 import { createDelegationObserver } from "../application/delegation-observer.ts";
 import {
+  DelegationControl,
+  type MattyApplicationControl,
+} from "../application/delegation-control.ts";
+import {
   delegationCard,
   renderDelegationHumanSnapshot,
   renderDelegationJson,
@@ -136,6 +140,8 @@ export interface PiMattyRegistrationOptions {
   diagnosticFailures?: RuntimeFacts["failures"];
   delegationRegistryOptions?: DelegationRegistryOptions;
   hostOutput?: (text: string) => void;
+  /** Explicit test seam for the scheduler-to-resource-cleanup boundary. */
+  resourceCleanupBarrier?: () => Promise<void>;
 }
 
 type WriterRelease = () => void | Promise<void>;
@@ -154,8 +160,10 @@ interface PreparedResearcherExecution {
 
 type SingleTaskExecutionParams = DelegationTaskDeclaration & {
   executionScope?: "standalone" | "group";
+  delegatedTaskId?: string;
   preparedWorker?: PreparedWorkerExecution;
   preparedResearcher?: PreparedResearcherExecution;
+  onChildSettled?: () => void;
 };
 
 const execFileAsync = promisify(execFile);
@@ -721,8 +729,13 @@ export function registerPiMatty(
   pi: ExtensionAPI,
   environment: NodeJS.ProcessEnv = process.env,
   options: PiMattyRegistrationOptions = {},
-): void {
+): MattyApplicationControl {
   const delegationRegistry = new DelegationRegistry(options.delegationRegistryOptions);
+  const delegationControl = new DelegationControl({
+    ...(options.delegationRegistryOptions?.terminalLimit !== undefined
+      ? { terminalLimit: options.delegationRegistryOptions.terminalLimit }
+      : {}),
+  });
   const delegationManagement = createPiDelegationManagement(delegationRegistry);
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
@@ -941,9 +954,11 @@ export function registerPiMatty(
       await researchCleanup;
     };
     pi.on("session_start", (event, context) => {
+      delegationControl.reset();
       delegationManagement.startSession(event.reason, context);
     });
     pi.on("session_shutdown", async () => {
+      delegationControl.shutdown();
       delegationManagement.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
@@ -1052,6 +1067,25 @@ export function registerPiMatty(
       },
       required: ["requirement", "tasks"],
       additionalProperties: false,
+    };
+
+    const trackRunner = <T extends ReturnType<typeof createChildPiRunner>>(
+      taskId: string | undefined,
+      runner: T,
+      onChildSettled?: () => void,
+    ): T => {
+      if (taskId) delegationControl.attachRunner(taskId, runner);
+      if (onChildSettled) {
+        const run = runner.run.bind(runner);
+        runner.run = async (task, options) => {
+          try {
+            return await run(task, options);
+          } finally {
+            onChildSettled();
+          }
+        };
+      }
+      return runner;
     };
 
     const singleTaskTool = {
@@ -1189,7 +1223,7 @@ export function registerPiMatty(
                 );
               },
               createRunner() {
-                return createChildPiRunner({
+                return trackRunner(params.delegatedTaskId, createChildPiRunner({
                   invocation: workerInvocation,
                   parent: {
                     provider: ctx.model?.provider ?? "",
@@ -1216,7 +1250,7 @@ export function registerPiMatty(
                       },
                     ),
                   },
-                });
+                }), params.onChildSettled);
               },
             },
             progressOptions as never,
@@ -1295,7 +1329,7 @@ export function registerPiMatty(
                   web: webState,
                 },
                 createRunner() {
-                  return createChildPiRunner({
+                  return trackRunner(params.delegatedTaskId, createChildPiRunner({
                     invocation: researcherInvocation,
                     parent: {
                       provider: ctx.model?.provider ?? "",
@@ -1316,7 +1350,7 @@ export function registerPiMatty(
                         { contract, scope },
                       ),
                     },
-                  });
+                  }), params.onChildSettled);
                 },
                 async reportDelivered() {
                   try {
@@ -1378,7 +1412,7 @@ export function registerPiMatty(
                 return await reviewCommitsAvailable(ctx.cwd, scope);
               },
               createRunner() {
-                return createChildPiRunner({
+                return trackRunner(params.delegatedTaskId, createChildPiRunner({
                   invocation: inspectionInvocation,
                   parent: {
                     provider: ctx.model?.provider ?? "",
@@ -1397,7 +1431,7 @@ export function registerPiMatty(
                       role,
                     ),
                   },
-                });
+                }), params.onChildSettled);
               },
             },
             {
@@ -1471,12 +1505,38 @@ export function registerPiMatty(
           ...(signal ? { signal } : {}),
           ...(onUpdate ? { onUpdate } : {}),
         });
+        const declaredTasks = "role" in params ? [params] : params.tasks;
+        const requirement = "role" in params ? "required" : params.requirement;
+        delegationControl.open(
+          observer.id,
+          requirement,
+          declaredTasks.map((_, taskIndex) => observer.taskId(taskIndex)),
+          () => observer.abort(),
+        );
+        let controlCompleted = false;
+        const beginFreeze = (): void => {
+          void delegationControl.freeze(observer.id).catch(() => {
+            // Session shutdown may discard control state while a child is settling.
+          });
+        };
+        const completeControl = (result: unknown): unknown => {
+          const completed = delegationControl.complete(observer.id, result);
+          controlCompleted = true;
+          return completed;
+        };
+        const failAndCompleteControl = (): void => {
+          beginFreeze();
+          if (!controlCompleted) {
+            observer.fail();
+            completeControl(Object.freeze({ status: "failed" }));
+          }
+        };
         const finishResult = <T extends { details?: unknown; content?: unknown }>(result: T): T => {
           const finished = observer.finish(result.details);
           if (finished.entry && isUnknownRecord(finished.safeDetails)) {
             resultCards.set(finished.safeDetails, finished.entry);
           }
-          return {
+          const terminal = {
             ...result,
             details: finished.safeDetails,
             ...(Array.isArray(result.content)
@@ -1488,18 +1548,26 @@ export function registerPiMatty(
               }
               : {}),
           };
+          return completeControl(terminal) as T;
         };
         if ("role" in params) {
           try {
-            return finishResult(await singleTaskTool.execute(
+            const result = await singleTaskTool.execute(
               toolCallId,
-              params,
+              {
+                ...params,
+                delegatedTaskId: observer.taskId(0),
+                onChildSettled: beginFreeze,
+              },
               observer.signal,
               (update) => observer.observeProgress(update.details),
               ctx,
-            ));
+            );
+            // Preflight-only executions have no child boundary to trigger this callback.
+            beginFreeze();
+            return finishResult(result);
           } catch (error) {
-            observer.fail();
+            failAndCompleteControl();
             throw error;
           }
         }
@@ -1532,7 +1600,8 @@ export function registerPiMatty(
         >();
         const result = await (async () => {
           try {
-            return await runDelegationGroup(contract, {
+            try {
+              const scheduled = await runDelegationGroup(contract, {
               async preflight(task, taskIndex) {
                 if (
                   !ctx.model ||
@@ -1705,6 +1774,7 @@ export function registerPiMatty(
                   {
                     ...task,
                     executionScope: "group",
+                    delegatedTaskId: observer.taskId(taskIndex),
                     ...(preparedWorker ? { preparedWorker } : {}),
                     ...(preparedResearcher ? { preparedResearcher } : {}),
                   },
@@ -1741,8 +1811,19 @@ export function registerPiMatty(
               onDiagnostic(diagnostic) {
                 observer.recordDiagnostic(diagnostic);
               },
+              onTaskAbort(taskIndex, abort) {
+                delegationControl.attachAbort(observer.taskId(taskIndex), abort);
+              },
             });
+              // Close only after every scheduled/accepted group interaction has settled.
+              beginFreeze();
+              return scheduled;
+            } catch (error) {
+              beginFreeze();
+              throw error;
+            }
           } finally {
+            await options.resourceCleanupBarrier?.();
             await Promise.all(
               [...preparedWorkers.values()].map(async (preparation) => {
                 try {
@@ -1764,15 +1845,23 @@ export function registerPiMatty(
               }),
             );
           }
-        })();
-        return finishResult({
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          details: result,
-          isError:
-            result.status === "blocked" ||
-            result.status === "failed" ||
-            result.status === "cancelled",
+        })().catch((error: unknown) => {
+          failAndCompleteControl();
+          throw error;
         });
+        try {
+          return finishResult({
+            content: [{ type: "text", text: JSON.stringify(result) }],
+            details: result,
+            isError:
+              result.status === "blocked" ||
+              result.status === "failed" ||
+              result.status === "cancelled",
+          });
+        } catch (error) {
+          failAndCompleteControl();
+          throw error;
+        }
       },
     } as never);
   }
@@ -1807,6 +1896,7 @@ export function registerPiMatty(
       ),
     },
   });
+  return delegationControl;
 }
 
 export default async function mattyExtension(pi: ExtensionAPI): Promise<void> {

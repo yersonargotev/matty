@@ -807,9 +807,12 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     success.progress.slice(0, 2).map((progress) => progress.progress.type),
     ["started", "identified"],
   );
-  const activities = success.progress.slice(2).map((progress) => progress.progress);
+  const streamed = success.progress.slice(2).map((progress) => progress.progress);
+  const activities = streamed.filter((progress) => progress.type === "activity");
+  const live = streamed.filter((progress) => progress.type === "live");
   assert.ok(activities.length > 0, JSON.stringify(success.progress));
-  assert.ok(activities.every((progress) => progress.type === "activity"));
+  assert.ok(live.every((progress) => Number.isSafeInteger(progress.revision)));
+  assert.ok(streamed.every((progress) => progress.type === "activity" || progress.type === "live"));
   assert.ok(activities.every((progress) =>
     progress.observation?.schemaVersion === 1 &&
     Number.isSafeInteger(progress.observation.sequence) &&
