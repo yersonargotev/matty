@@ -9,6 +9,8 @@ import {
   createChildPiRunner,
   type DelegatedTaskProgress,
 } from "../src/application/child-pi-runtime.ts";
+import { WORKER_TOOLS } from "../src/domain/capability-contract.ts";
+import { CHILD_EXECUTION_TOOL_CATEGORIES_V1 } from "../src/domain/child-execution-activity.ts";
 
 const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -47,6 +49,16 @@ function createRunner(
     terminationGraceMs,
   });
 }
+
+test("schema-v1 activity categories are an explicit immutable protocol allowlist", () => {
+  assert.equal(Object.isFrozen(CHILD_EXECUTION_TOOL_CATEGORIES_V1), true);
+  assert.notEqual(CHILD_EXECUTION_TOOL_CATEGORIES_V1, WORKER_TOOLS);
+  assert.deepEqual(CHILD_EXECUTION_TOOL_CATEGORIES_V1, [
+    "read", "write", "edit", "grep", "find", "ls", "bash",
+    "web_search", "source_check", "fetch_content", "get_search_content",
+    "research_file", "other",
+  ]);
+});
 
 test("runs a distinct child with explicit inherited context and ordered progress", async () => {
   const progress: DelegatedTaskProgress[] = [];
@@ -192,12 +204,19 @@ test("reports real Pi tool execution completion as ordered progress", async () =
     progress.map((event) => event.type),
     ["started", "identified", "activity", "activity", "activity"],
   );
+  const observations = progress.flatMap((event) =>
+    event.type === "activity" ? [event.observation] : []
+  );
+  assert.deepEqual(observations.map((observation) => observation.sequence), [1, 2, 3]);
+  assert.ok(observations.every((observation) =>
+    observation.schemaVersion === 1 && Number.isFinite(observation.observedAt)
+  ));
   assert.deepEqual(
-    progress.flatMap((event) => event.type === "activity" ? [event.activity] : []),
+    observations.map((observation) => observation.summary),
     [
       { schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" },
       { schemaVersion: 1, kind: "tool-completed", tool: "bash", outcome: "succeeded" },
-      { schemaVersion: 1, kind: "assistant-completed" },
+      { schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" },
     ],
   );
 });
@@ -210,16 +229,29 @@ test("redacts sensitive activity fields and categorizes valid unknown tools", as
 
   assert.equal(outcome.status, "succeeded");
   assert.deepEqual(
-    progress.flatMap((event) => event.type === "activity" ? [event.activity] : []),
+    progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
     [
       { schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" },
       { schemaVersion: 1, kind: "tool-completed", tool: "other", outcome: "failed" },
-      { schemaVersion: 1, kind: "assistant-completed" },
+      { schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" },
     ],
   );
   assert.doesNotMatch(
     JSON.stringify(progress),
     /secret|tool-call|private|path|command|prompt|response|result|transcript/i,
+  );
+});
+
+test("reports error assistant completion as failed activity", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("failure", {
+    onProgress(event) { progress.push(event); },
+  });
+
+  assert.equal(outcome.status, "failed");
+  assert.deepEqual(
+    progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
+    [{ schemaVersion: 1, kind: "assistant-completed", outcome: "failed" }],
   );
 });
 

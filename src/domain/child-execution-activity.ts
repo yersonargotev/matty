@@ -1,29 +1,40 @@
-import {
-  RESEARCHER_TOOLS,
-  WORKER_TOOLS,
-} from "./capability-contract.ts";
-
 export const CHILD_EXECUTION_ACTIVITY_SCHEMA_VERSION = 1 as const;
-
-const knownToolNames = new Set<string>([
-  ...WORKER_TOOLS,
-  ...RESEARCHER_TOOLS,
-]);
-const safeToolCategories = new Set<string>([...knownToolNames, "other"]);
-
-export type ChildExecutionToolCategory =
-  | (typeof WORKER_TOOLS)[number]
-  | (typeof RESEARCHER_TOOLS)[number]
-  | "other";
+export const CHILD_EXECUTION_ACTIVITY_OBSERVATION_SCHEMA_VERSION = 1 as const;
 
 /**
- * The only Child Execution activity data permitted to cross into parent-facing
- * progress and session state. Additions require a schema version change.
+ * Schema-v1 categories are a protocol allowlist. They must not inherit changes
+ * from mutable role tool surfaces without an explicit activity schema change.
  */
+export const CHILD_EXECUTION_TOOL_CATEGORIES_V1 = Object.freeze([
+  "read",
+  "write",
+  "edit",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "web_search",
+  "source_check",
+  "fetch_content",
+  "get_search_content",
+  "research_file",
+  "other",
+] as const);
+
+const safeToolCategories = new Set<string>(CHILD_EXECUTION_TOOL_CATEGORIES_V1);
+const knownToolNames = new Set<string>(
+  CHILD_EXECUTION_TOOL_CATEGORIES_V1.filter((tool) => tool !== "other"),
+);
+
+export type ChildExecutionToolCategory =
+  (typeof CHILD_EXECUTION_TOOL_CATEGORIES_V1)[number];
+
+/** The only event-derived activity detail allowed into parent state. */
 export type ChildExecutionActivitySummary =
   | {
       schemaVersion: typeof CHILD_EXECUTION_ACTIVITY_SCHEMA_VERSION;
       kind: "assistant-completed";
+      outcome: "succeeded" | "failed";
     }
   | {
       schemaVersion: typeof CHILD_EXECUTION_ACTIVITY_SCHEMA_VERSION;
@@ -31,6 +42,14 @@ export type ChildExecutionActivitySummary =
       tool: ChildExecutionToolCategory;
       outcome: "succeeded" | "failed";
     };
+
+/** Closed, versioned ordering envelope attached to one task by the registry. */
+export interface ChildExecutionActivityObservation {
+  schemaVersion: typeof CHILD_EXECUTION_ACTIVITY_OBSERVATION_SCHEMA_VERSION;
+  sequence: number;
+  observedAt: number;
+  summary: ChildExecutionActivitySummary;
+}
 
 export type ChildExecutionActivityClassification =
   | { recognized: false }
@@ -57,8 +76,11 @@ export function safeChildExecutionActivitySummary(
 ): ChildExecutionActivitySummary | undefined {
   const candidate = record(value);
   if (candidate?.schemaVersion !== 1) return undefined;
-  if (candidate.kind === "assistant-completed") {
-    return { schemaVersion: 1, kind: "assistant-completed" };
+  if (
+    candidate.kind === "assistant-completed" &&
+    (candidate.outcome === "succeeded" || candidate.outcome === "failed")
+  ) {
+    return { schemaVersion: 1, kind: "assistant-completed", outcome: candidate.outcome };
   }
   if (
     candidate.kind === "tool-completed" &&
@@ -76,6 +98,29 @@ export function safeChildExecutionActivitySummary(
   return undefined;
 }
 
+export function safeChildExecutionActivityObservation(
+  value: unknown,
+): ChildExecutionActivityObservation | undefined {
+  const candidate = record(value);
+  const summary = safeChildExecutionActivitySummary(candidate?.summary);
+  if (
+    candidate?.schemaVersion !== 1 ||
+    !Number.isSafeInteger(candidate.sequence) ||
+    (candidate.sequence as number) < 1 ||
+    typeof candidate.observedAt !== "number" ||
+    !Number.isSafeInteger(candidate.observedAt) ||
+    candidate.observedAt < 0 ||
+    candidate.observedAt > 8_640_000_000_000_000 ||
+    !summary
+  ) return undefined;
+  return {
+    schemaVersion: 1,
+    sequence: candidate.sequence as number,
+    observedAt: candidate.observedAt,
+    summary,
+  };
+}
+
 /** Classify a raw Pi event while intentionally copying no raw event fields. */
 export function classifyChildExecutionActivity(
   value: unknown,
@@ -86,10 +131,13 @@ export function classifyChildExecutionActivity(
   if (event.type === "message_end") {
     const message = record(event.message);
     if (message?.role !== "assistant") return { recognized: false };
+    const outcome = message.stopReason === "error" || message.stopReason === "aborted"
+      ? "failed" as const
+      : "succeeded" as const;
     return {
       recognized: true,
       valid: true,
-      summary: { schemaVersion: 1, kind: "assistant-completed" },
+      summary: { schemaVersion: 1, kind: "assistant-completed", outcome },
     };
   }
 

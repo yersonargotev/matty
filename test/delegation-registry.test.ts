@@ -7,7 +7,7 @@ import {
   type DelegationState,
 } from "../src/application/delegation-registry.ts";
 import {
-  delegatedTaskLifecycleTimeline,
+  delegatedTaskTimeline,
   delegationCard,
   renderDelegationConsole,
   renderDelegationHumanSnapshot,
@@ -168,7 +168,7 @@ test("registry releases an active slot when a task completes before queue promot
     endedAt: 2_000,
     pid: 40,
     resultSummary: "Succeeded",
-    activitySummaries: [],
+    activities: [],
   });
 
   registry.record(entry.id, { type: "started", taskIndex: 4, pid: 44 });
@@ -236,43 +236,76 @@ test("registry tracks bounded queue positions and clears them as tasks are promo
   );
 });
 
-test("registry retains ordered closed activity summaries on the correct task and Delegation", () => {
+test("registry retains ordered closed activity observations on the correct task and Delegation", () => {
   const registry = new DelegationRegistry({ idFactory: () => uuid(1), now: () => 1_000 });
   const entry = registry.accept({
     tasks: [{ role: "explorer" }, { role: "worker" }],
   });
   registry.recordActivity(entry.id, 1, {
     schemaVersion: 1,
-    kind: "tool-completed",
-    tool: "edit",
-    outcome: "succeeded",
-    path: "/secret/path",
-    result: "secret result",
+    sequence: 1,
+    observedAt: 1_200,
+    summary: {
+      schemaVersion: 1,
+      kind: "tool-completed",
+      tool: "edit",
+      outcome: "succeeded",
+      path: "/secret/path",
+      result: "secret result",
+    },
+    transcript: "secret transcript",
   });
   registry.recordActivity(entry.id, 0, {
     schemaVersion: 1,
-    kind: "assistant-completed",
-    response: "secret response",
+    sequence: 1,
+    observedAt: 1_100,
+    summary: {
+      schemaVersion: 1,
+      kind: "assistant-completed",
+      outcome: "succeeded",
+      response: "secret response",
+    },
   });
   registry.recordActivity(entry.id, 0, {
     schemaVersion: 99,
-    kind: "assistant-completed",
+    sequence: 2,
+    observedAt: 1_300,
+    summary: { schemaVersion: 1, kind: "assistant-completed", outcome: "failed" },
     prompt: "secret prompt",
   });
 
   const snapshot = registry.snapshot();
-  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activitySummaries), [
-    [{ schemaVersion: 1, kind: "assistant-completed" }],
-    [{ schemaVersion: 1, kind: "tool-completed", tool: "edit", outcome: "succeeded" }],
+  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activities), [
+    [{ schemaVersion: 1, sequence: 1, observedAt: 1_100, summary: {
+      schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded",
+    } }],
+    [{ schemaVersion: 1, sequence: 1, observedAt: 1_200, summary: {
+      schemaVersion: 1, kind: "tool-completed", tool: "edit", outcome: "succeeded",
+    } }],
   ]);
-  assert.deepEqual(snapshot.delegations[0]?.activitySummaries, [
-    {
-      taskIndex: 1,
-      summary: { schemaVersion: 1, kind: "tool-completed", tool: "edit", outcome: "succeeded" },
-    },
-    { taskIndex: 0, summary: { schemaVersion: 1, kind: "assistant-completed" } },
-  ]);
-  assert.doesNotMatch(JSON.stringify(snapshot), /secret|path|result|response|prompt/i);
+  assert.deepEqual(snapshot.delegations[0]?.activities.map((activity) => activity.taskIndex), [1, 0]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /secret|path|result|response|prompt|transcript/i);
+});
+
+test("activity retention is bounded per task and preserves deterministic recent ordering", () => {
+  const registry = new DelegationRegistry({
+    idFactory: () => uuid(1),
+    now: () => 1_000,
+    activityLimitPerTask: 3,
+  });
+  const entry = registry.accept({ tasks: [{ role: "worker" }] });
+  for (let sequence = 1; sequence <= 5; sequence += 1) {
+    registry.recordActivity(entry.id, 0, {
+      schemaVersion: 1,
+      sequence,
+      observedAt: 1_000 + sequence,
+      summary: { schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" },
+    });
+  }
+
+  const retained = registry.get(entry.id)!;
+  assert.deepEqual(retained.tasks[0]?.activities.map((activity) => activity.sequence), [3, 4, 5]);
+  assert.deepEqual(retained.activities.map((activity) => activity.observation.sequence), [3, 4, 5]);
 });
 
 test("expanded task details show safe lifecycle timing, duration, diagnostics, and results", () => {
@@ -299,7 +332,7 @@ test("expanded task details show safe lifecycle timing, duration, diagnostics, a
     selectedId: entry.id,
     expandedIds: new Set([entry.id]),
   }, now).join("\n");
-  assert.match(lines, /Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(lines, /Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
   assert.match(lines, /2026-02-01T12:00:01\.000Z · started/);
   assert.match(lines, /2026-02-01T12:00:03\.500Z · failed/);
   assert.doesNotMatch(lines, /^      (Queued|Started|Ended):/m);
@@ -317,33 +350,41 @@ test("each expanded Delegated Task has an ordered lifecycle timeline from safe R
   now += 3_000;
   registry.record(entry.id, { type: "started", taskIndex: 1, pid: 42 });
   now += 2_000;
+  registry.recordActivity(entry.id, 1, {
+    schemaVersion: 1,
+    sequence: 1,
+    observedAt: now - 1_000,
+    summary: { schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" },
+  });
   registry.record(entry.id, { type: "terminating", taskIndex: 0, pid: 43, runId: "safe-id" });
 
   const tasks = registry.get(entry.id)!.tasks;
-  assert.deepEqual(delegatedTaskLifecycleTimeline(tasks[0]!), [
-    "2026-02-01T12:00:00.000Z · queued",
-    "2026-02-01T12:00:05.000Z · started",
-    "Current · cancelling",
+  assert.deepEqual(delegatedTaskTimeline(tasks[0]!), [
+    "Lifecycle · 2026-02-01T12:00:00.000Z · queued",
+    "Lifecycle · 2026-02-01T12:00:05.000Z · started",
+    "Lifecycle · Current · cancelling",
   ]);
-  assert.deepEqual(delegatedTaskLifecycleTimeline(tasks[1]!), [
-    "2026-02-01T12:00:00.000Z · queued",
-    "2026-02-01T12:00:03.000Z · started",
-    "Current · running",
+  assert.deepEqual(delegatedTaskTimeline(tasks[1]!), [
+    "Lifecycle · 2026-02-01T12:00:00.000Z · queued",
+    "Lifecycle · 2026-02-01T12:00:03.000Z · started",
+    "Activity · 2026-02-01T12:00:04.000Z · #1 · Assistant completed · succeeded",
+    "Lifecycle · Current · running",
   ]);
 
   now += 1_000;
   registry.finish(entry.id, "succeeded");
-  assert.deepEqual(delegatedTaskLifecycleTimeline(registry.get(entry.id)!.tasks[1]!), [
-    "2026-02-01T12:00:00.000Z · queued",
-    "2026-02-01T12:00:03.000Z · started",
-    "2026-02-01T12:00:06.000Z · succeeded",
+  assert.deepEqual(delegatedTaskTimeline(registry.get(entry.id)!.tasks[1]!), [
+    "Lifecycle · 2026-02-01T12:00:00.000Z · queued",
+    "Lifecycle · 2026-02-01T12:00:03.000Z · started",
+    "Activity · 2026-02-01T12:00:04.000Z · #1 · Assistant completed · succeeded",
+    "Lifecycle · 2026-02-01T12:00:06.000Z · succeeded",
   ]);
   const expanded = renderDelegationConsole(registry.snapshot(), {
     selectedId: entry.id,
     expandedIds: new Set([entry.id]),
   }, now).join("\n");
-  assert.match(expanded, /1\. explorer[\s\S]*Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
-  assert.match(expanded, /2\. designer[\s\S]*Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(expanded, /1\. explorer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(expanded, /2\. designer[\s\S]*Timeline:\n        Lifecycle · 2026-02-01T12:00:00\.000Z · queued/);
   assert.doesNotMatch(expanded, /prompt|command|response|transcript/i);
 });
 

@@ -1,7 +1,7 @@
 import { isMattyRole } from "../domain/capability-contract.ts";
 import {
-  safeChildExecutionActivitySummary,
-  type ChildExecutionActivitySummary,
+  safeChildExecutionActivityObservation,
+  type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
 import type { DelegationDiagnostic, DelegationPreflightReason } from "./delegation-scheduler.ts";
 import {
@@ -21,10 +21,10 @@ export interface DelegationObserverUpdate {
     taskIndex: number;
     code?: "queued";
     type?: "started" | "identified" | "terminating" | "killing" | "activity";
-    activity?: ChildExecutionActivitySummary;
+    observation?: ChildExecutionActivityObservation;
     progress?:
       | { type: "started" | "identified" | "terminating" | "killing" }
-      | { type: "activity"; activity: ChildExecutionActivitySummary };
+      | { type: "activity"; observation: ChildExecutionActivityObservation };
   };
 }
 
@@ -175,7 +175,7 @@ export function createDelegationObserver(
     lifecycle?: "started" | "identified" | "terminating" | "killing",
     queued = false,
     nested = false,
-    activity?: ChildExecutionActivitySummary,
+    observation?: ChildExecutionActivityObservation,
   ) => {
     const entry = options.registry.get(accepted.id);
     if (!entry) return;
@@ -186,10 +186,10 @@ export function createDelegationObserver(
         taskIndex,
         ...(queued ? { code: "queued" as const } : {}),
         ...(lifecycle ? { type: lifecycle } : {}),
-        ...(activity ? { type: "activity" as const, activity } : {}),
+        ...(observation ? { type: "activity" as const, observation } : {}),
         ...(lifecycle && nested ? { progress: { type: lifecycle } } : {}),
-        ...(activity && nested
-          ? { progress: { type: "activity" as const, activity } }
+        ...(observation && nested
+          ? { progress: { type: "activity" as const, observation } }
           : {}),
       },
     });
@@ -211,10 +211,10 @@ export function createDelegationObserver(
       const child = record(progress.child);
       const type = progress.type;
       if (type === "activity") {
-        const activity = safeChildExecutionActivitySummary(progress.activity);
-        if (!activity) return;
-        options.registry.recordActivity(accepted.id, taskIndex, activity);
-        emit(taskIndex, undefined, false, nested !== undefined, activity);
+        const observation = safeChildExecutionActivityObservation(progress.observation);
+        if (!observation) return;
+        options.registry.recordActivity(accepted.id, taskIndex, observation);
+        emit(taskIndex, undefined, false, nested !== undefined, observation);
       } else if (type === "started" && typeof child?.pid === "number") {
         options.registry.record(accepted.id, { type, taskIndex, pid: child.pid });
         emit(taskIndex, type, false, nested !== undefined);

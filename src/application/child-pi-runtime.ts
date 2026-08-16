@@ -8,7 +8,7 @@ import { isAbsolute } from "node:path";
 
 import {
   classifyChildExecutionActivity,
-  type ChildExecutionActivitySummary,
+  type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
 
 export type PiThinkingLevel =
@@ -58,8 +58,7 @@ export type DelegatedTaskProgress =
   | {
       type: "activity";
       child: ChildIdentity;
-      sequence: number;
-      activity: ChildExecutionActivitySummary;
+      observation: ChildExecutionActivityObservation;
     }
   | {
       type: "terminating";
@@ -447,8 +446,12 @@ async function superviseChild(
         emitProgress(options.onProgress, {
           type: "activity",
           child: identity,
-          sequence,
-          activity: activity.summary,
+          observation: {
+            schemaVersion: 1,
+            sequence,
+            observedAt: Date.now(),
+            summary: activity.summary,
+          },
         });
       }
     };

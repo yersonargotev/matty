@@ -781,15 +781,18 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   assert.ok(activities.length > 0, JSON.stringify(success.progress));
   assert.ok(activities.every((progress) => progress.type === "activity"));
   assert.ok(activities.every((progress) =>
-    progress.activity?.schemaVersion === 1 &&
-    (progress.activity.kind === "assistant-completed" ||
-      (progress.activity.kind === "tool-completed" &&
-        ["read", "grep", "find", "ls", "bash", "other"].includes(progress.activity.tool) &&
-        ["succeeded", "failed"].includes(progress.activity.outcome)))
+    progress.observation?.schemaVersion === 1 &&
+    Number.isSafeInteger(progress.observation.sequence) &&
+    Number.isSafeInteger(progress.observation.observedAt) &&
+    progress.observation.summary?.schemaVersion === 1 &&
+    (progress.observation.summary.kind === "assistant-completed" ||
+      (progress.observation.summary.kind === "tool-completed" &&
+        ["read", "grep", "find", "ls", "bash", "other"].includes(progress.observation.summary.tool) &&
+        ["succeeded", "failed"].includes(progress.observation.summary.outcome)))
   ), JSON.stringify(activities));
   assert.deepEqual(
-    success.progress.at(-1)?.delegation.tasks[0].activitySummaries,
-    activities.map((progress) => progress.activity),
+    success.progress.at(-1)?.delegation.tasks[0].activities,
+    activities.map((progress) => progress.observation),
   );
   assert.ok(
     success.progress.every((progress) =>

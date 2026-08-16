@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { realpath } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
+import { createChildPiRunner } from "../src/application/child-pi-runtime.ts";
 import { createDelegationObserver } from "../src/application/delegation-observer.ts";
 import { DelegationRegistry } from "../src/application/delegation-registry.ts";
 import {
@@ -11,6 +15,9 @@ import {
 } from "../src/application/delegation-presentation.ts";
 
 const id = "aaaaaaaa-0000-4000-8000-000000000001";
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const fixture = resolve(repositoryRoot, "test/fixtures/child-pi-fixture.mjs");
+const canonicalRoot = await realpath(repositoryRoot);
 
 function blocked(unmet: string[]) {
   return {
@@ -120,17 +127,21 @@ test("observer exposes only ordered redacted activity across updates and present
     progress: {
       type: "activity",
       child: { pid: 42, runId: secret },
-      sequence: 1,
-      activity: {
+      observation: {
         schemaVersion: 1,
-        kind: "tool-completed",
-        tool: "read",
-        outcome: "succeeded",
-        args: secret,
-        command: secret,
-        path: secret,
-        rawResult: secret,
-        unknown: secret,
+        sequence: 1,
+        observedAt: 1_500,
+        summary: {
+          schemaVersion: 1,
+          kind: "tool-completed",
+          tool: "read",
+          outcome: "succeeded",
+          args: secret,
+          command: secret,
+          path: secret,
+          rawResult: secret,
+          unknown: secret,
+        },
       },
     },
   });
@@ -138,10 +149,16 @@ test("observer exposes only ordered redacted activity across updates and present
     taskIndex: 0,
     progress: {
       type: "activity",
-      activity: {
+      observation: {
         schemaVersion: 1,
-        kind: "assistant-completed",
-        response: secret,
+        sequence: 1,
+        observedAt: 1_400,
+        summary: {
+          schemaVersion: 1,
+          kind: "assistant-completed",
+          outcome: "succeeded",
+          response: secret,
+        },
       },
     },
   });
@@ -160,14 +177,76 @@ test("observer exposes only ordered redacted activity across updates and present
     consoleOutput,
   });
 
-  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activitySummaries), [
-    [{ schemaVersion: 1, kind: "assistant-completed" }],
-    [{ schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" }],
+  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activities), [
+    [{ schemaVersion: 1, sequence: 1, observedAt: 1_400, summary: {
+      schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded",
+    } }],
+    [{ schemaVersion: 1, sequence: 1, observedAt: 1_500, summary: {
+      schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded",
+    } }],
   ]);
-  assert.match(consoleOutput, /Lifecycle:[\s\S]*Activity:/);
-  assert.match(consoleOutput, /Assistant completed/);
+  assert.match(consoleOutput, /Timeline:[\s\S]*Lifecycle ·[\s\S]*Activity ·/);
+  assert.match(consoleOutput, /Assistant completed · succeeded/);
   assert.match(consoleOutput, /Tool read completed · succeeded/);
   assert.doesNotMatch(surfaces, /SENSITIVE|args|command|path|prompt|response|rawResult|transcript|tool-id/);
+});
+
+test("sensitive child fixture is sanitized through runtime, observer, registry, and every renderer", async () => {
+  const updates: unknown[] = [];
+  const registry = new DelegationRegistry({ idFactory: () => id });
+  const observer = createDelegationObserver({
+    registry,
+    declaration: { tasks: [{ role: "worker", task: "fixture task sentinel" }] },
+    onUpdate(update) { updates.push(update); },
+  });
+  const runner = createChildPiRunner({
+    invocation: { command: process.execPath, arguments: [fixture] },
+    parent: {
+      provider: "controlled-provider",
+      model: "controlled-model",
+      thinking: "high",
+      cwd: canonicalRoot,
+    },
+    authentication: {
+      provider: "controlled-provider",
+      environment: { PATH: process.env.PATH, MATTY_TEST_AUTH: "fixture-auth-sentinel" },
+    },
+  });
+
+  const outcome = await runner.run("sensitive-activity", {
+    signal: observer.signal,
+    onProgress(progress) { observer.observeProgress({ taskIndex: 0, progress }); },
+  });
+  assert.equal(outcome.status, "succeeded");
+  const sensitiveDiagnostic = {
+    kind: "delegation" as const,
+    code: "child-failed" as const,
+    taskIndex: 0,
+    rawResult: "secret raw diagnostic result",
+  };
+  observer.recordDiagnostic(sensitiveDiagnostic);
+  const snapshot = registry.snapshot();
+  assert.deepEqual(snapshot.delegations[0]?.diagnostics, [
+    { code: "child-failed", taskIndex: 0 },
+  ]);
+  const state = { selectedId: observer.id, expandedIds: new Set([observer.id]) };
+  const surfaces = [
+    JSON.stringify(updates),
+    JSON.stringify(snapshot),
+    renderDelegationJson(snapshot),
+    renderDelegationHumanSnapshot(snapshot),
+    renderDelegationConsole(snapshot, state).join("\n"),
+    renderDelegationWidget(snapshot).join("\n"),
+  ];
+
+  for (const surface of surfaces) {
+    assert.doesNotMatch(surface, /secret-tool-call-id|another-secret-id|secret raw tool result|secret raw diagnostic result|secret prompt and transcript|fixture-auth-sentinel/i);
+    assert.doesNotMatch(surface, /"(?:args|command|path|rawResult|response|result|transcript|toolCallId|unknownSensitiveField)"\s*:/i);
+  }
+  assert.deepEqual(
+    snapshot.delegations[0]?.tasks[0]?.activities.map((activity) => activity.sequence),
+    [1, 2, 3],
+  );
 });
 
 test("observer stores only closed standalone preflight reasons", () => {

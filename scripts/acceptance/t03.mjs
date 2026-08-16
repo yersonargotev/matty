@@ -463,8 +463,16 @@ export default function t03Acceptance(pi) {
   assert.equal(success.outcome.status, "succeeded");
   assert.deepEqual(
     success.progress.map((progress) => progress.type),
-    ["started", "identified", "message"],
+    ["started", "identified", "activity"],
   );
+  assert.deepEqual(success.progress[2]?.observation.summary, {
+    schemaVersion: 1,
+    kind: "assistant-completed",
+    outcome: "succeeded",
+  });
+  assert.equal(success.progress[2]?.observation.schemaVersion, 1);
+  assert.equal(success.progress[2]?.observation.sequence, 1);
+  assert.ok(Number.isSafeInteger(success.progress[2]?.observation.observedAt));
   const observed = JSON.parse(success.outcome.output);
   assert.equal(observed.pid, success.outcome.child.pid);
   assert.equal(observed.ppid, rpc.child.pid);
