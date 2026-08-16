@@ -21,6 +21,7 @@ import {
 
 export interface InspectionDelegationExecution {
   availability: CapabilityAvailability;
+  reviewCommitsAvailable?(scope: ReviewScopeContract): Promise<boolean>;
   createRunner(): DelegatedTaskRunner;
 }
 
@@ -170,6 +171,14 @@ export async function runInspectionDelegation(
       scope = reviewScope(options.reviewScope);
     } catch {
       return blockedInspectionDelegation(role, ["valid Review Scope Contract is required"]);
+    }
+    try {
+      if (!execution.reviewCommitsAvailable ||
+          !(await execution.reviewCommitsAvailable(scope))) {
+        return blockedInspectionDelegation(role, ["review-commit-unavailable"]);
+      }
+    } catch {
+      return blockedInspectionDelegation(role, ["review-commit-unavailable"]);
     }
   }
 

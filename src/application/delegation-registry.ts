@@ -110,11 +110,11 @@ const terminalStates = new Set<DelegationState>([
 const diagnosticCodes = new Set<DelegationDiagnosticCode>([
   "queued", "preflight-failed", "skipped", "task-failed", "cancelled",
   "partial-failure", "child-failed", "protocol-failed", "child-exited",
-  "missing-research-report",
+  "missing-research-report", "invalid-role-output",
 ]);
 const preflightReasons = new Set<DelegationPreflightReason>([
   "authentication-unavailable", "runtime-unavailable", "rules-conflict",
-  "github-unavailable", "web-unavailable", "writer-unavailable",
+  "github-unavailable", "review-commit-unavailable", "web-unavailable", "writer-unavailable",
   "artifact-destination-invalid", "tool-surface-incompatible",
   "capability-unavailable",
 ]);

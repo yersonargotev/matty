@@ -11,6 +11,7 @@ export const DELEGATION_LEAF_FAILURE_CODES = [
   "protocol-failed",
   "child-exited",
   "missing-research-report",
+  "invalid-role-output",
 ] as const;
 
 export type DelegationLeafFailureCode =
@@ -46,6 +47,7 @@ export type DelegationPreflightReason =
   | "runtime-unavailable"
   | "rules-conflict"
   | "github-unavailable"
+  | "review-commit-unavailable"
   | "web-unavailable"
   | "writer-unavailable"
   | "artifact-destination-invalid"

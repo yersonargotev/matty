@@ -378,6 +378,7 @@ test("scheduler preserves closed-allowlist child failure codes", async () => {
       "protocol-failed",
       "child-exited",
       "missing-research-report",
+      "invalid-role-output",
     ] as const
   ) {
     const result = await runDelegationGroup(requiredGroup(1), {

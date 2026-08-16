@@ -23,6 +23,9 @@ function availableExecution(
       inspectionGuard: true,
       github: { available: true, authenticated: true },
     },
+    async reviewCommitsAvailable() {
+      return true;
+    },
     createRunner() {
       return runner;
     },
@@ -132,6 +135,43 @@ test("reviewer rejects findings outside exact requirements or targeting excluded
   }
 });
 
+test("reviewer rejects an unresolved review commit before runner construction", async () => {
+  let runnerConstructed = false;
+  const terminal = await runInspectionDelegation(
+    "reviewer",
+    "Review",
+    {
+      ...availableExecution({ async run() { throw new Error("must not run"); } }),
+      async reviewCommitsAvailable() {
+        return false;
+      },
+      createRunner() {
+        runnerConstructed = true;
+        throw new Error("must not create a runner");
+      },
+    },
+    { reviewScope: {
+      schemaVersion: 1,
+      issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+      requirements: ["Issue 9"],
+      outOfScope: [],
+      baseSha: commitSha("0000000000000000000000000000000000000000"),
+      candidateSha: commitSha("1111111111111111111111111111111111111111"),
+      axes: ["spec"],
+    } },
+  );
+
+  assert.equal(runnerConstructed, false);
+  assert.deepEqual(terminal.outcome, {
+    status: "blocked",
+    diagnostic: {
+      kind: "capability-preflight",
+      contractId: "delegate-reviewer",
+      unmet: ["review-commit-unavailable"],
+    },
+  });
+});
+
 test("reviewer capability preflight completes before runner construction", async () => {
   const blocked = await runInspectionDelegation("reviewer", "Review", {
     availability: {
@@ -139,6 +179,9 @@ test("reviewer capability preflight completes before runner construction", async
       independentRuntime: true,
       inspectionGuard: true,
       github: { available: true, authenticated: false },
+    },
+    async reviewCommitsAvailable() {
+      throw new Error("capability preflight must happen first");
     },
     createRunner() {
       throw new Error("must not create a runner");

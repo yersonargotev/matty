@@ -95,6 +95,7 @@ function classifyPreflightReason(unmet: unknown): DelegationPreflightReason {
     ? unmet.filter((value): value is string => typeof value === "string")
     : [];
   const matches = (pattern: RegExp) => values.some((value) => pattern.test(value));
+  if (matches(/review-commit-unavailable/i)) return "review-commit-unavailable";
   if (matches(/GitHub CLI|github-unavailable/i)) return "github-unavailable";
   if (matches(/authentication is unavailable|authentication-unavailable/i)) {
     return "authentication-unavailable";
