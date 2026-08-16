@@ -23,6 +23,10 @@ export interface DiagnosticContext {
   mode?: "tui" | "rpc" | "json" | "print";
   openDelegations?: () => Promise<void>;
   openDelegatedTask?: (displayId: string) => Promise<boolean>;
+  interactWithDelegatedTask?: (
+    delegatedTaskId: string,
+    interaction: { type: "steer" | "follow_up"; message: string },
+  ) => Promise<{ status: string; code?: string; commandId?: string }>;
   delegationSnapshot?: () => { human: string; json: string; jsonEvent: string };
   emitOutput?: (text: string) => void;
   activeModel?: {
@@ -164,6 +168,28 @@ export function registerMatty(
         return;
       }
 
+      const interactionMatch = /^(steer|follow-up) ([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}) (.+)$/is.exec(rawArgs.trim());
+      if (interactionMatch) {
+        if (!context?.interactWithDelegatedTask) {
+          notify("Delegated Task interaction is unavailable", "warning");
+          return;
+        }
+        const result = await context.interactWithDelegatedTask(
+          interactionMatch[2]!.toLowerCase(),
+          {
+            type: interactionMatch[1]!.toLowerCase() === "steer" ? "steer" : "follow_up",
+            message: interactionMatch[3]!,
+          },
+        );
+        notify(
+          result.status === "accepted"
+            ? `${interactionMatch[1] === "steer" ? "Steer" : "Follow up"} accepted for ${interactionMatch[2]}.`
+            : `Interaction rejected: ${result.code ?? "unavailable"}`,
+          result.status === "accepted" ? "info" : "warning",
+        );
+        return;
+      }
+
       const taskMatch = /^task (T-[0-9a-f]{8})$/i.exec(args);
       if (taskMatch) {
         if (context?.mode !== "tui" || !context.openDelegatedTask) {
@@ -197,7 +223,7 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor|delegations> [--json] | /matty task T-<id>", "warning");
+      notify("Usage: /matty <status|doctor|delegations> [--json] | /matty task T-<id> | /matty <steer|follow-up> <exact-task-id> <message>", "warning");
     },
   });
 

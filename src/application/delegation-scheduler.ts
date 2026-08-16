@@ -95,6 +95,66 @@ export type DelegationTaskResult<T> =
       diagnostic: DelegationDiagnostic;
     };
 
+export function boundedChildExecutionScheduler(maxActive: number) {
+  const limit = Math.max(1, Math.trunc(maxActive));
+  let active = 0;
+  const waiting: Array<{
+    signal: AbortSignal | undefined;
+    admit(admitted: boolean): void;
+  }> = [];
+  const release = (): void => {
+    active -= 1;
+    while (waiting.length > 0) {
+      const waiter = waiting.shift()!;
+      if (waiter.signal?.aborted) {
+        waiter.admit(false);
+        continue;
+      }
+      active += 1;
+      waiter.admit(true);
+      return;
+    }
+  };
+  return async <T>(
+    execution: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T | undefined> => {
+    if (signal?.aborted) return undefined;
+    let admitted = false;
+    if (active < limit && waiting.length === 0) {
+      active += 1;
+      admitted = true;
+    } else {
+      admitted = await new Promise<boolean>((resolveWait) => {
+        const waiter = {
+          signal,
+          admit(result: boolean) {
+            signal?.removeEventListener("abort", cancelWait);
+            resolveWait(result);
+          },
+        };
+        const cancelWait = () => {
+          const index = waiting.indexOf(waiter);
+          if (index >= 0) waiting.splice(index, 1);
+          resolveWait(false);
+        };
+        waiting.push(waiter);
+        signal?.addEventListener("abort", cancelWait, { once: true });
+      });
+    }
+    if (!admitted) return undefined;
+    if (signal?.aborted) {
+      release();
+      return undefined;
+    }
+    try {
+      return await execution();
+    } finally {
+      release();
+    }
+  };
+}
+
 export type DelegationGroupResult<T> =
   | {
       status: "blocked";

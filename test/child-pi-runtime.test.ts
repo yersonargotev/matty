@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  childTerminalResponses,
   childTranscript,
   createChildPiRunner,
   type DelegatedTaskPresentation,
@@ -29,11 +30,15 @@ const authDigest = createHash("sha256").update(authMarker).digest("hex");
 function createRunner(
   terminationGraceMs = 1_000,
   authenticationProvider = "controlled-provider",
+  lifecycle: {
+    beforeInteraction?: () => Promise<boolean>;
+    onTerminalResponse?: (text: string) => void;
+  } = {},
 ) {
   return createChildPiRunner({
     invocation: {
       command: process.execPath,
-      arguments: [fixture],
+      arguments: [fixture, "--tools", "read,grep"],
     },
     parent: {
       provider: "controlled-provider",
@@ -49,6 +54,7 @@ function createRunner(
       },
     },
     terminationGraceMs,
+    ...lifecycle,
   });
 }
 
@@ -132,6 +138,31 @@ test("cancels the owned child and escalates only while it remains open", async (
   );
 });
 
+test("rejects malformed interactions before reserving worker authority", async () => {
+  let authorityReservations = 0;
+  const controller = new AbortController();
+  const runner = createRunner(25, "controlled-provider", {
+    async beforeInteraction() {
+      authorityReservations += 1;
+      return true;
+    },
+  });
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = runner.run("interactive-backpressure", {
+    signal: controller.signal,
+    onProgress(progress) { if (progress.type === "identified") identifiedResolve(); },
+  });
+  await identified;
+  assert.deepEqual(
+    await runner.interact?.({ type: "steer", message: "x".repeat(64 * 1024 + 1) }),
+    { status: "rejected", code: "command-rejected" },
+  );
+  assert.equal(authorityReservations, 0);
+  controller.abort();
+  await running;
+});
+
 test("bounds interactive command bytes and pending writes under backpressure", async () => {
   const controller = new AbortController();
   const runner = createRunner(25);
@@ -163,6 +194,313 @@ test("bounds interactive command bytes and pending writes under backpressure", a
   assert.equal((await running).status, "cancelled");
   const rejected = await Promise.all(pending);
   assert.ok(rejected.every((result) => result.status === "rejected"));
+});
+
+test("respawns a bounded Child Execution on the same session after the original exits", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  let executions = 0;
+  let interaction: Promise<unknown> | undefined;
+  const runIds: string[] = [];
+  const sessionRoot = await mkdtemp(join(resolve(process.env.TMPDIR ?? "/tmp"), "matty-runtime-test-"));
+  const runner = createChildPiRunner({
+    invocation: { command: process.execPath, arguments: [fixture, "--tools", "read,grep"] },
+    parent: { provider: "controlled-provider", model: "controlled-model", thinking: "high", cwd: canonicalRoot },
+    authentication: { provider: "controlled-provider", environment: { PATH: process.env.PATH, MATTY_TEST_AUTH: authMarker } },
+    sessionRoot,
+    retainSessionUntilClose: true,
+    async scheduleExecution(execute) {
+      active += 1;
+      executions += 1;
+      maximumActive = Math.max(maximumActive, active);
+      try { return await execute(); } finally { active -= 1; }
+    },
+  });
+  const releaseSession = runner.retain?.();
+  let interactionResolve!: () => void;
+  const interactionStarted = new Promise<void>((resolve) => { interactionResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.sessionState === "settled" && !interaction) {
+      interaction = runner.interact?.({ type: "follow_up", message: "replace-after-exit" });
+      interactionResolve();
+    }
+  });
+  const running = runner.run("settled-respawn-candidate", {
+    onProgress(progress) { if (progress.type === "identified") runIds.push(progress.child.runId); },
+  });
+  await interactionStarted;
+  assert.equal((await interaction as { status: string }).status, "accepted");
+  releaseSession?.();
+  const outcome = await running;
+  assert.equal(executions, 2);
+  assert.equal(maximumActive, 1);
+  assert.equal(new Set(runIds).size, 2);
+  assert.deepEqual(childTerminalResponses(outcome).map((response) => JSON.parse(response).summary), [
+    "initial candidate", "replacement after respawn",
+  ]);
+  const presentation = runner.presentation?.();
+  assert.deepEqual(presentation?.entries.filter((entry) => entry.label === "Assistant").map((entry) => entry.content), [
+    JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }),
+    JSON.stringify({ summary: "replacement after respawn", evidence: ["same-session", "same-tools"] }),
+  ]);
+  assert.equal(new Set(presentation?.entries.map((entry) => entry.id)).size, presentation?.entries.length);
+  assert.deepEqual(presentation?.usage, { inputTokens: 2, outputTokens: 2, totalTokens: 4, cost: 0 });
+  assert.deepEqual(JSON.parse(childTerminalResponses(outcome).at(-1) ?? "{}").evidence, ["same-session", "same-tools"]);
+  await runner.close?.();
+  assert.deepEqual(await readdir(sessionRoot), []);
+  await rm(sessionRoot, { recursive: true });
+});
+
+test("atomically caps concurrent respawn interactions across the Child Session lifetime", async () => {
+  let executions = 0;
+  const sessionRoot = await mkdtemp(join(resolve(process.env.TMPDIR ?? "/tmp"), "matty-runtime-test-"));
+  const runner = createChildPiRunner({
+    invocation: { command: process.execPath, arguments: [fixture, "--tools", "read,grep"] },
+    parent: { provider: "controlled-provider", model: "controlled-model", thinking: "high", cwd: canonicalRoot },
+    authentication: { provider: "controlled-provider", environment: { PATH: process.env.PATH, MATTY_TEST_AUTH: authMarker } },
+    sessionRoot,
+    retainSessionUntilClose: true,
+    async scheduleExecution(execute) {
+      executions += 1;
+      return await execute();
+    },
+  });
+  const release = runner.retain?.();
+  let settledResolve!: () => void;
+  const settled = new Promise<void>((resolve) => { settledResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.sessionState === "settled") settledResolve();
+  });
+  const running = runner.run("settled-respawn-candidate");
+  await settled;
+  const interactions = Array.from({ length: 24 }, () =>
+    runner.interact!({ type: "follow_up", message: "replace-after-exit" })
+  );
+  const results = await Promise.all(interactions);
+  assert.equal(results.filter((result) => result.status === "accepted").length, 15);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 9);
+  release?.();
+  assert.equal((await running).status, "succeeded");
+  assert.equal(executions, 16);
+  await runner.close?.();
+  await rm(sessionRoot, { recursive: true });
+});
+
+test("cancels worker authority when a respawn interaction is rejected by the scheduler", async () => {
+  const controller = new AbortController();
+  let scheduled = 0;
+  let authorityReservations = 0;
+  let authorityCancellations = 0;
+  const sessionRoot = await mkdtemp(join(resolve(process.env.TMPDIR ?? "/tmp"), "matty-runtime-test-"));
+  const runner = createChildPiRunner({
+    invocation: { command: process.execPath, arguments: [fixture, "--tools", "read,grep"] },
+    parent: { provider: "controlled-provider", model: "controlled-model", thinking: "high", cwd: canonicalRoot },
+    authentication: { provider: "controlled-provider", environment: { PATH: process.env.PATH, MATTY_TEST_AUTH: authMarker } },
+    sessionRoot,
+    retainSessionUntilClose: true,
+    async beforeInteraction() {
+      authorityReservations += 1;
+      return true;
+    },
+    onInteractionRejected() { authorityCancellations += 1; },
+    async scheduleExecution(execute, signal) {
+      scheduled += 1;
+      if (scheduled === 2) {
+        controller.abort();
+        return undefined;
+      }
+      return await execute();
+    },
+  });
+  const release = runner.retain?.();
+  let settledResolve!: () => void;
+  const settled = new Promise<void>((resolve) => { settledResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.sessionState === "settled") settledResolve();
+  });
+  const running = runner.run("settled-respawn-candidate", { signal: controller.signal });
+  await settled;
+  assert.deepEqual(await runner.interact?.({ type: "follow_up", message: "replace-after-exit" }), {
+    status: "rejected", code: "command-rejected",
+  });
+  assert.equal(authorityReservations, 1);
+  assert.equal(authorityCancellations, 1);
+  release?.();
+  await running;
+  await runner.close?.();
+  await rm(sessionRoot, { recursive: true });
+});
+
+test("publishes waiting-for-capability while an interaction reacquires authority", async () => {
+  let releaseCapability!: () => void;
+  const capability = new Promise<void>((resolve) => { releaseCapability = resolve; });
+  const presentations: DelegatedTaskPresentation[] = [];
+  const runner = createRunner(1_000, "controlled-provider", {
+    async beforeInteraction() {
+      await capability;
+      return true;
+    },
+  });
+  runner.subscribePresentation?.((presentation) => presentations.push(presentation));
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = runner.run("interactive-candidate", {
+    onProgress(progress) { if (progress.type === "identified") identifiedResolve(); },
+  });
+  await identified;
+  const interaction = runner.interact!({ type: "steer", message: "finish-valid" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(presentations.at(-1)?.sessionState, "waiting-for-capability");
+  releaseCapability();
+  assert.equal((await interaction).status, "accepted");
+  assert.equal((await running).status, "succeeded");
+});
+
+test("keeps capability contention visible while each queued interaction waits at its gate", async () => {
+  const gates: Array<(available: boolean) => void> = [];
+  const runner = createRunner(1_000, "controlled-provider", {
+    beforeInteraction: async () => await new Promise<boolean>((resolve) => gates.push(resolve)),
+  });
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = runner.run("interactive-candidate", {
+    onProgress(progress) { if (progress.type === "identified") identifiedResolve(); },
+  });
+  await identified;
+  const first = runner.interact!({ type: "steer", message: "finish-valid" });
+  const second = runner.interact!({ type: "follow_up", message: "finish-valid" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(gates.length, 2);
+  assert.equal(runner.presentation?.()?.sessionState, "waiting-for-capability");
+  gates[0]!(true);
+  assert.equal((await first).status, "accepted");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runner.presentation?.()?.sessionState, "waiting-for-capability");
+  gates[1]!(false);
+  assert.equal((await second).status, "rejected");
+  assert.equal((await running).status, "succeeded");
+});
+
+test("protocol-closes malformed method-specific Pi dialog requests", async () => {
+  for (const task of [
+    "malformed-extension-dialog-title",
+    "malformed-extension-dialog-options-empty",
+    "malformed-extension-dialog-options-string",
+    "malformed-extension-dialog-confirm-message",
+  ]) {
+    const outcome = await createRunner(25).run(task);
+    assert.equal(outcome.status, "failed", task);
+    assert.equal(outcome.failure.kind, "protocol-failed", task);
+    assert.match(outcome.failure.message, /malformed extension UI request/, task);
+  }
+});
+
+test("routes extension dialogs into waiting state and responds without parent UI", async () => {
+  const runner = createRunner();
+  let waitingResolve!: () => void;
+  const waiting = new Promise<void>((resolve) => { waitingResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.sessionState === "waiting-for-input") waitingResolve();
+  });
+  const running = runner.run("extension-dialog");
+  await waiting;
+  const presentation = runner.presentation?.();
+  assert.equal(presentation?.sessionState, "waiting-for-input");
+  assert.equal(presentation?.pendingInput?.id, "fixture-dialog");
+  assert.ok((presentation?.pendingInput?.expiresAt ?? 0) - Date.now() > 299_000);
+  assert.equal(presentation?.pendingInput?.extendable, true);
+  assert.deepEqual(runner.extendInputTimeout?.("fixture-dialog", 1_000), { status: "accepted" });
+  assert.deepEqual(await runner.respondToInput?.("fixture-dialog", { value: "answered" }), { status: "accepted" });
+  const outcome = await running;
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.output, JSON.stringify({ response: "answered" }));
+});
+
+test("validates method-specific Pi dialog response shapes", async () => {
+  for (const [task, invalid, valid, expected] of [
+    ["extension-dialog-select", { confirmed: true }, { value: "second" }, "second"],
+    ["extension-dialog-confirm", { value: "yes" }, { confirmed: false }, false],
+    ["extension-dialog-editor", { confirmed: true }, { value: "edited" }, "edited"],
+  ] as const) {
+    const runner = createRunner();
+    let waitingResolve!: () => void;
+    const waiting = new Promise<void>((resolve) => { waitingResolve = resolve; });
+    runner.subscribePresentation?.((presentation) => { if (presentation.pendingInput) waitingResolve(); });
+    const running = runner.run(task);
+    await waiting;
+    assert.deepEqual(await runner.respondToInput?.("fixture-dialog", invalid), { status: "rejected", code: "command-rejected" });
+    assert.deepEqual(await runner.respondToInput?.("fixture-dialog", valid), { status: "accepted" });
+    const outcome = await running;
+    assert.equal(outcome.status, "succeeded");
+    assert.equal(outcome.output, JSON.stringify({ response: expected }));
+  }
+});
+
+test("respects a valid positive integer extension dialog timeout", async () => {
+  const runner = createRunner();
+  let waitingResolve!: () => void;
+  const waiting = new Promise<void>((resolve) => { waitingResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.pendingInput) waitingResolve();
+  });
+  const startedAt = Date.now();
+  const running = runner.run("extension-dialog-declared-timeout");
+  await waiting;
+  const pending = runner.presentation?.()?.pendingInput;
+  assert.equal(pending?.extendable, false);
+  assert.ok((pending?.expiresAt ?? 0) - startedAt >= 59_000);
+  assert.ok((pending?.expiresAt ?? 0) - startedAt <= 61_000);
+  assert.deepEqual(await runner.respondToInput?.("fixture-dialog", { value: "answered" }), { status: "accepted" });
+  assert.equal((await running).status, "succeeded");
+});
+
+test("protocol-closes unsupported extension dialog timeout declarations", async () => {
+  for (const task of [
+    "extension-dialog-timeout-zero",
+    "extension-dialog-timeout-fractional",
+    "extension-dialog-timeout-huge",
+    "extension-dialog-timeout-string",
+  ]) {
+    const outcome = await createRunner(25).run(task);
+    assert.equal(outcome.status, "failed", task);
+    assert.equal(outcome.failure.kind, "protocol-failed", task);
+    assert.match(outcome.failure.message, /invalid extension UI timeout/, task);
+  }
+});
+
+test("protocol-closes when writing an extension dialog response fails", async () => {
+  const runner = createRunner(25);
+  let waitingResolve!: () => void;
+  const waiting = new Promise<void>((resolve) => { waitingResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.pendingInput) waitingResolve();
+  });
+  const running = runner.run("extension-dialog-write-failure");
+  await waiting;
+  assert.deepEqual(
+    await runner.respondToInput?.("fixture-dialog", { value: "x".repeat(8 * 1024 * 1024) }),
+    { status: "rejected", code: "command-rejected" },
+  );
+  const outcome = await running;
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "protocol-failed");
+  assert.match(outcome.failure.message, /extension UI response/);
+});
+
+test("cancels an unanswered extension dialog at its declared timeout and rejects extension", async () => {
+  const runner = createRunner();
+  let waitingResolve!: () => void;
+  const waiting = new Promise<void>((resolve) => { waitingResolve = resolve; });
+  runner.subscribePresentation?.((presentation) => {
+    if (presentation.pendingInput) waitingResolve();
+  });
+  const running = runner.run("extension-dialog-timeout");
+  await waiting;
+  assert.equal(runner.presentation?.()?.pendingInput?.extendable, false);
+  assert.deepEqual(runner.extendInputTimeout?.("fixture-dialog"), { status: "rejected", code: "command-rejected" });
+  const outcome = await running;
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.output, JSON.stringify({ response: "cancelled" }));
 });
 
 test("settled RPC children cannot remain as idle processes", async () => {
@@ -431,7 +769,7 @@ test("coalesces private live state and emits only safe revision markers", async 
     [0, "text"], [1, "text"], [2, "thinking"],
   ]);
   assert.deepEqual(partial.tools, [{
-    toolCallId: "call-live-base",
+    toolCallId: "execution:1:call-live-base",
     toolName: "read",
     status: "running",
     args: "{}",

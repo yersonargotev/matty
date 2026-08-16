@@ -143,6 +143,10 @@ test("registry represents every state, cancellation, task outcomes, counts, and 
   registry.record(queued.id, { type: "started", taskIndex: 0, pid: 12 });
   registry.record(queued.id, { type: "identified", taskIndex: 0, pid: 12, runId: "run-12" });
   assert.equal(registry.get(queued.id)?.state, "running");
+  registry.recordTaskSessionState(queued.tasks[0]!.id, "waiting-for-input");
+  assert.equal(registry.get(queued.id)?.tasks[0]?.state, "waiting-for-input");
+  registry.recordTaskSessionState(queued.tasks[0]!.id, "waiting-for-capability");
+  assert.equal(registry.get(queued.id)?.tasks[0]?.state, "waiting-for-capability");
   registry.record(queued.id, { type: "terminating", taskIndex: 0, pid: 12, runId: "run-12" });
   assert.equal(registry.get(queued.id)?.state, "cancelling");
   registry.record(queued.id, { type: "started", taskIndex: 1, pid: 13 });
@@ -154,7 +158,9 @@ test("registry represents every state, cancellation, task outcomes, counts, and 
   assert.equal(registry.get(queued.id)?.state, "partial");
   assert.deepEqual(registry.get(queued.id)?.tasks.map((task) => task.state), ["cancelled", "succeeded"]);
 
-  const observed = new Set<DelegationState>(["queued", "running", "cancelling", "partial"]);
+  const observed = new Set<DelegationState>([
+    "queued", "running", "waiting-for-input", "waiting-for-capability", "cancelling", "partial",
+  ]);
   for (const state of ["blocked", "succeeded", "failed", "cancelled"] as const) {
     const entry = registry.accept({ tasks: [{ role: "designer" }] });
     registry.finish(entry.id, state);

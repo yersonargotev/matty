@@ -71,6 +71,156 @@ test("runs a worker over the trusted tree through the guarded runtime", async ()
   assert.equal(terminal.outcome.status, "succeeded");
 });
 
+test("releases Single Writer at Candidate Result and reacquires before later interaction", async () => {
+  let acquisitions = 0;
+  let releases = 0;
+  const report = JSON.stringify({
+    schemaVersion: 1,
+    summary: "candidate",
+    changedPaths: [],
+    checks: [],
+    evidenceRole: "supporting-only-parent-verification-required",
+    reportedFullGate: { status: "not-run" },
+  });
+  const base = execution({ async run() { throw new Error("replaced below"); } });
+  const terminal = await runWorkerDelegation("Implement", {
+    ...base,
+    acquireWriter() {
+      acquisitions += 1;
+      return () => { releases += 1; };
+    },
+    createRunner(lifecycle) {
+      assert.ok(lifecycle);
+      return {
+        async run() {
+          lifecycle.onTerminalResponse(report);
+          assert.equal(await lifecycle.beforeInteraction(), true);
+          return {
+            status: "succeeded",
+            child: { pid: 42, runId: "run-42" },
+            output: report,
+            exit: { code: 0, signal: null },
+          };
+        },
+      };
+    },
+  });
+  assert.equal(terminal.outcome.status, "succeeded");
+  assert.equal(acquisitions, 2);
+  assert.equal(releases, 2);
+});
+
+test("releases at every Candidate Result and gates each queued interaction behind reacquisition", async () => {
+  let acquisitions = 0;
+  let releases = 0;
+  const report = JSON.stringify({
+    schemaVersion: 1, summary: "candidate", changedPaths: [], checks: [],
+    evidenceRole: "supporting-only-parent-verification-required", reportedFullGate: { status: "not-run" },
+  });
+  const base = execution({ async run() { throw new Error("replaced below"); } });
+  await runWorkerDelegation("Implement", {
+    ...base,
+    acquireWriter() {
+      acquisitions += 1;
+      return () => { releases += 1; };
+    },
+    createRunner(lifecycle) {
+      assert.ok(lifecycle);
+      return {
+        async run() {
+          const first = lifecycle.beforeInteraction(undefined, { candidateObserved: false });
+          const second = lifecycle.beforeInteraction(undefined, { candidateObserved: false });
+          await Promise.resolve();
+          assert.equal(acquisitions, 1, "pre-candidate interactions must not reacquire early");
+
+          lifecycle.onTerminalResponse(report);
+          assert.ok(await first);
+          assert.equal(releases, 1, "the initial candidate literally releases its lease");
+          assert.equal(acquisitions, 2);
+
+          let secondDelivered = false;
+          void second.then(() => { secondDelivered = true; });
+          await Promise.resolve();
+          assert.equal(secondDelivered, false, "each queued interaction has its own candidate gate");
+
+          lifecycle.onTerminalResponse(report);
+          assert.ok(await second);
+          assert.equal(releases, 2, "the first interaction candidate literally releases its lease");
+          assert.equal(acquisitions, 3);
+
+          lifecycle.onTerminalResponse(report);
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(releases, 3, "the second interaction candidate literally releases its lease");
+          return { status: "succeeded", child: { pid: 42, runId: "run-42" }, output: report, exit: { code: 0, signal: null } };
+        },
+      };
+    },
+  });
+  assert.equal(acquisitions, 3);
+  assert.equal(releases, 3);
+});
+
+test("waits and retries Single Writer reacquisition until capability becomes available", async () => {
+  let acquisitions = 0;
+  let releases = 0;
+  const report = JSON.stringify({
+    schemaVersion: 1, summary: "candidate", changedPaths: [], checks: [],
+    evidenceRole: "supporting-only-parent-verification-required", reportedFullGate: { status: "not-run" },
+  });
+  const base = execution({ async run() { throw new Error("replaced below"); } });
+  const terminal = await runWorkerDelegation("Implement", {
+    ...base,
+    acquireWriter() {
+      acquisitions += 1;
+      if (acquisitions === 2 || acquisitions === 3) return undefined;
+      return () => { releases += 1; };
+    },
+    createRunner(lifecycle) {
+      assert.ok(lifecycle);
+      return {
+        async run() {
+          lifecycle.onTerminalResponse(report);
+          assert.equal(await lifecycle.beforeInteraction(), true);
+          return { status: "succeeded", child: { pid: 42, runId: "run-42" }, output: report, exit: { code: 0, signal: null } };
+        },
+      };
+    },
+  });
+  assert.equal(terminal.outcome.status, "succeeded");
+  assert.equal(acquisitions, 4);
+  assert.equal(releases, 2);
+});
+
+test("stops waiting for Single Writer reacquisition when the interaction is cancelled", async () => {
+  const controller = new AbortController();
+  let acquisitions = 0;
+  const report = JSON.stringify({
+    schemaVersion: 1, summary: "candidate", changedPaths: [], checks: [],
+    evidenceRole: "supporting-only-parent-verification-required", reportedFullGate: { status: "not-run" },
+  });
+  const base = execution({ async run() { throw new Error("replaced below"); } });
+  const terminal = await runWorkerDelegation("Implement", {
+    ...base,
+    acquireWriter() {
+      acquisitions += 1;
+      return acquisitions === 1 ? () => {} : undefined;
+    },
+    createRunner(lifecycle) {
+      assert.ok(lifecycle);
+      return {
+        async run() {
+          lifecycle.onTerminalResponse(report);
+          setTimeout(() => controller.abort(), 15);
+          assert.equal(await lifecycle.beforeInteraction(), false);
+          return { status: "succeeded", child: { pid: 42, runId: "run-42" }, output: report, exit: { code: 0, signal: null } };
+        },
+      };
+    },
+  }, { signal: controller.signal });
+  assert.equal(terminal.outcome.status, "succeeded");
+  assert.ok(acquisitions >= 2);
+});
+
 test("preserves the private transcript when an invalid worker report becomes a failure", async () => {
   const source = await createRoleSeamChildRunner().run("success");
   assert.equal(source.status, "succeeded");

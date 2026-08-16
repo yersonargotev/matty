@@ -2,8 +2,8 @@
 // Pi is MIT licensed. Matty owns this adapted runtime and its invariants.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { chmod, mkdtemp, realpath, rm } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 import {
   classifyChildExecutionActivity,
@@ -82,8 +82,23 @@ export interface DelegatedTranscriptPresentationEntry {
   readonly expandedByDefault: boolean;
 }
 
+export interface ChildExtensionInputRequest {
+  readonly id: string;
+  readonly method: "select" | "confirm" | "input" | "editor";
+  readonly title: string;
+  readonly message?: string;
+  readonly options?: readonly string[];
+  readonly placeholder?: string;
+  readonly prefill?: string;
+  readonly expiresAt: number;
+  /** Only Matty's default timeout may be explicitly extended. */
+  readonly extendable: boolean;
+}
+
 export interface DelegatedTaskPresentation {
   readonly revision: number;
+  readonly sessionState: "working" | "settled" | "waiting-for-input" | "waiting-for-capability";
+  readonly pendingInput?: ChildExtensionInputRequest;
   readonly assistant: readonly DelegatedAssistantPresentationPart[];
   readonly tools: readonly DelegatedToolPresentation[];
   readonly entries: readonly DelegatedTranscriptPresentationEntry[];
@@ -169,6 +184,15 @@ export type ChildInteractionResult =
   | { status: "accepted"; commandId: string }
   | { status: "rejected"; code: "child-session-unavailable" | "child-session-settled" | "command-rejected" };
 
+export type ChildInputResponse =
+  | { cancelled: true }
+  | { value: string }
+  | { confirmed: boolean };
+
+export type ChildInputResult =
+  | { status: "accepted" }
+  | { status: "rejected"; code: "child-session-unavailable" | "input-request-unavailable" | "command-rejected" };
+
 export interface DelegatedTaskRunner {
   run(
     task: string,
@@ -178,11 +202,17 @@ export interface DelegatedTaskRunner {
     },
   ): Promise<DelegatedTaskOutcome>;
   interact?(interaction: ChildInteraction): Promise<ChildInteractionResult>;
+  respondToInput?(requestId: string, response: ChildInputResponse): Promise<ChildInputResult>;
+  extendInputTimeout?(requestId: string, extensionMs?: number): ChildInputResult;
+  close?(): Promise<void>;
+  freeze?(): void;
   abort?(): void;
   presentation?(): DelegatedTaskPresentation | undefined;
   subscribePresentation?(
     listener: (presentation: DelegatedTaskPresentation) => void,
   ): () => void;
+  /** Retains an interactive session until the returned holder is released. */
+  retain?(): () => void;
 }
 
 export interface ChildPiRunnerOptions {
@@ -190,6 +220,17 @@ export interface ChildPiRunnerOptions {
   parent: ParentPiExecutionContext;
   authentication: ChildSafePiAuthentication;
   terminationGraceMs?: number;
+  /** Worker-only capability lifecycle hooks. Other roles leave these absent. */
+  beforeInteraction?: (
+    signal?: AbortSignal,
+    context?: { readonly candidateObserved: boolean },
+  ) => Promise<boolean>;
+  onInteractionRejected?: () => void | Promise<void>;
+  onTerminalResponse?: (text: string) => void;
+  /** Matty-owned ephemeral session storage used to resume a settled Child Session. */
+  sessionRoot?: string;
+  retainSessionUntilClose?: boolean;
+  scheduleExecution?: <T>(execution: () => Promise<T>, signal?: AbortSignal) => Promise<T | undefined>;
 }
 
 interface PiMessageEnd extends Record<string, unknown> {
@@ -317,97 +358,235 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
   const graceMs = options.terminationGraceMs ?? 5_000;
   let activeControl: ChildProcessControl | undefined;
   let presentation: DelegatedTaskPresentation | undefined;
+  let sessionDirectory: string | undefined;
+  let sessionId: string | undefined;
+  let runSignal: AbortSignal | undefined;
+  let runProgress: ((progress: DelegatedTaskProgress) => void) | undefined;
+  let acceptingInteractions = true;
+  const interactionLifetime = new AbortController();
+  let executionChain: Promise<void> = Promise.resolve();
+  let executionCount = 0;
+  let holderCount = 0;
+  const holderWaiters = new Set<() => void>();
+  const outcomes: DelegatedTaskOutcome[] = [];
   const presentationListeners = new Set<(value: DelegatedTaskPresentation) => void>();
+  let capabilityWaiters = 0;
   let presentationNotificationPending = false;
   const publishPresentation = (value: DelegatedTaskPresentation): void => {
-    presentation = value;
+    presentation = capabilityWaiters > 0 && value.sessionState !== "waiting-for-input"
+      ? Object.freeze({ ...value, sessionState: "waiting-for-capability" as const })
+      : value;
     if (presentationNotificationPending) return;
     presentationNotificationPending = true;
     queueMicrotask(() => {
       presentationNotificationPending = false;
       if (!presentation) return;
       for (const listener of presentationListeners) {
-        try {
-          listener(presentation);
-        } catch {
-          // Private presentation observers cannot block protocol ingestion.
-        }
+        try { listener(presentation); } catch { /* Observers cannot block protocol ingestion. */ }
       }
     });
   };
   const parent = { ...options.parent };
-  const invocation = {
-    command: options.invocation.command,
-    arguments: [...(options.invocation.arguments ?? [])],
+  const invocation = { command: options.invocation.command, arguments: [...(options.invocation.arguments ?? [])] };
+  const authentication = { provider: options.authentication.provider, environment: { ...options.authentication.environment } };
+  const schedule = options.scheduleExecution ?? (async <T>(execution: () => Promise<T>) => await execution());
+
+  const execute = async (
+    task: string,
+    accepted?: (accepted: boolean) => void,
+    reservedExecutionNumber?: number,
+  ): Promise<DelegatedTaskOutcome> => {
+    const runId = randomUUID();
+    const executionNumber = reservedExecutionNumber ?? ++executionCount;
+    const priorEntries = presentation?.entries ?? [];
+    const priorUsage = presentation?.usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 };
+    let promptAccepted = false;
+    const publishExecutionPresentation = (value: DelegatedTaskPresentation): void => {
+      const qualify = (id: string) => `execution:${executionNumber}:${id}`;
+      publishPresentation(Object.freeze({
+        ...value,
+        assistant: Object.freeze(value.assistant.map((part) => Object.freeze({ ...part }))),
+        tools: Object.freeze(value.tools.map((tool) => Object.freeze({ ...tool, toolCallId: qualify(tool.toolCallId) }))),
+        entries: Object.freeze([
+          ...priorEntries,
+          ...value.entries.map((entry) => Object.freeze({ ...entry, id: qualify(entry.id) })),
+        ]),
+        usage: Object.freeze({
+          inputTokens: priorUsage.inputTokens + value.usage.inputTokens,
+          outputTokens: priorUsage.outputTokens + value.usage.outputTokens,
+          totalTokens: priorUsage.totalTokens + value.usage.totalTokens,
+          cost: priorUsage.cost + value.usage.cost,
+        }),
+      }));
+    };
+    const retainedTranscriptBytes = outcomes.reduce((total, outcome) =>
+      total + (transcripts.get(outcome)?.entries ?? []).reduce(
+        (bytes, entry) => bytes + Buffer.byteLength(JSON.stringify(entry)), 0,
+      ), 0);
+    const executeChild = async () => await superviseChild({
+      command: invocation.command,
+      arguments: [
+        ...invocation.arguments,
+        "--mode", "rpc",
+        ...(sessionDirectory && sessionId
+          ? ["--session-dir", sessionDirectory, "--session-id", sessionId]
+          : ["--no-session", "--session-id", runId]),
+        "--provider", parent.provider,
+        "--model", parent.model,
+        "--thinking", parent.thinking,
+      ],
+      cwd: parent.cwd,
+      environment: authentication.environment,
+      task,
+      runId,
+      promptId: randomUUID(),
+      graceMs,
+      transcriptBudgetBytes: Math.max(0, MAX_TRANSCRIPT_BYTES - retainedTranscriptBytes),
+      signal: runSignal,
+      onProgress: runProgress,
+      onControl(control) { activeControl = control; },
+      onPresentation: publishExecutionPresentation,
+      ...(accepted ? { onPromptAccepted() { promptAccepted = true; accepted(true); } } : {}),
+      ...(options.beforeInteraction ? { beforeInteraction: (candidateObserved) => options.beforeInteraction!(interactionLifetime.signal, { candidateObserved }) } : {}),
+      ...(options.onInteractionRejected ? { onInteractionRejected: options.onInteractionRejected } : {}),
+      ...(options.onTerminalResponse ? { onTerminalResponse: options.onTerminalResponse } : {}),
+    });
+    const outcome = await schedule(executeChild, runSignal) ?? {
+      status: "cancelled" as const, child: null, phase: "before-spawn" as const,
+    };
+    outcomes.push(outcome);
+    activeControl = undefined;
+    if (accepted && !promptAccepted) accepted(false);
+    return outcome;
   };
-  const authentication = {
-    provider: options.authentication.provider,
-    environment: { ...options.authentication.environment },
+
+  const combinedOutcome = (fallback: DelegatedTaskOutcome): DelegatedTaskOutcome => {
+    const latest = outcomes.at(-1) ?? fallback;
+    const entries = outcomes.flatMap((outcome) => transcripts.get(outcome)?.entries ?? []);
+    const responses = outcomes.flatMap((outcome) => terminalResponses.get(outcome) ?? []);
+    return withTranscript(latest, entries, responses);
+  };
+  const cleanup = async (): Promise<void> => {
+    acceptingInteractions = false;
+    await executionChain;
+    const directory = sessionDirectory;
+    sessionDirectory = undefined;
+    if (directory) await rm(directory, { recursive: true, force: true });
   };
 
   return {
     async run(task, runOptions = {}) {
-      if (runOptions.signal?.aborted) {
-        return { status: "cancelled", child: null, phase: "before-spawn" };
-      }
+      if (runOptions.signal?.aborted) return { status: "cancelled", child: null, phase: "before-spawn" };
       const parentError = await invalidParentContext(parent, authentication);
-      if (parentError) {
-        return {
-          status: "failed",
-          child: null,
-          failure: { kind: "invalid-parent-context", message: parentError },
-        };
+      if (parentError) return { status: "failed", child: null, failure: { kind: "invalid-parent-context", message: parentError } };
+      runSignal = runOptions.signal;
+      runProgress = runOptions.onProgress;
+      acceptingInteractions = true;
+      outcomes.length = 0;
+      executionCount = 0;
+      presentation = undefined;
+      sessionId = randomUUID();
+      if (options.sessionRoot) {
+        sessionDirectory = await mkdtemp(join(options.sessionRoot, "matty-child-session-"));
+        await chmod(sessionDirectory, 0o700);
       }
-
-      const runId = randomUUID();
-      return await superviseChild({
-        command: invocation.command,
-        arguments: [
-          ...invocation.arguments,
-          "--mode", "rpc",
-          "--no-session",
-          "--session-id", runId,
-          "--provider", parent.provider,
-          "--model", parent.model,
-          "--thinking", parent.thinking,
-        ],
-        cwd: parent.cwd,
-        environment: authentication.environment,
-        task,
-        runId,
-        promptId: randomUUID(),
-        graceMs,
-        signal: runOptions.signal,
-        onProgress: runOptions.onProgress,
-        onControl(control) {
-          activeControl = control;
-        },
-        onPresentation: publishPresentation,
-      }).finally(() => {
-        activeControl = undefined;
-      });
+      const initialExecution = execute(task);
+      executionChain = initialExecution.then(() => {});
+      const initial = await initialExecution;
+      if (holderCount > 0) {
+        await new Promise<void>((resolve) => holderWaiters.add(resolve));
+      }
+      acceptingInteractions = false;
+      await executionChain;
+      const result = combinedOutcome(initial);
+      if (!options.retainSessionUntilClose) await cleanup();
+      return result;
     },
     async interact(interaction) {
-      return activeControl
-        ? await activeControl.interact(interaction)
-        : { status: "rejected", code: "child-session-unavailable" };
+      if (activeControl && presentation?.sessionState !== "settled") {
+        const result = await activeControl.interact(interaction);
+        if (result.status === "accepted" || result.code !== "child-session-settled") return result;
+      }
+      if (!acceptingInteractions || !sessionId || !sessionDirectory) {
+        return { status: "rejected", code: "child-session-unavailable" };
+      }
+      if (
+        Buffer.byteLength(interaction.message) > MAX_INTERACTION_MESSAGE_BYTES ||
+        executionCount >= MAX_RESPAWN_EXECUTIONS
+      ) {
+        return { status: "rejected", code: "command-rejected" };
+      }
+      // Reserve admission before yielding so over-limit calls never acquire authority.
+      const executionNumber = ++executionCount;
+      if (options.beforeInteraction) {
+        capabilityWaiters += 1;
+        if (presentation) publishPresentation(Object.freeze({
+          ...presentation,
+          revision: presentation.revision + 1,
+          sessionState: "waiting-for-capability" as const,
+        }));
+        let available = false;
+        try {
+          available = await options.beforeInteraction(interactionLifetime.signal, { candidateObserved: true });
+        } catch {
+          available = false;
+        } finally {
+          capabilityWaiters = Math.max(0, capabilityWaiters - 1);
+        }
+        if (presentation) publishPresentation(Object.freeze({
+          ...presentation,
+          revision: presentation.revision + 1,
+          sessionState: capabilityWaiters > 0 ? "waiting-for-capability" as const : "settled" as const,
+        }));
+        if (!available) return { status: "rejected", code: "command-rejected" };
+      }
+      const commandId = randomUUID();
+      let acceptedResolve!: (accepted: boolean) => void;
+      const accepted = new Promise<boolean>((resolve) => { acceptedResolve = resolve; });
+      executionChain = executionChain.then(async () => {
+        await execute(interaction.message, acceptedResolve, executionNumber);
+      });
+      const wasAccepted = await accepted;
+      if (!wasAccepted) await options.onInteractionRejected?.();
+      return wasAccepted
+        ? { status: "accepted", commandId }
+        : { status: "rejected", code: "command-rejected" };
     },
-    abort() {
-      activeControl?.abort();
+    async respondToInput(requestId, response) {
+      return activeControl ? await activeControl.respondToInput(requestId, response) : { status: "rejected", code: "child-session-unavailable" };
     },
-    presentation() {
-      return presentation;
+    extendInputTimeout(requestId, extensionMs) {
+      return activeControl ? activeControl.extendInputTimeout(requestId, extensionMs) : { status: "rejected", code: "child-session-unavailable" };
     },
+    async close() { interactionLifetime.abort(); await cleanup(); },
+    freeze() { acceptingInteractions = false; interactionLifetime.abort(); },
+    abort() { acceptingInteractions = false; interactionLifetime.abort(); activeControl?.abort(); },
+    presentation() { return presentation; },
     subscribePresentation(listener) {
       presentationListeners.add(listener);
       if (presentation) listener(presentation);
       return () => presentationListeners.delete(listener);
+    },
+    retain() {
+      holderCount += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holderCount = Math.max(0, holderCount - 1);
+        if (holderCount === 0) {
+          for (const resolve of holderWaiters) resolve();
+          holderWaiters.clear();
+        }
+      };
     },
   };
 }
 
 interface ChildProcessControl {
   interact(interaction: ChildInteraction): Promise<ChildInteractionResult>;
+  respondToInput(requestId: string, response: ChildInputResponse): Promise<ChildInputResult>;
+  extendInputTimeout(requestId: string, extensionMs?: number): ChildInputResult;
   abort(): void;
 }
 
@@ -420,10 +599,15 @@ interface SupervisionOptions {
   runId: string;
   promptId: string;
   graceMs: number;
+  transcriptBudgetBytes: number;
   signal: AbortSignal | undefined;
   onProgress: ((progress: DelegatedTaskProgress) => void) | undefined;
   onControl(control: ChildProcessControl): void;
   onPresentation(presentation: DelegatedTaskPresentation): void;
+  onPromptAccepted?: () => void;
+  beforeInteraction?: (candidateObserved: boolean) => Promise<boolean>;
+  onInteractionRejected?: () => void | Promise<void>;
+  onTerminalResponse?: (text: string) => void;
 }
 
 const TRANSCRIPT_TYPES = new Set([
@@ -533,6 +717,11 @@ const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 const MAX_INTERACTION_MESSAGE_BYTES = 64 * 1024;
 const MAX_PENDING_INTERACTION_COMMANDS = 16;
+const MAX_RESPAWN_EXECUTIONS = 16;
+const DEFAULT_EXTENSION_INPUT_TIMEOUT_MS = 5 * 60 * 1_000;
+const MAX_EXTENSION_INPUT_TIMEOUT_MS = 60 * 60 * 1_000;
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
+const extensionDialogMethods = new Set(["select", "confirm", "input", "editor"]);
 
 async function superviseChild(options: SupervisionOptions): Promise<DelegatedTaskOutcome> {
   let child;
@@ -587,6 +776,12 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
     let liveAssistantBytes = 0;
     let liveRevision = 0;
     let liveUpdatePending = false;
+    let waitingForCapability = 0;
+    let pendingInput: {
+      request: ChildExtensionInputRequest;
+      timer: NodeJS.Timeout;
+    } | undefined;
+    let extensionResponseWritePending = false;
     let stderrBytes = 0;
     let sequence = 0;
     let promptAccepted = false;
@@ -666,6 +861,8 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         pending.resolve({ status: "rejected", code: "child-session-settled" });
       }
       pendingCommands.clear();
+      if (pendingInput) clearTimeout(pendingInput.timer);
+      pendingInput = undefined;
       resolve(withTranscript(outcome, transcriptEntries, terminalAssistantTexts));
     };
 
@@ -693,6 +890,8 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         const entries = [...presentedEntries.values()].map((entry) => Object.freeze({ ...entry }));
         options.onPresentation(Object.freeze({
           revision: liveRevision,
+          sessionState: pendingInput ? "waiting-for-input" : waitingForCapability > 0 ? "waiting-for-capability" : agentSettled ? "settled" : "working",
+          ...(pendingInput ? { pendingInput: pendingInput.request } : {}),
           assistant: Object.freeze(assistant),
           tools: Object.freeze(tools),
           entries: Object.freeze(entries),
@@ -706,14 +905,14 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
       const bytes = Buffer.byteLength(JSON.stringify(event));
       const existing = key === undefined ? undefined : partialTranscriptIndexes.get(key);
       if (existing === undefined) {
-        if (transcriptBytes + bytes > MAX_TRANSCRIPT_BYTES) return false;
+        if (transcriptBytes + bytes > options.transcriptBudgetBytes) return false;
         transcriptEntries.push(event);
         transcriptBytes += bytes;
         if (key !== undefined) partialTranscriptIndexes.set(key, transcriptEntries.length - 1);
       } else {
         const previous = transcriptEntries[existing];
         const previousBytes = previous ? Buffer.byteLength(JSON.stringify(previous)) : 0;
-        if (transcriptBytes - previousBytes + bytes > MAX_TRANSCRIPT_BYTES) return false;
+        if (transcriptBytes - previousBytes + bytes > options.transcriptBudgetBytes) return false;
         transcriptEntries[existing] = event;
         transcriptBytes += bytes - previousBytes;
       }
@@ -740,6 +939,49 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         return;
       }
 
+      if (event.type === "extension_ui_request") {
+        if (!nonemptyString(event.method) || !extensionDialogMethods.has(event.method)) return;
+        const validDialogShape = nonemptyString(event.id) && nonemptyString(event.title) &&
+          (event.method !== "select" || (Array.isArray(event.options) && event.options.length > 0 && event.options.every(nonemptyString))) &&
+          (event.method !== "confirm" || nonemptyString(event.message));
+        if (!validDialogShape) {
+          terminate("Pi emitted a malformed extension UI request");
+          return;
+        }
+        if (!spawned || agentSettled || pendingInput) {
+          terminate("Pi emitted an invalid extension UI dialog request");
+          return;
+        }
+        const hasDeclaredTimeout = event.timeout !== undefined;
+        if (hasDeclaredTimeout &&
+            (typeof event.timeout !== "number" || !Number.isInteger(event.timeout) ||
+              event.timeout <= 0 || event.timeout > MAX_NODE_TIMER_DELAY_MS)) {
+          terminate("Pi emitted an invalid extension UI timeout");
+          return;
+        }
+        const timeout = hasDeclaredTimeout ? event.timeout as number : DEFAULT_EXTENSION_INPUT_TIMEOUT_MS;
+        const request = Object.freeze({
+          id: event.id as string,
+          method: event.method as ChildExtensionInputRequest["method"],
+          title: neutralizeTerminalText(typeof event.title === "string" ? event.title : event.method),
+          ...(typeof event.message === "string" ? { message: neutralizeTerminalText(event.message) } : {}),
+          ...(stringArray(event.options) ? { options: Object.freeze(event.options.map(neutralizeTerminalText)) } : {}),
+          ...(typeof event.placeholder === "string" ? { placeholder: neutralizeTerminalText(event.placeholder) } : {}),
+          ...(typeof event.prefill === "string" ? { prefill: neutralizeTerminalText(event.prefill) } : {}),
+          expiresAt: Date.now() + timeout,
+          extendable: !hasDeclaredTimeout,
+        });
+        const expire = () => {
+          if (pendingInput?.request.id !== request.id || closed || child.stdin.destroyed) return;
+          child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: request.id, cancelled: true })}\n`);
+          pendingInput = undefined;
+          emitLive();
+        };
+        pendingInput = { request, timer: setTimeout(expire, timeout) };
+        emitLive();
+        return;
+      }
+
       if (event.type === "response") {
         if (typeof event.id !== "string" || typeof event.command !== "string" ||
             typeof event.success !== "boolean") {
@@ -756,6 +998,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
             return;
           }
           promptAccepted = true;
+          options.onPromptAccepted?.();
           if (identity) dispatchProgress({ type: "identified", child: identity });
           return;
         }
@@ -959,7 +1202,9 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
       if (isMessageEnd(event) && event.message.role === "assistant") {
         finalMessage = event.message;
         if (terminalAssistantStopReasons.has(event.message.stopReason ?? "")) {
-          terminalAssistantTexts.push(assistantText(event.message));
+          const text = assistantText(event.message);
+          terminalAssistantTexts.push(text);
+          try { options.onTerminalResponse?.(text); } catch { /* Candidate observers cannot break RPC ingestion. */ }
         }
         assistantParts.clear();
         if (Array.isArray(event.message.content)) {
@@ -1025,6 +1270,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           return;
         }
         agentSettled = true;
+        emitLive();
         child.stdin.end();
         terminationTimer ??= setTimeout(() => {
           if (closed) return;
@@ -1072,8 +1318,27 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         ) {
           return { status: "rejected", code: "command-rejected" };
         }
+        if (options.beforeInteraction) {
+          waitingForCapability += 1;
+          emitLive();
+          let available = false;
+          try { available = await options.beforeInteraction(terminalAssistantTexts.length > 0); } catch { available = false; }
+          waitingForCapability = Math.max(0, waitingForCapability - 1);
+          emitLive();
+          if (!available) return { status: "rejected", code: "command-rejected" };
+          if (
+            agentSettled || closed || cancellationRequested ||
+            pendingCommands.size >= MAX_PENDING_INTERACTION_COMMANDS ||
+            child.stdin.destroyed || !child.stdin.writable
+          ) {
+            await options.onInteractionRejected?.();
+            return agentSettled || closed
+              ? { status: "rejected", code: "child-session-settled" }
+              : { status: "rejected", code: "command-rejected" };
+          }
+        }
         const commandId = randomUUID();
-        return await new Promise<ChildInteractionResult>((resolveCommand) => {
+        const result = await new Promise<ChildInteractionResult>((resolveCommand) => {
           pendingCommands.set(commandId, {
             command: interaction.type,
             frame: `${JSON.stringify({
@@ -1086,6 +1351,58 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           interactionWriteQueue.push(commandId);
           pumpInteractionWrites();
         });
+        if (result.status === "rejected") await options.onInteractionRejected?.();
+        return result;
+      },
+      async respondToInput(requestId, response) {
+        if (!pendingInput || pendingInput.request.id !== requestId) {
+          return { status: "rejected", code: "input-request-unavailable" };
+        }
+        const method = pendingInput.request.method;
+        const validResponse = ("cancelled" in response && response.cancelled === true) ||
+          ((method === "select" || method === "input" || method === "editor") && "value" in response && typeof response.value === "string") ||
+          (method === "confirm" && "confirmed" in response && typeof response.confirmed === "boolean");
+        if (!validResponse) return { status: "rejected", code: "command-rejected" };
+        if (closed || child.stdin.destroyed || !child.stdin.writable) {
+          return { status: "rejected", code: "command-rejected" };
+        }
+        clearTimeout(pendingInput.timer);
+        pendingInput = undefined;
+        extensionResponseWritePending = true;
+        try {
+          await new Promise<void>((resolveWrite, rejectWrite) => {
+            child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: requestId, ...response })}\n`, (error) =>
+              error ? rejectWrite(error) : resolveWrite()
+            );
+          });
+          emitLive();
+          return { status: "accepted" };
+        } catch {
+          terminate("Pi extension UI response write failed");
+          return { status: "rejected", code: "command-rejected" };
+        } finally {
+          extensionResponseWritePending = false;
+        }
+      },
+      extendInputTimeout(requestId, extensionMs = DEFAULT_EXTENSION_INPUT_TIMEOUT_MS) {
+        if (!pendingInput || pendingInput.request.id !== requestId) {
+          return { status: "rejected", code: "input-request-unavailable" };
+        }
+        if (!pendingInput.request.extendable) {
+          return { status: "rejected", code: "command-rejected" };
+        }
+        const extension = Math.max(1, Math.min(extensionMs, MAX_EXTENSION_INPUT_TIMEOUT_MS));
+        clearTimeout(pendingInput.timer);
+        const request = Object.freeze({ ...pendingInput.request, expiresAt: Date.now() + extension });
+        const timer = setTimeout(() => {
+          if (pendingInput?.request.id !== requestId || closed || child.stdin.destroyed) return;
+          child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: requestId, cancelled: true })}\n`);
+          pendingInput = undefined;
+          emitLive();
+        }, extension);
+        pendingInput = { request, timer };
+        emitLive();
+        return { status: "accepted" };
       },
       abort: cancel,
     });
@@ -1117,7 +1434,9 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
       interactionWriteQueue.length = 0;
       for (const commandId of [...pendingCommands.keys()]) rejectPendingCommand(commandId);
       if (!closed && !cancellationRequested && !agentSettled) {
-        terminate("Pi child RPC input failed");
+        terminate(extensionResponseWritePending
+          ? "Pi extension UI response write failed"
+          : "Pi child RPC input failed");
       }
     });
 

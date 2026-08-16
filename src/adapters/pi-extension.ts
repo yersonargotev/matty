@@ -38,6 +38,7 @@ import {
   runWorkerDelegation,
 } from "../application/worker-delegation.ts";
 import {
+  boundedChildExecutionScheduler,
   isDelegationLeafFailureCode,
   runDelegationGroup,
   type DelegationLeafFailureCode,
@@ -165,6 +166,7 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
   preparedWorker?: PreparedWorkerExecution;
   preparedResearcher?: PreparedResearcherExecution;
   onChildSettled?: () => void;
+  scheduleChildExecution?: <T>(execution: () => Promise<T>, signal?: AbortSignal) => Promise<T | undefined>;
 };
 
 const execFileAsync = promisify(execFile);
@@ -180,6 +182,7 @@ function createPiHost(
     registry: DelegationRegistry;
     openConsole(context: ExtensionContext): Promise<void>;
     openTask(context: ExtensionContext, displayId: string): Promise<boolean>;
+    interact(delegatedTaskId: string, interaction: { type: "steer" | "follow_up"; message: string }): Promise<{ status: string; code?: string; commandId?: string }>;
     output(text: string): void;
   },
 ): MattyHost {
@@ -213,6 +216,8 @@ function createPiHost(
           },
           openDelegatedTask: async (displayId: string) =>
             await management.openTask(context, displayId),
+          interactWithDelegatedTask: async (delegatedTaskId, interaction) =>
+            await management.interact(delegatedTaskId, interaction),
         }
         : {}),
       ...(context.model
@@ -739,6 +744,9 @@ export function registerPiMatty(
     ...(options.delegationRegistryOptions?.terminalLimit !== undefined
       ? { terminalLimit: options.delegationRegistryOptions.terminalLimit }
       : {}),
+    onTaskSessionState(taskId, state) {
+      delegationRegistry.recordTaskSessionState(taskId, state);
+    },
   });
   const delegationManagement = createPiDelegationManagement(delegationRegistry, delegationControl);
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
@@ -1205,7 +1213,7 @@ export function registerPiMatty(
             ? invocationWithTools(invocation, WORKER_TOOLS)
             : invocation;
           const configurationPaths = userConfigurationPaths(environment);
-          const writerStateRoot = contract.temporaryPaths.at(-1) ?? tmpdir();
+          const writerStateRoot = contract.temporaryPaths.at(0) ?? tmpdir();
           const protectedPaths = [singleWriterStatePath(writerStateRoot)];
           const terminal = await runWorkerDelegation(
             params.task,
@@ -1218,15 +1226,14 @@ export function registerPiMatty(
                 workerGuard: true,
               },
               async acquireWriter() {
-                if (params.preparedWorker) {
-                  return params.preparedWorker.takeWriterLease();
-                }
+                const preparedLease = params.preparedWorker?.takeWriterLease();
+                if (preparedLease) return preparedLease;
                 return await acquireRepositoryWriter(
                   contract.workingTree,
                   writerStateRoot,
                 );
               },
-              createRunner() {
+              createRunner(lifecycle) {
                 return trackRunner(params.delegatedTaskId, createChildPiRunner({
                   invocation: workerInvocation,
                   parent: {
@@ -1254,6 +1261,14 @@ export function registerPiMatty(
                       },
                     ),
                   },
+                  ...(lifecycle ? {
+                    beforeInteraction: lifecycle.beforeInteraction,
+                    onInteractionRejected: lifecycle.onInteractionRejected,
+                    onTerminalResponse: lifecycle.onTerminalResponse,
+                  } : {}),
+                  sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                  retainSessionUntilClose: true,
+                  ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                 }), params.onChildSettled);
               },
             },
@@ -1354,6 +1369,9 @@ export function registerPiMatty(
                         { contract, scope },
                       ),
                     },
+                    sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                    retainSessionUntilClose: true,
+                    ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                   }), params.onChildSettled);
                 },
                 async reportDelivered() {
@@ -1435,6 +1453,9 @@ export function registerPiMatty(
                       role,
                     ),
                   },
+                  sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                  retainSessionUntilClose: true,
+                  ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                 }), params.onChildSettled);
               },
             },
@@ -1511,6 +1532,7 @@ export function registerPiMatty(
         });
         const declaredTasks = "role" in params ? [params] : params.tasks;
         const requirement = "role" in params ? "required" : params.requirement;
+        const scheduleChildExecution = boundedChildExecutionScheduler(4);
         delegationControl.open(
           observer.id,
           requirement,
@@ -1562,6 +1584,7 @@ export function registerPiMatty(
                 ...params,
                 delegatedTaskId: observer.taskId(0),
                 onChildSettled: beginFreeze,
+                scheduleChildExecution,
               },
               observer.signal,
               (update) => observer.observeProgress(update.details),
@@ -1697,7 +1720,7 @@ export function registerPiMatty(
                     };
                   }
                   const writerStateRoot =
-                    workerCapability.temporaryPaths.at(-1) ?? tmpdir();
+                    workerCapability.temporaryPaths.at(0) ?? tmpdir();
                   let writerLease = await acquireRepositoryWriter(
                     workerCapability.workingTree,
                     writerStateRoot,
@@ -1779,6 +1802,7 @@ export function registerPiMatty(
                     ...task,
                     executionScope: "group",
                     delegatedTaskId: observer.taskId(taskIndex),
+                    scheduleChildExecution,
                     ...(preparedWorker ? { preparedWorker } : {}),
                     ...(preparedResearcher ? { preparedResearcher } : {}),
                   },
@@ -1883,6 +1907,7 @@ export function registerPiMatty(
     registry: delegationRegistry,
     openConsole: (context) => delegationManagement.openConsole(context),
     openTask: (context, displayId) => delegationManagement.openTask(context, displayId),
+    interact: (delegatedTaskId, interaction) => delegationControl.interact(delegatedTaskId, interaction),
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {
     packageVersion: MATTY_PACKAGE_VERSION,
