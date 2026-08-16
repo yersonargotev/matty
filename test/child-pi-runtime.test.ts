@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   childTranscript,
   createChildPiRunner,
+  type DelegatedTaskPresentation,
   type DelegatedTaskProgress,
 } from "../src/application/child-pi-runtime.ts";
 import { WORKER_TOOLS } from "../src/domain/capability-contract.ts";
@@ -73,7 +74,7 @@ test("runs a distinct child with explicit inherited context and ordered progress
   assert.notEqual(outcome.child.pid, process.pid);
   assert.equal(outcome.child.runId.length, 36);
   assert.deepEqual(
-    progress.map((event) => event.type),
+    progress.filter((event) => event.type !== "live").map((event) => event.type),
     ["started", "identified", "activity"],
   );
 
@@ -131,6 +132,39 @@ test("cancels the owned child and escalates only while it remains open", async (
   );
 });
 
+test("bounds interactive command bytes and pending writes under backpressure", async () => {
+  const controller = new AbortController();
+  const runner = createRunner(25);
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = runner.run("interactive-backpressure", {
+    signal: controller.signal,
+    onProgress(progress) {
+      if (progress.type === "identified") identifiedResolve();
+    },
+  });
+  await identified;
+  assert.ok(runner.interact);
+
+  assert.deepEqual(
+    await runner.interact({ type: "steer", message: "x".repeat(64 * 1024 + 1) }),
+    { status: "rejected", code: "command-rejected" },
+  );
+
+  const pending = Array.from({ length: 16 }, () =>
+    runner.interact!({ type: "follow_up", message: "x".repeat(64 * 1024) })
+  );
+  assert.deepEqual(
+    await runner.interact({ type: "steer", message: "one command too many" }),
+    { status: "rejected", code: "command-rejected" },
+  );
+
+  controller.abort();
+  assert.equal((await running).status, "cancelled");
+  const rejected = await Promise.all(pending);
+  assert.ok(rejected.every((result) => result.status === "rejected"));
+});
+
 test("settled RPC children cannot remain as idle processes", async () => {
   const outcome = await createRunner(25).run("ignore-settled-exit");
 
@@ -170,6 +204,16 @@ test("closes malformed JSONL as a protocol failure without fallback", async () =
 
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.failure.kind, "protocol-failed");
+});
+
+test("fails only the child that exceeds frame or stderr bounds", async () => {
+  for (const task of ["oversized-frame", "stderr-overflow"]) {
+    const outcome = await createRunner(25).run(task);
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.failure.kind, "protocol-failed");
+    assert.match(outcome.failure.message, /frame|stderr/);
+  }
+  assert.equal((await createRunner().run("success")).status, "succeeded");
 });
 
 test("accepts protocol-valid CRLF frames while splitting only on LF", async () => {
@@ -269,7 +313,7 @@ test("accepts fixture-valid custom, user, and tool-result messages without repla
     promptTerminatedByLf: true,
   });
   assert.deepEqual(
-    progress.map((event) => event.type),
+    progress.filter((event) => event.type !== "live").map((event) => event.type),
     ["started", "identified", "activity"],
   );
   assert.deepEqual(
@@ -288,7 +332,7 @@ test("reports real Pi tool execution completion as ordered progress", async () =
 
   assert.equal(outcome.status, "succeeded");
   assert.deepEqual(
-    progress.map((event) => event.type),
+    progress.filter((event) => event.type !== "live").map((event) => event.type),
     ["started", "identified", "activity", "activity", "activity"],
   );
   const observations = progress.flatMap((event) =>
@@ -358,6 +402,56 @@ test("ignores delta-only message_update and keeps message_end authoritative", as
     progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
     [{ schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" }],
   );
+});
+
+test("coalesces private live state and emits only safe revision markers", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const presentations: DelegatedTaskPresentation[] = [];
+  const runner = createRunner();
+  runner.subscribePresentation?.((presentation) => presentations.push(presentation));
+  const outcome = await runner.run("interleaved-live-updates", {
+    onProgress(event) { progress.push(event); },
+  });
+
+  assert.equal(outcome.status, "succeeded");
+  const live = progress.filter((event) => event.type === "live");
+  assert.ok(live.length > 0);
+  assert.deepEqual(live.at(-1), {
+    type: "live",
+    child: outcome.child,
+    revision: live.length,
+  });
+  assert.doesNotMatch(JSON.stringify(live), /first|second|read|old|new|call-live/);
+  const partial = presentations.find((presentation) =>
+    presentation.assistant.length === 3 && presentation.tools.length === 1
+  );
+  assert.ok(partial);
+  assert.deepEqual(partial.assistant.map((part) => [part.contentIndex, part.type]), [
+    [0, "text"], [1, "text"], [2, "thinking"],
+  ]);
+  assert.deepEqual(partial.tools, [{
+    toolCallId: "call-live-base",
+    toolName: "read",
+    status: "running",
+    content: JSON.stringify({ content: "base-new" }),
+  }]);
+  assert.doesNotMatch(JSON.stringify(partial), /base-old/);
+  assert.deepEqual(runner.presentation?.()?.assistant.map((part) => part.contentIndex), [0]);
+});
+
+test("retains tool bytes in the presentation limit across assistant messages", async () => {
+  const outcome = await createRunner(25).run("presentation-accounting-overflow");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "protocol-failed");
+  assert.match(outcome.failure.message, /live (?:assistant|presentation) buffer limit/);
+});
+
+test("neutralizes ANSI and terminal controls in the settled assistant output", async () => {
+  const outcome = await createRunner().run("ansi-output");
+
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.output, "safe");
 });
 
 test("accepts Pi length and deferred assistant completion", async () => {

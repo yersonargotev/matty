@@ -177,7 +177,7 @@ export class DelegationRegistry {
     this.#now = options.now ?? Date.now;
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#taskIdFactory = options.taskIdFactory ?? randomUUID;
-    this.#terminalLimit = options.terminalLimit ?? 50;
+    this.#terminalLimit = Math.max(0, Math.trunc(options.terminalLimit ?? 50));
     this.#activityLimitPerTask = Math.max(1, Math.trunc(options.activityLimitPerTask ?? 100));
   }
 

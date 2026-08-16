@@ -471,8 +471,9 @@ export default function t03Acceptance(pi) {
   assert.equal(successfulChild.status, "succeeded");
   assert.deepEqual(
     success.progress.map((progress) => progress.type),
-    ["started", "identified", "activity"],
+    ["started", "identified", "activity", "live"],
   );
+  assert.equal(Number.isSafeInteger(success.progress[3]?.revision), true);
   assert.deepEqual(success.progress[2]?.observation.summary, {
     schemaVersion: 1,
     kind: "assistant-completed",

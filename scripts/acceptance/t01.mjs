@@ -521,6 +521,8 @@ async function main() {
       "dist/application/child-control-environment.js",
       "dist/application/child-pi-runtime.d.ts",
       "dist/application/child-pi-runtime.js",
+      "dist/application/delegation-control.d.ts",
+      "dist/application/delegation-control.js",
       "dist/application/delegation-observer.d.ts",
       "dist/application/delegation-observer.js",
       "dist/application/delegation-presentation.d.ts",

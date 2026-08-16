@@ -78,6 +78,7 @@ export interface DelegationGroupExecution<T> {
 export interface DelegationGroupOptions {
   signal?: AbortSignal;
   onDiagnostic?: (diagnostic: DelegationDiagnostic) => void;
+  onTaskAbort?: (taskIndex: number, abort: () => void) => void;
 }
 
 export type DelegationTaskResult<T> =
@@ -258,6 +259,11 @@ export async function runDelegationGroup<T>(
   let stopped = false;
   let requiredTaskFailed = false;
   const controllers = new Map<number, AbortController>();
+  for (const taskIndex of readyTaskIndexes) {
+    const controller = new AbortController();
+    controllers.set(taskIndex, controller);
+    options.onTaskAbort?.(taskIndex, () => controller.abort());
+  }
   const abortRunning = () => {
     stopped = true;
     for (const controller of controllers.values()) {
@@ -280,8 +286,7 @@ export async function runDelegationGroup<T>(
         if (!task || !ready[taskIndex]) {
           continue;
         }
-        const controller = new AbortController();
-        controllers.set(taskIndex, controller);
+        const controller = controllers.get(taskIndex) ?? new AbortController();
         try {
           let outcome: DelegationTaskExecution<T>;
           try {

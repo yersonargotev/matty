@@ -1,4 +1,5 @@
 import {
+  childTerminalResponses,
   transferChildTranscript,
   type DelegatedTaskOutcome,
   type DelegatedTaskProgress,
@@ -44,7 +45,10 @@ export interface InspectionRoleFindings {
 
 type SuccessfulInspectionOutcome =
   Extract<DelegatedTaskOutcome, { status: "succeeded" }> extends infer Outcome
-    ? Omit<Outcome, "output"> & { output: InspectionRoleFindings | ReviewerFindings }
+    ? Omit<Outcome, "output"> & {
+        output: InspectionRoleFindings | ReviewerFindings;
+        diagnostic?: { kind: "candidate"; code: "invalid-role-output" };
+      }
     : never;
 
 interface InvalidInspectionOutput {
@@ -124,32 +128,37 @@ function structuredOutcome(
   if (outcome.status !== "succeeded") {
     return outcome;
   }
-  try {
-    const output = JSON.parse(outcome.output) as unknown;
-    if (scope) {
-      return transferChildTranscript(
-        outcome,
-        { ...outcome, output: reviewerFindings(output, scope) },
-      );
+  let candidate: InspectionRoleFindings | ReviewerFindings | undefined;
+  let invalidAfterCandidate = false;
+  for (const response of childTerminalResponses(outcome)) {
+    try {
+      const output = JSON.parse(response) as unknown;
+      if (scope) {
+        candidate = reviewerFindings(output, scope);
+      } else if (
+        typeof output === "object" && output !== null && !Array.isArray(output) &&
+        typeof (output as Partial<InspectionRoleFindings>).summary === "string" &&
+        Array.isArray((output as Partial<InspectionRoleFindings>).evidence)
+      ) {
+        candidate = output as InspectionRoleFindings;
+      } else {
+        throw new Error("invalid inspection result");
+      }
+      invalidAfterCandidate = false;
+    } catch {
+      if (candidate) invalidAfterCandidate = true;
     }
-    if (
-      typeof output === "object" &&
-      output !== null &&
-      !Array.isArray(output) &&
-      typeof (output as Partial<InspectionRoleFindings>).summary === "string" &&
-      Array.isArray((output as Partial<InspectionRoleFindings>).evidence)
-    ) {
-      return transferChildTranscript(
-        outcome,
-        { ...outcome, output: output as InspectionRoleFindings },
-      );
-    }
-  } catch {
-    // Converted to a structured role failure below.
   }
-  if (!required) {
-    return outcome;
+  if (candidate) {
+    return transferChildTranscript(outcome, {
+      ...outcome,
+      output: candidate,
+      ...(invalidAfterCandidate
+        ? { diagnostic: { kind: "candidate" as const, code: "invalid-role-output" as const } }
+        : {}),
+    });
   }
+  if (!required) return outcome;
   return transferChildTranscript(outcome, {
     status: "failed",
     child: outcome.child,
