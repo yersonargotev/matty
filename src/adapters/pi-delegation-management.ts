@@ -35,14 +35,21 @@ function taskById(entry: DelegationSnapshotEntry | undefined, id: DelegatedTaskI
   return entry?.tasks.find((task) => task.id === id);
 }
 
+function compositionText(data: string): string | undefined {
+  const text = data.replace(/^\u001b\[200~/, "").replace(/\u001b\[201~$/, "");
+  return text.length > 0 && !/[\u0000-\u0008\u000b-\u001f\u007f]/u.test(text)
+    ? text
+    : undefined;
+}
+
 function taskMetadata(task: DelegatedTaskSnapshot, presentation: DelegatedTaskPresentation | undefined, now: number): string[] {
   const started = task.startedAt ?? task.queuedAt;
   const ended = task.endedAt ?? now;
   return [
     `Task state: ${task.state} · Role: ${task.role ?? "unknown"}`,
-    `Timing: ${Math.max(0, Math.floor((ended - started) / 1_000))}s · Queued at: ${new Date(task.queuedAt).toISOString()}`,
     `PID: ${task.pid ?? "unavailable"} · Run ID: ${task.runId ?? "unavailable"}`,
     `Usage: input ${presentation?.usage.inputTokens ?? 0} · output ${presentation?.usage.outputTokens ?? 0} tokens · Cost: $${(presentation?.usage.cost ?? 0).toFixed(4)} · Context consumption: ${presentation?.usage.totalTokens ?? 0} tokens`,
+    `Timing: ${Math.max(0, Math.floor((ended - started) / 1_000))}s · Queued at: ${new Date(task.queuedAt).toISOString()}`,
   ];
 }
 
@@ -88,12 +95,17 @@ export function createPiDelegationManagement(
       let selectedTaskId = initial?.taskId;
       let presentation = selectedTaskId ? control.taskPresentation(selectedTaskId) : undefined;
       let detachPresentation: (() => void) | undefined;
+      let releaseSession: (() => void) | undefined;
       let confirmation: { id: DelegationId; displayId: string; active: number; queued: number } | undefined;
+      let taskAbortConfirmation: { id: DelegatedTaskId; requirement: "required" | "optional" } | undefined;
+      let composition: { type: "steer" | "follow_up" | "input"; text: string } | undefined;
+      let interactionStatus: string | undefined;
       let cancellationStatus: string | undefined;
       let filter: TranscriptFilter = "all";
       let query = "";
       let enteringSearch = false;
       let selectedEntryId: string | undefined;
+      let selectedDialogOption = 0;
       const collapsed = new Set<string>();
       const initializedEntries = new Set<string>();
       let scroll = 0;
@@ -116,6 +128,7 @@ export function createPiDelegationManagement(
         });
       };
       bindPresentation();
+      if (view === "session" && selectedTaskId) releaseSession = control.retainTaskSession(selectedTaskId);
 
       const cancellationMessages = {
         cancelling: (displayId: string) => `Cancellation requested for ${displayId}.`,
@@ -141,6 +154,8 @@ export function createPiDelegationManagement(
         closed = true;
         unsubscribe();
         detachPresentation?.();
+        releaseSession?.();
+        releaseSession = undefined;
         activeConsoleClosers.delete(close);
         done();
       };
@@ -173,9 +188,27 @@ export function createPiDelegationManagement(
           } else {
             const task = taskById(delegation, selectedTaskId);
             lines.push("Delegation Console · Delegations → Delegated Tasks → Child Session");
-            lines.push("↑/↓ scroll/select · Enter collapse · / search · f filter · Esc/q close");
+            lines.push("↑/↓ scroll/select · Enter collapse · / search · f filter · s Steer · u Follow up · a abort · Esc/q close");
             if (task) {
               lines.push(`Delegated Task ID: ${task.id}`, ...taskMetadata(task, presentation, registry.now()));
+              lines.push(`Child Session: ${presentation?.sessionState ?? (task.state === "succeeded" ? "settled" : "working")}`);
+              if (presentation?.pendingInput) {
+                const request = presentation.pendingInput;
+                lines.push(
+                  `Waiting for ${request.method} · ${request.title}`,
+                  `${request.message ?? request.placeholder ?? "Response required"}`,
+                );
+                if (request.method === "select") {
+                  for (const [index, option] of (request.options ?? []).entries()) {
+                    lines.push(`${index === selectedDialogOption ? ">" : " "} ${option}`);
+                  }
+                  lines.push(`↑/↓ select · Enter respond · x cancel request${request.extendable ? " · e extend 5 minutes" : ""}`);
+                } else if (request.method === "confirm") {
+                  lines.push(`y yes · n no · x cancel request${request.extendable ? " · e extend 5 minutes" : ""}`);
+                } else {
+                  lines.push(`r compose ${request.method} response · x cancel request${request.extendable ? " · e extend 5 minutes" : ""}`);
+                }
+              }
               lines.push(`Filter: ${filter} · Search: ${enteringSearch ? `${query}█` : query || "none"}`);
               const entries = (presentation?.entries ?? []).filter((entry) =>
                 (filter === "all" || entry.category === filter) &&
@@ -192,24 +225,75 @@ export function createPiDelegationManagement(
               lines.push(...entryLines.slice(scroll, scroll + 24));
             } else lines.push("Delegated Task is unavailable.");
           }
-          if (confirmation) lines.push(
+          if (composition) lines.push(
+            `${composition.type === "steer" ? "Steer" : composition.type === "follow_up" ? "Follow up" : "Input response"}: ${composition.text}█`,
+            "Enter send · Esc cancel composition",
+          );
+          else if (taskAbortConfirmation) lines.push(
+            taskAbortConfirmation.requirement === "required"
+              ? "Abort this required task? Required sibling atomicity cancels every open sibling."
+              : "Abort this optional task? Only this task is cancelled; siblings continue.",
+            "y confirm · n/Esc keep running",
+          );
+          else if (confirmation) lines.push(
             `Confirm cancellation of ${confirmation.displayId}: ${confirmation.active} active, ${confirmation.queued} queued?`,
             "y confirm · n/Esc keep running",
           );
+          else if (interactionStatus) lines.push(interactionStatus);
           else if (cancellationStatus) lines.push(cancellationStatus);
           return lines.map((line) => piTui.truncateToWidth(line, Math.max(1, width)));
         },
         handleInput(data: string) {
-          if (enteringSearch) {
-            if (piTui.matchesKey(data, "q") || piTui.matchesKey(data, piTui.Key.escape)) {
-              close();
-              return;
+          if (composition) {
+            if (piTui.matchesKey(data, piTui.Key.escape)) {
+              composition = undefined;
+            } else if (piTui.matchesKey(data, piTui.Key.enter)) {
+              const submitted = composition;
+              composition = undefined;
+              if (selectedTaskId) {
+                if (submitted.type === "input" && presentation?.pendingInput) {
+                  void control.respondToInput(selectedTaskId, presentation.pendingInput.id, { value: submitted.text }).then((result) => {
+                    interactionStatus = result.status === "accepted" ? "Input response accepted." : `Input response rejected: ${result.code}.`;
+                    tui.requestRender();
+                  });
+                } else if (submitted.type !== "input") {
+                  void control.interact(selectedTaskId, { type: submitted.type, message: submitted.text }).then((result) => {
+                    interactionStatus = result.status === "accepted"
+                      ? `${submitted.type === "steer" ? "Steer" : "Follow up"} accepted.`
+                      : `Interaction rejected: ${result.code}.`;
+                    tui.requestRender();
+                  });
+                }
+              }
+            } else if (data === "\u007f") composition.text = composition.text.slice(0, -1);
+            else {
+              const text = compositionText(data);
+              if (text !== undefined) composition.text += text;
             }
-            if (piTui.matchesKey(data, piTui.Key.enter)) enteringSearch = false;
+            tui.requestRender();
+            return;
+          }
+          if (enteringSearch) {
+            if (piTui.matchesKey(data, piTui.Key.escape)) {
+              enteringSearch = false;
+            } else if (piTui.matchesKey(data, piTui.Key.enter)) enteringSearch = false;
             else if (data === "\u007f") query = query.slice(0, -1);
             else if (/^[ -~]$/.test(data)) query += data;
             scroll = 0;
             tui.requestRender();
+            return;
+          }
+          if (taskAbortConfirmation) {
+            if (piTui.matchesKey(data, "y")) {
+              const target = taskAbortConfirmation;
+              taskAbortConfirmation = undefined;
+              const result = control.abortTask(target.id);
+              interactionStatus = result.status === "accepted" ? "Task abort requested." : `Task abort rejected: ${result.code}.`;
+              tui.requestRender();
+            } else if (piTui.matchesKey(data, "n") || piTui.matchesKey(data, piTui.Key.escape)) {
+              taskAbortConfirmation = undefined;
+              tui.requestRender();
+            }
             return;
           }
           if (confirmation) {
@@ -240,7 +324,7 @@ export function createPiDelegationManagement(
               if (target.state === "queued" || target.state === "running") confirmation = {
                 id: target.id,
                 displayId: target.displayId,
-                active: target.tasks.filter((task) => task.state === "running").length,
+                active: target.tasks.filter((task) => task.state === "running" || task.state === "waiting-for-input" || task.state === "waiting-for-capability").length,
                 queued: target.tasks.filter((task) => task.state === "queued").length,
               };
               else reportCancellation(target.id, target.displayId);
@@ -250,9 +334,34 @@ export function createPiDelegationManagement(
             if (direction) selectedTaskId = move(tasks, selectedTaskId, direction) as DelegatedTaskId | undefined;
             else if (piTui.matchesKey(data, piTui.Key.enter) && selectedTaskId) {
               view = "session";
+              releaseSession?.();
+              releaseSession = control.retainTaskSession(selectedTaskId);
               bindPresentation();
             }
           } else {
+            const pendingRequest = presentation?.pendingInput;
+            if (piTui.matchesKey(data, "e") && selectedTaskId && pendingRequest?.extendable) {
+              const result = control.extendInputTimeout(selectedTaskId, pendingRequest.id);
+              interactionStatus = result.status === "accepted" ? "Dialog timeout extended by 5 minutes." : `Timeout extension rejected: ${result.code}.`;
+              tui.requestRender();
+              return;
+            }
+            if (pendingRequest?.method === "select") {
+              const options = pendingRequest.options ?? [];
+              if (direction && options.length > 0) {
+                selectedDialogOption = Math.max(0, Math.min(options.length - 1, selectedDialogOption + direction));
+              } else if (piTui.matchesKey(data, piTui.Key.enter) && selectedTaskId && options[selectedDialogOption] !== undefined) {
+                void control.respondToInput(selectedTaskId, pendingRequest.id, { value: options[selectedDialogOption]! }).then(() => tui.requestRender());
+              } else if (piTui.matchesKey(data, "x") && selectedTaskId) {
+                void control.respondToInput(selectedTaskId, pendingRequest.id, { cancelled: true }).then(() => tui.requestRender());
+              }
+              tui.requestRender();
+              return;
+            }
+            if (pendingRequest?.method === "confirm" && selectedTaskId && (piTui.matchesKey(data, "y") || piTui.matchesKey(data, "n"))) {
+              void control.respondToInput(selectedTaskId, pendingRequest.id, { confirmed: piTui.matchesKey(data, "y") }).then(() => tui.requestRender());
+              return;
+            }
             const entries = (presentation?.entries ?? []).filter((entry) =>
               (filter === "all" || entry.category === filter) &&
               (!query || `${entry.label}\n${entry.content}`.toLowerCase().includes(query.toLowerCase()))
@@ -281,6 +390,20 @@ export function createPiDelegationManagement(
               filter = filters[(filters.indexOf(filter) + 1) % filters.length]!;
               selectedEntryId = undefined;
               scroll = 0;
+            } else if (piTui.matchesKey(data, "s")) {
+              composition = { type: "steer", text: "" };
+            } else if (piTui.matchesKey(data, "u")) {
+              composition = { type: "follow_up", text: "" };
+            } else if (piTui.matchesKey(data, "a") && selectedTaskId) {
+              taskAbortConfirmation = {
+                id: selectedTaskId,
+                requirement: currentDelegation()?.requirement ?? "required",
+              };
+            } else if (piTui.matchesKey(data, "r") && presentation?.pendingInput &&
+              (presentation.pendingInput.method === "input" || presentation.pendingInput.method === "editor")) {
+              composition = { type: "input", text: presentation.pendingInput.prefill ?? "" };
+            } else if (piTui.matchesKey(data, "x") && selectedTaskId && presentation?.pendingInput) {
+              void control.respondToInput(selectedTaskId, presentation.pendingInput.id, { cancelled: true }).then(() => tui.requestRender());
             }
           }
           tui.requestRender();
@@ -290,6 +413,8 @@ export function createPiDelegationManagement(
           closed = true;
           unsubscribe();
           detachPresentation?.();
+          releaseSession?.();
+          releaseSession = undefined;
           activeConsoleClosers.delete(close);
         },
       };

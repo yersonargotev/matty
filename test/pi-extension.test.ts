@@ -26,6 +26,7 @@ import {
   detectLauncherPiVersion,
   registerPiMatty,
 } from "../src/adapters/pi-extension.ts";
+import { boundedChildExecutionScheduler } from "../src/application/delegation-scheduler.ts";
 import { childTranscript } from "../src/application/child-pi-runtime.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
@@ -766,7 +767,94 @@ test("Child Session browsing filters, searches, collapses details, labels metada
   assert.match(searched, /validated designer result base/);
   assert.doesNotMatch(searched, /Reasoning \[reasoning\]|Tool · read/);
   component.handleInput("\u001b");
+  assert.match(component.render(120).join("\n"), /Search: validated/);
+  component.handleInput("/");
+  component.handleInput("q");
+  assert.match(component.render(120).join("\n"), /Search: q█/);
+  component.handleInput("\u001b");
+  component.handleInput("s");
+  component.handleInput("corrección pegada");
+  assert.match(component.render(120).join("\n"), /Steer: corrección pegada█/);
+  component.handleInput("\u001b");
+  component.handleInput("q");
   await opening;
+});
+
+test("delegation TUI exposes default-timeout extension for every dialog method but not declared timeouts", async () => {
+  for (const [task, method, responseKey, extendable] of [
+    ["extension-dialog-select", "select", "\r", true],
+    ["extension-dialog-confirm", "confirm", "n", true],
+    ["extension-dialog-declared-timeout", "input", "x", false],
+  ] as const) {
+    const harness = createExtensionHarness();
+    const control = registerPiMatty(harness.pi, {}, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute);
+    let pendingResolve!: () => void;
+    const pending = new Promise<void>((resolve) => { pendingResolve = resolve; });
+    let subscribedTaskId = "";
+    const running = execute(
+      `tui-${method}` as never,
+      { requirement: "required", tasks: [{ role: "designer", task }] } as never,
+      undefined as never,
+      ((update: { details: { type?: string; delegatedTaskId?: string } }) => {
+        if (update.details.type !== "identified" || !update.details.delegatedTaskId || subscribedTaskId) return;
+        subscribedTaskId = update.details.delegatedTaskId;
+        control.subscribeTaskPresentation(subscribedTaskId, (presentation) => {
+          if (presentation.pendingInput?.method === method) pendingResolve();
+        });
+      }) as never,
+      {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      } as never,
+    );
+    await pending;
+    const notifications: string[] = [];
+    await harness.commandHandlers.get("matty")?.("delegations --json", {
+      mode: "rpc",
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    const displayId = JSON.parse(notifications.at(-1) ?? "{}").delegations[0].tasks[0].displayId;
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+    let close: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => { close = resolve; });
+    const opening = harness.commandHandlers.get("matty")?.(`task ${displayId}`, {
+      mode: "tui",
+      ui: {
+        notify() {},
+        async custom(factory: (...args: unknown[]) => unknown) {
+          component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+          await closed;
+        },
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(component);
+    const rendered = component.render(160).join("\n");
+    assert.match(rendered, new RegExp(`Waiting for ${method}`));
+    if (extendable) {
+      assert.match(rendered, /e extend 5 minutes/);
+      component.handleInput("e");
+      assert.match(component.render(160).join("\n"), /Dialog timeout extended by 5 minutes\./);
+    } else {
+      assert.doesNotMatch(rendered, /e extend 5 minutes/);
+      component.handleInput("e");
+      assert.doesNotMatch(component.render(160).join("\n"), /timeout extended/i);
+    }
+    component.handleInput(responseKey);
+    component.handleInput("q");
+    await opening;
+    const result = await running as unknown as { details: { tasks: Array<{ status: string }> } };
+    assert.equal(result.details.tasks[0]?.status, "failed");
+  }
 });
 
 test("delegation TUI reports cancellation of an already-terminal Delegation without confirmation or state overwrite", async () => {
@@ -1114,6 +1202,99 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
     ui: { notify(message: string) { notifications.push(message); } },
   });
   assert.equal(JSON.parse(notifications.at(-1) ?? "{}").delegations.length, 0);
+});
+
+test("headless exact-ID Steer and Follow up use distinct Pi delivery commands", async () => {
+  for (const commandName of ["steer", "follow-up"] as const) {
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, {}, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute);
+    let taskId = "";
+    let identifiedResolve!: () => void;
+    const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+    const running = execute(
+      `headless-${commandName}` as never,
+      { requirement: "required", tasks: [{ role: "designer", task: "interactive-candidate" }] } as never,
+      undefined as never,
+      ((update: { details: { type?: string; delegatedTaskId: string } }) => {
+        if (update.details.type === "identified") {
+          taskId = update.details.delegatedTaskId;
+          identifiedResolve();
+        }
+      }) as never,
+      {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      } as never,
+    );
+    await identified;
+    const notifications: string[] = [];
+    await harness.commandHandlers.get("matty")?.(`${commandName} ${taskId} finish-valid`, {
+      mode: "rpc",
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    assert.match(notifications.at(-1) ?? "", commandName === "steer" ? /Steer accepted/ : /Follow up accepted/);
+    const result = await running as unknown as {
+      details: { tasks: Array<{ value: { outcome: { output: { evidence: string[] } } } }> };
+    };
+    assert.deepEqual(result.details.tasks[0]?.value.outcome.output.evidence, [
+      commandName === "steer" ? "steer" : "follow_up",
+    ]);
+  }
+});
+
+test("settled Child Session respawns before freeze and replaces Candidate Result under the same task identity", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let taskId = "";
+  let interaction: Promise<unknown> | undefined;
+  const observedTaskIds: string[] = [];
+  const running = execute(
+    "settled-respawn" as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "settled-respawn-candidate" }] } as never,
+    undefined as never,
+    ((update: { details: { delegatedTaskId?: string } }) => {
+      if (!update.details.delegatedTaskId) return;
+      taskId ||= update.details.delegatedTaskId;
+      observedTaskIds.push(update.details.delegatedTaskId);
+      control.subscribeTaskPresentation(taskId, (presentation) => {
+        if (presentation.sessionState === "settled" && !interaction) {
+          interaction = control.interact(taskId, { type: "follow_up", message: "replace-after-exit" });
+        }
+      });
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  const result = await running as unknown as {
+    details: { tasks: Array<{ value: { outcome: { output: { summary: string; evidence: string[] } } } }> };
+  };
+  assert.equal((await interaction as { status: string }).status, "accepted");
+  assert.ok(observedTaskIds.length >= 2);
+  assert.deepEqual([...new Set(observedTaskIds)], [taskId]);
+  assert.deepEqual(result.details.tasks[0]?.value.outcome.output, {
+    summary: "replacement after respawn",
+    evidence: ["same-session", "same-tools"],
+  });
 });
 
 test("registered control correlates accepted interaction, freezes once, and replaces Candidate Result", async () => {
@@ -2307,7 +2488,7 @@ test("registered control privately assembles interleaved live state by exact Del
     assert.equal(presentation.assistant[0]?.type, "text");
     assert.match(presentation.assistant[0]?.content ?? "", new RegExp(`result ${marker}`));
     assert.deepEqual(presentation.tools, [{
-      toolCallId: `call-live-${marker}`,
+      toolCallId: `execution:1:call-live-${marker}`,
       toolName: "read",
       status: "running",
       args: "{}",
@@ -2319,6 +2500,53 @@ test("registered control privately assembles interleaved live state by exact Del
   }
   assert.doesNotMatch(JSON.stringify(updates), /A-first|B-first|A-new|B-new|call-live/);
   assert.equal(control.taskPresentation("not-an-authorized-task"), undefined);
+});
+
+test("bounded child admission reserves promoted slots and removes cancelled waiters", async () => {
+  const schedule = boundedChildExecutionScheduler(4);
+  let active = 0;
+  let maximumActive = 0;
+  const releases: Array<() => void> = [];
+  const blockingExecution = async () => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise<void>((resolve) => releases.push(resolve));
+    active -= 1;
+  };
+  const shortExecution = async () => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setImmediate(resolve));
+    active -= 1;
+  };
+
+  const initial = Array.from({ length: 4 }, () => schedule(blockingExecution));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(active, 4);
+
+  const cancelledController = new AbortController();
+  const cancelled = schedule(shortExecution, cancelledController.signal);
+  const promotedController = new AbortController();
+  let newArrival: Promise<void | undefined> | undefined;
+  const removeEventListener = promotedController.signal.removeEventListener.bind(promotedController.signal);
+  Object.defineProperty(promotedController.signal, "removeEventListener", {
+    value(...args: Parameters<AbortSignal["removeEventListener"]>) {
+      removeEventListener(...args);
+      newArrival ??= schedule(shortExecution);
+    },
+  });
+  const promoted = schedule(shortExecution, promotedController.signal);
+  cancelledController.abort();
+  assert.equal(await cancelled, undefined);
+
+  releases.shift()?.();
+  for (const release of releases.splice(0)) release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(newArrival);
+  await Promise.all([...initial, promoted, newArrival]);
+
+  assert.equal(maximumActive, 4);
+  assert.equal(active, 0);
 });
 
 test("one subagent call queues a fifth child behind four active children", async () => {

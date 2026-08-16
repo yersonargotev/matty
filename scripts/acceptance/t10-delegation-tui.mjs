@@ -129,6 +129,10 @@ try {
     host,
     "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js",
   )).href;
+  const singleWriter = pathToFileURL(join(
+    host,
+    "node_modules/@yargote/matty/dist/application/single-writer.js",
+  )).href;
 
   await writeFile(join(agentDir, "auth.json"), JSON.stringify({
     "t10-acceptance": { type: "api_key", key: "isolated-fixture-key" },
@@ -136,6 +140,24 @@ try {
   await writeFile(extension, `
 import { registerPiMatty } from ${JSON.stringify(mattyExtension)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
+import { spawn } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
+const writerCompetitor = ${JSON.stringify(`
+import { acquireRepositoryWriter } from ${JSON.stringify(singleWriter)};
+const [workingTree, stateRoot] = process.argv.slice(1);
+setTimeout(() => process.exit(0), 1_500);
+let release;
+for (let attempt = 0; attempt < 200 && !release; attempt += 1) {
+  release = await acquireRepositoryWriter(workingTree, stateRoot);
+  if (!release) await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (release) {
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  await release();
+}
+`)};
 
 const childMode = Boolean(process.env.MATTY_CHILD_ROLE);
 const childLifetimeHandle = childMode ? setInterval(() => {}, 60_000) : undefined;
@@ -161,6 +183,12 @@ export default function t10(pi) {
     },
     independentRuntimeAvailable: true,
   });
+  let requestedFixtureInput = false;
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (!childMode || requestedFixtureInput || /redirect deterministically|observe capability wait/.test(event.prompt)) return;
+    requestedFixtureInput = true;
+    await ctx.ui.input("T10 child input", "deterministic response required");
+  });
   pi.registerProvider("t10-acceptance", {
     name: "T10 deterministic fixture", baseUrl: "http://127.0.0.1/unused",
     api: "openai-completions",
@@ -171,32 +199,53 @@ export default function t10(pi) {
       const stream = createAssistantMessageEventStream();
       if (childMode) {
         const partial = assistant(model, [{ type: "text", text: "" }]);
+        const interacted = JSON.stringify(context.messages).includes("redirect deterministically");
+        const report = JSON.stringify({
+          schemaVersion: 1,
+          summary: interacted ? "T10 interaction Candidate Result" : "T10 initial Candidate Result",
+          changedPaths: [], checks: [],
+          evidenceRole: "supporting-only-parent-verification-required",
+          reportedFullGate: { status: "not-run" },
+        });
         queueMicrotask(() => {
           stream.push({ type: "start", partial });
           stream.push({ type: "text_start", contentIndex: 0, partial });
           stream.push({
-            type: "text_delta",
-            contentIndex: 0,
+            type: "text_delta", contentIndex: 0,
             delta: "\\u001b]0;owned\\u0007\\u001b[999mlive transcript needle\\u001b[0m",
             partial: assistant(model, [{
               type: "text",
               text: "\\u001b]0;owned\\u0007\\u001b[999mlive transcript needle\\u001b[0m",
             }]),
           });
+          setTimeout(() => {
+            stream.end(assistant(model, [{ type: "text", text: report }]));
+            if (interacted) void realpath(tmpdir()).then((stateRoot) => {
+              const competitor = spawn(process.execPath, [
+                "--input-type=module", "-e", writerCompetitor,
+                process.cwd(), stateRoot,
+              ], { stdio: "ignore" });
+              competitor.unref();
+            });
+          }, 2_000);
         });
         return stream;
       }
+      const messages = JSON.stringify(context.messages);
       const results = context.messages.filter((message) => message.role === "toolResult");
+      const cancellationRun = messages.includes("start cancellation delegation");
+      const shouldDelegate = results.length < (cancellationRun ? 2 : 1);
       queueMicrotask(() => stream.end(assistant(model,
-        results.length === 0
-          ? [{ type: "toolCall", id: "five-task-delegation", name: "subagent", arguments: {
+        shouldDelegate
+          ? [{ type: "toolCall", id: cancellationRun ? "cancellation-delegation" : "five-task-delegation", name: "subagent", arguments: {
               requirement: "required",
               tasks: Array.from({ length: 5 }, (_, index) => ({
-                role: "explorer", task: "deterministic hold " + (index + 1),
+                role: cancellationRun || index > 0 ? "explorer" : "worker",
+                task: "deterministic hold " + (index + 1),
               })),
             } }]
           : [{ type: "text", text: "T10 delegation cancellation complete" }],
-        results.length === 0 ? "toolUse" : "stop",
+        shouldDelegate ? "toolUse" : "stop",
       )));
       return stream;
     },
@@ -281,41 +330,64 @@ send -- "start deterministic delegation\\r"
 phase live-counts {Matty fleet[^\\r\\n]*Active tasks: 4[^\\r\\n]*Queued tasks: 1}
 after 1600
 drain
-stty rows 41 columns 160
+stty rows 55 columns 160
 phase stable-before-open {T-[0-9a-f]{8}[^\\r\\n]*State: queued[^\\r\\n]*queue 1}
 send -- "/matty delegations\\r"
 phase console-open {Delegation Console.*Delegations}
 phase navigation-hint {Enter Delegated Tasks.*Esc/q close}
 send -- "\\r"
 phase task-list {Delegations.*Delegated Tasks}
-phase task-state {T-[0-9a-f]{8}.*State: (running|queued).*Role: explorer}
+phase task-state {T-[0-9a-f]{8}.*State: (running|waiting-for-input).*Role: worker}
 set taskLine $expect_out(0,string)
 regexp {(T-[0-9a-f]{8})} $taskLine _ taskId
 send -- "\\r"
 phase child-session {Delegations.*Delegated Tasks.*Child Session}
-phase session-key-hints {/ search.*f filter.*Esc/q close}
+phase session-key-hints {/ search.*f filter.*s Steer.*u Follow}
 phase accessible-labels {Task state:.*Role:}
 phase process-labels {PID:.*Run ID:}
 phase usage-labels {Usage:.*Cost:.*Context consumption:}
+phase waiting-input-state {Task state: waiting-for-input}
+send -- "rfixture response\\r"
 phase live-transcript {live transcript needle}
+phase input-update {Input response accepted\.}
+send -- "sredirect deterministically\\r"
+phase steer-update {Steer accepted\.}
+phase initial-candidate {T10 initial Candidate Result}
+phase interaction-candidate {T10 interaction Candidate Result}
 send -- "f"
 phase filter-message {Filter: message}
-send -- "/absent\\r"
-phase search-no-match {No transcript entries match}
-send -- "/needle\\r"
-phase search-match {Search: needle}
-phase search-result {live transcript needle}
+send -- "/Candidate\\r"
+phase search-match {Search: Candidate}
+phase search-result {T10 interaction Candidate Result}
 send -- "f"
 phase filter-reasoning {Filter: reasoning}
 phase filtered-out {No transcript entries match}
-send -- "\\033"
+send -- "f"
+send -- "f"
+send -- "f"
+send -- "/\\r"
+phase filter-reset {Filter: all.*Search: none}
+after 300
+send -- "uobserve capability wait\\r"
+phase waiting-capability {Child Session: waiting-for-capability}
+phase follow-up-update {Follow up accepted\.}
+phase follow-up-candidate {T10 interaction Candidate Result}
+send -- "a"
+phase task-abort-atomicity {Abort this required task.*Required sibling atomicity cancels every open sibling\.}
+send -- "y"
+phase task-abort-requested {Task abort requested\.}
 after 200
-send -- "/matty task $taskId\\r"
-phase exact-task {Delegated Task ID:}
+send -- "q"
+phase first-group-complete {T10 delegation cancellation complete}
+send -- "/matty delegations\\r"
+phase required-group-consequence {D-[0-9a-f]{8} cancelled}
 send -- "q"
 after 200
 send -- "/matty status\\r"
-phase focus-restored-q {Matty 0\\.2\\.0}
+phase focus-restored-task-abort {Matty 0\\.2\\.0}
+after 200
+send -- "start cancellation delegation\\r"
+phase cancellation-live-counts {Matty fleet[^\\r\\n]*Active tasks: 4[^\\r\\n]*Queued tasks: 1}
 send -- "/matty delegations\\r"
 phase cancellation-console {Delegation Console.*Delegations}
 send -- "c"
@@ -361,9 +433,12 @@ expect eof
       `target: ${CERTIFIED_TARGET}`,
       "live task-level fleet state: 4 active / 1 queued",
       "Delegations → Delegated Tasks → Child Session navigation: observed",
-      "search/filter/key hints/accessibility labels: observed",
-      "exact task command and Esc/q focus restoration: observed",
-      "cancellation reject/confirm/live rerender: observed",
+      "search/filter/composition/key hints/accessibility labels: observed",
+      "distinct Steer and Follow up composition with post-interaction Candidate Results: observed",
+      "waiting-for-capability: observed",
+      "required task abort and atomic sibling consequence: observed",
+      "q focus restoration after task abort: observed",
+      "separate cancellation reject/confirm/live rerender: observed",
     ].join("\n") + "\n");
   }
 } catch (error) {

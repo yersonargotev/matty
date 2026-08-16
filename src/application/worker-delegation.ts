@@ -21,7 +21,14 @@ export interface WorkerDelegationExecution {
     | (() => void | Promise<void>)
     | undefined
     | Promise<(() => void | Promise<void>) | undefined>;
-  createRunner(): DelegatedTaskRunner;
+  createRunner(lifecycle?: {
+    beforeInteraction(
+      signal?: AbortSignal,
+      context?: { readonly candidateObserved: boolean },
+    ): Promise<boolean>;
+    onInteractionRejected(): void | Promise<void>;
+    onTerminalResponse(text: string): void;
+  }): DelegatedTaskRunner;
 }
 
 export interface WorkerDelegationOptions {
@@ -93,14 +100,100 @@ export async function runWorkerDelegation(
       preflight.diagnostic.unmet,
     );
   }
-  const releaseWriter = await execution.acquireWriter();
+  let releaseWriter = await execution.acquireWriter();
   if (!releaseWriter) {
     return blockedWorkerDelegation(execution.contract, [
       "Single Writer already active for this repository",
     ]);
   }
+  let releasePending: Promise<void> = Promise.resolve();
+  let candidateSequence = 0;
+  const candidateWaiters = new Set<() => void>();
+  let interactionTail: Promise<void> = Promise.resolve();
+  let activeInteraction: { complete(): void } | undefined;
+  const releaseCandidateWriter = (): void => {
+    const release = releaseWriter;
+    releaseWriter = undefined;
+    if (release) releasePending = releasePending.then(async () => { await release(); });
+  };
+  const completeActiveInteraction = (): void => {
+    const active = activeInteraction;
+    activeInteraction = undefined;
+    active?.complete();
+  };
   try {
-    const runner = execution.createRunner();
+    const runner = execution.createRunner({
+      async beforeInteraction(signal = options.signal, context) {
+        const predecessor = interactionTail;
+        let complete!: () => void;
+        let completed = false;
+        interactionTail = new Promise<void>((resolve) => {
+          complete = () => {
+            if (completed) return;
+            completed = true;
+            resolve();
+          };
+        });
+        const targetCandidate = candidateSequence + (context?.candidateObserved === false ? 1 : 0);
+        await predecessor;
+        if (signal?.aborted) {
+          complete();
+          return false;
+        }
+        if (candidateSequence < targetCandidate) {
+          await new Promise<void>((resolveCandidate) => {
+            const finish = () => {
+              candidateWaiters.delete(finish);
+              signal?.removeEventListener("abort", finish);
+              resolveCandidate();
+            };
+            candidateWaiters.add(finish);
+            signal?.addEventListener("abort", finish, { once: true });
+          });
+        }
+        if (signal?.aborted) {
+          complete();
+          return false;
+        }
+        await releasePending;
+        while (!releaseWriter && !signal?.aborted) {
+          releaseWriter = await execution.acquireWriter();
+          if (!releaseWriter) {
+            await new Promise<void>((resolveWait) => {
+              const finish = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener("abort", finish);
+                resolveWait();
+              };
+              const timer = setTimeout(finish, 10);
+              signal?.addEventListener("abort", finish, { once: true });
+            });
+          }
+        }
+        if (!releaseWriter) {
+          complete();
+          return false;
+        }
+        activeInteraction = { complete };
+        return true;
+      },
+      async onInteractionRejected() {
+        releaseCandidateWriter();
+        completeActiveInteraction();
+        await releasePending;
+      },
+      onTerminalResponse(text) {
+        try {
+          workerCompletionReport(JSON.parse(text));
+          candidateSequence += 1;
+          releaseCandidateWriter();
+          for (const resolveCandidate of [...candidateWaiters]) resolveCandidate();
+          completeActiveInteraction();
+        } catch {
+          // Invalid responses remain transcript-only and do not alter authority.
+        }
+      },
+    });
     const outcome = await runner.run(workerTask(preflight.contract, task), options);
     if (outcome.status !== "succeeded") {
       return { contract: preflight.contract, outcome };
@@ -140,6 +233,11 @@ export async function runWorkerDelegation(
       }),
     };
   } finally {
-    await releaseWriter();
+    for (const resolveCandidate of [...candidateWaiters]) resolveCandidate();
+    completeActiveInteraction();
+    await interactionTail;
+    await releasePending;
+    await releaseWriter?.();
+    releaseWriter = undefined;
   }
 }

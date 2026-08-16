@@ -12,7 +12,7 @@ import type {
 } from "./delegation-scheduler.ts";
 
 export const DELEGATION_STATES = [
-  "queued", "running", "cancelling", "blocked", "succeeded", "partial",
+  "queued", "running", "waiting-for-input", "waiting-for-capability", "cancelling", "blocked", "succeeded", "partial",
   "failed", "cancelled",
 ] as const;
 export type DelegationState = (typeof DELEGATION_STATES)[number];
@@ -271,6 +271,20 @@ export class DelegationRegistry {
     this.#changed();
   }
 
+  recordTaskSessionState(
+    taskId: string,
+    state: "working" | "settled" | "waiting-for-input" | "waiting-for-capability",
+  ): void {
+    for (const entry of this.#entries.values()) {
+      const task = entry.tasks.find((candidate) => candidate.id === taskId);
+      if (!task || isTerminalDelegationState(task.state)) continue;
+      task.state = state === "working" || state === "settled" ? "running" : state;
+      this.#recalculateState(entry);
+      this.#changed();
+      return;
+    }
+  }
+
   recordActivity(id: DelegationId, taskIndex: number, value: unknown): void {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state)) return;
@@ -379,7 +393,7 @@ export class DelegationRegistry {
     if (entry.state === "cancelling") return "already-cancelling";
     entry.state = "cancelling";
     for (const task of entry.tasks) {
-      if (task.state === "running") task.state = "cancelling";
+      if (task.state === "running" || task.state === "waiting-for-input" || task.state === "waiting-for-capability") task.state = "cancelling";
     }
     this.#changed();
     entry.controller?.abort();
@@ -400,7 +414,7 @@ export class DelegationRegistry {
     let queuedTasks = 0;
     for (const entry of entries) {
       for (const task of entry.tasks) {
-        if (task.state === "running" || task.state === "cancelling") activeTasks += 1;
+        if (task.state === "running" || task.state === "waiting-for-input" || task.state === "waiting-for-capability" || task.state === "cancelling") activeTasks += 1;
         if (task.state === "queued") queuedTasks += 1;
       }
     }
@@ -484,7 +498,7 @@ export class DelegationRegistry {
     if (entry.state === "cancelling") return;
     if (entry.tasks.some((task) => task.state === "cancelling")) {
       entry.state = "cancelling";
-    } else if (entry.tasks.some((task) => task.state === "running")) {
+    } else if (entry.tasks.some((task) => task.state === "running" || task.state === "waiting-for-input" || task.state === "waiting-for-capability")) {
       entry.state = "running";
     } else if (entry.tasks.some((task) => task.state === "queued")) {
       entry.state = "queued";

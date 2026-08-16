@@ -31,6 +31,7 @@ test("control retains active plus newest terminal limit and detaches completion 
   let activeAborts = 0;
   const presentation = Object.freeze({
     revision: 1,
+    sessionState: "working" as const,
     assistant: Object.freeze([]),
     tools: Object.freeze([]),
     entries: Object.freeze([]),
@@ -60,6 +61,29 @@ test("control retains active plus newest terminal limit and detaches completion 
   assert.equal((await control.freeze("terminal-2") as { index: number }).index, 2);
 });
 
+test("an active task-view holder keeps the runner alive through settlement until released", () => {
+  const control = new DelegationControl();
+  let retained = 0;
+  let released = 0;
+  let closed = 0;
+  control.open("delegation", "optional", ["task"], () => {});
+  control.attachRunner("task", {
+    async run() { return { status: "cancelled", child: null, phase: "before-spawn" }; },
+    retain() {
+      retained += 1;
+      return () => { released += 1; };
+    },
+    async close() { closed += 1; },
+  });
+  const release = control.retainTaskSession("task");
+  control.complete("delegation", { status: "succeeded" });
+  assert.equal(retained, 1);
+  assert.equal(closed, 0);
+  release();
+  assert.equal(released, 1);
+  assert.equal(closed, 1);
+});
+
 test("control reset resolves waiters and drops task-scoped presentation subscriptions", async () => {
   const control = new DelegationControl();
   let detached = 0;
@@ -67,6 +91,7 @@ test("control reset resolves waiters and drops task-scoped presentation subscrip
   control.open("delegation", "required", ["task"], () => { aborted += 1; });
   control.attachRunner("task", runner(Object.freeze({
     revision: 1,
+    sessionState: "working" as const,
     assistant: Object.freeze([]),
     tools: Object.freeze([]),
     entries: Object.freeze([]),

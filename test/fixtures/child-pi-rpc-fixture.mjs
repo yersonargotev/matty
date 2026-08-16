@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { closeSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -10,6 +11,9 @@ function argument(name) {
 const provider = argument("--provider");
 const model = argument("--model");
 const thinking = argument("--thinking");
+const sessionDirectory = argument("--session-dir");
+const sessionId = argument("--session-id");
+const tools = argument("--tools");
 const authDigest = createHash("sha256")
   .update(process.env.MATTY_TEST_AUTH ?? "")
   .digest("hex");
@@ -28,6 +32,10 @@ function terminal(text) {
       role: "assistant",
       content: [{ type: "text", text }],
       stopReason: "stop",
+      usage: {
+        input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
     },
   });
 }
@@ -35,6 +43,12 @@ function terminal(text) {
 function handle(command, promptTerminatedByLf) {
   if (command.type === "prompt") {
     void run(command, promptTerminatedByLf);
+    return;
+  }
+  if (command.type === "extension_ui_response") {
+    terminal(JSON.stringify({ response: command.cancelled ? "cancelled" : command.value ?? command.confirmed }));
+    emit({ type: "agent_settled" });
+    process.stdin.unref();
     return;
   }
   if (interactive && (command.type === "steer" || command.type === "follow_up")) {
@@ -100,9 +114,24 @@ async function run(command, promptTerminatedByLf) {
   if (task === "stderr-overflow" || task?.includes("assignment:\nstderr-overflow\n")) {
     process.stderr.write("x".repeat(65 * 1024));
   }
-  if (task?.startsWith("Designer assignment:\ninteractive-candidate\n")) {
+  if (task === "interactive-candidate" || task?.startsWith("Designer assignment:\ninteractive-candidate\n")) {
     interactive = true;
     terminal(JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }));
+    return;
+  }
+  if (task === "settled-respawn-candidate" || task?.startsWith("Designer assignment:\nsettled-respawn-candidate\n")) {
+    await writeFile(join(sessionDirectory, "fixture-session.json"), JSON.stringify({ sessionId, tools, provider, model, thinking }));
+    terminal(JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }));
+    emit({ type: "agent_settled" });
+    return;
+  }
+  if (task === "replace-after-exit") {
+    const original = JSON.parse(await readFile(join(sessionDirectory, "fixture-session.json"), "utf8"));
+    terminal(JSON.stringify({
+      summary: "replacement after respawn",
+      evidence: [original.sessionId === sessionId ? "same-session" : "changed-session", original.tools === tools ? "same-tools" : "changed-tools"],
+    }));
+    emit({ type: "agent_settled" });
     return;
   }
   if (task === "interactive-backpressure") {
@@ -110,6 +139,56 @@ async function run(command, promptTerminatedByLf) {
     holdInteractions = true;
     terminal("waiting for bounded interactions");
     process.stdin.pause();
+    return;
+  }
+  const extensionDialogTask = [
+    "extension-dialog", "extension-dialog-timeout", "extension-dialog-declared-timeout",
+    "extension-dialog-timeout-zero", "extension-dialog-timeout-fractional",
+    "extension-dialog-timeout-huge", "extension-dialog-timeout-string",
+    "extension-dialog-write-failure", "extension-dialog-select", "extension-dialog-confirm",
+    "extension-dialog-editor",
+  ].find((candidate) => task === candidate || task?.includes(`assignment:\n${candidate}\n`));
+  if (extensionDialogTask) {
+    const method = extensionDialogTask.endsWith("-select") ? "select" : extensionDialogTask.endsWith("-confirm") ? "confirm" : extensionDialogTask.endsWith("-editor") ? "editor" : "input";
+    const timeout = {
+      "extension-dialog-timeout": 5,
+      "extension-dialog-declared-timeout": 60_000,
+      "extension-dialog-timeout-zero": 0,
+      "extension-dialog-timeout-fractional": 1.5,
+      "extension-dialog-timeout-huge": 2_147_483_648,
+      "extension-dialog-timeout-string": "1000",
+    }[extensionDialogTask];
+    emit({
+      type: "extension_ui_request",
+      id: "fixture-dialog",
+      method,
+      title: `Fixture ${method}`,
+      ...(method === "confirm" ? { message: "Continue?" } : {}),
+      ...(method === "input" ? { placeholder: "type a response" } : {}),
+      ...(method === "select" ? { options: ["first", "second"] } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
+    });
+    if (extensionDialogTask === "extension-dialog-write-failure") {
+      process.stdin.pause();
+      setTimeout(() => closeSync(0), 20);
+      setInterval(() => {}, 1_000);
+    }
+    if ([
+      "extension-dialog-timeout-zero", "extension-dialog-timeout-fractional",
+      "extension-dialog-timeout-huge", "extension-dialog-timeout-string",
+    ].includes(extensionDialogTask)) {
+      setTimeout(() => process.exit(9), 100);
+    }
+    return;
+  }
+  const malformedDialog = {
+    "malformed-extension-dialog-title": { method: "input", title: "" },
+    "malformed-extension-dialog-options-empty": { method: "select", title: "Choose", options: [] },
+    "malformed-extension-dialog-options-string": { method: "select", title: "Choose", options: ["valid", ""] },
+    "malformed-extension-dialog-confirm-message": { method: "confirm", title: "Confirm", message: "" },
+  }[task];
+  if (malformedDialog) {
+    emit({ type: "extension_ui_request", id: "fixture-dialog", ...malformedDialog });
     return;
   }
   if (task === "malformed-message") {

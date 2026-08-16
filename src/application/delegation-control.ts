@@ -1,6 +1,8 @@
 import type {
   ChildInteraction,
   ChildInteractionResult,
+  ChildInputResponse,
+  ChildInputResult,
   DelegatedTaskPresentation,
   DelegatedTaskRunner,
 } from "./child-pi-runtime.ts";
@@ -15,12 +17,16 @@ export interface MattyApplicationControl {
     status: "rejected";
     code: "delegated-task-unavailable" | "delegation-closing";
   };
+  respondToInput(delegatedTaskId: string, requestId: string, response: ChildInputResponse): Promise<ChildInputResult | { status: "rejected"; code: "delegated-task-unavailable" | "delegation-closing" }>;
+  extendInputTimeout(delegatedTaskId: string, requestId: string, extensionMs?: number): ChildInputResult | { status: "rejected"; code: "delegated-task-unavailable" | "delegation-closing" };
   /** Private, task-scoped presentation state. Raw Child Session content is never returned elsewhere. */
   taskPresentation(delegatedTaskId: string): DelegatedTaskPresentation | undefined;
   subscribeTaskPresentation(
     delegatedTaskId: string,
     listener: (presentation: DelegatedTaskPresentation) => void,
   ): () => void;
+  /** Holds an active Child Session while its task view remains open. */
+  retainTaskSession(delegatedTaskId: string): () => void;
   freeze(delegationId: string): Promise<unknown>;
 }
 
@@ -44,6 +50,8 @@ interface TaskRecord {
   abortRequested?: boolean;
   presentation?: DelegatedTaskPresentation;
   listeners: Set<(presentation: DelegatedTaskPresentation) => void>;
+  holders: Map<symbol, (() => void) | undefined>;
+  closeWhenReleased?: boolean;
 }
 
 function immutable<T>(value: T, visited = new WeakSet<object>()): T {
@@ -55,12 +63,17 @@ function immutable<T>(value: T, visited = new WeakSet<object>()): T {
 
 export class DelegationControl implements MattyApplicationControl {
   readonly #terminalLimit: number;
+  readonly #onTaskSessionState?: (taskId: string, state: DelegatedTaskPresentation["sessionState"]) => void;
   readonly #delegations = new Map<string, DelegationRecord>();
   readonly #tasks = new Map<string, TaskRecord>();
   #terminalOrder = 0;
 
-  constructor(options: { terminalLimit?: number } = {}) {
+  constructor(options: {
+    terminalLimit?: number;
+    onTaskSessionState?: (taskId: string, state: DelegatedTaskPresentation["sessionState"]) => void;
+  } = {}) {
     this.#terminalLimit = Math.max(0, Math.trunc(options.terminalLimit ?? 50));
+    if (options.onTaskSessionState) this.#onTaskSessionState = options.onTaskSessionState;
   }
 
   open(
@@ -83,6 +96,7 @@ export class DelegationControl implements MattyApplicationControl {
         delegationId,
         requirement,
         listeners: new Set(),
+        holders: new Map(),
       });
     }
   }
@@ -91,9 +105,12 @@ export class DelegationControl implements MattyApplicationControl {
     const task = this.#tasks.get(taskId);
     if (!task) return;
     task.detachRunner?.();
+    for (const release of task.holders.values()) release?.();
     task.runner = runner;
+    for (const holder of task.holders.keys()) task.holders.set(holder, runner.retain?.());
     const update = (presentation: DelegatedTaskPresentation) => {
       task.presentation = presentation;
+      this.#onTaskSessionState?.(taskId, presentation.sessionState);
       for (const listener of task.listeners) {
         try {
           listener(presentation);
@@ -133,6 +150,30 @@ export class DelegationControl implements MattyApplicationControl {
     return await task.runner.interact(interaction);
   }
 
+  async respondToInput(taskId: string, requestId: string, response: ChildInputResponse) {
+    const task = this.#tasks.get(taskId);
+    if (!task) return { status: "rejected" as const, code: "delegated-task-unavailable" as const };
+    const delegation = this.#delegations.get(task.delegationId);
+    if (!delegation || delegation.phase !== "open") {
+      return { status: "rejected" as const, code: "delegation-closing" as const };
+    }
+    return task.runner?.respondToInput
+      ? await task.runner.respondToInput(requestId, response)
+      : { status: "rejected" as const, code: "child-session-unavailable" as const };
+  }
+
+  extendInputTimeout(taskId: string, requestId: string, extensionMs?: number) {
+    const task = this.#tasks.get(taskId);
+    if (!task) return { status: "rejected" as const, code: "delegated-task-unavailable" as const };
+    const delegation = this.#delegations.get(task.delegationId);
+    if (!delegation || delegation.phase !== "open") {
+      return { status: "rejected" as const, code: "delegation-closing" as const };
+    }
+    return task.runner?.extendInputTimeout
+      ? task.runner.extendInputTimeout(requestId, extensionMs)
+      : { status: "rejected" as const, code: "child-session-unavailable" as const };
+  }
+
   abortTask(taskId: string): ReturnType<MattyApplicationControl["abortTask"]> {
     const task = this.#tasks.get(taskId);
     if (!task) return { status: "rejected", code: "delegated-task-unavailable" };
@@ -161,10 +202,27 @@ export class DelegationControl implements MattyApplicationControl {
     return () => task.listeners.delete(listener);
   }
 
+  retainTaskSession(taskId: string): () => void {
+    const task = this.#tasks.get(taskId);
+    const delegation = task ? this.#delegations.get(task.delegationId) : undefined;
+    if (!task || !delegation || delegation.phase !== "open") return () => {};
+    const holder = Symbol("task-session-holder");
+    task.holders.set(holder, task.runner?.retain?.());
+    return () => {
+      if (!task.holders.has(holder)) return;
+      task.holders.get(holder)?.();
+      task.holders.delete(holder);
+      if (task.holders.size === 0 && task.closeWhenReleased) this.#closeTaskRunner(task);
+    };
+  }
+
   freeze(delegationId: string): Promise<unknown> {
     const delegation = this.#delegations.get(delegationId);
     if (!delegation) return Promise.reject(new Error("Delegation is unavailable"));
-    if (delegation.phase === "open") delegation.phase = "closing";
+    if (delegation.phase === "open") {
+      delegation.phase = "closing";
+      for (const taskId of delegation.taskIds) this.#tasks.get(taskId)?.runner?.freeze?.();
+    }
     return delegation.terminal;
   }
 
@@ -183,9 +241,8 @@ export class DelegationControl implements MattyApplicationControl {
       if (!task) continue;
       const finalPresentation = task.runner?.presentation?.();
       if (finalPresentation) task.presentation = finalPresentation;
-      task.detachRunner?.();
-      delete task.detachRunner;
-      delete task.runner;
+      if (task.holders.size > 0) task.closeWhenReleased = true;
+      else this.#closeTaskRunner(task);
       delete task.abort;
       delete task.abortRequested;
     }
@@ -202,6 +259,11 @@ export class DelegationControl implements MattyApplicationControl {
     }
     for (const task of this.#tasks.values()) {
       task.detachRunner?.();
+      for (const release of task.holders.values()) release?.();
+      task.holders.clear();
+      void task.runner?.close?.().catch(() => {
+        // Ephemeral Child Session cleanup is best effort during host shutdown.
+      });
       task.listeners.clear();
     }
     this.#delegations.clear();
@@ -211,6 +273,16 @@ export class DelegationControl implements MattyApplicationControl {
 
   shutdown(): void {
     this.reset();
+  }
+
+  #closeTaskRunner(task: TaskRecord): void {
+    task.detachRunner?.();
+    void task.runner?.close?.().catch(() => {
+      // Ephemeral Child Session cleanup is best effort after lifecycle completion.
+    });
+    delete task.detachRunner;
+    delete task.runner;
+    delete task.closeWhenReleased;
   }
 
   #evict(): void {
