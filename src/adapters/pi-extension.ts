@@ -89,6 +89,7 @@ import type {
   DelegationGroupContract,
   DelegationTaskDeclaration,
 } from "../domain/delegation-group.ts";
+import type { ReviewScopeContract } from "../domain/review-scope.ts";
 import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
 import {
   detectMattyRulesConflict,
@@ -514,6 +515,23 @@ function researcherScope(
     };
   } catch {
     return undefined;
+  }
+}
+
+async function reviewCommitsAvailable(
+  cwd: string,
+  scope: ReviewScopeContract,
+): Promise<boolean> {
+  try {
+    await Promise.all([scope.baseSha, scope.candidateSha].map((sha) =>
+      execFileAsync("git", ["cat-file", "-e", `${sha}^{commit}`], {
+        cwd,
+        timeout: 5_000,
+      })
+    ));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1475,6 +1493,9 @@ export function registerPiMatty(
                 inspectionGuard: true,
                 github,
               },
+              async reviewCommitsAvailable(scope) {
+                return await reviewCommitsAvailable(ctx.cwd, scope);
+              },
               createRunner() {
                 return createChildPiRunner({
                   invocation: inspectionInvocation,
@@ -1665,6 +1686,13 @@ export function registerPiMatty(
                     (!github.available || !github.authenticated)
                   ) {
                     return { ok: false, reason: "github-unavailable" };
+                  }
+                  if (
+                    task.role === "reviewer" &&
+                    (!task.reviewScope ||
+                      !(await reviewCommitsAvailable(ctx.cwd, task.reviewScope)))
+                  ) {
+                    return { ok: false, reason: "review-commit-unavailable" };
                   }
                   const roleInvocation = !declaresInvocationTools(invocation)
                     ? invocationWithTools(invocation, INSPECTION_TOOLS)

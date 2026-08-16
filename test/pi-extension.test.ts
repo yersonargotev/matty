@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   access,
   mkdir,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import type {
   ExtensionAPI,
@@ -35,6 +37,8 @@ import {
 import {
   createParentWebCapabilityContract,
 } from "../src/domain/web-capability.ts";
+
+const execFileAsync = promisify(execFile);
 
 function createExtensionHarness() {
   const handlers = new Map<string, Array<(...args: never[]) => unknown>>();
@@ -1968,6 +1972,158 @@ test("Single Writer permits at most one active worker for a repository", async (
       "cancelled",
     );
   }
+});
+
+test("required reviewer group blocks atomically when a review commit is unavailable", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+    async reviewerGithubPreflight() {
+      return { available: true, authenticated: true };
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let childStarted = false;
+  const secret = "review prompt must remain redacted";
+  const result = await execute(
+    "review-missing-commit" as never,
+    {
+      requirement: "required",
+      tasks: [
+        {
+          role: "reviewer",
+          task: secret,
+          reviewScope: {
+            schemaVersion: 1,
+            issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+            requirements: ["Issue 9"],
+            outOfScope: [],
+            baseSha: "ffffffffffffffffffffffffffffffffffffffff",
+            candidateSha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            axes: ["spec"],
+          },
+        },
+        { role: "explorer", task: "must not start" },
+      ],
+    } as never,
+    undefined as never,
+    ((update: { details?: { progress?: { type?: string } } }) => {
+      childStarted ||= update.details?.progress?.type === "started";
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+
+  assert.equal(childStarted, false);
+  assert.equal((result.details as { status: string }).status, "blocked");
+  assert.deepEqual(
+    (result.details as { tasks: Array<{ status: string; diagnostic: unknown }> }).tasks,
+    [
+      {
+        taskIndex: 0,
+        role: "reviewer",
+        status: "failed",
+        diagnostic: {
+          kind: "delegation",
+          code: "preflight-failed",
+          taskIndex: 0,
+          role: "reviewer",
+          reason: "review-commit-unavailable",
+        },
+      },
+      {
+        taskIndex: 1,
+        role: "explorer",
+        status: "cancelled",
+        diagnostic: {
+          kind: "delegation",
+          code: "cancelled",
+          taskIndex: 1,
+          role: "explorer",
+          phase: "before-spawn",
+        },
+      },
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+});
+
+test("reviewer invalid output remains a closed-allowlist group diagnostic", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+    async reviewerGithubPreflight() {
+      return { available: true, authenticated: true };
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    cwd: process.cwd(),
+  });
+  const head = stdout.trim();
+  const result = await execute(
+    "review-invalid-output" as never,
+    {
+      requirement: "required",
+      tasks: [{
+        role: "reviewer",
+        task: "Return invalid fixture output",
+        reviewScope: {
+          schemaVersion: 1,
+          issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+          requirements: ["Issue 9"],
+          outOfScope: [],
+          baseSha: head,
+          candidateSha: head,
+          axes: ["spec"],
+        },
+      }],
+    } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+
+  assert.equal((result.details as { status: string }).status, "failed");
+  assert.equal(
+    (result.details as { tasks: Array<{ diagnostic?: { code?: string } }> })
+      .tasks[0]?.diagnostic?.code,
+    "invalid-role-output",
+  );
+  assert.doesNotMatch(JSON.stringify(result), /fixture-provider|authDigest|Return invalid/);
 });
 
 test("reviewer gh preflight blocks before spawning and returns a diagnostic", async () => {

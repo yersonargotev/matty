@@ -213,6 +213,10 @@ try {
     { cwd: project, env: isolatedEnv },
   );
   const canonicalProject = await realpath(project);
+  const reviewCommit = (await run("git", ["rev-parse", "HEAD"], {
+    cwd: project,
+    env: isolatedEnv,
+  })).stdout.trim();
 
   const providedArtifact = process.env.MATTY_PACKED_ARTIFACT
     ? resolve(process.env.MATTY_PACKED_ARTIFACT)
@@ -445,8 +449,8 @@ export default function t07Acceptance(pi) {
                   issue: { repository: "github.com/example/project", number: 9, reference: "#9" },
                   requirements: ["Inspect guarded behavior"],
                   outOfScope: [{ reference: "#42", reason: "dependent publication behavior" }],
-                  baseSha: "0000000000000000000000000000000000000000",
-                  candidateSha: "1111111111111111111111111111111111111111",
+                  baseSha: ${JSON.stringify(reviewCommit)},
+                  candidateSha: ${JSON.stringify(reviewCommit)},
                   axes: ["standards", "spec"],
                 } } : {}),
               }],
@@ -671,7 +675,7 @@ export default function t07Acceptance(pi) {
           type: "text",
           text: JSON.stringify(childRole === "reviewer" ? {
             schemaVersion: 1,
-            candidateSha: "1111111111111111111111111111111111111111",
+            candidateSha: ${JSON.stringify(reviewCommit)},
             summary: "review completed",
             findings: [{ axis: "spec", severity: "non-blocking", requirement: "Inspect guarded behavior", evidence: JSON.stringify(payload) }],
           } : {
