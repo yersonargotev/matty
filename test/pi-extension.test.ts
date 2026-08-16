@@ -416,6 +416,89 @@ test("registered delegation seam exposes safe cards, deterministic modes, and li
   }
 });
 
+test("TUI delegation widget shows useful bounded work, hides on terminal state, and cleans up lifecycle", async () => {
+  const harness = createExtensionHarness();
+  let id = 1;
+  registerPiMatty(harness.pi, {}, {
+    delegationRegistryOptions: {
+      now: () => 5_000,
+      idFactory: () => `${(id++).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    },
+  });
+  type WidgetContent = string[] | ((...args: unknown[]) => {
+    render(width: number): string[];
+    invalidate(): void;
+    handleInput?: (data: string) => void;
+  }) | undefined;
+  const widgetCalls: Array<{ id: string; content: WidgetContent }> = [];
+  const tuiContext = {
+    mode: "tui",
+    hasUI: true,
+    model: undefined,
+    ui: {
+      notify() {},
+      setWidget(widgetId: string, content: WidgetContent) {
+        widgetCalls.push({ id: widgetId, content });
+      },
+    },
+  };
+  for (const handler of harness.handlers.get("session_start") ?? []) {
+    await handler({ reason: "startup" } as never, tuiContext as never);
+  }
+
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const secret = "private task payload must never appear";
+  await execute(
+    "widget-call" as never,
+    {
+      requirement: "required",
+      tasks: Array.from({ length: 9 }, () => ({ role: "explorer", task: secret })),
+    } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  );
+
+  const shown = widgetCalls.find((call) => typeof call.content === "function");
+  assert.equal(shown?.id, "matty-delegations");
+  if (typeof shown?.content !== "function") assert.fail("expected a widget component factory");
+  const widget = shown.content({}, {});
+  const shownLines = widget.render(30);
+  const shownText = shownLines.join("\n");
+  assert.ok(shownLines.length <= 4);
+  assert.ok(shownLines.every((line) => visibleWidth(line) <= 30));
+  assert.equal(widget.handleInput, undefined);
+  assert.match(shownText, /Matty · 0 active Delegatio/);
+  assert.match(shownText, /D-[0-9a-f]{8} queued/);
+  assert.doesNotMatch(shownText, /private task payload|prompt|command|response|transcript/i);
+  assert.equal(widgetCalls.at(-1)?.content, undefined);
+
+  for (const reason of ["new", "resume", "reload"]) {
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler({ reason } as never, tuiContext as never);
+    }
+    assert.equal(widgetCalls.at(-1)?.content, undefined);
+  }
+  for (const handler of harness.handlers.get("session_shutdown") ?? []) {
+    await handler({ reason: "quit" } as never, tuiContext as never);
+  }
+  assert.deepEqual(widgetCalls.at(-1), { id: "matty-delegations", content: undefined });
+
+  const rpcCalls: unknown[] = [];
+  const noninteractive = createExtensionHarness();
+  registerPiMatty(noninteractive.pi, {});
+  for (const handler of noninteractive.handlers.get("session_start") ?? []) {
+    await handler({ reason: "startup" } as never, {
+      mode: "rpc",
+      hasUI: true,
+      model: undefined,
+      ui: { notify() {}, setWidget(...args: unknown[]) { rpcCalls.push(args); } },
+    } as never);
+  }
+  assert.deepEqual(rpcCalls, []);
+});
+
 test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, and closes", async () => {
   const harness = createExtensionHarness();
   let id = 1;

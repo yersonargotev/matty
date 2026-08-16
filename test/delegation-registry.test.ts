@@ -7,10 +7,12 @@ import {
   type DelegationState,
 } from "../src/application/delegation-registry.ts";
 import {
+  delegatedTaskLifecycleTimeline,
   delegationCard,
   renderDelegationConsole,
   renderDelegationHumanSnapshot,
   renderDelegationJson,
+  renderDelegationWidget,
 } from "../src/application/delegation-presentation.ts";
 
 function uuid(index: number): string {
@@ -257,12 +259,81 @@ test("expanded task details show safe lifecycle timing, duration, diagnostics, a
     selectedId: entry.id,
     expandedIds: new Set([entry.id]),
   }, now).join("\n");
-  assert.match(lines, /Queued: 2026-02-01T12:00:00\.000Z/);
-  assert.match(lines, /Started: 2026-02-01T12:00:01\.000Z/);
-  assert.match(lines, /Ended: 2026-02-01T12:00:03\.500Z/);
+  assert.match(lines, /Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(lines, /2026-02-01T12:00:01\.000Z · started/);
+  assert.match(lines, /2026-02-01T12:00:03\.500Z · failed/);
+  assert.doesNotMatch(lines, /^      (Queued|Started|Ended):/m);
   assert.match(lines, /Duration: 2s/);
   assert.match(lines, /Result: Failed \(task-failed · running\)/);
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(secret));
+});
+
+test("each expanded Delegated Task has an ordered lifecycle timeline from safe Registry timestamps", () => {
+  let now = Date.parse("2026-02-01T12:00:00.000Z");
+  const registry = new DelegationRegistry({ now: () => now, idFactory: () => uuid(1) });
+  const entry = registry.accept({
+    tasks: [{ role: "explorer" }, { role: "designer" }],
+  });
+  now += 3_000;
+  registry.record(entry.id, { type: "started", taskIndex: 1, pid: 42 });
+  now += 2_000;
+  registry.record(entry.id, { type: "terminating", taskIndex: 0, pid: 43, runId: "safe-id" });
+
+  const tasks = registry.get(entry.id)!.tasks;
+  assert.deepEqual(delegatedTaskLifecycleTimeline(tasks[0]!), [
+    "2026-02-01T12:00:00.000Z · queued",
+    "2026-02-01T12:00:05.000Z · started",
+    "Current · cancelling",
+  ]);
+  assert.deepEqual(delegatedTaskLifecycleTimeline(tasks[1]!), [
+    "2026-02-01T12:00:00.000Z · queued",
+    "2026-02-01T12:00:03.000Z · started",
+    "Current · running",
+  ]);
+
+  now += 1_000;
+  registry.finish(entry.id, "succeeded");
+  assert.deepEqual(delegatedTaskLifecycleTimeline(registry.get(entry.id)!.tasks[1]!), [
+    "2026-02-01T12:00:00.000Z · queued",
+    "2026-02-01T12:00:03.000Z · started",
+    "2026-02-01T12:00:06.000Z · succeeded",
+  ]);
+  const expanded = renderDelegationConsole(registry.snapshot(), {
+    selectedId: entry.id,
+    expandedIds: new Set([entry.id]),
+  }, now).join("\n");
+  assert.match(expanded, /1\. explorer[\s\S]*Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
+  assert.match(expanded, /2\. designer[\s\S]*Lifecycle:\n        2026-02-01T12:00:00\.000Z · queued/);
+  assert.doesNotMatch(expanded, /prompt|command|response|transcript/i);
+});
+
+test("compact widget presentation is useful-only, bounded, and reports roles and task states", () => {
+  let next = 1;
+  const registry = new DelegationRegistry({ idFactory: () => uuid(next++), now: () => 1_000 });
+  const mixed = registry.accept({
+    tasks: [{ role: "explorer" }, { role: "designer" }],
+    maxActive: 1,
+  });
+  registry.record(mixed.id, { type: "started", taskIndex: 0, pid: 42 });
+  registry.accept({ tasks: [{ role: "worker" }] });
+  registry.accept({ tasks: [{ role: "reviewer" }] });
+  registry.accept({ tasks: [{ role: "designer" }] });
+  const terminal = registry.accept({ tasks: [{ role: "researcher" }] });
+  registry.finish(terminal.id, "succeeded");
+
+  const lines = renderDelegationWidget(registry.snapshot(), 4_000, 4);
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0], "Matty · 1 active Delegation · 4 queued tasks");
+  assert.match(lines[1] ?? "", /^D-[0-9a-f]{8} running · explorer,designer · running 1, queued 1 · 3s$/);
+  assert.match(lines[2] ?? "", /^D-[0-9a-f]{8} queued · worker · queued 1 · 3s$/);
+  assert.equal(lines[3], "+2 more queued Delegations");
+  assert.doesNotMatch(lines.join("\n"), /researcher|succeeded|PID|runId|prompt|command|response|transcript/i);
+
+  registry.finish(mixed.id, "succeeded");
+  for (const entry of registry.snapshot().delegations.filter((candidate) => candidate.state === "queued")) {
+    registry.finish(entry.id, "cancelled");
+  }
+  assert.deepEqual(renderDelegationWidget(registry.snapshot(), 4_000, 4), []);
 });
 
 test("presentation groups safely and exposes PID and runId only in expanded details", () => {

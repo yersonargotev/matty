@@ -64,6 +64,7 @@ import {
   renderDelegationConsole,
   renderDelegationHumanSnapshot,
   renderDelegationJson,
+  renderDelegationWidget,
 } from "../application/delegation-presentation.ts";
 import {
   INSPECTION_TOOLS,
@@ -993,18 +994,56 @@ export function registerPiMatty(
       "research",
     );
     let researchCleanup: Promise<void> | undefined;
+    const delegationWidgetId = "matty-delegations";
+    let widgetContext: ExtensionContext | undefined;
+    let unsubscribeWidget: (() => void) | undefined;
+    const clearDelegationWidget = () => {
+      unsubscribeWidget?.();
+      unsubscribeWidget = undefined;
+      widgetContext?.ui.setWidget(delegationWidgetId, undefined);
+      widgetContext = undefined;
+    };
+    const bindDelegationWidget = (context: ExtensionContext) => {
+      if (context.mode !== "tui") return;
+      widgetContext = context;
+      const update = () => {
+        const lines = renderDelegationWidget(
+          delegationRegistry.snapshot(),
+          delegationRegistry.now(),
+          4,
+        );
+        context.ui.setWidget(
+          delegationWidgetId,
+          lines.length > 0
+            ? () => ({
+              render(width: number) {
+                return lines.map((line) =>
+                  piTui.truncateToWidth(line, Math.max(1, width))
+                );
+              },
+              invalidate() {},
+            })
+            : undefined,
+        );
+      };
+      unsubscribeWidget = delegationRegistry.subscribe(update);
+      update();
+    };
     const prepareResearchRoot = async () => {
       researchCleanup ??= cleanupStaleResearchWorkspaces({
         temporaryRoot: researchTemporaryRoot,
       }).then(() => undefined);
       await researchCleanup;
     };
-    pi.on("session_start", (event) => {
+    pi.on("session_start", (event, context) => {
+      clearDelegationWidget();
       if (event.reason === "new" || event.reason === "resume" || event.reason === "reload") {
         delegationRegistry.reset();
       }
+      bindDelegationWidget(context);
     });
     pi.on("session_shutdown", async () => {
+      clearDelegationWidget();
       for (const close of [...activeConsoleClosers]) close();
       delegationRegistry.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
