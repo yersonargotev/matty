@@ -774,8 +774,22 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     JSON.stringify(success.terminal),
   );
   assert.deepEqual(
-    success.progress.map((progress) => progress.progress.type),
+    success.progress.slice(0, 2).map((progress) => progress.progress.type),
     ["started", "identified"],
+  );
+  const activities = success.progress.slice(2).map((progress) => progress.progress);
+  assert.ok(activities.length > 0, JSON.stringify(success.progress));
+  assert.ok(activities.every((progress) => progress.type === "activity"));
+  assert.ok(activities.every((progress) =>
+    progress.activity?.schemaVersion === 1 &&
+    (progress.activity.kind === "assistant-completed" ||
+      (progress.activity.kind === "tool-completed" &&
+        ["read", "grep", "find", "ls", "bash", "other"].includes(progress.activity.tool) &&
+        ["succeeded", "failed"].includes(progress.activity.outcome)))
+  ), JSON.stringify(activities));
+  assert.deepEqual(
+    success.progress.at(-1)?.delegation.tasks[0].activitySummaries,
+    activities.map((progress) => progress.activity),
   );
   assert.ok(
     success.progress.every((progress) =>
@@ -787,7 +801,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   assert.doesNotMatch(
     JSON.stringify(success.progress),
-    /tool-result|allowed-git|blocked-filesystem|inspection completed/,
+    /tool-result|allowed-git|blocked-filesystem|inspection completed|toolCallId|args|command|partialResult|raw result|prompt|response|transcript/,
   );
   const observed = successLeaf.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });

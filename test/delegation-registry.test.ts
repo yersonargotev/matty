@@ -168,6 +168,7 @@ test("registry releases an active slot when a task completes before queue promot
     endedAt: 2_000,
     pid: 40,
     resultSummary: "Succeeded",
+    activitySummaries: [],
   });
 
   registry.record(entry.id, { type: "started", taskIndex: 4, pid: 44 });
@@ -233,6 +234,45 @@ test("registry tracks bounded queue positions and clears them as tasks are promo
     registry.get(entry.id)?.tasks.map((task) => task.queuePosition),
     [undefined, undefined, undefined, undefined, undefined, 1],
   );
+});
+
+test("registry retains ordered closed activity summaries on the correct task and Delegation", () => {
+  const registry = new DelegationRegistry({ idFactory: () => uuid(1), now: () => 1_000 });
+  const entry = registry.accept({
+    tasks: [{ role: "explorer" }, { role: "worker" }],
+  });
+  registry.recordActivity(entry.id, 1, {
+    schemaVersion: 1,
+    kind: "tool-completed",
+    tool: "edit",
+    outcome: "succeeded",
+    path: "/secret/path",
+    result: "secret result",
+  });
+  registry.recordActivity(entry.id, 0, {
+    schemaVersion: 1,
+    kind: "assistant-completed",
+    response: "secret response",
+  });
+  registry.recordActivity(entry.id, 0, {
+    schemaVersion: 99,
+    kind: "assistant-completed",
+    prompt: "secret prompt",
+  });
+
+  const snapshot = registry.snapshot();
+  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activitySummaries), [
+    [{ schemaVersion: 1, kind: "assistant-completed" }],
+    [{ schemaVersion: 1, kind: "tool-completed", tool: "edit", outcome: "succeeded" }],
+  ]);
+  assert.deepEqual(snapshot.delegations[0]?.activitySummaries, [
+    {
+      taskIndex: 1,
+      summary: { schemaVersion: 1, kind: "tool-completed", tool: "edit", outcome: "succeeded" },
+    },
+    { taskIndex: 0, summary: { schemaVersion: 1, kind: "assistant-completed" } },
+  ]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /secret|path|result|response|prompt/i);
 });
 
 test("expanded task details show safe lifecycle timing, duration, diagnostics, and results", () => {

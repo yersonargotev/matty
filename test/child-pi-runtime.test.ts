@@ -61,7 +61,7 @@ test("runs a distinct child with explicit inherited context and ordered progress
   assert.equal(outcome.child.runId.length, 36);
   assert.deepEqual(
     progress.map((event) => event.type),
-    ["started", "identified", "message"],
+    ["started", "identified", "activity"],
   );
 
   const observed = JSON.parse(outcome.output);
@@ -175,7 +175,7 @@ test("accepts custom string message content without replacing the assistant resu
   });
   assert.deepEqual(
     progress.map((event) => event.type),
-    ["started", "identified", "message"],
+    ["started", "identified", "activity"],
   );
 });
 
@@ -190,6 +190,42 @@ test("reports real Pi tool execution completion as ordered progress", async () =
   assert.equal(outcome.status, "succeeded");
   assert.deepEqual(
     progress.map((event) => event.type),
-    ["started", "identified", "tool-result", "tool-result", "message"],
+    ["started", "identified", "activity", "activity", "activity"],
   );
+  assert.deepEqual(
+    progress.flatMap((event) => event.type === "activity" ? [event.activity] : []),
+    [
+      { schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" },
+      { schemaVersion: 1, kind: "tool-completed", tool: "bash", outcome: "succeeded" },
+      { schemaVersion: 1, kind: "assistant-completed" },
+    ],
+  );
+});
+
+test("redacts sensitive activity fields and categorizes valid unknown tools", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("sensitive-activity", {
+    onProgress(event) { progress.push(event); },
+  });
+
+  assert.equal(outcome.status, "succeeded");
+  assert.deepEqual(
+    progress.flatMap((event) => event.type === "activity" ? [event.activity] : []),
+    [
+      { schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" },
+      { schemaVersion: 1, kind: "tool-completed", tool: "other", outcome: "failed" },
+      { schemaVersion: 1, kind: "assistant-completed" },
+    ],
+  );
+  assert.doesNotMatch(
+    JSON.stringify(progress),
+    /secret|tool-call|private|path|command|prompt|response|result|transcript/i,
+  );
+});
+
+test("rejects malformed recognized child activity as a protocol failure", async () => {
+  const outcome = await createRunner().run("malformed-tool-activity");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "protocol-failed");
 });

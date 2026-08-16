@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
+import {
+  safeChildExecutionActivitySummary,
+  type ChildExecutionActivitySummary,
+} from "../domain/child-execution-activity.ts";
 import type {
   DelegationDiagnostic,
   DelegationDiagnosticCode,
@@ -37,6 +41,11 @@ export interface RedactedDelegationDiagnostic {
 
 export type DelegatedTaskState = Exclude<DelegationState, "partial">;
 
+export interface DelegatedActivitySnapshot {
+  taskIndex: number;
+  summary: ChildExecutionActivitySummary;
+}
+
 export interface DelegatedTaskSnapshot {
   index: number;
   role?: MattyRole;
@@ -49,6 +58,7 @@ export interface DelegatedTaskSnapshot {
   runId?: string;
   diagnostic?: RedactedDelegationDiagnostic;
   resultSummary?: string;
+  activitySummaries: readonly ChildExecutionActivitySummary[];
 }
 
 export interface DelegationSnapshotEntry {
@@ -63,6 +73,7 @@ export interface DelegationSnapshotEntry {
   endedAt?: number;
   diagnostics: readonly RedactedDelegationDiagnostic[];
   resultSummary?: string;
+  activitySummaries: readonly DelegatedActivitySnapshot[];
   tasks: readonly DelegatedTaskSnapshot[];
 }
 
@@ -184,12 +195,14 @@ export class DelegationRegistry {
       state: "queued",
       acceptedAt,
       diagnostics: [],
+      activitySummaries: [],
       tasks: tasks.map((declaration, index) => ({
         index,
         ...(declaration.role ? { role: declaration.role } : {}),
         state: "queued" as const,
         ...(index >= maxActive ? { queuePosition: index - maxActive + 1 } : {}),
         queuedAt: acceptedAt,
+        activitySummaries: [],
       })),
       ...(controller ? { controller } : {}),
     };
@@ -238,6 +251,21 @@ export class DelegationRegistry {
       entry.startedAt ??= now;
     }
     this.#recalculateState(entry);
+    this.#changed();
+  }
+
+  recordActivity(id: string, taskIndex: number, value: unknown): void {
+    const entry = this.#entries.get(id);
+    if (!entry || isTerminalDelegationState(entry.state)) return;
+    const task = entry.tasks[taskIndex];
+    if (!task || isTerminalDelegationState(task.state)) return;
+    const summary = safeChildExecutionActivitySummary(value);
+    if (!summary) return;
+    task.activitySummaries = [...task.activitySummaries, summary];
+    entry.activitySummaries = [
+      ...entry.activitySummaries,
+      { taskIndex, summary },
+    ];
     this.#changed();
   }
 
@@ -393,8 +421,13 @@ export class DelegationRegistry {
       ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
       diagnostics: entry.diagnostics.map((diagnostic) => ({ ...diagnostic })),
       ...(entry.resultSummary ? { resultSummary: entry.resultSummary } : {}),
+      activitySummaries: entry.activitySummaries.map((activity) => ({
+        taskIndex: activity.taskIndex,
+        summary: { ...activity.summary },
+      })),
       tasks: entry.tasks.map((task) => ({
         ...task,
+        activitySummaries: task.activitySummaries.map((summary) => ({ ...summary })),
         ...(task.diagnostic ? { diagnostic: { ...task.diagnostic } } : {}),
       })),
     };

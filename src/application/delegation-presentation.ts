@@ -38,6 +38,14 @@ export function delegatedTaskLifecycleTimeline(
   return lines;
 }
 
+function activityText(
+  activity: DelegatedTaskSnapshot["activitySummaries"][number],
+): string {
+  return activity.kind === "assistant-completed"
+    ? "Assistant completed"
+    : `Tool ${activity.tool} completed · ${activity.outcome}`;
+}
+
 export function delegationCard(
   entry: DelegationSnapshotEntry,
   now = Date.now(),
@@ -84,6 +92,14 @@ export function renderDelegationConsole(
         lines.push(`    ${task.index + 1}. ${task.role ?? "unknown"} · ${task.state}${identity ? ` · ${identity}` : ""}`);
         lines.push("      Lifecycle:");
         lines.push(...delegatedTaskLifecycleTimeline(task).map((event) => `        ${event}`));
+        lines.push("      Activity:");
+        if (task.activitySummaries.length === 0) {
+          lines.push("        No activity reported.");
+        } else {
+          lines.push(...task.activitySummaries.map((activity, index) =>
+            `        ${index + 1}. ${activityText(activity)}`
+          ));
+        }
         if (task.queuePosition !== undefined) lines.push(`      Queue position: ${task.queuePosition}`);
         const durationStart = task.startedAt ?? task.queuedAt;
         lines.push(`      ${task.endedAt === undefined ? "Elapsed" : "Duration"}: ${formatDuration(durationStart, task.endedAt ?? now)}`);

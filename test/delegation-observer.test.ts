@@ -3,6 +3,12 @@ import test from "node:test";
 
 import { createDelegationObserver } from "../src/application/delegation-observer.ts";
 import { DelegationRegistry } from "../src/application/delegation-registry.ts";
+import {
+  renderDelegationConsole,
+  renderDelegationHumanSnapshot,
+  renderDelegationJson,
+  renderDelegationWidget,
+} from "../src/application/delegation-presentation.ts";
 
 const id = "aaaaaaaa-0000-4000-8000-000000000001";
 
@@ -92,6 +98,76 @@ test("observer completes each task once and ignores late lifecycle progress", ()
     progress: { type: "started", child: { pid: 44 } },
   });
   assert.deepEqual(registry.snapshot().concurrency, { activeTasks: 4, queuedTasks: 0 });
+});
+
+test("observer exposes only ordered redacted activity across updates and presentations", () => {
+  const secret = "SENSITIVE-command-path-prompt-response-result-transcript-tool-id";
+  const registry = new DelegationRegistry({ idFactory: () => id, now: () => 1_000 });
+  const updates: unknown[] = [];
+  const observer = createDelegationObserver({
+    registry,
+    declaration: {
+      tasks: [
+        { role: "explorer", task: secret },
+        { role: "worker", task: secret },
+      ],
+    },
+    onUpdate(update) { updates.push(update); },
+  });
+
+  observer.observeProgress({
+    taskIndex: 1,
+    progress: {
+      type: "activity",
+      child: { pid: 42, runId: secret },
+      sequence: 1,
+      activity: {
+        schemaVersion: 1,
+        kind: "tool-completed",
+        tool: "read",
+        outcome: "succeeded",
+        args: secret,
+        command: secret,
+        path: secret,
+        rawResult: secret,
+        unknown: secret,
+      },
+    },
+  });
+  observer.observeProgress({
+    taskIndex: 0,
+    progress: {
+      type: "activity",
+      activity: {
+        schemaVersion: 1,
+        kind: "assistant-completed",
+        response: secret,
+      },
+    },
+  });
+
+  const snapshot = registry.snapshot();
+  const consoleOutput = renderDelegationConsole(snapshot, {
+    selectedId: observer.id,
+    expandedIds: new Set([observer.id]),
+  }, 2_000).join("\n");
+  const surfaces = JSON.stringify({
+    updates,
+    snapshot,
+    json: renderDelegationJson(snapshot),
+    diagnostic: renderDelegationHumanSnapshot(snapshot, 2_000),
+    widget: renderDelegationWidget(snapshot, 2_000),
+    consoleOutput,
+  });
+
+  assert.deepEqual(snapshot.delegations[0]?.tasks.map((task) => task.activitySummaries), [
+    [{ schemaVersion: 1, kind: "assistant-completed" }],
+    [{ schemaVersion: 1, kind: "tool-completed", tool: "read", outcome: "succeeded" }],
+  ]);
+  assert.match(consoleOutput, /Lifecycle:[\s\S]*Activity:/);
+  assert.match(consoleOutput, /Assistant completed/);
+  assert.match(consoleOutput, /Tool read completed · succeeded/);
+  assert.doesNotMatch(surfaces, /SENSITIVE|args|command|path|prompt|response|rawResult|transcript|tool-id/);
 });
 
 test("observer stores only closed standalone preflight reasons", () => {

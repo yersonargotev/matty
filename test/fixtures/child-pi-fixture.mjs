@@ -55,21 +55,37 @@ if (task === "malformed-message") {
       flag: "wx",
     });
   }
-  if (task === "tool-progress") {
+  if (task === "tool-progress" || task === "sensitive-activity") {
     process.stdout.write(
       `${JSON.stringify({
         type: "tool_execution_end",
-        toolCallId: "tool-1",
+        toolCallId: "secret-tool-call-id",
         toolName: "read",
+        args: { path: "/secret/private/path" },
+        result: { content: "secret raw tool result" },
+        command: "cat /secret/private/path",
+        unknownSensitiveField: "secret prompt and transcript",
         isError: false,
       })}\n`,
     );
     process.stdout.write(
       `${JSON.stringify({
         type: "tool_execution_end",
-        toolCallId: "tool-2",
-        toolName: "bash",
-        isError: false,
+        toolCallId: "another-secret-id",
+        toolName: task === "sensitive-activity" ? "valid_unknown_tool" : "bash",
+        result: "secret response",
+        isError: task === "sensitive-activity",
+      })}\n`,
+    );
+  }
+  if (task === "malformed-tool-activity") {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "secret-id",
+        toolName: "read",
+        result: "secret result",
+        isError: "false",
       })}\n`,
     );
   }

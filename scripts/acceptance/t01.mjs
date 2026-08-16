@@ -452,6 +452,8 @@ async function main() {
       "dist/application/worker-delegation.js",
       "dist/domain/capability-contract.d.ts",
       "dist/domain/capability-contract.js",
+      "dist/domain/child-execution-activity.d.ts",
+      "dist/domain/child-execution-activity.js",
       "dist/domain/commit-sha.d.ts",
       "dist/domain/commit-sha.js",
       "dist/domain/delegation-group.d.ts",
