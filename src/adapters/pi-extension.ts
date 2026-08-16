@@ -1,5 +1,4 @@
 import {
-  VERSION as PI_VERSION,
   type ExtensionAPI,
   type ExtensionContext,
   type ToolCallEvent,
@@ -9,9 +8,10 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piTui from "@earendil-works/pi-tui";
 import * as typebox from "typebox";
 import { execFile } from "node:child_process";
+import { readFileSync, realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
@@ -123,6 +123,8 @@ import {
 } from "../domain/web-capability.ts";
 
 export interface PiMattyRegistrationOptions {
+  /** Explicit test seam. Production registration derives the launcher version. */
+  hostPiVersion?: string;
   invocation?: PiInvocation;
   childEnvironment?: NodeJS.ProcessEnv;
   independentRuntimeAvailable?: boolean;
@@ -352,6 +354,43 @@ function createPiHost(
       });
     },
   };
+}
+
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+const UNAVAILABLE_PI_VERSION = "unavailable";
+
+export function detectLauncherPiVersion(
+  entrypoint: string | null | undefined = process.argv[1],
+): string | undefined {
+  if (!entrypoint) return undefined;
+
+  let directory: string;
+  try {
+    directory = dirname(realpathSync(entrypoint));
+  } catch {
+    return undefined;
+  }
+
+  while (true) {
+    const manifestPath = join(directory, "package.json");
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (manifest.name === PI_PACKAGE_NAME) {
+        return typeof manifest.version === "string" && manifest.version.length > 0
+          ? manifest.version
+          : undefined;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    }
+
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
 }
 
 function currentPiInvocation(): PiInvocation | undefined {
@@ -1911,7 +1950,9 @@ export function registerPiMatty(
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {
     packageVersion: MATTY_PACKAGE_VERSION,
-    piVersion: PI_VERSION,
+    piVersion: options.hostPiVersion ??
+      detectLauncherPiVersion() ??
+      UNAVAILABLE_PI_VERSION,
     platform: process.platform,
     arch: process.arch,
     subagentRuntimeAvailable:

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
+import {
+  safeChildExecutionActivityObservation,
+  type ChildExecutionActivityObservation,
+} from "../domain/child-execution-activity.ts";
 import type {
   DelegationDiagnostic,
   DelegationDiagnosticCode,
@@ -37,6 +41,11 @@ export interface RedactedDelegationDiagnostic {
 
 export type DelegatedTaskState = Exclude<DelegationState, "partial">;
 
+export interface DelegatedActivitySnapshot {
+  taskIndex: number;
+  observation: ChildExecutionActivityObservation;
+}
+
 export interface DelegatedTaskSnapshot {
   index: number;
   role?: MattyRole;
@@ -49,6 +58,7 @@ export interface DelegatedTaskSnapshot {
   runId?: string;
   diagnostic?: RedactedDelegationDiagnostic;
   resultSummary?: string;
+  activities: readonly ChildExecutionActivityObservation[];
 }
 
 export interface DelegationSnapshotEntry {
@@ -63,6 +73,7 @@ export interface DelegationSnapshotEntry {
   endedAt?: number;
   diagnostics: readonly RedactedDelegationDiagnostic[];
   resultSummary?: string;
+  activities: readonly DelegatedActivitySnapshot[];
   tasks: readonly DelegatedTaskSnapshot[];
 }
 
@@ -82,6 +93,7 @@ export interface DelegationRegistryOptions {
   now?: () => number;
   idFactory?: () => string;
   terminalLimit?: number;
+  activityLimitPerTask?: number;
 }
 
 export type DelegatedTaskTerminalState = Extract<
@@ -144,6 +156,7 @@ export class DelegationRegistry {
   readonly #now: () => number;
   readonly #idFactory: () => string;
   readonly #terminalLimit: number;
+  readonly #activityLimitPerTask: number;
   readonly #entries = new Map<string, StoredDelegation>();
   readonly #listeners = new Set<() => void>();
   readonly #sessionIds = new Set<string>();
@@ -154,6 +167,7 @@ export class DelegationRegistry {
     this.#now = options.now ?? Date.now;
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#terminalLimit = options.terminalLimit ?? 50;
+    this.#activityLimitPerTask = Math.max(1, Math.trunc(options.activityLimitPerTask ?? 100));
   }
 
   accept(
@@ -184,12 +198,14 @@ export class DelegationRegistry {
       state: "queued",
       acceptedAt,
       diagnostics: [],
+      activities: [],
       tasks: tasks.map((declaration, index) => ({
         index,
         ...(declaration.role ? { role: declaration.role } : {}),
         state: "queued" as const,
         ...(index >= maxActive ? { queuePosition: index - maxActive + 1 } : {}),
         queuedAt: acceptedAt,
+        activities: [],
       })),
       ...(controller ? { controller } : {}),
     };
@@ -238,6 +254,26 @@ export class DelegationRegistry {
       entry.startedAt ??= now;
     }
     this.#recalculateState(entry);
+    this.#changed();
+  }
+
+  recordActivity(id: string, taskIndex: number, value: unknown): void {
+    const entry = this.#entries.get(id);
+    if (!entry || isTerminalDelegationState(entry.state)) return;
+    const task = entry.tasks[taskIndex];
+    if (!task || isTerminalDelegationState(task.state)) return;
+    const observation = safeChildExecutionActivityObservation(value);
+    if (!observation) return;
+    task.activities = [...task.activities, observation].slice(-this.#activityLimitPerTask);
+    const counts = new Map<number, number>();
+    entry.activities = [...entry.activities, { taskIndex, observation }]
+      .reverse()
+      .filter((activity) => {
+        const count = counts.get(activity.taskIndex) ?? 0;
+        counts.set(activity.taskIndex, count + 1);
+        return count < this.#activityLimitPerTask;
+      })
+      .reverse();
     this.#changed();
   }
 
@@ -393,8 +429,19 @@ export class DelegationRegistry {
       ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
       diagnostics: entry.diagnostics.map((diagnostic) => ({ ...diagnostic })),
       ...(entry.resultSummary ? { resultSummary: entry.resultSummary } : {}),
+      activities: entry.activities.map((activity) => ({
+        taskIndex: activity.taskIndex,
+        observation: {
+          ...activity.observation,
+          summary: { ...activity.observation.summary },
+        },
+      })),
       tasks: entry.tasks.map((task) => ({
         ...task,
+        activities: task.activities.map((activity) => ({
+          ...activity,
+          summary: { ...activity.summary },
+        })),
         ...(task.diagnostic ? { diagnostic: { ...task.diagnostic } } : {}),
       })),
     };

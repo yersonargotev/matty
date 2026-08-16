@@ -8,7 +8,7 @@ Matty gives Pi a dependable runtime for delegating engineering work to isolated 
 
 Matty currently certifies this exact host:
 
-- Pi `0.83.0`
+- Pi `0.84.2`
 - Node.js `>=22.19.0`
 - macOS on Apple Silicon (`darwin/arm64`)
 - Reference model path: `openai-codex/gpt-5.6-sol` with ChatGPT/Codex subscription authentication

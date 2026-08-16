@@ -23,6 +23,7 @@ import type {
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
+  detectLauncherPiVersion,
   registerPiMatty,
 } from "../src/adapters/pi-extension.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
@@ -204,10 +205,63 @@ test("parent registration exposes explicit delegated roles", async () => {
   );
 });
 
+test("launcher Pi metadata wins over a locally resolved Matty peer", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-launcher-version-"));
+  const launcherRoot = join(
+    sandbox,
+    "launcher/node_modules/@earendil-works/pi-coding-agent",
+  );
+  const localPeerRoot = join(
+    sandbox,
+    "matty/node_modules/@earendil-works/pi-coding-agent",
+  );
+  try {
+    await mkdir(join(launcherRoot, "dist"), { recursive: true });
+    await mkdir(localPeerRoot, { recursive: true });
+    await writeFile(join(launcherRoot, "dist/cli.js"), "// launcher\n");
+    await writeFile(join(launcherRoot, "package.json"), JSON.stringify({
+      name: "@earendil-works/pi-coding-agent",
+      version: "0.84.2",
+    }));
+    await writeFile(join(localPeerRoot, "package.json"), JSON.stringify({
+      name: "@earendil-works/pi-coding-agent",
+      version: "0.83.0",
+    }));
+
+    assert.equal(
+      detectLauncherPiVersion(join(launcherRoot, "dist/cli.js")),
+      "0.84.2",
+    );
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("launcher Pi detection fails closed for unavailable or malformed metadata", async () => {
+  assert.equal(detectLauncherPiVersion(null), undefined);
+  assert.equal(detectLauncherPiVersion("/definitely/missing/pi"), undefined);
+
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-launcher-malformed-"));
+  try {
+    const launcherRoot = join(sandbox, "pi");
+    await mkdir(join(launcherRoot, "dist"), { recursive: true });
+    const launcher = join(launcherRoot, "dist/cli.js");
+    await writeFile(launcher, "// launcher\n");
+    await writeFile(join(launcherRoot, "package.json"), JSON.stringify({
+      name: "@earendil-works/pi-coding-agent",
+      version: 842,
+    }));
+    assert.equal(detectLauncherPiVersion(launcher), undefined);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("Pi status and doctor use local model and runtime facts", async () => {
   const harness = createExtensionHarness();
   const notifications: string[] = [];
   registerPiMatty(harness.pi, {}, {
+    hostPiVersion: "0.84.2",
     invocation: {
       command: process.execPath,
       arguments: ["fixture.mjs"],

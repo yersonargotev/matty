@@ -31,7 +31,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0"
+    "@earendil-works/pi-coding-agent": "0.84.2"
   },
   "scripts": {
     "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json",

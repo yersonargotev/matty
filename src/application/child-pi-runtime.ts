@@ -6,6 +6,11 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
+import {
+  classifyChildExecutionActivity,
+  type ChildExecutionActivityObservation,
+} from "../domain/child-execution-activity.ts";
+
 export type PiThinkingLevel =
   | "off"
   | "minimal"
@@ -51,9 +56,9 @@ export type DelegatedTaskProgress =
       child: ChildIdentity;
     }
   | {
-      type: "message" | "tool-result";
+      type: "activity";
       child: ChildIdentity;
-      sequence: number;
+      observation: ChildExecutionActivityObservation;
     }
   | {
       type: "terminating";
@@ -152,6 +157,14 @@ function isMessageEnd(value: unknown): value is PiMessageEnd {
     candidate.message === null ||
     Array.isArray(candidate.message) ||
     typeof candidate.message.role !== "string"
+  ) {
+    return false;
+  }
+  if (
+    (candidate.message.stopReason !== undefined &&
+      typeof candidate.message.stopReason !== "string") ||
+    (candidate.message.errorMessage !== undefined &&
+      typeof candidate.message.errorMessage !== "string")
   ) {
     return false;
   }
@@ -416,29 +429,29 @@ async function superviseChild(
         return;
       }
 
-      if (isMessageEnd(event) && event.message?.role === "assistant") {
-        finalMessage = event.message;
-        sequence += 1;
-        emitProgress(options.onProgress, {
-          type: "message",
-          child: identity,
-          sequence,
-        });
+      const activity = classifyChildExecutionActivity(event);
+      if (activity.recognized && !activity.valid) {
+        terminateForProtocolFailure(
+          "Pi emitted a malformed child activity event",
+        );
         return;
       }
 
-      if (
-        typeof event === "object" &&
-        event !== null &&
-        ((event as { type?: string }).type === "tool_result_end" ||
-          (event as { type?: string }).type === "tool_execution_end") &&
-        identity
-      ) {
+      if (isMessageEnd(event) && event.message?.role === "assistant") {
+        finalMessage = event.message;
+      }
+
+      if (activity.recognized && activity.valid) {
         sequence += 1;
         emitProgress(options.onProgress, {
-          type: "tool-result",
+          type: "activity",
           child: identity,
-          sequence,
+          observation: {
+            schemaVersion: 1,
+            sequence,
+            observedAt: Date.now(),
+            summary: activity.summary,
+          },
         });
       }
     };

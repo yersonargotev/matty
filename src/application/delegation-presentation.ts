@@ -23,20 +23,63 @@ function roles(entry: DelegationSnapshotEntry): string {
   return [...new Set(entry.roles)].join(",") || "unknown";
 }
 
-export function delegatedTaskLifecycleTimeline(
-  task: DelegatedTaskSnapshot,
-): string[] {
-  const lines = [`${new Date(task.queuedAt).toISOString()} · queued`];
+function activityText(
+  activity: DelegatedTaskSnapshot["activities"][number],
+): string {
+  const summary = activity.summary;
+  return summary.kind === "assistant-completed"
+    ? `Assistant completed · ${summary.outcome}`
+    : `Tool ${summary.tool} completed · ${summary.outcome}`;
+}
+
+/** A single chronological task timeline preserving lifecycle/activity interleaving. */
+export function delegatedTaskTimeline(task: DelegatedTaskSnapshot): string[] {
+  const events: Array<{ at: number; rank: number; sequence: number; text: string }> = [{
+    at: task.queuedAt,
+    rank: 0,
+    sequence: 0,
+    text: `Lifecycle · ${new Date(task.queuedAt).toISOString()} · queued`,
+  }];
   if (task.startedAt !== undefined) {
-    lines.push(`${new Date(task.startedAt).toISOString()} · started`);
+    events.push({
+      at: task.startedAt,
+      rank: 1,
+      sequence: 0,
+      text: `Lifecycle · ${new Date(task.startedAt).toISOString()} · started`,
+    });
+  }
+  for (const activity of task.activities) {
+    events.push({
+      at: activity.observedAt,
+      rank: 2,
+      sequence: activity.sequence,
+      text: `Activity · ${new Date(activity.observedAt).toISOString()} · #${activity.sequence} · ${activityText(activity)}`,
+    });
   }
   if (task.endedAt !== undefined) {
-    lines.push(`${new Date(task.endedAt).toISOString()} · ${task.state}`);
+    events.push({
+      at: task.endedAt,
+      rank: 3,
+      sequence: 0,
+      text: `Lifecycle · ${new Date(task.endedAt).toISOString()} · ${task.state}`,
+    });
   } else if (task.state !== "queued") {
-    lines.push(`Current · ${task.state}`);
+    events.push({
+      at: Number.POSITIVE_INFINITY,
+      rank: 3,
+      sequence: 0,
+      text: `Lifecycle · Current · ${task.state}`,
+    });
   }
-  return lines;
+  return events
+    .sort((left, right) =>
+      left.at - right.at || left.rank - right.rank || left.sequence - right.sequence
+    )
+    .map((event) => event.text);
 }
+
+/** @deprecated Use delegatedTaskTimeline. */
+export const delegatedTaskLifecycleTimeline = delegatedTaskTimeline;
 
 export function delegationCard(
   entry: DelegationSnapshotEntry,
@@ -82,8 +125,8 @@ export function renderDelegationConsole(
           task.runId ? `runId ${task.runId}` : undefined,
         ].filter(Boolean).join(" · ");
         lines.push(`    ${task.index + 1}. ${task.role ?? "unknown"} · ${task.state}${identity ? ` · ${identity}` : ""}`);
-        lines.push("      Lifecycle:");
-        lines.push(...delegatedTaskLifecycleTimeline(task).map((event) => `        ${event}`));
+        lines.push("      Timeline:");
+        lines.push(...delegatedTaskTimeline(task).map((event) => `        ${event}`));
         if (task.queuePosition !== undefined) lines.push(`      Queue position: ${task.queuePosition}`);
         const durationStart = task.startedAt ?? task.queuedAt;
         lines.push(`      ${task.endedAt === undefined ? "Elapsed" : "Duration"}: ${formatDuration(durationStart, task.endedAt ?? now)}`);

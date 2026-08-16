@@ -54,7 +54,7 @@ test("a compatible host activates Matty Core", async () => {
 
   registerMatty(harness.host, {
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activeModel: {
@@ -90,7 +90,7 @@ test("a compatible host activates Matty Core", async () => {
     harness.notifications.at(-1)?.message,
     [
       "Matty 0.2.0",
-      "Host Pi 0.83.0 · certified",
+      "Host Pi 0.84.2 · certified",
       "Target darwin/arm64 · certified",
       "Reference Model Path openai-codex/gpt-5.6-sol · verified",
       "Activation active · compatible",
@@ -152,7 +152,7 @@ test("status and doctor render the same Redacted Diagnostic snapshot", async () 
   const harness = createPiHarness();
   registerMatty(harness.host, {
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activeModel: {
