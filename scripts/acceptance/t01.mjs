@@ -424,6 +424,8 @@ async function main() {
     assert.equal(packMetadata.name, "@yargote/matty");
     assert.equal(packMetadata.version, "0.2.0");
     const expectedDistFiles = [
+      "dist/adapters/pi-delegation-management.d.ts",
+      "dist/adapters/pi-delegation-management.js",
       "dist/adapters/pi-extension.d.ts",
       "dist/adapters/pi-extension.js",
       "dist/application/child-control-environment.d.ts",

@@ -37,7 +37,7 @@
     "build": "node scripts/build/clean-dist.mjs && tsgo -p tsconfig.build.json",
     "typecheck": "tsgo -p tsconfig.json",
     "test": "node --test test/*.test.ts",
-    "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs && node scripts/acceptance/t07.mjs",
+    "test:acceptance": "node scripts/acceptance/t01.mjs && node scripts/acceptance/t03.mjs && node scripts/acceptance/t07.mjs && node scripts/acceptance/t10-delegation-tui.mjs",
     "inspect:artifact": "node scripts/release/inspect-artifact.mjs",
     "verify:release-chain": "node scripts/release/verify-release-chain.mjs",
     "validate:release-tag": "node scripts/release/validate-release-tag.mjs",

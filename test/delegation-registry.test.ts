@@ -155,6 +155,7 @@ test("registry cancellation is one transition, aborts owned work, and first term
   registry.finish(entry.id, "cancelled");
   assert.equal(registry.get(entry.id)?.state, "succeeded");
   assert.equal(registry.cancel(entry.id), "already-finished");
+  // @ts-expect-error Arbitrary strings cannot cross the opaque identity boundary.
   assert.equal(registry.cancel("missing"), "already-finished");
 });
 

@@ -1,12 +1,13 @@
 import type {
   DelegatedTaskSnapshot,
+  DelegationId,
   DelegationSnapshot,
   DelegationSnapshotEntry,
 } from "./delegation-registry.ts";
 
 export interface DelegationPresentationState {
-  selectedId?: string;
-  expandedIds: ReadonlySet<string>;
+  selectedId?: DelegationId;
+  expandedIds: ReadonlySet<DelegationId>;
 }
 
 function formatDuration(start: number, end: number): string {
@@ -77,9 +78,6 @@ export function delegatedTaskTimeline(task: DelegatedTaskSnapshot): string[] {
     )
     .map((event) => event.text);
 }
-
-/** @deprecated Use delegatedTaskTimeline. */
-export const delegatedTaskLifecycleTimeline = delegatedTaskTimeline;
 
 export function delegationCard(
   entry: DelegationSnapshotEntry,

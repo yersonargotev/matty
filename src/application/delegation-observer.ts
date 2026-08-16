@@ -9,6 +9,7 @@ import {
   type DelegatedTaskCompletionState,
   type DelegatedTaskTerminalState,
   type DelegationDeclaration,
+  type DelegationId,
   type DelegationSnapshotEntry,
   type TerminalDelegationState,
 } from "./delegation-registry.ts";
@@ -29,7 +30,7 @@ export interface DelegationObserverUpdate {
 }
 
 export interface DelegationObserver {
-  readonly id: string;
+  readonly id: DelegationId;
   readonly signal: AbortSignal;
   observeProgress(details: unknown): void;
   completeTask(taskIndex: number, status: DelegatedTaskCompletionState): void;

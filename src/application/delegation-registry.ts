@@ -16,6 +16,9 @@ export const DELEGATION_STATES = [
   "failed", "cancelled",
 ] as const;
 export type DelegationState = (typeof DELEGATION_STATES)[number];
+declare const delegationIdBrand: unique symbol;
+/** Opaque session-scoped identity. Its JSON/runtime representation remains a string. */
+export type DelegationId = string & { readonly [delegationIdBrand]: "DelegationId" };
 export type TerminalDelegationState = Extract<
   DelegationState,
   "blocked" | "succeeded" | "partial" | "failed" | "cancelled"
@@ -62,7 +65,7 @@ export interface DelegatedTaskSnapshot {
 }
 
 export interface DelegationSnapshotEntry {
-  id: string;
+  id: DelegationId;
   displayId: string;
   requirement?: "required" | "optional";
   roles: readonly MattyRole[];
@@ -147,7 +150,7 @@ export function isTerminalDelegationState(
   return terminalStates.has(state);
 }
 
-function shortCandidate(id: string): string {
+function shortCandidate(id: DelegationId): string {
   const hex = id.replaceAll("-", "").toLowerCase();
   return `D-${hex.slice(0, 8).padEnd(8, "0")}`;
 }
@@ -157,7 +160,7 @@ export class DelegationRegistry {
   readonly #idFactory: () => string;
   readonly #terminalLimit: number;
   readonly #activityLimitPerTask: number;
-  readonly #entries = new Map<string, StoredDelegation>();
+  readonly #entries = new Map<DelegationId, StoredDelegation>();
   readonly #listeners = new Set<() => void>();
   #terminalOrder = 0;
 
@@ -172,11 +175,11 @@ export class DelegationRegistry {
     declaration: DelegationDeclaration,
     controller?: AbortController,
   ): DelegationSnapshotEntry {
-    let id = this.#idFactory();
-    while (this.#entries.has(id)) id = this.#idFactory();
+    let id = this.#nextId();
+    while (this.#entries.has(id)) id = this.#nextId();
     let displayId = shortCandidate(id);
     while ([...this.#entries.values()].some((entry) => entry.displayId === displayId)) {
-      id = this.#idFactory();
+      id = this.#nextId();
       if (this.#entries.has(id)) continue;
       displayId = shortCandidate(id);
     }
@@ -210,7 +213,7 @@ export class DelegationRegistry {
     return this.get(id)!;
   }
 
-  get(id: string): DelegationSnapshotEntry | undefined {
+  get(id: DelegationId): DelegationSnapshotEntry | undefined {
     const entry = this.#entries.get(id);
     return entry ? this.#copy(entry) : undefined;
   }
@@ -219,7 +222,7 @@ export class DelegationRegistry {
     return this.#now();
   }
 
-  record(id: string, event: DelegationLifecycleEvent): void {
+  record(id: DelegationId, event: DelegationLifecycleEvent): void {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state)) return;
     const task = entry.tasks[event.taskIndex];
@@ -253,7 +256,7 @@ export class DelegationRegistry {
     this.#changed();
   }
 
-  recordActivity(id: string, taskIndex: number, value: unknown): void {
+  recordActivity(id: DelegationId, taskIndex: number, value: unknown): void {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state)) return;
     const task = entry.tasks[taskIndex];
@@ -274,7 +277,7 @@ export class DelegationRegistry {
   }
 
   finishTask(
-    id: string,
+    id: DelegationId,
     taskIndex: number,
     state: DelegatedTaskCompletionState,
   ): void {
@@ -291,7 +294,7 @@ export class DelegationRegistry {
     this.#changed();
   }
 
-  recordDiagnostic(id: string, diagnostic: DelegationDiagnostic): void {
+  recordDiagnostic(id: DelegationId, diagnostic: DelegationDiagnostic): void {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state) ||
       !diagnosticCodes.has(diagnostic.code)) return;
@@ -325,7 +328,7 @@ export class DelegationRegistry {
   }
 
   finish(
-    id: string,
+    id: DelegationId,
     state: TerminalDelegationState,
     taskStates: ReadonlyMap<number, DelegatedTaskTerminalState> = new Map(),
   ): DelegationSnapshotEntry | undefined {
@@ -355,7 +358,7 @@ export class DelegationRegistry {
     return this.#copy(entry);
   }
 
-  cancel(id: string): DelegationCancellationResult {
+  cancel(id: DelegationId): DelegationCancellationResult {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state)) return "already-finished";
     if (entry.state === "cancelling") return "already-cancelling";
@@ -408,6 +411,10 @@ export class DelegationRegistry {
   shutdown(): void {
     this.reset();
     this.#listeners.clear();
+  }
+
+  #nextId(): DelegationId {
+    return this.#idFactory() as DelegationId;
   }
 
   #copy(entry: StoredDelegation): DelegationSnapshotEntry {
