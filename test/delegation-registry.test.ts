@@ -115,6 +115,33 @@ test("registry represents every state, cancellation, task outcomes, counts, and 
   assert.deepEqual([...observed].sort(), [...DELEGATION_STATES].sort());
 });
 
+test("registry cancellation is one transition, aborts owned work, and first terminal wins", () => {
+  let aborts = 0;
+  const controller = new AbortController();
+  controller.signal.addEventListener("abort", () => { aborts += 1; });
+  const registry = new DelegationRegistry({ idFactory: () => uuid(1), now: () => 1_000 });
+  const entry = registry.accept({
+    requirement: "required",
+    tasks: Array.from({ length: 5 }, () => ({ role: "explorer" as const })),
+    maxActive: 4,
+  }, controller);
+  for (let taskIndex = 0; taskIndex < 4; taskIndex += 1) {
+    registry.record(entry.id, { type: "started", taskIndex, pid: 40 + taskIndex });
+  }
+
+  assert.equal(registry.cancel(entry.id), "cancelling");
+  assert.equal(registry.get(entry.id)?.state, "cancelling");
+  assert.equal(aborts, 1);
+  assert.equal(registry.cancel(entry.id), "already-cancelling");
+  assert.equal(aborts, 1);
+
+  registry.finish(entry.id, "succeeded");
+  registry.finish(entry.id, "cancelled");
+  assert.equal(registry.get(entry.id)?.state, "succeeded");
+  assert.equal(registry.cancel(entry.id), "already-finished");
+  assert.equal(registry.cancel("missing"), "already-finished");
+});
+
 test("registry releases an active slot when a task completes before queue promotion", () => {
   let now = 1_000;
   const registry = new DelegationRegistry({ now: () => now, idFactory: () => uuid(1) });

@@ -92,6 +92,10 @@ export type DelegatedTaskCompletionState = Extract<
   DelegatedTaskTerminalState,
   "succeeded" | "failed" | "cancelled"
 >;
+export type DelegationCancellationResult =
+  | "cancelling"
+  | "already-cancelling"
+  | "already-finished";
 
 interface StoredDelegation extends DelegationSnapshotEntry {
   diagnostics: RedactedDelegationDiagnostic[];
@@ -319,6 +323,19 @@ export class DelegationRegistry {
     return this.#copy(entry);
   }
 
+  cancel(id: string): DelegationCancellationResult {
+    const entry = this.#entries.get(id);
+    if (!entry || isTerminalDelegationState(entry.state)) return "already-finished";
+    if (entry.state === "cancelling") return "already-cancelling";
+    entry.state = "cancelling";
+    for (const task of entry.tasks) {
+      if (task.state === "running") task.state = "cancelling";
+    }
+    this.#changed();
+    entry.controller?.abort();
+    return "cancelling";
+  }
+
   snapshot(): DelegationSnapshot {
     const entries = [...this.#entries.values()].sort((left, right) => {
       const rank = (entry: StoredDelegation) =>
@@ -384,6 +401,7 @@ export class DelegationRegistry {
   }
 
   #recalculateState(entry: StoredDelegation): void {
+    if (entry.state === "cancelling") return;
     if (entry.tasks.some((task) => task.state === "cancelling")) {
       entry.state = "cancelling";
     } else if (entry.tasks.some((task) => task.state === "running")) {

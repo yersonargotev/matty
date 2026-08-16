@@ -36,7 +36,7 @@ export function renderDelegationConsole(
 ): string[] {
   const lines = [
     "Matty Delegations (session only)",
-    "↑/↓ select · Enter details · Esc/q close",
+    "↑/↓ select · Enter details · c cancel · Esc/q close",
   ];
   if (snapshot.delegations.length === 0) {
     lines.push("No delegations in this session.");

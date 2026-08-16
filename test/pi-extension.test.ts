@@ -477,6 +477,202 @@ test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, 
   await opening;
 });
 
+test("delegation TUI reports cancellation of an already-terminal Delegation without confirmation or state overwrite", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    delegationRegistryOptions: {
+      now: () => 5_000,
+      idFactory: () => "00000001-0000-4000-8000-000000000000",
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  await execute(
+    "terminal-delegation" as never,
+    { requirement: "required", tasks: [] } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  );
+
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  assert.match(component.render(200).join("\n"), /blocked/i);
+
+  component.handleInput("c");
+
+  const rendered = component.render(200).join("\n");
+  assert.match(rendered, /D-00000001 is already finished\./);
+  assert.match(rendered, /blocked/i);
+  assert.doesNotMatch(rendered, /Confirm cancellation|cancelling/i);
+  component.handleInput("q");
+  await opening;
+});
+
+test("delegation TUI confirms selected whole-group cancellation with active and queued counts", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  let fourStartedResolve: (() => void) | undefined;
+  const fourStarted = new Promise<void>((resolve) => { fourStartedResolve = resolve; });
+  const started = new Set<number>();
+  const running = execute(
+    "cancel-group" as never,
+    {
+      requirement: "required",
+      tasks: Array.from({ length: 5 }, () => ({ role: "explorer", task: "hold" })),
+    } as never,
+    undefined as never,
+    ((update: { details: { taskIndex?: number; type?: string } }) => {
+      if (update.details.type === "started" && update.details.taskIndex !== undefined) {
+        started.add(update.details.taskIndex);
+        if (started.size === 4) fourStartedResolve?.();
+      }
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+  await fourStarted;
+
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  component.handleInput("c");
+  assert.match(component.render(200).join("\n"), /cancellation .*4 active.*1 queued/i);
+  component.handleInput("\u001b");
+  assert.doesNotMatch(component.render(200).join("\n"), /Confirm cancellation/i);
+  component.handleInput("c");
+  component.handleInput("y");
+  const cancellationResult = component.render(200).join("\n");
+  assert.match(cancellationResult, /Cancellation requested for D-[0-9a-f]{8}\./);
+  assert.doesNotMatch(cancellationResult, /hold|fixture-secret/);
+  component.handleInput("c");
+  const repeatedCancellation = component.render(200).join("\n");
+  assert.match(repeatedCancellation, /Cancellation is already in progress/);
+  assert.doesNotMatch(repeatedCancellation, /Confirm cancellation/i);
+
+  const result = await running;
+  const details = result.details as { status: string; tasks: Array<{ status: string }> };
+  assert.equal(details.status, "cancelled");
+  assert.ok(details.tasks.every((task) => task.status === "cancelled"));
+  component.handleInput("q");
+  await opening;
+});
+
+test("delegation TUI reports a Delegation that finishes while cancellation confirmation is open", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const controller = new AbortController();
+  let startedResolve: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+  const running = execute(
+    "finishes-before-confirmation" as never,
+    { role: "explorer", task: "hold" } as never,
+    controller.signal as never,
+    ((update: { details?: { type?: string } }) => {
+      if (update.details?.type === "started") startedResolve?.();
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+  await started;
+
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  component.handleInput("c");
+  assert.match(component.render(200).join("\n"), /Confirm cancellation/i);
+
+  controller.abort();
+  const terminal = await running;
+  assert.equal(
+    (terminal.details as { outcome: { status: string } }).outcome.status,
+    "cancelled",
+  );
+  component.handleInput("y");
+
+  const rendered = component.render(200).join("\n");
+  assert.match(rendered, /already finished/i);
+  assert.match(rendered, /cancelled/i);
+  assert.doesNotMatch(rendered, /cancelling/i);
+  component.handleInput("q");
+  await opening;
+});
+
 test("session shutdown aborts active delegation and safe onUpdate cards disclose no progress payload", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
@@ -517,9 +713,23 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
   await started;
   assert.doesNotMatch(JSON.stringify(updates), /private delegated task text|fixture-secret|sequence|output/);
   assert.match(JSON.stringify(updates), /D-[0-9a-f]{8}/);
+  let consoleClosed = false;
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        factory({ requestRender() {} }, {}, {}, () => { consoleClosed = true; });
+        while (!consoleClosed) await new Promise((resolve) => setImmediate(resolve));
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
   for (const shutdown of harness.handlers.get("session_shutdown") ?? []) {
     await shutdown({ type: "session_shutdown" } as never, {} as never);
   }
+  await opening;
+  assert.equal(consoleClosed, true);
   const result = await running;
   assert.equal((result.details as { outcome: { status: string } }).outcome.status, "cancelled");
   const notifications: string[] = [];
