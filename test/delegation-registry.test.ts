@@ -273,6 +273,31 @@ test("registry keeps the first task terminal state and late progress cannot reop
   ]);
 });
 
+test("registry snapshots retain only the closed reviewer validation reason", () => {
+  const registry = new DelegationRegistry({ idFactory: () => uuid(1), now: () => 1_000 });
+  const entry = registry.accept({ tasks: [{ role: "reviewer" }] });
+  const secret = "raw response, evidence, prompt, stderr, and credentials";
+  registry.recordDiagnostic(entry.id, {
+    kind: "delegation",
+    code: "invalid-role-output",
+    taskIndex: 0,
+    role: "reviewer",
+    validation: {
+      schemaVersion: 1,
+      reason: "axis-not-allowed",
+      secret,
+    },
+  } as never);
+
+  assert.deepEqual(registry.get(entry.id)?.tasks[0]?.diagnostic, {
+    code: "invalid-role-output",
+    taskIndex: 0,
+    role: "reviewer",
+    validation: { schemaVersion: 1, reason: "axis-not-allowed" },
+  });
+  assert.doesNotMatch(JSON.stringify(registry.snapshot()), new RegExp(secret));
+});
+
 test("registry tracks bounded queue positions and clears them as tasks are promoted", () => {
   let now = 1_000;
   const registry = new DelegationRegistry({ now: () => now, idFactory: () => uuid(1) });

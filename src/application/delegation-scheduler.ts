@@ -5,6 +5,10 @@ import {
   type DelegationTaskDeclaration,
 } from "../domain/delegation-group.ts";
 import type { MattyRole } from "../domain/capability-contract.ts";
+import {
+  safeReviewerValidationDiagnostic,
+  type ReviewerValidationDiagnostic,
+} from "../domain/review-scope.ts";
 
 export const DELEGATION_LEAF_FAILURE_CODES = [
   "child-failed",
@@ -40,6 +44,7 @@ export interface DelegationDiagnostic {
   role?: MattyRole;
   phase?: "before-spawn" | "running";
   reason?: DelegationPreflightReason;
+  validation?: ReviewerValidationDiagnostic;
 }
 
 export type DelegationPreflightReason =
@@ -60,7 +65,11 @@ export type DelegationTaskPreflight =
 
 export type DelegationTaskExecution<T> =
   | { status: "succeeded"; value: T }
-  | { status: "failed"; code?: DelegationLeafFailureCode }
+  | {
+      status: "failed";
+      code?: DelegationLeafFailureCode;
+      validation?: ReviewerValidationDiagnostic;
+    }
   | { status: "cancelled" };
 
 export interface DelegationGroupExecution<T> {
@@ -364,6 +373,10 @@ export async function runDelegationGroup<T>(
               value: outcome.value,
             };
           } else {
+            const validation = outcome.status === "failed" &&
+                outcome.code === "invalid-role-output" && outcome.validation
+              ? safeReviewerValidationDiagnostic(outcome.validation)
+              : undefined;
             const diagnostic: DelegationDiagnostic = {
               kind: "delegation",
               code: outcome.status === "failed"
@@ -376,6 +389,7 @@ export async function runDelegationGroup<T>(
               ...(outcome.status === "cancelled"
                 ? { phase: "running" as const }
                 : {}),
+              ...(validation ? { validation } : {}),
             };
             emit(diagnostic);
             results[taskIndex] = {

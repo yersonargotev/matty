@@ -28,6 +28,55 @@ export interface ReviewerFindings {
   }>;
 }
 
+export const REVIEWER_VALIDATION_REASONS = [
+  "invalid-json",
+  "invalid-shape",
+  "candidate-sha-mismatch",
+  "axis-not-allowed",
+  "requirement-not-in-scope",
+  "excluded-reference",
+  "validation-failed",
+] as const;
+
+export type ReviewerValidationReason =
+  (typeof REVIEWER_VALIDATION_REASONS)[number];
+
+export interface ReviewerValidationDiagnostic {
+  schemaVersion: 1;
+  reason: ReviewerValidationReason;
+}
+
+export type ReviewerFindingsValidation =
+  | { ok: true; findings: ReviewerFindings }
+  | { ok: false; diagnostic: ReviewerValidationDiagnostic };
+
+export function reviewerValidationDiagnostic(
+  reason: ReviewerValidationReason,
+): ReviewerValidationDiagnostic {
+  return { schemaVersion: 1, reason };
+}
+
+export function isReviewerValidationReason(
+  value: unknown,
+): value is ReviewerValidationReason {
+  return typeof value === "string" &&
+    REVIEWER_VALIDATION_REASONS.some((reason) => reason === value);
+}
+
+/** Rebuilds reviewer validation metadata from its closed versioned allowlist. */
+export function safeReviewerValidationDiagnostic(
+  value: unknown,
+): ReviewerValidationDiagnostic {
+  const candidate = typeof value === "object" && value !== null
+    ? value as Partial<ReviewerValidationDiagnostic>
+    : undefined;
+  return reviewerValidationDiagnostic(
+    candidate?.schemaVersion === 1 && isReviewerValidationReason(candidate.reason)
+      ? candidate.reason
+      : "validation-failed",
+  );
+}
+
 const AXES = new Set<ReviewAxis>([
   "standards", "spec", "security", "correctness", "maintainability",
 ]);
@@ -96,34 +145,74 @@ function targetsExcludedReference(
 export function reviewerFindings(
   value: unknown,
   scope: ReviewScopeContract,
-): ReviewerFindings {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("invalid reviewer findings");
-  }
-  const input = value as Record<string, unknown>;
-  const candidate = commitSha(input.candidateSha);
-  if (
-    !hasOnlyKeys(input, ["schemaVersion", "candidateSha", "summary", "findings"]) ||
-    input.schemaVersion !== 1 || candidate !== scope.candidateSha ||
-    typeof input.summary !== "string" || !input.summary.trim() ||
-    !Array.isArray(input.findings) || input.findings.some((finding) => {
-      if (typeof finding !== "object" || finding === null || Array.isArray(finding)) return true;
+): ReviewerFindingsValidation {
+  const fail = (reason: ReviewerValidationReason): ReviewerFindingsValidation => ({
+    ok: false,
+    diagnostic: reviewerValidationDiagnostic(reason),
+  });
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return fail("invalid-shape");
+    }
+    const input = value as Record<string, unknown>;
+    if (
+      !hasOnlyKeys(input, ["schemaVersion", "candidateSha", "summary", "findings"]) ||
+      input.schemaVersion !== 1 ||
+      typeof input.summary !== "string" || !input.summary.trim() ||
+      !Array.isArray(input.findings)
+    ) {
+      return fail("invalid-shape");
+    }
+    let candidate: CommitSha;
+    try {
+      candidate = commitSha(input.candidateSha);
+    } catch {
+      return fail("invalid-shape");
+    }
+    if (candidate !== scope.candidateSha) return fail("candidate-sha-mismatch");
+
+    const findings: ReviewerFindings["findings"] = [];
+    for (const finding of input.findings) {
+      if (typeof finding !== "object" || finding === null || Array.isArray(finding)) {
+        return fail("invalid-shape");
+      }
       const item = finding as Record<string, unknown>;
-      return !hasOnlyKeys(item, ["axis", "severity", "requirement", "evidence"]) ||
-        !AXES.has(item.axis as ReviewAxis) || !scope.axes.includes(item.axis as ReviewAxis) ||
+      if (
+        !hasOnlyKeys(item, ["axis", "severity", "requirement", "evidence"]) ||
+        !AXES.has(item.axis as ReviewAxis) ||
         (item.severity !== "blocking" && item.severity !== "non-blocking") ||
-        typeof item.requirement !== "string" || !scope.requirements.includes(item.requirement) ||
-        typeof item.evidence !== "string" || !item.evidence.trim() ||
-        targetsExcludedReference(item.requirement as string, scope) ||
-        targetsExcludedReference(item.evidence as string, scope);
-    })
-  ) {
-    throw new Error("invalid reviewer findings");
+        typeof item.requirement !== "string" ||
+        typeof item.evidence !== "string" || !item.evidence.trim()
+      ) {
+        return fail("invalid-shape");
+      }
+      if (!scope.axes.includes(item.axis as ReviewAxis)) return fail("axis-not-allowed");
+      if (!scope.requirements.includes(item.requirement)) {
+        return fail("requirement-not-in-scope");
+      }
+      if (
+        targetsExcludedReference(item.requirement, scope) ||
+        targetsExcludedReference(item.evidence, scope)
+      ) {
+        return fail("excluded-reference");
+      }
+      findings.push({
+        axis: item.axis as ReviewAxis,
+        severity: item.severity,
+        requirement: item.requirement,
+        evidence: item.evidence,
+      });
+    }
+    return {
+      ok: true,
+      findings: {
+        schemaVersion: 1,
+        candidateSha: candidate,
+        summary: input.summary,
+        findings,
+      },
+    };
+  } catch {
+    return fail("validation-failed");
   }
-  return {
-    schemaVersion: 1,
-    candidateSha: candidate,
-    summary: input.summary as string,
-    findings: (input.findings as ReviewerFindings["findings"]).map((x) => ({ ...x })),
-  };
 }

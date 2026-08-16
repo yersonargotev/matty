@@ -17,8 +17,10 @@ import {
 import {
   reviewScope,
   reviewerFindings,
+  reviewerValidationDiagnostic,
   type ReviewScopeContract,
   type ReviewerFindings,
+  type ReviewerValidationDiagnostic,
 } from "../domain/review-scope.ts";
 
 export interface InspectionDelegationExecution {
@@ -47,7 +49,11 @@ type SuccessfulInspectionOutcome =
   Extract<DelegatedTaskOutcome, { status: "succeeded" }> extends infer Outcome
     ? Omit<Outcome, "output"> & {
         output: InspectionRoleFindings | ReviewerFindings;
-        diagnostic?: { kind: "candidate"; code: "invalid-role-output" };
+        diagnostic?: {
+          kind: "candidate";
+          code: "invalid-role-output";
+          validation?: ReviewerValidationDiagnostic;
+        };
       }
     : never;
 
@@ -60,6 +66,7 @@ interface InvalidInspectionOutput {
   failure: {
     kind: "invalid-role-output";
     message: string;
+    validation?: ReviewerValidationDiagnostic;
   };
   exit: Extract<
     DelegatedTaskOutcome,
@@ -109,13 +116,15 @@ function inspectionTask(
       ? [
         "Review Scope Contract (exact JSON; do not expand it):",
         JSON.stringify(scope),
-        "Bind every finding to candidateSha. Treat listed dependent/out-of-scope issues as excluded.",
+        "Bind candidateSha exactly to the supplied candidateSha.",
+        "Use only supplied axes. Bind every finding requirement verbatim to one supplied requirement.",
+        "Do not mention or quote excluded references in finding requirements or evidence.",
       ]
       : []),
     role === "explorer"
       ? "Do not mutate local or remote state. Return concise evidence to the parent."
       : role === "reviewer"
-      ? 'Do not mutate local or remote state. Return JSON exactly {"schemaVersion":1,"candidateSha":string,"summary":string,"findings":[{"axis":string,"severity":"blocking"|"non-blocking","requirement":string,"evidence":string}]}. The parent adjudicates scope and contradictions.'
+      ? 'Do not mutate local or remote state. Return only JSON, with no Markdown or surrounding text, exactly {"schemaVersion":1,"candidateSha":string,"summary":string,"findings":[{"axis":string,"severity":"blocking"|"non-blocking","requirement":string,"evidence":string}]}. The parent adjudicates scope and contradictions.'
       : 'Do not mutate local or remote state. Return JSON exactly {"summary": string, "evidence": array}.',
   ].join("\n");
 }
@@ -130,23 +139,36 @@ function structuredOutcome(
   }
   let candidate: InspectionRoleFindings | ReviewerFindings | undefined;
   let invalidAfterCandidate = false;
+  let validation: ReviewerValidationDiagnostic | undefined;
   for (const response of childTerminalResponses(outcome)) {
+    let output: unknown;
     try {
-      const output = JSON.parse(response) as unknown;
-      if (scope) {
-        candidate = reviewerFindings(output, scope);
-      } else if (
-        typeof output === "object" && output !== null && !Array.isArray(output) &&
-        typeof (output as Partial<InspectionRoleFindings>).summary === "string" &&
-        Array.isArray((output as Partial<InspectionRoleFindings>).evidence)
-      ) {
-        candidate = output as InspectionRoleFindings;
-      } else {
-        throw new Error("invalid inspection result");
-      }
-      invalidAfterCandidate = false;
+      output = JSON.parse(response) as unknown;
     } catch {
       if (candidate) invalidAfterCandidate = true;
+      validation = scope ? reviewerValidationDiagnostic("invalid-json") : undefined;
+      continue;
+    }
+    if (scope) {
+      const result = reviewerFindings(output, scope);
+      if (result.ok) {
+        candidate = result.findings;
+        invalidAfterCandidate = false;
+        validation = undefined;
+      } else {
+        if (candidate) invalidAfterCandidate = true;
+        validation = result.diagnostic;
+      }
+    } else if (
+      typeof output === "object" && output !== null && !Array.isArray(output) &&
+      typeof (output as Partial<InspectionRoleFindings>).summary === "string" &&
+      Array.isArray((output as Partial<InspectionRoleFindings>).evidence)
+    ) {
+      candidate = output as InspectionRoleFindings;
+      invalidAfterCandidate = false;
+      validation = undefined;
+    } else if (candidate) {
+      invalidAfterCandidate = true;
     }
   }
   if (candidate) {
@@ -154,7 +176,13 @@ function structuredOutcome(
       ...outcome,
       output: candidate,
       ...(invalidAfterCandidate
-        ? { diagnostic: { kind: "candidate" as const, code: "invalid-role-output" as const } }
+        ? {
+          diagnostic: {
+            kind: "candidate" as const,
+            code: "invalid-role-output" as const,
+            ...(validation ? { validation } : {}),
+          },
+        }
         : {}),
     });
   }
@@ -165,6 +193,7 @@ function structuredOutcome(
     failure: {
       kind: "invalid-role-output",
       message: "inspection role output must be structured JSON findings",
+      ...(validation ? { validation } : {}),
     },
     exit: outcome.exit,
   });

@@ -424,6 +424,60 @@ test("scheduler redacts unknown task failure codes", async () => {
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
 });
 
+test("scheduler propagates only an allowlisted reviewer validation diagnostic", async () => {
+  const secret = "raw reviewer response and evidence";
+  const result = await runDelegationGroup(requiredGroup(1), {
+    async preflight() {
+      return { ok: true };
+    },
+    async run() {
+      return {
+        status: "failed",
+        code: "invalid-role-output",
+        validation: {
+          schemaVersion: 1,
+          reason: "candidate-sha-mismatch",
+          response: secret,
+        },
+      } as unknown as DelegationTaskExecution<never>;
+    },
+  });
+
+  assert.deepEqual(result.tasks[0] && "diagnostic" in result.tasks[0]
+    ? result.tasks[0].diagnostic
+    : undefined, {
+    kind: "delegation",
+    code: "invalid-role-output",
+    taskIndex: 0,
+    role: "explorer",
+    validation: { schemaVersion: 1, reason: "candidate-sha-mismatch" },
+  });
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+});
+
+test("scheduler fails closed on unknown reviewer validation metadata", async () => {
+  const result = await runDelegationGroup(requiredGroup(1), {
+    async preflight() {
+      return { ok: true };
+    },
+    async run() {
+      return {
+        status: "failed",
+        code: "invalid-role-output",
+        validation: { schemaVersion: 99, reason: "private-reason" },
+      } as unknown as DelegationTaskExecution<never>;
+    },
+  });
+
+  assert.deepEqual(result.tasks[0] && "diagnostic" in result.tasks[0]
+    ? result.tasks[0].diagnostic.validation
+    : undefined, {
+    schemaVersion: 1,
+    reason: "validation-failed",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /private-reason/);
+});
+
 test("scheduler exceptions become redacted task diagnostics", async () => {
   const secret = "provider stderr and prompt content";
   const result = await runDelegationGroup(requiredGroup(1), {

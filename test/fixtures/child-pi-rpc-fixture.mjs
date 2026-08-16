@@ -119,6 +119,17 @@ async function run(command, promptTerminatedByLf) {
     terminal(JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }));
     return;
   }
+  if (task?.startsWith("Reviewer assignment:\ninteractive-reviewer-candidate\n")) {
+    const candidateSha = /"candidateSha":"([0-9a-f]{40})"/.exec(task)?.[1];
+    interactive = true;
+    terminal(JSON.stringify({
+      schemaVersion: 1,
+      candidateSha,
+      summary: "initial reviewer candidate",
+      findings: [],
+    }));
+    return;
+  }
   if (task === "settled-respawn-candidate" || task?.startsWith("Designer assignment:\nsettled-respawn-candidate\n")) {
     await writeFile(join(sessionDirectory, "fixture-session.json"), JSON.stringify({ sessionId, tools, provider, model, thinking }));
     terminal(JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }));

@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
 import {
+  safeReviewerValidationDiagnostic,
+  type ReviewerValidationDiagnostic,
+} from "../domain/review-scope.ts";
+import {
   safeChildExecutionActivityObservation,
   type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
@@ -45,6 +49,7 @@ export interface RedactedDelegationDiagnostic {
   role?: MattyRole;
   phase?: "before-spawn" | "running";
   reason?: DelegationPreflightReason;
+  validation?: ReviewerValidationDiagnostic;
 }
 
 export type DelegatedTaskState = Exclude<DelegationState, "partial">;
@@ -327,6 +332,9 @@ export class DelegationRegistry {
     const entry = this.#entries.get(id);
     if (!entry || isTerminalDelegationState(entry.state) ||
       !diagnosticCodes.has(diagnostic.code)) return;
+    const validation = diagnostic.code === "invalid-role-output" && diagnostic.validation
+      ? safeReviewerValidationDiagnostic(diagnostic.validation)
+      : undefined;
     const safe: RedactedDelegationDiagnostic = {
       code: diagnostic.code,
       ...(typeof diagnostic.taskIndex === "number" &&
@@ -342,6 +350,7 @@ export class DelegationRegistry {
       ...(diagnostic.reason && preflightReasons.has(diagnostic.reason)
         ? { reason: diagnostic.reason }
         : {}),
+      ...(validation ? { validation } : {}),
     };
     entry.diagnostics.push(safe);
     if (safe.taskIndex !== undefined) {

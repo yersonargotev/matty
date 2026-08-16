@@ -1508,6 +1508,86 @@ test("invalid later response remains private and preserves the last valid Candid
   assert.doesNotMatch(JSON.stringify(result), /not structured JSON/);
 });
 
+test("invalid later reviewer response preserves the Candidate Result and safe validation reason", async () => {
+  const harness = createExtensionHarness();
+  const control = registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+    async reviewerGithubPreflight() {
+      return { available: true, authenticated: true };
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: process.cwd() });
+  const head = stdout.trim();
+  let taskId = "";
+  let identifiedResolve!: () => void;
+  const identified = new Promise<void>((resolve) => { identifiedResolve = resolve; });
+  const running = execute(
+    "interactive-invalid-reviewer" as never,
+    {
+      requirement: "required",
+      tasks: [{
+        role: "reviewer",
+        task: "interactive-reviewer-candidate",
+        reviewScope: {
+          schemaVersion: 1,
+          issue: { repository: "github.com/acme/repo", number: 84, reference: "#84" },
+          requirements: ["Bind findings verbatim"],
+          outOfScope: [{ reference: "#42", reason: "excluded" }],
+          baseSha: head,
+          candidateSha: head,
+          axes: ["spec"],
+        },
+      }],
+    } as never,
+    undefined as never,
+    ((update: { details: { type?: string; delegatedTaskId: string } }) => {
+      if (update.details.type === "identified") {
+        taskId = update.details.delegatedTaskId;
+        identifiedResolve();
+      }
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  await identified;
+  assert.equal((await control.interact(taskId, {
+    type: "follow_up",
+    message: "finish-invalid",
+  })).status, "accepted");
+  const result = await running as unknown as {
+    details: {
+      tasks: Array<{
+        value: {
+          outcome: {
+            output: { summary: string };
+            diagnostic: {
+              code: string;
+              validation: { schemaVersion: number; reason: string };
+            };
+          };
+        };
+      }>;
+    };
+  };
+  const outcome = result.details.tasks[0]?.value.outcome;
+  assert.equal(outcome?.output.summary, "initial reviewer candidate");
+  assert.deepEqual(outcome?.diagnostic, {
+    kind: "candidate",
+    code: "invalid-role-output",
+    validation: { schemaVersion: 1, reason: "invalid-json" },
+  });
+  assert.doesNotMatch(JSON.stringify(result), /not structured JSON/);
+});
+
 test("task abort preserves required atomicity and optional sibling independence", async () => {
   const context = {
     cwd: process.cwd(),
@@ -3033,7 +3113,7 @@ test("reviewer invalid output remains a closed-allowlist group diagnostic", asyn
           candidateSha: head,
           axes: ["spec"],
         },
-      }],
+      }, { role: "explorer", task: "hold" }],
     } as never,
     undefined as never,
     undefined as never,
@@ -3050,11 +3130,21 @@ test("reviewer invalid output remains a closed-allowlist group diagnostic", asyn
   );
 
   assert.equal((result.details as { status: string }).status, "failed");
-  assert.equal(
-    (result.details as { tasks: Array<{ diagnostic?: { code?: string } }> })
-      .tasks[0]?.diagnostic?.code,
-    "invalid-role-output",
-  );
+  const tasks = (result.details as {
+    tasks: Array<{
+      status: string;
+      diagnostic?: {
+        code?: string;
+        validation?: { schemaVersion: number; reason: string };
+      };
+    }>;
+  }).tasks;
+  assert.deepEqual(tasks.map((task) => task.status), ["failed", "cancelled"]);
+  assert.equal(tasks[0]?.diagnostic?.code, "invalid-role-output");
+  assert.deepEqual(tasks[0]?.diagnostic?.validation, {
+    schemaVersion: 1,
+    reason: "invalid-shape",
+  });
   assert.doesNotMatch(JSON.stringify(result), /fixture-provider|authDigest|Return invalid/);
 });
 
