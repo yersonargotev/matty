@@ -57,6 +57,7 @@ export type DelegationPreflightReason =
   | "writer-unavailable"
   | "artifact-destination-invalid"
   | "tool-surface-incompatible"
+  | "child-session-store-unavailable"
   | "capability-unavailable";
 
 export type DelegationTaskPreflight =

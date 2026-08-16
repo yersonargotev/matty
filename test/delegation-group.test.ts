@@ -36,6 +36,31 @@ function optionalInspectionGroup(taskCount: number) {
   };
 }
 
+test("defaults Delegation persistence to persistent and rejects per-task alternatives", () => {
+  const persistent = requiredGroup(1);
+  assert.deepEqual(validateDelegationGroupContract(persistent), {
+    ok: true,
+    contract: { ...persistent, persistence: "persistent" },
+  });
+
+  const ephemeral = { ...requiredGroup(1), persistence: "ephemeral" as const };
+  assert.deepEqual(validateDelegationGroupContract(ephemeral), {
+    ok: true,
+    contract: ephemeral,
+  });
+  assert.deepEqual(validateDelegationGroupContract({
+    ...requiredGroup(1),
+    persistence: "archive",
+    tasks: [{ role: "explorer", task: "inspect", persistence: "ephemeral" }],
+  }), {
+    ok: false,
+    errors: [
+      { code: "invalid-group-policy" },
+      { code: "invalid-task", taskIndex: 0 },
+    ],
+  });
+});
+
 test("validates a required atomic delegation group of at most eight tasks", () => {
   const contract = {
     schemaVersion: 1,
@@ -54,7 +79,7 @@ test("validates a required atomic delegation group of at most eight tasks", () =
 
   assert.deepEqual(validateDelegationGroupContract(contract), {
     ok: true,
-    contract,
+    contract: { ...contract, persistence: "persistent" },
   });
 });
 
@@ -126,7 +151,10 @@ test("reviewer requires one closed Review Scope Contract", () => {
     ...requiredGroup(1),
     tasks: [{ role: "reviewer", task: "review", reviewScope }],
   };
-  assert.deepEqual(validateDelegationGroupContract(valid), { ok: true, contract: valid });
+  assert.deepEqual(validateDelegationGroupContract(valid), {
+    ok: true,
+    contract: { ...valid, persistence: "persistent" },
+  });
   assert.deepEqual(validateDelegationGroupContract({
     ...valid,
     tasks: [{ ...valid.tasks[0], reviewScope: { ...reviewScope, expansion: "forbidden" } }],

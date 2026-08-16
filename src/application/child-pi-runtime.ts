@@ -9,6 +9,7 @@ import {
   classifyChildExecutionActivity,
   type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
+import type { ChildSessionHandle } from "./child-session-store.ts";
 
 export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -227,8 +228,9 @@ export interface ChildPiRunnerOptions {
   ) => Promise<boolean>;
   onInteractionRejected?: () => void | Promise<void>;
   onTerminalResponse?: (text: string) => void;
-  /** Matty-owned ephemeral session storage used to resume a settled Child Session. */
+  /** Matty-owned session storage used to resume a settled Child Session. */
   sessionRoot?: string;
+  session?: ChildSessionHandle | undefined;
   retainSessionUntilClose?: boolean;
   scheduleExecution?: <T>(execution: () => Promise<T>, signal?: AbortSignal) => Promise<T | undefined>;
 }
@@ -360,6 +362,8 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
   let presentation: DelegatedTaskPresentation | undefined;
   let sessionDirectory: string | undefined;
   let sessionId: string | undefined;
+  let sessionTerminalState: "succeeded" | "failed" | "cancelled" | undefined;
+  let sessionFinished = false;
   let runSignal: AbortSignal | undefined;
   let runProgress: ((progress: DelegatedTaskProgress) => void) | undefined;
   let acceptingInteractions = true;
@@ -428,9 +432,11 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
       arguments: [
         ...invocation.arguments,
         "--mode", "rpc",
-        ...(sessionDirectory && sessionId
-          ? ["--session-dir", sessionDirectory, "--session-id", sessionId]
-          : ["--no-session", "--session-id", runId]),
+        ...(options.session
+          ? ["--session", options.session.sessionFile]
+          : sessionDirectory && sessionId
+            ? ["--session-dir", sessionDirectory, "--session-id", sessionId]
+            : ["--no-session", "--session-id", runId]),
         "--provider", parent.provider,
         "--model", parent.model,
         "--thinking", parent.thinking,
@@ -471,7 +477,18 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
     await executionChain;
     const directory = sessionDirectory;
     sessionDirectory = undefined;
-    if (directory) await rm(directory, { recursive: true, force: true });
+    const storedOutcome = outcomes.at(-1);
+    const terminalState = sessionTerminalState ?? (storedOutcome
+      ? storedOutcome.status === "succeeded"
+        ? "succeeded"
+        : storedOutcome.status === "cancelled" ? "cancelled" : "failed"
+      : undefined);
+    if (options.session && !sessionFinished && terminalState) {
+      sessionFinished = true;
+      await options.session.finish(terminalState);
+    }
+    if (options.session) await options.session.close();
+    else if (directory) await rm(directory, { recursive: true, force: true });
   };
 
   return {
@@ -485,8 +502,13 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
       outcomes.length = 0;
       executionCount = 0;
       presentation = undefined;
-      sessionId = randomUUID();
-      if (options.sessionRoot) {
+      sessionTerminalState = undefined;
+      sessionFinished = false;
+      sessionId = options.session?.sessionId ?? randomUUID();
+      if (options.session) {
+        await options.session.prepare(parent.cwd);
+        sessionDirectory = options.session.directory;
+      } else if (options.sessionRoot) {
         sessionDirectory = await mkdtemp(join(options.sessionRoot, "matty-child-session-"));
         await chmod(sessionDirectory, 0o700);
       }
@@ -499,6 +521,9 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
       acceptingInteractions = false;
       await executionChain;
       const result = combinedOutcome(initial);
+      sessionTerminalState = result.status === "succeeded"
+        ? "succeeded"
+        : result.status === "cancelled" ? "cancelled" : "failed";
       if (!options.retainSessionUntilClose) await cleanup();
       return result;
     },

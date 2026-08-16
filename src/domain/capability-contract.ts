@@ -51,7 +51,7 @@ export const MATTY_ROLES = [
 export type MattyRole = (typeof MATTY_ROLES)[number];
 
 export const DELEGATION_INPUT_GUIDANCE =
-  `{"requirement": "required"|"optional", "tasks": [{"role": ${
+  `{"requirement": "required"|"optional", "persistence"?: "persistent"|"ephemeral", "tasks": [{"role": ${
     [...INSPECTION_ROLES, "researcher", "worker"].map((role) =>
       JSON.stringify(role)
     ).join("|")

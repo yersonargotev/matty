@@ -144,7 +144,7 @@ const preflightReasons = new Set<DelegationPreflightReason>([
   "authentication-unavailable", "runtime-unavailable", "rules-conflict",
   "github-unavailable", "review-commit-unavailable", "web-unavailable", "writer-unavailable",
   "artifact-destination-invalid", "tool-surface-incompatible",
-  "capability-unavailable",
+  "child-session-store-unavailable", "capability-unavailable",
 ]);
 
 function title(state: DelegationState): string {
@@ -432,6 +432,61 @@ export class DelegationRegistry {
       delegations: entries.map((entry) => this.#copy(entry)),
       concurrency: { activeTasks, queuedTasks },
     };
+  }
+
+  restore(sessions: ReadonlyArray<{
+    taskId: string;
+    delegationId: string;
+    taskIndex: number;
+    role: MattyRole;
+    requirement: "required" | "optional";
+    state: "active" | "succeeded" | "failed" | "cancelled" | "interrupted";
+    createdAt: number;
+    updatedAt: number;
+  }>): void {
+    const groups = new Map<string, typeof sessions>();
+    for (const session of sessions) groups.set(session.delegationId, [...(groups.get(session.delegationId) ?? []), session]);
+    for (const [rawDelegationId, group] of groups) {
+      const id = rawDelegationId as DelegationId;
+      if (this.#entries.has(id)) continue;
+      const ordered = [...group].sort((left, right) => left.taskIndex - right.taskIndex);
+      const taskStates = ordered.map((item) => item.state === "succeeded" ? "succeeded" as const : item.state === "cancelled" ? "cancelled" as const : "failed" as const);
+      const state: TerminalDelegationState = taskStates.every((item) => item === "succeeded") ? "succeeded"
+        : taskStates.every((item) => item === "cancelled") ? "cancelled" : "failed";
+      const acceptedAt = Math.min(...ordered.map((item) => item.createdAt));
+      const endedAt = Math.max(...ordered.map((item) => item.updatedAt));
+      const roles = [...new Set(ordered.map((item) => item.role))];
+      const entry: StoredDelegation = {
+        id,
+        displayId: shortCandidate("D", id),
+        requirement: ordered[0]!.requirement,
+        roles,
+        taskCount: ordered.length,
+        state,
+        acceptedAt,
+        startedAt: acceptedAt,
+        endedAt,
+        diagnostics: [],
+        resultSummary: ordered.some((item) => item.state === "interrupted") ? "Failed (interrupted)" : title(state),
+        activities: [],
+        tasks: ordered.map((item, index) => ({
+          id: item.taskId as DelegatedTaskId,
+          displayId: shortCandidate("T", item.taskId),
+          index,
+          role: item.role,
+          state: taskStates[index]!,
+          queuedAt: item.createdAt,
+          startedAt: item.createdAt,
+          endedAt: item.updatedAt,
+          resultSummary: item.state === "interrupted" ? "Failed (interrupted)" : title(taskStates[index]!),
+          activities: [],
+        })),
+        terminalOrder: ++this.#terminalOrder,
+      };
+      this.#entries.set(id, entry);
+    }
+    this.#evict();
+    this.#changed();
   }
 
   subscribe(listener: () => void): () => void {

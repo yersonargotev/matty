@@ -101,6 +101,31 @@ export class DelegationControl implements MattyApplicationControl {
     }
   }
 
+  restore(sessions: ReadonlyArray<{ taskId: string; delegationId: string; requirement: "required" | "optional"; presentation: DelegatedTaskPresentation }>): void {
+    const groups = new Map<string, typeof sessions>();
+    for (const session of sessions) groups.set(session.delegationId, [...(groups.get(session.delegationId) ?? []), session]);
+    for (const [delegationId, group] of groups) {
+      const terminal = Promise.resolve(Object.freeze({ status: "restored" as const }));
+      this.#delegations.set(delegationId, {
+        phase: "closed",
+        terminal,
+        resolveTerminal() {},
+        frozen: Object.freeze({ status: "restored" as const }),
+        hasFrozen: true,
+        terminalOrder: ++this.#terminalOrder,
+        taskIds: group.map((item) => item.taskId),
+      });
+      for (const item of group) this.#tasks.set(item.taskId, {
+        delegationId,
+        requirement: item.requirement,
+        presentation: item.presentation,
+        listeners: new Set(),
+        holders: new Map(),
+      });
+    }
+    this.#evict();
+  }
+
   attachRunner(taskId: string, runner: DelegatedTaskRunner): void {
     const task = this.#tasks.get(taskId);
     if (!task) return;
@@ -271,8 +296,24 @@ export class DelegationControl implements MattyApplicationControl {
     this.#terminalOrder = 0;
   }
 
-  shutdown(): void {
-    this.reset();
+  async shutdown(): Promise<void> {
+    const cancelled = immutable({ status: "cancelled" as const });
+    const cleanup: Promise<void>[] = [];
+    for (const delegation of this.#delegations.values()) {
+      delegation.abortGroup?.();
+      if (delegation.phase !== "closed") delegation.resolveTerminal(cancelled);
+    }
+    for (const task of this.#tasks.values()) {
+      task.detachRunner?.();
+      for (const release of task.holders.values()) release?.();
+      task.holders.clear();
+      if (task.runner?.close) cleanup.push(task.runner.close());
+      task.listeners.clear();
+    }
+    await Promise.allSettled(cleanup);
+    this.#delegations.clear();
+    this.#tasks.clear();
+    this.#terminalOrder = 0;
   }
 
   #closeTaskRunner(task: TaskRecord): void {
