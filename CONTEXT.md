@@ -37,13 +37,53 @@ form may be displayed, but process and tool-call identifiers never substitute fo
 _Avoid_: PID, run ID, task index, tool call ID
 
 **Delegated Task**:
-One role-bound unit of work within a Delegation.
-_Avoid_: Delegation, child session
+One role-bound unit of work within a Delegation, with stable identity across the
+Child Executions needed for its interactions.
+_Avoid_: Delegation, Child Session, Child Execution
+
+**Delegated Task ID**:
+The opaque identity assigned to a Delegated Task and preserved across its Child
+Executions. A task index or Child Execution run ID never substitutes for it.
+_Avoid_: Task index, PID, run ID
 
 **Child Execution**:
 One isolated Pi process attempting a Delegated Task. Its PID and run ID are
 diagnostic identity rather than the user-facing unit of management.
-_Avoid_: Delegation, agent identity
+_Avoid_: Delegation, agent identity, Delegated Task
+
+**Child Session**:
+The isolated, bidirectional Pi conversation associated with one Delegated Task,
+observable and controllable without replacing the parent session. It persists
+across the bounded Child Executions needed to interact with that task.
+_Avoid_: Parent session, terminal pane, Child Execution
+
+**Candidate Result**:
+The replaceable result of a Delegated Task before its Delegation closes. Once
+the Delegation closes, the task result is immutable and later work is a linked
+Continuation.
+_Avoid_: Final result, transcript update, mutable tool result
+
+**Continuation**:
+A new Delegated Task linked to a closed task for additional work without
+rewriting the earlier task result or parent conversation.
+_Avoid_: Result update, reopened Delegation, transcript mutation
+
+**Child Transcript**:
+The complete ordered Pi conversation of a Child Session, including retained
+model messages, reasoning, tool activity, usage, interaction, and errors. Data
+truncated before entering the conversation is not part of the transcript.
+_Avoid_: Activity summary, Delegation timeline, raw process log
+
+**Waiting Child Session**:
+A Child Session paused for user input or capability reacquisition while retaining
+its Delegated Task identity and bounded lifecycle.
+_Avoid_: Failed task, blocked Delegation, idle process
+
+**Child Session Store**:
+The Matty-owned local collection of persisted Child Sessions and their minimal
+versioned metadata, separate from Pi's user-facing parent-session history and
+from project files.
+_Avoid_: Delegation Registry, transcript database, project cache
 
 **Delegation Registry**:
 The session-scoped, bounded record of active and recently completed Delegations
@@ -52,8 +92,9 @@ most recent terminal Delegations.
 _Avoid_: Persistent history, child transcript, telemetry store
 
 **Delegation Console**:
-The user-facing `/matty delegations` view of the Delegation Registry, with
-Delegations as its primary unit and Delegated Tasks available for inspection.
+The user-facing `/matty delegations` view with Delegations as its primary unit,
+Delegated Tasks as stable nested units, and Child Sessions available for
+inspection and bounded interaction.
 _Avoid_: Agents console, child process monitor, persistent fleet database
 
 **Matty Role**:
@@ -80,9 +121,9 @@ non-writing roles may run concurrently.
 _Avoid_: Parallel workers, shared-worktree writers
 
 **Bounded Concurrency**:
-The limit of eight tasks accepted by one delegation call and four child Pi
-processes active at once.
-_Avoid_: Unlimited delegation, eight-way parallelism
+The limit of eight tasks accepted by one Delegation and four working Child
+Executions. A settled Child Session has no idle child process.
+_Avoid_: Unlimited delegation, eight-way parallelism, idle process fleet
 
 **Capability Contract**:
 Versioned Matty-owned policy for one Core operation, covering its role, tools,

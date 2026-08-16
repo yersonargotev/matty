@@ -109,26 +109,105 @@ La implementación productiva incluye:
 
 La redacción usa un allowlist cerrado y las vistas comparten snapshots deterministas. La interacción, truncación, lifecycle del widget y modos headless/print están cubiertos en los seams públicos de aplicación y registro Pi.
 
-## Incremento 3 — Control avanzado
+## Incremento 3 — Child Sessions interactivas y persistentes
 
-Backlog preservado, no comprometido por los dos primeros incrementos:
+**Estado:** diseño acordado; implementación pendiente.
 
-- steering durante ejecución;
-- retry y resume;
-- visor de conversación;
-- historial persistente;
-- interoperabilidad RPC opcional con `pi-subagents`.
+El Incremento 3 reemplaza el child runtime de una sola respuesta con la arquitectura final: una Child Session Pi bidireccional por Delegated Task, ejecutada exclusivamente mediante procesos aislados `pi --mode rpc`. No conserva el renderer/runtime anterior como fallback, no usa `AgentSession` in-process y no añade compatibilidad ni migraciones para shapes obsoletos. La decisión se registra en [ADR-0024](../adr/0024-manage-interactive-child-sessions-over-isolated-pi-rpc.md).
 
-Estas capacidades requieren decisiones nuevas sobre protocolo bidireccional, identidad de intentos, privacidad, almacenamiento, retención, recuperación y compatibilidad certificada. No se simularán sobre primitivas insuficientes.
+### Identidad, ejecución y resultados
 
-## Fuera de alcance actual
+- Cada Delegated Task recibe un UUID opaco y una etiqueta corta `T-<hex>`, estable entre sus Child Executions.
+- La Delegated Task es la unidad visible; PID y `runId` identifican únicamente el intento actual.
+- Sólo existen cuatro Child Executions concurrentes. Un proceso RPC permanece abierto mientras procesa su turn y mensajes ya encolados, y termina al alcanzar `agent_settled`; no existe una flota idle ni un scheduler secundario.
+- Una interacción aceptada usa el Child Execution abierto o, si éste ya terminó antes del freeze, crea otro sobre la misma Child Session. Durante `freezing`, nuevas interacciones reciben `delegation-closing`; después del freeze se ofrecen como Continuation.
+- Cada respuesta settled vuelve a pasar por el parser del Matty Role. Sólo una respuesta válida reemplaza el Candidate Result; una inválida permanece en el Child Transcript con diagnóstico cerrado.
+- El cierre espera interacciones ya aceptadas, congela el resultado una sola vez y produce un único tool result. Trabajo posterior crea una Continuation enlazada, con Delegated Task, Delegation, preflight y resultado propios.
+
+Estados de Child Session:
+
+```text
+starting → working → settled
+                  ↘ waiting-for-input
+                  ↘ waiting-for-capability
+working → aborting → aborted
+any open state → interrupted | failed | protocol-failed
+```
+
+La Child Session persiste como conversación aunque no exista un proceso hijo. Crash, reload o restart nunca intentan reattach al mismo proceso; Continue crea una nueva Delegated Task y Child Execution después de preflight.
+
+### Interacción y autoridad
+
+- La consola permite transcript, búsqueda, filtros, steering, follow-up, abort y Continue.
+- `Steer` y `Follow up` son acciones explícitas. `Esc` cancela composición o vuelve un nivel; abort requiere confirmación separada.
+- Toda interacción conserva rol, herramientas, guards, working tree, web, Review Scope Contract y límites de modelo. Una ampliación de capacidades exige otra Delegated Task con preflight propio.
+- Solicitudes `extension_ui_request` no toman el foco: se registran, marcan `waiting-for-input` y se responden desde la consola. Se respeta el timeout del hijo o se aplica un default fijo de cinco minutos; la consola puede ampliarlo explícitamente.
+- Al expirar, Matty responde cancelación. Si el hijo no puede producir Candidate Result, la tarea falla mediante su contrato normal.
+- Abortar una tarea `required` aplica la cancelación atómica a hermanas abiertas. En una Delegation `optional`, sólo se cancela la tarea elegida. Una tarea cancelada nunca se presenta como failed.
+- Un worker libera Single Writer al producir Candidate Result. Otra interacción debe readquirirlo y espera como `waiting-for-capability` mientras no esté disponible.
+- Continue repite preflight, advierte drift de Git HEAD/working tree, bloquea Reviewer si sus commits ya no existen y nunca restaura autoridad desde metadata antigua.
+
+### Protocolo y backpressure
+
+- El cliente RPC usa framing JSONL estricto, límites por frame y buffer, request IDs correlacionados y comandos allowlisted.
+- Un frame inválido termina sólo ese Child Execution como `protocol-failed`; stderr se limita y se reduce a diagnóstico cerrado. No existe fallback al modo print.
+- Eventos desconocidos no se ejecutan. ANSI y contenido de terminal se neutralizan antes de renderizarse.
+- Los deltas se ensamblan por `contentIndex`; `message_end` es la autoridad final. Updates acumulativos reemplazan estado en vez de duplicarlo.
+- La lectura de stdout nunca espera a la TUI. Los rerenders se coalescen y la memoria conserva sólo el parcial necesario; el store persiste entradas terminales, no frames visuales.
+
+### Child Session Store y privacidad
+
+El store mínimo vive fuera del repositorio y de `/resume`:
+
+```text
+<agent-dir>/matty/child-sessions/
+└── <delegated-task-id>/
+    ├── manifest.json
+    └── session.jsonl
+```
+
+- No hay índice global: Matty descubre sesiones escaneando manifests.
+- El JSONL de Pi es la fuente del Child Transcript y el manifest usa únicamente el schema actual. Una versión incompatible falla explícitamente; no se migra ni se abre read-only.
+- La persistencia está habilitada por defecto. Cada Delegation sólo puede elegir `persistent` o `ephemeral`.
+- La retención fija es siete días o cien sesiones, con límite global de 1 GiB. Se desalojan primero sesiones terminales antiguas y nunca una activa.
+- Una sesión ephemeral conserva transcript en memoria durante la sesión padre y no puede continuar después de reload o restart.
+- El transcript incluye mensajes retenidos, reasoning, tool calls, argumentos, resultados, usage, interacción y errores, pero no promete recuperar contenido truncado antes de entrar a Pi.
+- No hay redacción heurística. El store usa permisos restrictivos y nunca incluye transcripts en snapshots seguros, tool results del padre, logs, status, doctor, crash output o telemetría.
+
+### Presentación y API
+
+La Delegation Console conserva la jerarquía `Delegations → Delegated Tasks → Child Session`.
+
+- La tarjeta inline muestra una sección viva y compacta por tarea; el widget fleet resume actividad y cola por tarea.
+- La vista Child Session ofrece transcript con scroll, búsqueda y filtros, costo, usage, contexto y controles. Texto user/assistant aparece expandido; reasoning, argumentos y resultados aparecen colapsados.
+- `/matty task T-<id>` abre directamente una tarea. La UI publica hints para `Enter`, `Tab`, flechas/`j`/`k`, `/`, `f`, `s`, `u`, `a`, `Esc` y `q` usando las capacidades actuales de keybindings Pi.
+- Headless mantiene `/matty delegations --json` con el nuevo shape breaking y añade lectura explícita de tarea/transcript más steer/follow-up por ID exacto.
+- Abort, delete y Continue son TUI-only en este incremento. Ningún control se expone como tool al modelo padre.
+- La consola muestra tokens, costo, turns y contexto, sin introducir presupuestos configurables.
+
+### Entrega
+
+La arquitectura final se entrega en tres incrementos end-to-end, cada uno integrado en `npm run check` y aceptación empaquetada:
+
+1. Delegated Task ID, controlador RPC final, stream, transcript en memoria y resultados de grupo;
+2. tarjetas por tarea y visor TUI final con búsqueda, steer, follow-up y abort;
+3. manifest + JSONL, modo ephemeral, retención fija y Continue.
+
+Cada incremento mantiene el producto funcionando, pero ninguno introduce un runtime temporal que el siguiente deba reemplazar. No habrá feature flag permanente ni fallback al child runtime obsoleto.
+
+## Fuera de alcance
 
 - reemplazar Child Executions con `AgentSession` in-process;
-- usar `pi-subagents` para ejecutar Matty Roles;
-- cancelación individual de tareas;
-- persistencia entre sesiones;
-- copiar FleetView o el manager completo de `pi-subagents`;
-- mostrar payloads o transcripts de hijos.
+- usar `pi-subagents` para ejecutar Matty Roles o copiar su manager;
+- ampliar herramientas, rol o autoridad mediante steering, follow-up o Continuation;
+- retry fresh, navegación/fork de ramas, recovery automático o reattach durable al mismo proceso;
+- presupuestos configurables, exportación especial o gestión de attachments propia;
+- mutaciones headless como abort, delete o Continue;
+- compatibilidad, fallback o migración para el child runtime y schemas reemplazados;
+- reescribir resultados terminales o tool results de la conversación padre;
+- guardar Child Transcripts dentro del proyecto o mezclarlos con `/resume`;
+- incluir Child Transcripts en snapshots seguros o exponer controles como tools al modelo padre;
+- prometer recuperación de output que Pi o una herramienta ya truncó.
 
 ## Estrategia de entrega
 
@@ -148,7 +227,7 @@ El issue tracker separó las fronteras ya implementadas:
 3. #59 entregó el Fleet observable;
 4. #60 entregó actividad redactada.
 
-El Incremento 3 permanece en esta propuesta hasta contar con evidencia suficiente para dividirlo en trabajo implementable.
+El Incremento 3 queda dividido en los tres incrementos finales definidos arriba. Cada uno requiere issue/spec propio, tests de protocolo y presentación, aceptación empaquetada y validación manual de foco, navegación y ausencia de corrupción visual.
 
 ## Resultado del spike de interacción (#56)
 
