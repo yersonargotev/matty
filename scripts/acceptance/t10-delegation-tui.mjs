@@ -169,7 +169,23 @@ export default function t10(pi) {
       contextWindow: 8192, maxTokens: 128 }],
     streamSimple(model, context) {
       const stream = createAssistantMessageEventStream();
-      if (childMode) return stream;
+      if (childMode) {
+        const partial = assistant(model, [{ type: "text", text: "" }]);
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial });
+          stream.push({ type: "text_start", contentIndex: 0, partial });
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "\\u001b]0;owned\\u0007\\u001b[999mlive transcript needle\\u001b[0m",
+            partial: assistant(model, [{
+              type: "text",
+              text: "\\u001b]0;owned\\u0007\\u001b[999mlive transcript needle\\u001b[0m",
+            }]),
+          });
+        });
+        return stream;
+      }
       const results = context.messages.filter((message) => message.role === "toolResult");
       queueMicrotask(() => stream.end(assistant(model,
         results.length === 0
@@ -245,6 +261,7 @@ set timeout 45
 log_user 1
 log_file -noappend ${tclLiteral(transcript)}
 proc phase {name pattern} {
+  global expect_out
   expect {
     -re $pattern { puts "T10_PHASE:$name" }
     timeout { puts stderr "T10_TIMEOUT:$name"; exit 70 }
@@ -261,14 +278,46 @@ spawn -noecho ${tclLiteral(pi)} --no-session --no-extensions -e ${tclLiteral(ext
 stty rows 40 columns 160
 phase startup {Matty active}
 send -- "start deterministic delegation\\r"
-phase live-counts {D-[0-9a-f]{8} running[^\\r\\n]*running 4, queued 1}
+phase live-counts {Matty fleet[^\\r\\n]*Active tasks: 4[^\\r\\n]*Queued tasks: 1}
 after 1600
 drain
 stty rows 41 columns 160
-phase stable-before-open {D-[0-9a-f]{8} running[^\\r\\n]*running 4, queued 1}
+phase stable-before-open {T-[0-9a-f]{8}[^\\r\\n]*State: queued[^\\r\\n]*queue 1}
 send -- "/matty delegations\\r"
-phase console-open {Matty Delegations.*session only}
-phase live-state {D-[0-9a-f]{8} running}
+phase console-open {Delegation Console.*Delegations}
+phase navigation-hint {Enter Delegated Tasks.*Esc/q close}
+send -- "\\r"
+phase task-list {Delegations.*Delegated Tasks}
+phase task-state {T-[0-9a-f]{8}.*State: (running|queued).*Role: explorer}
+set taskLine $expect_out(0,string)
+regexp {(T-[0-9a-f]{8})} $taskLine _ taskId
+send -- "\\r"
+phase child-session {Delegations.*Delegated Tasks.*Child Session}
+phase session-key-hints {/ search.*f filter.*Esc/q close}
+phase accessible-labels {Task state:.*Role:}
+phase process-labels {PID:.*Run ID:}
+phase usage-labels {Usage:.*Cost:.*Context consumption:}
+phase live-transcript {live transcript needle}
+send -- "f"
+phase filter-message {Filter: message}
+send -- "/absent\\r"
+phase search-no-match {No transcript entries match}
+send -- "/needle\\r"
+phase search-match {Search: needle}
+phase search-result {live transcript needle}
+send -- "f"
+phase filter-reasoning {Filter: reasoning}
+phase filtered-out {No transcript entries match}
+send -- "\\033"
+after 200
+send -- "/matty task $taskId\\r"
+phase exact-task {Delegated Task ID:}
+send -- "q"
+after 200
+send -- "/matty status\\r"
+phase focus-restored-q {Matty 0\\.2\\.0}
+send -- "/matty delegations\\r"
+phase cancellation-console {Delegation Console.*Delegations}
 send -- "c"
 phase confirmation-first {Confirm cancellation[^\\r\\n]*4 active[^\\r\\n]*1 queued}
 send -- "\\033"
@@ -299,14 +348,22 @@ expect eof
     });
   }
   if (process.env.MATTY_MANUAL_TUI !== "1") {
+    const ptyOutput = await readFile(transcript, "utf8");
+    assert.doesNotMatch(
+      ptyOutput,
+      /owned|\u001b\[999m|\\u001b\[999m/,
+      "[T10:clean-terminal-output] child terminal-control payload reached the PTY",
+    );
     process.stdout.write([
       "T10 packed Delegation TUI acceptance passed",
       `artifact: ${metadata.filename}`,
       `Pi: ${PI_VERSION}`,
       `target: ${CERTIFIED_TARGET}`,
-      "live five-task state: 4 active / 1 queued",
+      "live task-level fleet state: 4 active / 1 queued",
+      "Delegations → Delegated Tasks → Child Session navigation: observed",
+      "search/filter/key hints/accessibility labels: observed",
+      "exact task command and Esc/q focus restoration: observed",
       "cancellation reject/confirm/live rerender: observed",
-      "console close and /matty status focus restoration: observed",
     ].join("\n") + "\n");
   }
 } catch (error) {

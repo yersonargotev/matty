@@ -136,43 +136,42 @@ export function renderDelegationConsole(
   return lines;
 }
 
+export function renderDelegationTaskSection(
+  entry: DelegationSnapshotEntry,
+  now = Date.now(),
+): string[] {
+  return [
+    delegationCard(entry, now),
+    ...entry.tasks.map((task) => {
+      const elapsed = formatDuration(task.startedAt ?? task.queuedAt, task.endedAt ?? now);
+      const pressure = task.queuePosition !== undefined ? ` · queue ${task.queuePosition}` : "";
+      return `  ${task.displayId} · State: ${task.state} · Role: ${task.role ?? "unknown"}${pressure} · Time: ${elapsed}`;
+    }),
+  ];
+}
+
 export function renderDelegationWidget(
   snapshot: DelegationSnapshot,
   now = Date.now(),
   maxLines = 4,
 ): string[] {
-  const useful = snapshot.delegations.filter((entry) =>
-    entry.state === "queued" || entry.state === "running" || entry.state === "cancelling"
+  const tasks = snapshot.delegations.flatMap((entry) =>
+    entry.tasks
+      .filter((task) => task.state === "queued" || task.state === "running" || task.state === "cancelling")
+      .map((task) => ({ entry, task }))
   );
-  if (useful.length === 0 || maxLines <= 0) return [];
-  const activeDelegations = useful.filter((entry) =>
-    entry.state === "running" || entry.state === "cancelling"
-  ).length;
-  const plural = (count: number, singular: string) =>
-    `${count} ${singular}${count === 1 ? "" : "s"}`;
+  if (tasks.length === 0 || maxLines <= 0) return [];
   const lines = [
-    `Matty · ${plural(activeDelegations, "active Delegation")} · ${plural(snapshot.concurrency.queuedTasks, "queued task")}`,
+    `Matty fleet · Active tasks: ${snapshot.concurrency.activeTasks} · Queued tasks: ${snapshot.concurrency.queuedTasks}`,
   ];
-  const availableCards = Math.max(0, maxLines - 1);
-  const visibleCount = useful.length > availableCards
-    ? Math.max(0, availableCards - 1)
-    : availableCards;
-  for (const entry of useful.slice(0, visibleCount)) {
-    const stateCounts = new Map<string, number>();
-    for (const task of entry.tasks) {
-      stateCounts.set(task.state, (stateCounts.get(task.state) ?? 0) + 1);
-    }
-    const states = [...stateCounts]
-      .map(([state, count]) => `${state} ${count}`)
-      .join(", ");
-    lines.push(
-      `${entry.displayId} ${entry.state} · ${roles(entry)} · ${states} · ${duration(entry, now)}`,
-    );
+  const visible = tasks.slice(0, Math.max(0, maxLines - 1));
+  for (const { entry, task } of visible) {
+    const pressure = task.queuePosition !== undefined ? ` · Queue: ${task.queuePosition}` : "";
+    lines.push(`${task.displayId} · State: ${task.state} · Role: ${task.role ?? "unknown"}${pressure} · ${entry.displayId}`);
   }
-  const hidden = useful.slice(visibleCount);
-  if (hidden.length > 0 && lines.length < maxLines) {
-    const allQueued = hidden.every((entry) => entry.state === "queued");
-    lines.push(`+${hidden.length} more${allQueued ? " queued" : ""} Delegation${hidden.length === 1 ? "" : "s"}`);
+  const hidden = tasks.length - visible.length;
+  if (hidden > 0 && lines.length === maxLines) {
+    lines[lines.length - 1] = `+${hidden + 1} more tasks · Queue pressure: ${snapshot.concurrency.queuedTasks}`;
   }
   return lines.slice(0, maxLines);
 }

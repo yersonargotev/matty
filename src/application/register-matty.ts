@@ -22,6 +22,7 @@ export type Notify = (
 export interface DiagnosticContext {
   mode?: "tui" | "rpc" | "json" | "print";
   openDelegations?: () => Promise<void>;
+  openDelegatedTask?: (displayId: string) => Promise<boolean>;
   delegationSnapshot?: () => { human: string; json: string; jsonEvent: string };
   emitOutput?: (text: string) => void;
   activeModel?: {
@@ -163,6 +164,19 @@ export function registerMatty(
         return;
       }
 
+      const taskMatch = /^task (T-[0-9a-f]{8})$/i.exec(args);
+      if (taskMatch) {
+        if (context?.mode !== "tui" || !context.openDelegatedTask) {
+          notify("Delegated Task browsing requires TUI mode", "warning");
+          return;
+        }
+        const displayId = taskMatch[1]!.toUpperCase();
+        if (!await context.openDelegatedTask(displayId)) {
+          notify(`Delegated Task ${displayId} was not found in this session.`, "warning");
+        }
+        return;
+      }
+
       if (args === "delegations" || args === "delegations --json") {
         const delegation = context?.delegationSnapshot?.();
         if (!delegation) {
@@ -183,7 +197,7 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor|delegations> [--json]", "warning");
+      notify("Usage: /matty <status|doctor|delegations> [--json] | /matty task T-<id>", "warning");
     },
   });
 

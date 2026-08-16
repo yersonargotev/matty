@@ -423,7 +423,8 @@ test("coalesces private live state and emits only safe revision markers", async 
   });
   assert.doesNotMatch(JSON.stringify(live), /first|second|read|old|new|call-live/);
   const partial = presentations.find((presentation) =>
-    presentation.assistant.length === 3 && presentation.tools.length === 1
+    presentation.assistant.length === 3 &&
+    presentation.tools[0]?.content === JSON.stringify({ content: "base-new" })
   );
   assert.ok(partial);
   assert.deepEqual(partial.assistant.map((part) => [part.contentIndex, part.type]), [
@@ -433,10 +434,41 @@ test("coalesces private live state and emits only safe revision markers", async 
     toolCallId: "call-live-base",
     toolName: "read",
     status: "running",
+    args: "{}",
     content: JSON.stringify({ content: "base-new" }),
   }]);
   assert.doesNotMatch(JSON.stringify(partial), /base-old/);
   assert.deepEqual(runner.presentation?.()?.assistant.map((part) => part.contentIndex), [0]);
+});
+
+test("presents bounded transcript entries and labeled usage without exposing terminal controls", async () => {
+  const runner = createRunner();
+  const outcome = await runner.run("interleaved-live-updates");
+
+  assert.equal(outcome.status, "succeeded");
+  const presentation = runner.presentation?.();
+  assert.ok(presentation);
+  assert.ok(presentation.entries.some((entry) =>
+    entry.category === "message" && entry.label === "Assistant" && entry.expandedByDefault
+  ));
+  assert.ok(presentation.entries.some((entry) =>
+    entry.category === "reasoning" && !entry.expandedByDefault
+  ));
+  assert.ok(presentation.entries.some((entry) =>
+    entry.category === "tool" && entry.label.includes("read") && !entry.expandedByDefault
+  ));
+  assert.ok(presentation.entries.some((entry) =>
+    entry.category === "error" && entry.content === "base-extension-error" &&
+    !entry.expandedByDefault
+  ));
+  assert.deepEqual(presentation.usage, {
+    inputTokens: 1,
+    outputTokens: 1,
+    totalTokens: 2,
+    cost: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(presentation), /\u001b|\u0000/);
+  assert.equal(Object.isFrozen(presentation.entries), true);
 });
 
 test("retains tool bytes in the presentation limit across assistant messages", async () => {
