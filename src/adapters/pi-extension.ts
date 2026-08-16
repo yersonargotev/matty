@@ -8,9 +8,10 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piTui from "@earendil-works/pi-tui";
 import * as typebox from "typebox";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,12 @@ import {
   type PiInvocation,
   type PiThinkingLevel,
 } from "../application/child-pi-runtime.ts";
+import {
+  ChildSessionStore,
+  ChildSessionStoreError,
+  loadChildSessionPresentation,
+  type DelegationPersistence,
+} from "../application/child-session-store.ts";
 import {
   CHILD_CONTROL_ENVIRONMENT as CONTROL_ENV,
   scrubChildControlEnvironment,
@@ -148,6 +155,10 @@ export interface PiMattyRegistrationOptions {
   hostOutput?: (text: string) => void;
   /** Explicit test seam for the scheduler-to-resource-cleanup boundary. */
   resourceCleanupBarrier?: () => Promise<void>;
+  /** Explicit test seam. Production uses PI_CODING_AGENT_DIR or ~/.pi/agent. */
+  childSessionAgentRoot?: string;
+  /** Explicit test seam for retention boundaries. */
+  childSessionStore?: ChildSessionStore;
 }
 
 type WriterRelease = () => void | Promise<void>;
@@ -167,6 +178,10 @@ interface PreparedResearcherExecution {
 type SingleTaskExecutionParams = DelegationTaskDeclaration & {
   executionScope?: "standalone" | "group";
   delegatedTaskId?: string;
+  delegationId?: string;
+  delegatedTaskIndex?: number;
+  requirement?: "required" | "optional";
+  persistence?: DelegationPersistence;
   preparedWorker?: PreparedWorkerExecution;
   preparedResearcher?: PreparedResearcherExecution;
   onChildSettled?: () => void;
@@ -752,6 +767,18 @@ export function registerPiMatty(
   options: PiMattyRegistrationOptions = {},
 ): MattyApplicationControl {
   const delegationRegistry = new DelegationRegistry(options.delegationRegistryOptions);
+  const childSessionAgentRoot = resolve(
+    options.childSessionAgentRoot ?? environment.PI_CODING_AGENT_DIR ??
+      (environment.HOME
+        ? join(environment.HOME, ".pi", "agent")
+        : environment === process.env
+          ? join(homedir(), ".pi", "agent")
+          : join(environment.TMPDIR ?? tmpdir(), `pi-agent-${randomUUID()}`)),
+  );
+  const childSessionStore = options.childSessionStore ?? new ChildSessionStore({
+    root: join(childSessionAgentRoot, "matty", "child-sessions"),
+    ephemeralRoot: join(resolve(environment.TMPDIR ?? tmpdir()), "matty", "ephemeral-child-sessions"),
+  });
   const delegationControl = new DelegationControl({
     ...(options.delegationRegistryOptions?.terminalLimit !== undefined
       ? { terminalLimit: options.delegationRegistryOptions.terminalLimit }
@@ -765,6 +792,7 @@ export function registerPiMatty(
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
   > = [...(options.diagnosticFailures ?? [])];
+  let childSessionStoreFailure: ChildSessionStoreError["code"] | undefined;
   const childRoleValue = environment[CONTROL_ENV.role];
   const childRole = isMattyRole(childRoleValue) ? childRoleValue : undefined;
   const research = childRole === "researcher" ? researcherScope(environment) : undefined;
@@ -977,12 +1005,44 @@ export function registerPiMatty(
       }).then(() => undefined);
       await researchCleanup;
     };
-    pi.on("session_start", (event, context) => {
+    pi.on("session_start", async (event, context) => {
       delegationControl.reset();
+      childSessionStoreFailure = undefined;
       delegationManagement.startSession(event.reason, context);
+      try {
+        // Discovery first converts crash-left active manifests to interrupted;
+        // retention may then evict them under the same terminal policy.
+        await childSessionStore.discover({ protectedRoot: context.cwd });
+        await childSessionStore.enforceRetention(context.cwd);
+        const discovered = await childSessionStore.discover({
+          interruptActive: false,
+          protectedRoot: context.cwd,
+        });
+        delegationRegistry.restore(discovered.map(({ manifest }) => manifest));
+        const restored = await Promise.all(discovered.map(async ({ manifest, sessionFile }) => ({
+          taskId: manifest.taskId,
+          delegationId: manifest.delegationId,
+          requirement: manifest.requirement,
+          presentation: await loadChildSessionPresentation(sessionFile),
+        })));
+        delegationControl.restore(restored);
+      } catch (error) {
+        childSessionStoreFailure = error instanceof ChildSessionStoreError
+          ? error.code
+          : "malformed-store";
+        if (!diagnosticFailures.some((failure) => failure.source === "role-data")) {
+          diagnosticFailures.push({ source: "role-data" });
+        }
+        context.ui.notify(
+          error instanceof ChildSessionStoreError
+            ? `Child Session Store unavailable: ${error.code}`
+            : "Child Session Store unavailable: malformed-store",
+          "warning",
+        );
+      }
     });
     pi.on("session_shutdown", async () => {
-      delegationControl.shutdown();
+      await delegationControl.shutdown();
       delegationManagement.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
@@ -1004,6 +1064,12 @@ export function registerPiMatty(
           enum: ["required", "optional"],
           description:
             "Required groups are atomic; optional inspection groups disclose skipped work.",
+        },
+        persistence: {
+          type: "string",
+          enum: ["persistent", "ephemeral"],
+          default: "persistent",
+          description: "Persist Child Sessions across Pi lifecycles or delete them at close.",
         },
         tasks: {
           type: "array",
@@ -1093,6 +1159,21 @@ export function registerPiMatty(
       additionalProperties: false,
     };
 
+    const childSession = (
+      params: SingleTaskExecutionParams,
+      role: MattyRole,
+      projectRoot: string,
+    ) => {
+      if (!params.delegatedTaskId || !params.delegationId || params.delegatedTaskIndex === undefined) return undefined;
+      return childSessionStore.session({
+        taskId: params.delegatedTaskId,
+        delegationId: params.delegationId,
+        taskIndex: params.delegatedTaskIndex,
+        role,
+        requirement: params.requirement ?? "required",
+      }, params.persistence ?? "persistent", projectRoot);
+    };
+
     const trackRunner = <T extends ReturnType<typeof createChildPiRunner>>(
       taskId: string | undefined,
       runner: T,
@@ -1162,6 +1243,9 @@ export function registerPiMatty(
           };
         }
         const unmet: string[] = [];
+        if ((params.persistence ?? "persistent") === "persistent" && childSessionStoreFailure) {
+          unmet.push("Child Session Store is unavailable");
+        }
         if (!ctx.model) {
           unmet.push("parent model is unavailable");
         }
@@ -1278,7 +1362,7 @@ export function registerPiMatty(
                     onInteractionRejected: lifecycle.onInteractionRejected,
                     onTerminalResponse: lifecycle.onTerminalResponse,
                   } : {}),
-                  sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                  session: childSession(params, role, ctx.cwd),
                   retainSessionUntilClose: true,
                   ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                 }), params.onChildSettled);
@@ -1381,7 +1465,7 @@ export function registerPiMatty(
                         { contract, scope },
                       ),
                     },
-                    sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                    session: childSession(params, role, scope.projectRoot),
                     retainSessionUntilClose: true,
                     ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                   }), params.onChildSettled);
@@ -1465,7 +1549,7 @@ export function registerPiMatty(
                       role,
                     ),
                   },
-                  sessionRoot: resolve(environment.TMPDIR ?? tmpdir()),
+                  session: childSession(params, role, ctx.cwd),
                   retainSessionUntilClose: true,
                   ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                 }), params.onChildSettled);
@@ -1524,6 +1608,7 @@ export function registerPiMatty(
         params:
           | {
               requirement: "required" | "optional";
+              persistence?: DelegationPersistence;
               tasks: DelegationTaskDeclaration[];
             }
           | DelegationTaskDeclaration,
@@ -1595,6 +1680,10 @@ export function registerPiMatty(
               {
                 ...params,
                 delegatedTaskId: observer.taskId(0),
+                delegationId: observer.id,
+                delegatedTaskIndex: 0,
+                requirement: "required",
+                persistence: "persistent",
                 onChildSettled: beginFreeze,
                 scheduleChildExecution,
               },
@@ -1619,6 +1708,7 @@ export function registerPiMatty(
           cardinality: { min: 1, max: 8 },
           concurrency: { maxActive: 4 },
           independence: "required",
+          persistence: params.persistence ?? "persistent",
           tasks: params.tasks.map((task) =>
             task.role === "researcher"
               ? {
@@ -1642,6 +1732,9 @@ export function registerPiMatty(
             try {
               const scheduled = await runDelegationGroup(contract, {
               async preflight(task, taskIndex) {
+                if (contract.persistence === "persistent" && childSessionStoreFailure) {
+                  return { ok: false, reason: "child-session-store-unavailable" };
+                }
                 if (
                   !ctx.model ||
                   !invocation ||
@@ -1814,6 +1907,10 @@ export function registerPiMatty(
                     ...task,
                     executionScope: "group",
                     delegatedTaskId: observer.taskId(taskIndex),
+                    delegationId: observer.id,
+                    delegatedTaskIndex: taskIndex,
+                    requirement: params.requirement,
+                    persistence: contract.persistence,
                     scheduleChildExecution,
                     ...(preparedWorker ? { preparedWorker } : {}),
                     ...(preparedResearcher ? { preparedResearcher } : {}),

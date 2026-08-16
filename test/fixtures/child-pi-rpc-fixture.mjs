@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { closeSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, closeSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -11,9 +11,32 @@ function argument(name) {
 const provider = argument("--provider");
 const model = argument("--model");
 const thinking = argument("--thinking");
-const sessionDirectory = argument("--session-dir");
-const sessionId = argument("--session-id");
+const sessionFileArgument = argument("--session");
+const sessionDirectory = sessionFileArgument ? dirname(sessionFileArgument) : argument("--session-dir");
+let sessionId = argument("--session-id");
+if (sessionFileArgument) {
+  sessionId = JSON.parse((await readFile(sessionFileArgument, "utf8")).split("\n")[0]).id;
+}
 const tools = argument("--tools");
+if (sessionFileArgument) {
+  const source = await readFile(sessionFileArgument, "utf8");
+  const lines = source.split("\n");
+  const header = JSON.parse(lines[0]);
+  if (header.fixtureTools === undefined) {
+    lines[0] = JSON.stringify({ ...header, fixtureTools: tools });
+    await writeFile(sessionFileArgument, lines.join("\n"), { mode: 0o600 });
+  }
+}
+if (sessionDirectory && !sessionFileArgument) {
+  await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(join(sessionDirectory, `${sessionId}.jsonl`), `${JSON.stringify({
+      type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: process.cwd(), fixtureTools: tools,
+    })}\n`, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+}
 const authDigest = createHash("sha256")
   .update(process.env.MATTY_TEST_AUTH ?? "")
   .digest("hex");
@@ -25,7 +48,18 @@ function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function persistAssistant(text) {
+  if (sessionDirectory) appendFileSync(sessionFileArgument ?? join(sessionDirectory, `${sessionId}.jsonl`), `${JSON.stringify({
+    type: "message", id: randomUUID().replaceAll("-", "").slice(0, 8), parentId: null,
+    timestamp: new Date().toISOString(), message: {
+      role: "assistant", content: [{ type: "text", text }], stopReason: "stop",
+      usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+    },
+  })}\n`, { mode: 0o600 });
+}
+
 function terminal(text) {
+  persistAssistant(text);
   emit({
     type: "message_end",
     message: {
@@ -131,16 +165,15 @@ async function run(command, promptTerminatedByLf) {
     return;
   }
   if (task === "settled-respawn-candidate" || task?.startsWith("Designer assignment:\nsettled-respawn-candidate\n")) {
-    await writeFile(join(sessionDirectory, "fixture-session.json"), JSON.stringify({ sessionId, tools, provider, model, thinking }));
     terminal(JSON.stringify({ summary: "initial candidate", evidence: ["initial"] }));
     emit({ type: "agent_settled" });
     return;
   }
   if (task === "replace-after-exit") {
-    const original = JSON.parse(await readFile(join(sessionDirectory, "fixture-session.json"), "utf8"));
+    const original = JSON.parse((await readFile(sessionFileArgument ?? join(sessionDirectory, `${sessionId}.jsonl`), "utf8")).split("\n")[0]);
     terminal(JSON.stringify({
       summary: "replacement after respawn",
-      evidence: [original.sessionId === sessionId ? "same-session" : "changed-session", original.tools === tools ? "same-tools" : "changed-tools"],
+      evidence: [original.id === sessionId ? "same-session" : "changed-session", original.fixtureTools === tools ? "same-tools" : "changed-tools"],
     }));
     emit({ type: "agent_settled" });
     return;
@@ -365,6 +398,7 @@ async function run(command, promptTerminatedByLf) {
       ),
       promptTerminatedByLf,
     };
+  persistAssistant(observedOutput ?? JSON.stringify(observed));
   emit({
     type: "message_end",
     message: {

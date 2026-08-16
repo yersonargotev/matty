@@ -114,6 +114,9 @@ function classifyPreflightReason(unmet: unknown): DelegationPreflightReason {
     return "authentication-unavailable";
   }
   if (matches(/Subagent Runtime|runtime-unavailable/i)) return "runtime-unavailable";
+  if (matches(/Child Session Store|child-session-store-unavailable/i)) {
+    return "child-session-store-unavailable";
+  }
   if (matches(/Matty Rules conflict|rules-conflict/i)) return "rules-conflict";
   if (matches(/Single Writer|writer-unavailable/i)) return "writer-unavailable";
   if (matches(/web.+unavailable|web-unavailable/i)) return "web-unavailable";

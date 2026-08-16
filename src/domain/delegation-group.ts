@@ -27,6 +27,7 @@ export interface DelegationGroupContract {
     maxActive: 4;
   };
   independence: "required";
+  persistence: "persistent" | "ephemeral";
   tasks: readonly DelegationTaskDeclaration[];
 }
 
@@ -80,6 +81,7 @@ export function validateDelegationGroupContract(
       "cardinality",
       "concurrency",
       "independence",
+      "persistence",
       "tasks",
     ])
   ) {
@@ -92,6 +94,9 @@ export function validateDelegationGroupContract(
     candidate.cardinality.max !== 8 ||
     candidate.concurrency?.maxActive !== 4 ||
     candidate.independence !== "required" ||
+    (candidate.persistence !== undefined &&
+      candidate.persistence !== "persistent" &&
+      candidate.persistence !== "ephemeral") ||
     (
       candidate.requirement !== "required" &&
       candidate.requirement !== "optional"
@@ -194,5 +199,11 @@ export function validateDelegationGroupContract(
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, contract: value as DelegationGroupContract };
+  return {
+    ok: true,
+    contract: {
+      ...(value as Omit<DelegationGroupContract, "persistence">),
+      persistence: candidate.persistence ?? "persistent",
+    },
+  };
 }

@@ -8,6 +8,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -28,6 +29,7 @@ import {
 } from "../src/adapters/pi-extension.ts";
 import { boundedChildExecutionScheduler } from "../src/application/delegation-scheduler.ts";
 import { childTranscript } from "../src/application/child-pi-runtime.ts";
+import { ChildSessionStore } from "../src/application/child-session-store.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
   MATTY_GUIDANCE_END,
@@ -171,6 +173,15 @@ test("parent registration exposes explicit delegated roles", async () => {
     ["explorer", "designer", "reviewer", "researcher", "worker"],
   );
   assert.deepEqual(subagent?.parameters?.required, ["requirement", "tasks"]);
+  assert.deepEqual(
+    subagent?.parameters?.properties?.persistence,
+    {
+      type: "string",
+      enum: ["persistent", "ephemeral"],
+      default: "persistent",
+      description: "Persist Child Sessions across Pi lifecycles or delete them at close.",
+    },
+  );
   assert.deepEqual(
     (
       (
@@ -400,6 +411,195 @@ test("subagent rejects an invalid group before any child preflight", async () =>
     code: "task-limit-exceeded",
   }]);
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+});
+
+test("registered persistence keeps or deletes Pi sessions and hydrates a fresh extension privately", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-persistence-"));
+  const agentRoot = join(sandbox, "agent");
+  const transcriptSecret = "restart-tool-secret-78";
+  const invocation = { command: process.execPath, arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")] };
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+  };
+  try {
+    for (const persistence of ["persistent", "ephemeral"] as const) {
+      const harness = createExtensionHarness();
+      registerPiMatty(harness.pi, { TMPDIR: sandbox, PI_CODING_AGENT_DIR: agentRoot }, { invocation, independentRuntimeAvailable: true });
+      let id = "";
+      await harness.tools.find((tool) => tool.name === "subagent")!.execute!(
+        `call-${persistence}` as never,
+        { requirement: "required", persistence, tasks: [{ role: "explorer", task: "success" }] } as never,
+        undefined as never,
+        ((update: { details?: { delegatedTaskId?: string } }) => { id ||= update.details?.delegatedTaskId ?? ""; }) as never,
+        context as never,
+      );
+      assert.ok(id);
+      const directory = join(agentRoot, "matty", "child-sessions", id);
+      if (persistence === "persistent") {
+        assert.deepEqual(await readdir(directory), ["manifest.json", "session.jsonl"]);
+        assert.equal((await stat(directory)).mode & 0o777, 0o700);
+        assert.equal((await stat(join(directory, "manifest.json"))).mode & 0o777, 0o600);
+        const sessionFile = join(directory, "session.jsonl");
+        assert.equal((await stat(sessionFile)).mode & 0o777, 0o600);
+        assert.match(await readFile(sessionFile, "utf8"), /fixture-provider/);
+        await writeFile(sessionFile, [
+          JSON.stringify({ type: "message", message: { role: "assistant", content: [
+            { type: "thinking", thinking: "restart reasoning" },
+            { type: "toolCall", id: "call-78", name: "read", arguments: { path: transcriptSecret } },
+            { type: "text", text: "restart answer" },
+          ] } }),
+          JSON.stringify({ type: "message", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "restart result" }], details: { private: transcriptSecret }, isError: false } }),
+          "",
+        ].join("\n"), { flag: "a", mode: 0o600 });
+      } else {
+        const ephemeral = join(sandbox, "matty", "ephemeral-child-sessions", id);
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          try { await access(ephemeral); await new Promise((resolve) => setTimeout(resolve, 5)); }
+          catch { break; }
+        }
+        await assert.rejects(access(ephemeral));
+      }
+      for (const shutdown of harness.handlers.get("session_shutdown") ?? []) {
+        await shutdown({ type: "session_shutdown" } as never, {} as never);
+      }
+    }
+
+    const oldTaskId = "10000000-0000-4000-8000-000000000078";
+    const oldDirectory = join(agentRoot, "matty", "child-sessions", oldTaskId);
+    await mkdir(oldDirectory, { recursive: true, mode: 0o700 });
+    const oldTimestamp = Date.now() - 8 * 24 * 60 * 60 * 1_000;
+    await writeFile(join(oldDirectory, "manifest.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      taskId: oldTaskId,
+      delegationId: "20000000-0000-4000-8000-000000000078",
+      taskIndex: 0,
+      role: "explorer",
+      requirement: "required",
+      state: "succeeded",
+      createdAt: oldTimestamp,
+      updatedAt: oldTimestamp,
+    })}\n`, { mode: 0o600 });
+    await writeFile(join(oldDirectory, "session.jsonl"), `${JSON.stringify({
+      type: "session", version: 3, id: oldTaskId,
+      timestamp: new Date(oldTimestamp).toISOString(), cwd: process.cwd(),
+    })}\n`, { mode: 0o600 });
+
+    const fresh = createExtensionHarness();
+    const control = registerPiMatty(fresh.pi, { TMPDIR: sandbox, PI_CODING_AGENT_DIR: agentRoot });
+    for (const handler of fresh.handlers.get("session_start") ?? []) {
+      await handler({ reason: "startup" } as never, { mode: "rpc", model: undefined, ui: { notify() {} } } as never);
+    }
+    const notifications: string[] = [];
+    await fresh.commandHandlers.get("matty")!("delegations --json", { mode: "rpc", ui: { notify(message: string) { notifications.push(message); } } });
+    const snapshot = JSON.parse(notifications.at(-1) ?? "{}");
+    await assert.rejects(access(oldDirectory));
+    assert.equal(snapshot.delegations.length, 1);
+    const restoredTask = snapshot.delegations[0].tasks[0];
+    assert.equal(restoredTask.state, "succeeded");
+    const presentation = control.taskPresentation(restoredTask.id);
+    assert.match(presentation?.entries[0]?.content ?? "", /fixture-provider/);
+    assert.deepEqual(presentation?.entries.slice(-4).map((entry) => entry.category), ["reasoning", "tool", "message", "tool"]);
+    assert.match(presentation?.entries.at(-3)?.content ?? "", new RegExp(transcriptSecret));
+    assert.match(presentation?.entries.at(-1)?.content ?? "", /restart result/);
+    assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(`session\\.jsonl|child-sessions|fixture-provider|${transcriptSecret}`));
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
+test("registered completion enforces Child Session retention without evicting active work", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-registered-retention-"));
+  const store = new ChildSessionStore({
+    root: join(sandbox, "child-sessions"),
+    ephemeralRoot: join(sandbox, "ephemeral"),
+    maxSessions: 1,
+  });
+  try {
+    const harness = createExtensionHarness();
+    const invocation = { command: process.execPath, arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")] };
+    registerPiMatty(harness.pi, { TMPDIR: sandbox }, {
+      invocation,
+      independentRuntimeAvailable: true,
+      childSessionStore: store,
+    });
+    const context = {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    };
+    const ids: string[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      let taskId = "";
+      await harness.tools.find((tool) => tool.name === "subagent")!.execute!(
+        `retention-${index}` as never,
+        { requirement: "required", tasks: [{ role: "explorer", task: "success" }] } as never,
+        undefined as never,
+        ((update: { details?: { delegatedTaskId?: string } }) => { taskId ||= update.details?.delegatedTaskId ?? ""; }) as never,
+        context as never,
+      );
+      ids.push(taskId);
+    }
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        await access(join(store.root, ids[0]!));
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      } catch { break; }
+    }
+    await assert.rejects(access(join(store.root, ids[0]!)));
+    assert.deepEqual(await readdir(store.root), [ids[1]]);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
+test("registered startup fails closed on incompatible Child Session metadata while ephemeral remains available", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-incompatible-store-"));
+  const agentRoot = join(sandbox, "agent");
+  const taskId = "30000000-0000-4000-8000-000000000078";
+  const secret = "incompatible-transcript-secret-78";
+  try {
+    const directory = join(agentRoot, "matty", "child-sessions", taskId);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(join(directory, "manifest.json"), JSON.stringify({ schemaVersion: 99, secret }), { mode: 0o600 });
+    await writeFile(join(directory, "session.jsonl"), secret, { mode: 0o600 });
+    const harness = createExtensionHarness();
+    const invocation = { command: process.execPath, arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")] };
+    registerPiMatty(harness.pi, { TMPDIR: sandbox, PI_CODING_AGENT_DIR: agentRoot }, { invocation, independentRuntimeAvailable: true });
+    const startupNotifications: string[] = [];
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler({ reason: "startup" } as never, {
+        cwd: process.cwd(), mode: "rpc", model: undefined,
+        ui: { notify(message: string) { startupNotifications.push(message); } },
+      } as never);
+    }
+    assert.ok(startupNotifications.includes("Child Session Store unavailable: incompatible-metadata"));
+    assert.doesNotMatch(startupNotifications.join("\n"), new RegExp(secret));
+
+    const context = {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    };
+    const tool = harness.tools.find((candidate) => candidate.name === "subagent")!;
+    const persistent = await tool.execute!("persistent" as never, {
+      requirement: "required", tasks: [{ role: "explorer", task: "success" }],
+    } as never, undefined as never, undefined as never, context as never) as unknown as { details: unknown; isError: boolean };
+    assert.equal(persistent.isError, true);
+    assert.match(JSON.stringify(persistent.details), /child-session-store-unavailable/);
+    assert.doesNotMatch(JSON.stringify(persistent), new RegExp(secret));
+    const diagnostics: string[] = [];
+    await harness.commandHandlers.get("matty")!("status --json", {
+      mode: "rpc",
+      ui: { notify(message: string) { diagnostics.push(message); } },
+    });
+    assert.doesNotMatch(diagnostics.join("\n"), new RegExp(secret));
+
+    const ephemeral = await tool.execute!("ephemeral" as never, {
+      requirement: "required", persistence: "ephemeral", tasks: [{ role: "explorer", task: "success" }],
+    } as never, undefined as never, undefined as never, context as never) as unknown as { isError?: boolean };
+    assert.notEqual(ephemeral.isError, true);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
 test("registered delegation seam exposes safe cards, deterministic modes, and lifecycle reset", async () => {
