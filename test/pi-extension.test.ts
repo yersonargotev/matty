@@ -18,6 +18,7 @@ import type {
   ExtensionAPI,
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   registerPiMatty,
@@ -44,6 +45,9 @@ function createExtensionHarness() {
       required?: string[];
       properties?: Record<string, unknown>;
     };
+    renderShell?: string;
+    renderCall?: (args: unknown) => { render(width: number): string[] };
+    renderResult?: (result: { details?: unknown }) => { render(width: number): string[] };
     execute?: (...args: never[]) => Promise<{
       details?: unknown;
     }>;
@@ -66,6 +70,9 @@ function createExtensionHarness() {
         required?: string[];
         properties?: Record<string, unknown>;
       };
+      renderShell?: string;
+      renderCall?: (args: unknown) => { render(width: number): string[] };
+      renderResult?: (result: { details?: unknown }) => { render(width: number): string[] };
       execute?: (...args: never[]) => Promise<{ details?: unknown }>;
     }) {
       tools.push(tool);
@@ -309,6 +316,220 @@ test("subagent rejects an invalid group before any child preflight", async () =>
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
 });
 
+test("registered delegation seam exposes safe cards, deterministic modes, and lifecycle reset", async () => {
+  const harness = createExtensionHarness();
+  const hostOutput: string[] = [];
+  let now = 1_000;
+  let id = 1;
+  registerPiMatty(harness.pi, {}, {
+    hostOutput(text) {
+      hostOutput.push(text);
+    },
+    delegationRegistryOptions: {
+      now: () => now,
+      idFactory: () => `${(id++).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    },
+  });
+  const tool = harness.tools.find((candidate) => candidate.name === "subagent");
+  assert.ok(tool?.execute);
+  const secret = "never expose this delegated prompt or --dangerous argument";
+  const callCard = tool.renderCall?.({
+    requirement: "required",
+    tasks: [{ role: "explorer", task: secret, args: ["--dangerous"] }],
+  }).render(120).join("\n") ?? "";
+  assert.match(callCard, /Delegation · explorer · 1 task/);
+  assert.doesNotMatch(callCard, /never expose|dangerous/);
+
+  const invalid = await tool.execute(
+    "host-call-id-must-not-be-used" as never,
+    {
+      requirement: "required",
+      tasks: Array.from({ length: 9 }, () => ({ role: "explorer", task: secret })),
+    } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  ) as unknown as { content: Array<{ text: string }>; details: unknown };
+  assert.match(invalid.content[0]?.text ?? "", /task-limit-exceeded/);
+  const resultCard = tool.renderResult?.(invalid).render(120).join("\n") ?? "";
+  assert.match(resultCard.trimEnd(), /^D-[0-9a-f]{8} blocked · explorer · 9 tasks · 0s$/);
+  assert.doesNotMatch(resultCard, /never expose|dangerous|host-call-id/);
+
+  now = 2_000;
+  await tool.execute(
+    "another-host-id" as never,
+    { role: "explorer", task: secret } as never,
+    undefined as never,
+    undefined as never,
+    { cwd: process.cwd(), model: undefined, modelRegistry: {} } as never,
+  );
+
+  const notifications: string[] = [];
+  const command = harness.commandHandlers.get("matty");
+  assert.ok(command);
+  await command("delegations", {
+    mode: "json",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  assert.equal(hostOutput.length, 1);
+  assert.ok(hostOutput[0]?.endsWith("\n"));
+  const event = JSON.parse(hostOutput[0]!);
+  assert.equal(event.type, "matty.delegations");
+  assert.equal(event.snapshot.schemaVersion, 1);
+  assert.equal(event.snapshot.delegations.length, 2);
+  assert.equal(new Set(event.snapshot.delegations.map((entry: { id: string }) => entry.id)).size, 2);
+  for (const entry of event.snapshot.delegations) {
+    assert.match(entry.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.match(entry.displayId, /^D-[0-9a-f]{8}$/);
+  }
+  assert.doesNotMatch(hostOutput[0]!, /never expose|dangerous|host-call-id/);
+  assert.equal(notifications.length, 0);
+
+  await command("delegations --json", {
+    mode: "print",
+    ui: { notify() {} },
+  });
+  assert.match(hostOutput[1] ?? "", /^Matty delegations \(session only\)/);
+  assert.doesNotMatch(hostOutput[1] ?? "", /^\{/);
+  await command("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  assert.equal(JSON.parse(notifications.at(-1) ?? "{}").schemaVersion, 1);
+
+  for (const reason of ["new", "resume", "reload"]) {
+    await tool.execute(
+      `reset-${reason}` as never,
+      { requirement: "required", tasks: [] } as never,
+      undefined as never,
+      undefined as never,
+      {} as never,
+    );
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler({ reason } as never, { model: undefined, ui: { notify() {} } } as never);
+    }
+    await command("delegations --json", {
+      mode: "rpc",
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    assert.equal(JSON.parse(notifications.at(-1) ?? "{}").delegations.length, 0);
+  }
+});
+
+test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, and closes", async () => {
+  const harness = createExtensionHarness();
+  let id = 1;
+  registerPiMatty(harness.pi, {}, {
+    delegationRegistryOptions: {
+      now: () => 5_000,
+      idFactory: () => `${(id++).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    },
+  });
+  const tool = harness.tools.find((candidate) => candidate.name === "subagent");
+  assert.ok(tool?.execute);
+  const block = async () => await tool.execute!(
+    `call-${id}` as never,
+    { requirement: "required", tasks: [] } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  );
+  await block();
+  await block();
+
+  let component: {
+    render(width: number): string[];
+    handleInput(data: string): void;
+    dispose?(): void;
+  } | undefined;
+  let requestRenders = 0;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.("delegations", {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory(
+          { requestRender() { requestRenders += 1; } },
+          {},
+          {},
+          () => close?.(),
+        ) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  component.handleInput("\u001b[B");
+  component.handleInput("\r");
+  const expanded = component.render(200).join("\n");
+  const selectedId = expanded.match(/> (D-[0-9a-f]{8})/)?.[1];
+  assert.ok(selectedId);
+  assert.match(expanded, /Delegation ID:/);
+  const beforeLive = requestRenders;
+  await block();
+  assert.ok(requestRenders > beforeLive);
+  assert.match(component.render(200).join("\n"), new RegExp(`> ${selectedId}`));
+  assert.ok(component.render(24).every((line) => visibleWidth(line) <= 24));
+  component.handleInput("q");
+  await opening;
+});
+
+test("session shutdown aborts active delegation and safe onUpdate cards disclose no progress payload", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  const updates: unknown[] = [];
+  let startedResolve: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+  const secret = "private delegated task text";
+  const running = execute(
+    "shutdown-call" as never,
+    { role: "explorer", task: secret } as never,
+    undefined as never,
+    ((update: { content: Array<{ text: string }>; details: { type?: string } }) => {
+      updates.push(update);
+      if (update.details.type === "started") startedResolve?.();
+    }) as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: {
+        async getApiKeyAndHeaders() {
+          return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+        },
+      },
+    } as never,
+  );
+  await started;
+  assert.doesNotMatch(JSON.stringify(updates), /private delegated task text|fixture-secret|sequence|output/);
+  assert.match(JSON.stringify(updates), /D-[0-9a-f]{8}/);
+  for (const shutdown of harness.handlers.get("session_shutdown") ?? []) {
+    await shutdown({ type: "session_shutdown" } as never, {} as never);
+  }
+  const result = await running;
+  assert.equal((result.details as { outcome: { status: string } }).outcome.status, "cancelled");
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  assert.equal(JSON.parse(notifications.at(-1) ?? "{}").delegations.length, 0);
+});
+
 test("subagent group preserves a redacted child failure code", async () => {
   const harness = createExtensionHarness();
   registerPiMatty(harness.pi, {}, {
@@ -357,7 +578,9 @@ test("subagent group preserves a redacted child failure code", async () => {
 
 test("required group authentication preflight blocks before spawning", async () => {
   const harness = createExtensionHarness();
+  let now = Date.parse("2026-02-01T12:00:00.000Z");
   registerPiMatty(harness.pi, {}, {
+    delegationRegistryOptions: { now: () => now },
     invocation: {
       command: process.execPath,
       arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
@@ -393,12 +616,133 @@ test("required group authentication preflight blocks before spawning", async () 
     } as never,
   );
 
+  now += 1_500;
   assert.equal(started, false);
   assert.equal(
     (result.details as { status: string }).status,
     "blocked",
   );
-  assert.doesNotMatch(JSON.stringify(result), /secret provider failure/);
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const snapshot = JSON.parse(notifications.at(-1) ?? "{}");
+  const blocked = snapshot.delegations[0];
+  assert.equal(blocked.state, "blocked");
+  assert.equal(blocked.resultSummary, "Blocked (authentication-unavailable)");
+  assert.deepEqual(blocked.diagnostics, [
+    {
+      code: "preflight-failed",
+      taskIndex: 0,
+      role: "explorer",
+      reason: "authentication-unavailable",
+    },
+    {
+      code: "preflight-failed",
+      taskIndex: 1,
+      role: "designer",
+      reason: "authentication-unavailable",
+    },
+  ]);
+  assert.equal(blocked.tasks[0].queuedAt, Date.parse("2026-02-01T12:00:00.000Z"));
+  assert.equal(blocked.tasks[0].endedAt, Date.parse("2026-02-01T12:00:00.000Z"));
+  assert.equal(blocked.tasks[0].resultSummary, "Failed (preflight-failed · authentication-unavailable)");
+  assert.doesNotMatch(
+    JSON.stringify({ result, snapshot }),
+    /secret provider failure|first|second/,
+  );
+});
+
+test("standalone preflight failures expose only closed reasons through the registered seam", async () => {
+  const cases = [
+    {
+      name: "runtime",
+      role: "explorer",
+      options: { independentRuntimeAvailable: false },
+      context: {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      },
+      reason: "runtime-unavailable",
+    },
+    {
+      name: "authentication",
+      role: "explorer",
+      options: {
+        invocation: {
+          command: process.execPath,
+          arguments: [join(process.cwd(), "test/fixtures/child-pi-fixture.mjs")],
+        },
+      },
+      context: {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        modelRegistry: {
+          async getApiKeyAndHeaders() {
+            return { ok: false, error: "provider-secret-auth-error" };
+          },
+        },
+      },
+      reason: "authentication-unavailable",
+    },
+    {
+      name: "reviewer GitHub",
+      role: "reviewer",
+      options: {
+        invocation: {
+          command: process.execPath,
+          arguments: [
+            join(process.cwd(), "test/fixtures/child-pi-fixture.mjs"),
+            "--tools",
+            INSPECTION_TOOLS.join(","),
+          ],
+        },
+        async reviewerGithubPreflight() {
+          return { available: false, authenticated: false };
+        },
+      },
+      context: {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      },
+      reason: "github-unavailable",
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, {}, scenario.options);
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute, scenario.name);
+    const privateTask = `private-${scenario.name}-task`;
+    const result = await execute(
+      `call-${scenario.name}` as never,
+      { role: scenario.role, task: privateTask } as never,
+      undefined as never,
+      undefined as never,
+      scenario.context as never,
+    );
+    const notifications: string[] = [];
+    await harness.commandHandlers.get("matty")?.("delegations --json", {
+      mode: "rpc",
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    const snapshot = JSON.parse(notifications.at(-1) ?? "{}");
+    assert.equal(snapshot.delegations[0].resultSummary, `Blocked (${scenario.reason})`);
+    assert.equal(snapshot.delegations[0].diagnostics[0].reason, scenario.reason);
+    assert.equal(
+      (result.details as { outcome: { diagnostic: { reason: string } } })
+        .outcome.diagnostic.reason,
+      scenario.reason,
+    );
+    assert.doesNotMatch(
+      JSON.stringify({ result, snapshot }),
+      /provider-secret-auth-error|private-(?:runtime|authentication|reviewer GitHub)-task/,
+    );
+  }
 });
 
 test("optional inspection fallback discloses a skip without failing the tool", async () => {
@@ -935,12 +1279,19 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
       diagnostic: {
         kind: "capability-preflight",
         contractId: "delegate-designer",
-        unmet: [
-          "Matty Rules conflict: project instructions attempt to disable Matty Rules",
-        ],
+        reason: "rules-conflict",
       },
     },
   });
+
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const delegation = JSON.parse(notifications.at(-1) ?? "{}").delegations[0];
+  assert.equal(delegation.resultSummary, "Blocked (rules-conflict)");
+  assert.equal(delegation.diagnostics[0].reason, "rules-conflict");
+  assert.doesNotMatch(JSON.stringify({ result, delegation }), /attempt to disable/);
 
   await harness.commandHandlers.get("matty")?.("doctor --json", {
     model: undefined,
@@ -1050,6 +1401,14 @@ test("one subagent call queues a fifth child behind four active children", async
   const status = JSON.parse(notifications.at(-1) ?? "");
   assert.equal(status.concurrency.activeChildren, 4);
   assert.equal(status.concurrency.queuedChildren, 1);
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    ...context,
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const delegation = JSON.parse(notifications.at(-1) ?? "{}").delegations[0];
+  assert.equal(delegation.tasks[4].queuePosition, 1);
+  assert.doesNotMatch(JSON.stringify(delegation), /hold|fixture-secret/);
 
   controller.abort();
   const result = await running;
@@ -1060,6 +1419,74 @@ test("one subagent call queues a fifth child behind four active children", async
     (result.details as { status: string }).status,
     "cancelled",
   );
+});
+
+test("group task completion releases its registry slot before queue promotion", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [
+        "test/fixtures/child-pi-fixture.mjs",
+        "--tools",
+        INSPECTION_TOOLS.join(","),
+      ],
+    },
+  });
+  const execute = harness.tools[0]?.execute;
+  assert.ok(execute);
+  const controller = new AbortController();
+  const started = new Set<number>();
+  let resolvePromoted: (() => void) | undefined;
+  const promoted = new Promise<void>((resolve) => {
+    resolvePromoted = resolve;
+  });
+  const context = {
+    cwd: process.cwd(),
+    model: { provider: "fixture-provider", id: "fixture-model" },
+    thinkingLevel: "off",
+    modelRegistry: {
+      async getApiKeyAndHeaders() {
+        return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
+      },
+    },
+  };
+
+  const running = execute(
+    "group-promote" as never,
+    {
+      requirement: "required",
+      tasks: [
+        { role: "explorer", task: "complete" },
+        ...Array.from({ length: 4 }, () => ({ role: "explorer", task: "hold" })),
+      ],
+    } as never,
+    controller.signal as never,
+    ((update: { details?: { taskIndex?: number; progress?: { type?: string } } }) => {
+      if (
+        update.details?.progress?.type === "started" &&
+        typeof update.details.taskIndex === "number"
+      ) {
+        started.add(update.details.taskIndex);
+        if (update.details.taskIndex === 4) resolvePromoted?.();
+      }
+    }) as never,
+    context as never,
+  );
+  await promoted;
+
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("status --json", {
+    ...context,
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const status = JSON.parse(notifications.at(-1) ?? "{}");
+  controller.abort();
+  await running;
+
+  assert.deepEqual([...started].sort(), [0, 1, 2, 3, 4]);
+  assert.equal(status.concurrency.activeChildren, 4);
+  assert.equal(status.concurrency.queuedChildren, 0);
 });
 
 test("each inspection Capability Contract permits only one active invocation", async () => {
@@ -1125,7 +1552,7 @@ test("each inspection Capability Contract permits only one active invocation", a
         diagnostic: {
           kind: "capability-preflight",
           contractId: "delegate-explorer",
-          unmet: ["explorer concurrency limit reached: 1 active"],
+          reason: "capability-unavailable",
         },
       },
     );
@@ -1141,8 +1568,9 @@ test("each inspection Capability Contract permits only one active invocation", a
 });
 
 test("Single Writer permits at most one active worker for a repository", async () => {
+  const isolated = await mkdtemp(join(tmpdir(), "matty-single-writer-test-"));
   const harness = createExtensionHarness();
-  registerPiMatty(harness.pi, { TMPDIR: tmpdir() }, {
+  registerPiMatty(harness.pi, { TMPDIR: isolated }, {
     invocation: {
       command: process.execPath,
       arguments: [
@@ -1182,7 +1610,11 @@ test("Single Writer permits at most one active worker for a repository", async (
     }) as never,
     context as never,
   );
-  await started;
+  const workerStart = await Promise.race([
+    started.then(() => "started" as const),
+    first.then((result) => ({ result })),
+  ]);
+  assert.equal(workerStart, "started");
 
   try {
     const blocked = await execute(
@@ -1199,7 +1631,7 @@ test("Single Writer permits at most one active worker for a repository", async (
         diagnostic: {
           kind: "capability-preflight",
           contractId: "delegate-worker",
-          unmet: ["Single Writer already active for this repository"],
+          reason: "writer-unavailable",
         },
       },
     );
@@ -1237,6 +1669,7 @@ test("Single Writer permits at most one active worker for a repository", async (
   } finally {
     controller.abort();
     const result = await first;
+    await rm(isolated, { recursive: true, force: true });
     assert.equal(
       (result.details as { outcome: { status: string } }).outcome.status,
       "cancelled",
@@ -1286,7 +1719,7 @@ test("reviewer gh preflight blocks before spawning and returns a diagnostic", as
       diagnostic: {
         kind: "capability-preflight",
         contractId: "delegate-reviewer",
-        unmet: ["GitHub CLI authentication is unavailable"],
+        reason: "github-unavailable",
       },
     },
   );
@@ -1331,7 +1764,7 @@ test("spawn preflight rejects tools outside the selected contract", async () => 
       diagnostic: {
         kind: "capability-preflight",
         contractId: "delegate-designer",
-        unmet: ["unapproved tool is available: write"],
+        reason: "tool-surface-incompatible",
       },
     },
   );
