@@ -437,7 +437,8 @@ test("registered delegation seam exposes safe cards, deterministic modes, and li
   ) as unknown as { content: Array<{ text: string }>; details: unknown };
   assert.match(invalid.content[0]?.text ?? "", /task-limit-exceeded/);
   const resultCard = tool.renderResult?.(invalid).render(120).join("\n") ?? "";
-  assert.match(resultCard.trimEnd(), /^D-[0-9a-f]{8} blocked · explorer · 9 tasks · 0s$/);
+  assert.match(resultCard, /^D-[0-9a-f]{8} blocked · explorer · 9 tasks · 0s/);
+  assert.equal((resultCard.match(/T-[0-9a-f]{8} · State: blocked/g) ?? []).length, 9);
   assert.doesNotMatch(resultCard, /never expose|dangerous|host-call-id/);
 
   now = 2_000;
@@ -559,8 +560,9 @@ test("TUI delegation widget shows useful bounded work, hides on terminal state, 
   assert.ok(shownLines.length <= 4);
   assert.ok(shownLines.every((line) => visibleWidth(line) <= 30));
   assert.equal(widget.handleInput, undefined);
-  assert.match(shownText, /Matty · 0 active Delegatio/);
-  assert.match(shownText, /D-[0-9a-f]{8} queued/);
+  assert.match(shownText, /Matty fleet · Active tasks:/);
+  assert.match(shownText, /T-[0-9a-f]{8} · State: queued/);
+  assert.match(shownText, /Queue press/);
   assert.doesNotMatch(shownText, /private task payload|prompt|command|response|transcript/i);
   assert.equal(widgetCalls.at(-1)?.content, undefined);
 
@@ -602,7 +604,7 @@ test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, 
   assert.ok(tool?.execute);
   const block = async () => await tool.execute!(
     `call-${id}` as never,
-    { requirement: "required", tasks: [] } as never,
+    { requirement: "required", tasks: [{ role: "explorer", task: "private" }] } as never,
     undefined as never,
     undefined as never,
     {} as never,
@@ -636,17 +638,134 @@ test("delegation TUI keeps selection by ID, expands, rerenders live, truncates, 
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(component);
   component.handleInput("\u001b[B");
-  component.handleInput("\r");
-  const expanded = component.render(200).join("\n");
-  const selectedId = expanded.match(/> (D-[0-9a-f]{8})/)?.[1];
+  const selectedId = component.render(200).join("\n").match(/> (D-[0-9a-f]{8})/)?.[1];
   assert.ok(selectedId);
-  assert.match(expanded, /Delegation ID:/);
+  component.handleInput("\r");
+  const tasks = component.render(200).join("\n");
+  assert.match(tasks, /Delegations → Delegated Tasks/);
+  assert.match(tasks, /Delegation ID:/);
+  const selectedTaskId = tasks.match(/> (T-[0-9a-f]{8})/)?.[1];
+  assert.ok(selectedTaskId);
   const beforeLive = requestRenders;
   await block();
   assert.ok(requestRenders > beforeLive);
-  assert.match(component.render(200).join("\n"), new RegExp(`> ${selectedId}`));
+  assert.match(component.render(200).join("\n"), new RegExp(`> ${selectedTaskId}`));
   assert.ok(component.render(24).every((line) => visibleWidth(line) <= 24));
   component.handleInput("q");
+  await opening;
+});
+
+test("/matty task opens the exact Delegated Task and reports a closed not-found diagnostic", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {});
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  await execute(
+    "task-command" as never,
+    { requirement: "required", tasks: Array.from({ length: 9 }, () => ({ role: "explorer", task: "private" })) } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  );
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const snapshot = JSON.parse(notifications.at(-1) ?? "{}");
+  const target = snapshot.delegations[0].tasks[4];
+
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.(`task ${target.displayId}`, {
+    mode: "tui",
+    ui: {
+      notify(message: string) { notifications.push(message); },
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  const rendered = component.render(120).join("\n");
+  assert.match(rendered, /Delegations → Delegated Tasks → Child Session/);
+  assert.match(rendered, new RegExp(`Delegated Task ID: ${target.id}`));
+  assert.ok(component.render(24).every((line) => visibleWidth(line) <= 24));
+  component.handleInput("q");
+  await opening;
+
+  await harness.commandHandlers.get("matty")?.("task T-deadbeef", {
+    mode: "tui",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  assert.equal(notifications.at(-1), "Delegated Task T-DEADBEEF was not found in this session.");
+});
+
+test("Child Session browsing filters, searches, collapses details, labels metadata, and restores focus", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, {}, {
+    invocation: {
+      command: process.execPath,
+      arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+    },
+  });
+  const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+  assert.ok(execute);
+  await execute(
+    "browse-task" as never,
+    { role: "designer", task: "interleaved-live-updates" } as never,
+    undefined as never,
+    undefined as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    } as never,
+  );
+  const notifications: string[] = [];
+  await harness.commandHandlers.get("matty")?.("delegations --json", {
+    mode: "rpc",
+    ui: { notify(message: string) { notifications.push(message); } },
+  });
+  const task = JSON.parse(notifications.at(-1) ?? "{}").delegations[0].tasks[0];
+  let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let close: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const opening = harness.commandHandlers.get("matty")?.(`task ${task.displayId}`, {
+    mode: "tui",
+    ui: {
+      notify() {},
+      async custom(factory: (...args: unknown[]) => unknown) {
+        component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+        await closed;
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(component);
+  const initial = component.render(120).join("\n");
+  assert.match(initial, /Task state: succeeded · Role: designer/);
+  assert.match(initial, /PID: \d+ · Run ID: [0-9a-f-]+/);
+  assert.match(initial, /Usage: input 1 · output 1 tokens · Cost: \$0\.0000 · Context consumption: 2 tokens/);
+  assert.match(initial, /▶ Reasoning \[reasoning\]/);
+  assert.match(initial, /▼ Assistant \[message\]/);
+  assert.match(initial, /▶ Tool · read \[tool\]/);
+  assert.doesNotMatch(initial, /Arguments: \{\}/);
+
+  component.handleInput("f");
+  assert.match(component.render(120).join("\n"), /Filter: message/);
+  component.handleInput("/");
+  for (const character of "validated") component.handleInput(character);
+  component.handleInput("\r");
+  const searched = component.render(120).join("\n");
+  assert.match(searched, /Search: validated/);
+  assert.match(searched, /validated designer result base/);
+  assert.doesNotMatch(searched, /Reasoning \[reasoning\]|Tool · read/);
+  component.handleInput("\u001b");
   await opening;
 });
 
@@ -2191,6 +2310,7 @@ test("registered control privately assembles interleaved live state by exact Del
       toolCallId: `call-live-${marker}`,
       toolName: "read",
       status: "running",
+      args: "{}",
       content: JSON.stringify({ content: `${marker}-new` }),
     }]);
     assert.ok((observed.get(taskId)?.length ?? 0) > 0);

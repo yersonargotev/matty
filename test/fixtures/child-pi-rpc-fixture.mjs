@@ -246,6 +246,12 @@ async function run(command, promptTerminatedByLf) {
     emit({ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" } });
     emit({ type: "tool_execution_update", toolCallId: `call-live-${liveMarker}`, toolName: "read", args: {}, partialResult: { content: `${liveMarker}-old` } });
     emit({ type: "tool_execution_update", toolCallId: `call-live-${liveMarker}`, toolName: "read", args: {}, partialResult: { content: `${liveMarker}-new` } });
+    emit({
+      type: "extension_error",
+      extensionPath: "fixture-extension",
+      event: "fixture-event",
+      error: `${liveMarker}-extension-error`,
+    });
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   if (task === "ansi-output") {

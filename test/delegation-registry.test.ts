@@ -458,10 +458,10 @@ test("compact widget presentation is useful-only, bounded, and reports roles and
 
   const lines = renderDelegationWidget(registry.snapshot(), 4_000, 4);
   assert.equal(lines.length, 4);
-  assert.equal(lines[0], "Matty · 1 active Delegation · 4 queued tasks");
-  assert.match(lines[1] ?? "", /^D-[0-9a-f]{8} running · explorer,designer · running 1, queued 1 · 3s$/);
-  assert.match(lines[2] ?? "", /^D-[0-9a-f]{8} queued · worker · queued 1 · 3s$/);
-  assert.equal(lines[3], "+2 more queued Delegations");
+  assert.equal(lines[0], "Matty fleet · Active tasks: 1 · Queued tasks: 4");
+  assert.match(lines[1] ?? "", /^T-[0-9a-f]{8} · State: running · Role: explorer · D-[0-9a-f]{8}$/);
+  assert.match(lines[2] ?? "", /^T-[0-9a-f]{8} · State: queued · Role: designer · Queue: 1 · D-[0-9a-f]{8}$/);
+  assert.equal(lines[3], "+3 more tasks · Queue pressure: 4");
   assert.doesNotMatch(lines.join("\n"), /researcher|succeeded|PID|runId|prompt|command|response|transcript/i);
 
   registry.finish(mixed.id, "succeeded");

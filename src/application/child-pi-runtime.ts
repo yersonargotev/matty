@@ -69,14 +69,30 @@ export interface DelegatedToolPresentation {
   readonly toolCallId: string;
   readonly toolName: string;
   readonly status: "running" | "completed";
+  readonly args?: string;
   readonly content?: string;
   readonly isError?: boolean;
+}
+
+export interface DelegatedTranscriptPresentationEntry {
+  readonly id: string;
+  readonly category: "message" | "reasoning" | "tool" | "error";
+  readonly label: string;
+  readonly content: string;
+  readonly expandedByDefault: boolean;
 }
 
 export interface DelegatedTaskPresentation {
   readonly revision: number;
   readonly assistant: readonly DelegatedAssistantPresentationPart[];
   readonly tools: readonly DelegatedToolPresentation[];
+  readonly entries: readonly DelegatedTranscriptPresentationEntry[];
+  readonly usage: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly totalTokens: number;
+    readonly cost: number;
+  };
 }
 
 export type DelegatedTaskOutcome =
@@ -183,6 +199,8 @@ interface PiMessageEnd extends Record<string, unknown> {
     content: Array<Record<string, unknown>> | string;
     stopReason?: string;
     errorMessage?: string;
+    usage?: Record<string, unknown>;
+    isError?: boolean;
   };
 }
 
@@ -551,9 +569,13 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
       toolCallId: string;
       toolName: string;
       status: "running" | "completed";
+      args?: string;
       content?: string;
       isError?: boolean;
     }>();
+    const presentedEntries = new Map<string, DelegatedTranscriptPresentationEntry>();
+    let turnSequence = 0;
+    let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 };
     const pendingCommands = new Map<string, {
       command: ChildInteraction["type"];
       frame: string;
@@ -668,10 +690,13 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           .sort(([left], [right]) => left - right)
           .map(([contentIndex, part]) => Object.freeze({ contentIndex, ...part }));
         const tools = [...presentedTools.values()].map((tool) => Object.freeze({ ...tool }));
+        const entries = [...presentedEntries.values()].map((entry) => Object.freeze({ ...entry }));
         options.onPresentation(Object.freeze({
           revision: liveRevision,
           assistant: Object.freeze(assistant),
           tools: Object.freeze(tools),
+          entries: Object.freeze(entries),
+          usage: Object.freeze({ ...usage }),
         }));
         dispatchProgress({ type: "live", child: identity, revision: liveRevision });
       });
@@ -766,6 +791,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         return;
       }
       if (event.type === "turn_start") {
+        turnSequence += 1;
         assistantParts.clear();
         presentedTools.clear();
         liveAssistantBytes = 0;
@@ -801,6 +827,29 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
             return;
           }
           assistantParts.set(index, { type, content: next });
+          presentedEntries.set(`assistant:${turnSequence}:${index}`, Object.freeze({
+            id: `assistant:${turnSequence}:${index}`,
+            category: type === "thinking" ? "reasoning" : "message",
+            label: type === "thinking" ? "Reasoning" : "Assistant",
+            content: next,
+            expandedByDefault: type === "text",
+          }));
+          const usageRecord = record(event.usage);
+          if (usageRecord) {
+            const costRecord = record(usageRecord.cost);
+            usage = {
+              inputTokens: typeof usageRecord.input === "number"
+                ? usageRecord.input
+                : usage.inputTokens,
+              outputTokens: typeof usageRecord.output === "number"
+                ? usageRecord.output
+                : usage.outputTokens,
+              totalTokens: typeof usageRecord.totalTokens === "number"
+                ? usageRecord.totalTokens
+                : usage.totalTokens,
+              cost: typeof costRecord?.total === "number" ? costRecord.total : usage.cost,
+            };
+          }
           emitLive();
         }
         if (!retainTranscript(event, `message:${index}`)) {
@@ -826,13 +875,26 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           terminate("Pi exceeded the live presentation buffer limit");
           return;
         }
+        const args = event.args !== undefined
+          ? presentationContent(event.args)
+          : previous?.args;
+        const toolName = neutralizeTerminalText(event.toolName as string);
         presentedTools.set(toolCallId, {
           toolCallId,
-          toolName: event.toolName as string,
+          toolName,
           status: event.type === "tool_execution_end" ? "completed" : "running",
+          ...(args !== undefined ? { args } : {}),
           ...(content !== undefined ? { content } : {}),
           ...(event.type === "tool_execution_end" ? { isError: event.isError as boolean } : {}),
         });
+        presentedEntries.set(`tool:${toolCallId}`, Object.freeze({
+          id: `tool:${toolCallId}`,
+          category: event.type === "tool_execution_end" && event.isError ? "error" : "tool",
+          label: `${event.type === "tool_execution_end" && event.isError ? "Tool error" : "Tool"} · ${toolName}`,
+          content: [args ? `Arguments: ${args}` : undefined, content ? `Result: ${content}` : undefined]
+            .filter(Boolean).join("\n") || "Running",
+          expandedByDefault: false,
+        }));
         emitLive();
         if (!retainTranscript(event, `tool:${event.toolCallId as string}`)) {
           terminate("Pi exceeded the in-memory transcript limit");
@@ -841,6 +903,58 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
       } else if (TRANSCRIPT_TYPES.has(event.type) && !retainTranscript(event)) {
         terminate("Pi exceeded the in-memory transcript limit");
         return;
+      }
+      const eventError = event.type === "extension_error"
+        ? event.error
+        : event.type === "auto_retry_end" && !event.success
+          ? event.finalError
+          : event.type === "compaction_end"
+            ? event.errorMessage
+            : event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled"
+              ? event.errorMessage
+              : undefined;
+      if (typeof eventError === "string" && eventError.length > 0) {
+        const id = `error:${turnSequence}:${presentedEntries.size}`;
+        presentedEntries.set(id, Object.freeze({
+          id,
+          category: "error",
+          label: "Error",
+          content: neutralizeTerminalText(eventError),
+          expandedByDefault: false,
+        }));
+        emitLive();
+      }
+      if (isMessageEnd(event)) {
+        const messageUsage = record(event.message.usage);
+        const messageCost = record(messageUsage?.cost);
+        if (messageUsage) {
+          usage = {
+            inputTokens: typeof messageUsage.input === "number"
+              ? messageUsage.input
+              : usage.inputTokens,
+            outputTokens: typeof messageUsage.output === "number"
+              ? messageUsage.output
+              : usage.outputTokens,
+            totalTokens: typeof messageUsage.totalTokens === "number"
+              ? messageUsage.totalTokens
+              : usage.totalTokens,
+            cost: typeof messageCost?.total === "number" ? messageCost.total : usage.cost,
+          };
+        }
+        if (event.message.role !== "assistant") {
+          const content = presentationContent(event.message.content);
+          presentedEntries.set(`message:${turnSequence}:${presentedEntries.size}`, Object.freeze({
+            id: `message:${turnSequence}:${presentedEntries.size}`,
+            category: event.message.role === "toolResult" && event.message.isError ? "error" : "message",
+            label: event.message.role === "user"
+              ? "User"
+              : event.message.role === "toolResult"
+                ? "Tool result"
+                : neutralizeTerminalText(event.message.role),
+            content,
+            expandedByDefault: event.message.role === "user",
+          }));
+        }
       }
       if (isMessageEnd(event) && event.message.role === "assistant") {
         finalMessage = event.message;
@@ -862,6 +976,24 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
               });
             }
           });
+        }
+        for (const [contentIndex, part] of assistantParts) {
+          presentedEntries.set(`assistant:${turnSequence}:${contentIndex}`, Object.freeze({
+            id: `assistant:${turnSequence}:${contentIndex}`,
+            category: part.type === "thinking" ? "reasoning" : "message",
+            label: part.type === "thinking" ? "Reasoning" : "Assistant",
+            content: part.content,
+            expandedByDefault: part.type === "text",
+          }));
+        }
+        if (event.message.errorMessage) {
+          presentedEntries.set(`error:${turnSequence}`, Object.freeze({
+            id: `error:${turnSequence}`,
+            category: "error",
+            label: "Error",
+            content: neutralizeTerminalText(event.message.errorMessage),
+            expandedByDefault: false,
+          }));
         }
         liveAssistantBytes = [...assistantParts.values(), ...presentedTools.values()]
           .reduce((bytes, part) => bytes + Buffer.byteLength(part.content ?? ""), 0);

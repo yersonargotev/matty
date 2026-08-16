@@ -64,6 +64,7 @@ import {
 } from "../application/delegation-control.ts";
 import {
   delegationCard,
+  renderDelegationTaskSection,
   renderDelegationHumanSnapshot,
   renderDelegationJson,
 } from "../application/delegation-presentation.ts";
@@ -178,6 +179,7 @@ function createPiHost(
   management?: {
     registry: DelegationRegistry;
     openConsole(context: ExtensionContext): Promise<void>;
+    openTask(context: ExtensionContext, displayId: string): Promise<boolean>;
     output(text: string): void;
   },
 ): MattyHost {
@@ -209,6 +211,8 @@ function createPiHost(
           openDelegations: async () => {
             await management.openConsole(context);
           },
+          openDelegatedTask: async (displayId: string) =>
+            await management.openTask(context, displayId),
         }
         : {}),
       ...(context.model
@@ -736,7 +740,7 @@ export function registerPiMatty(
       ? { terminalLimit: options.delegationRegistryOptions.terminalLimit }
       : {}),
   });
-  const delegationManagement = createPiDelegationManagement(delegationRegistry);
+  const delegationManagement = createPiDelegationManagement(delegationRegistry, delegationControl);
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
@@ -1480,7 +1484,7 @@ export function registerPiMatty(
             ? details.delegation as unknown as DelegationSnapshotEntry
             : undefined)
           : undefined;
-        return new piTui.Text(entry ? delegationCard(entry, delegationRegistry.now()) : "Delegation · lifecycle unavailable", 0, 0);
+        return new piTui.Text(entry ? renderDelegationTaskSection(entry, delegationRegistry.now()).join("\n") : "Delegation · lifecycle unavailable", 0, 0);
       },
       async execute(
         toolCallId: string,
@@ -1878,6 +1882,7 @@ export function registerPiMatty(
   }), {
     registry: delegationRegistry,
     openConsole: (context) => delegationManagement.openConsole(context),
+    openTask: (context, displayId) => delegationManagement.openTask(context, displayId),
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {
     packageVersion: MATTY_PACKAGE_VERSION,

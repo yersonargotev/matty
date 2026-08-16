@@ -33,6 +33,8 @@ test("control retains active plus newest terminal limit and detaches completion 
     revision: 1,
     assistant: Object.freeze([]),
     tools: Object.freeze([]),
+    entries: Object.freeze([]),
+    usage: Object.freeze({ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 }),
   });
 
   control.open("active", "required", ["active-task"], () => { activeAborts += 1; });
@@ -67,6 +69,8 @@ test("control reset resolves waiters and drops task-scoped presentation subscrip
     revision: 1,
     assistant: Object.freeze([]),
     tools: Object.freeze([]),
+    entries: Object.freeze([]),
+    usage: Object.freeze({ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 }),
   }), () => { detached += 1; }));
   const terminal = control.freeze("delegation");
 
