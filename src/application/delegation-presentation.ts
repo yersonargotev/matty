@@ -1,4 +1,5 @@
 import type {
+  DelegatedTaskSnapshot,
   DelegationSnapshot,
   DelegationSnapshotEntry,
 } from "./delegation-registry.ts";
@@ -20,6 +21,21 @@ function duration(entry: DelegationSnapshotEntry, now: number): string {
 
 function roles(entry: DelegationSnapshotEntry): string {
   return [...new Set(entry.roles)].join(",") || "unknown";
+}
+
+export function delegatedTaskLifecycleTimeline(
+  task: DelegatedTaskSnapshot,
+): string[] {
+  const lines = [`${new Date(task.queuedAt).toISOString()} · queued`];
+  if (task.startedAt !== undefined) {
+    lines.push(`${new Date(task.startedAt).toISOString()} · started`);
+  }
+  if (task.endedAt !== undefined) {
+    lines.push(`${new Date(task.endedAt).toISOString()} · ${task.state}`);
+  } else if (task.state !== "queued") {
+    lines.push(`Current · ${task.state}`);
+  }
+  return lines;
 }
 
 export function delegationCard(
@@ -66,10 +82,9 @@ export function renderDelegationConsole(
           task.runId ? `runId ${task.runId}` : undefined,
         ].filter(Boolean).join(" · ");
         lines.push(`    ${task.index + 1}. ${task.role ?? "unknown"} · ${task.state}${identity ? ` · ${identity}` : ""}`);
+        lines.push("      Lifecycle:");
+        lines.push(...delegatedTaskLifecycleTimeline(task).map((event) => `        ${event}`));
         if (task.queuePosition !== undefined) lines.push(`      Queue position: ${task.queuePosition}`);
-        lines.push(`      Queued: ${new Date(task.queuedAt).toISOString()}`);
-        if (task.startedAt !== undefined) lines.push(`      Started: ${new Date(task.startedAt).toISOString()}`);
-        if (task.endedAt !== undefined) lines.push(`      Ended: ${new Date(task.endedAt).toISOString()}`);
         const durationStart = task.startedAt ?? task.queuedAt;
         lines.push(`      ${task.endedAt === undefined ? "Elapsed" : "Duration"}: ${formatDuration(durationStart, task.endedAt ?? now)}`);
         if (task.resultSummary) lines.push(`      Result: ${task.resultSummary}`);
@@ -77,6 +92,47 @@ export function renderDelegationConsole(
     }
   }
   return lines;
+}
+
+export function renderDelegationWidget(
+  snapshot: DelegationSnapshot,
+  now = Date.now(),
+  maxLines = 4,
+): string[] {
+  const useful = snapshot.delegations.filter((entry) =>
+    entry.state === "queued" || entry.state === "running" || entry.state === "cancelling"
+  );
+  if (useful.length === 0 || maxLines <= 0) return [];
+  const activeDelegations = useful.filter((entry) =>
+    entry.state === "running" || entry.state === "cancelling"
+  ).length;
+  const plural = (count: number, singular: string) =>
+    `${count} ${singular}${count === 1 ? "" : "s"}`;
+  const lines = [
+    `Matty · ${plural(activeDelegations, "active Delegation")} · ${plural(snapshot.concurrency.queuedTasks, "queued task")}`,
+  ];
+  const availableCards = Math.max(0, maxLines - 1);
+  const visibleCount = useful.length > availableCards
+    ? Math.max(0, availableCards - 1)
+    : availableCards;
+  for (const entry of useful.slice(0, visibleCount)) {
+    const stateCounts = new Map<string, number>();
+    for (const task of entry.tasks) {
+      stateCounts.set(task.state, (stateCounts.get(task.state) ?? 0) + 1);
+    }
+    const states = [...stateCounts]
+      .map(([state, count]) => `${state} ${count}`)
+      .join(", ");
+    lines.push(
+      `${entry.displayId} ${entry.state} · ${roles(entry)} · ${states} · ${duration(entry, now)}`,
+    );
+  }
+  const hidden = useful.slice(visibleCount);
+  if (hidden.length > 0 && lines.length < maxLines) {
+    const allQueued = hidden.every((entry) => entry.state === "queued");
+    lines.push(`+${hidden.length} more${allQueued ? " queued" : ""} Delegation${hidden.length === 1 ? "" : "s"}`);
+  }
+  return lines.slice(0, maxLines);
 }
 
 export function renderDelegationHumanSnapshot(
