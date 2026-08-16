@@ -37,6 +37,14 @@ Check the installation inside Pi:
 
 Both commands support machine-readable output with `--json`.
 
+## Theme
+
+The package includes the `matty-catppuccin-mocha` theme for Pi 0.84.2. Select it from `/settings`, or use it for one run without changing your saved setting:
+
+```bash
+pi --use-theme matty-catppuccin-mocha
+```
+
 ## Delegate work
 
 Ask Pi to delegate a bounded task, for example:

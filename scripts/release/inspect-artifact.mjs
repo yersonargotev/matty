@@ -11,6 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  loadThemeFromPath,
+} from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 
 const REPOSITORY_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -92,6 +95,7 @@ const EXPECTED_PACKED_FILES = [
   "THIRD_PARTY_PROVENANCE.json",
   ...EXPECTED_DIST_FILES,
   "package.json",
+  "themes/matty-catppuccin-mocha.json",
 ].sort();
 
 async function readJson(path) {
@@ -216,10 +220,15 @@ function inspectPackageMetadata(manifest) {
   });
   assert.deepEqual(manifest.files, [
     "dist",
+    "themes",
     "PRODUCTION_DEPENDENCY_LIFECYCLES.json",
     "THIRD_PARTY_NOTICES.md",
     "THIRD_PARTY_PROVENANCE.json",
   ]);
+  assert.deepEqual(manifest.pi, {
+    extensions: ["./dist/adapters/pi-extension.js"],
+    themes: ["./themes/matty-catppuccin-mocha.json"],
+  });
   assert.deepEqual(manifest.peerDependencies, {
     "@earendil-works/pi-coding-agent": "0.84.2",
   });
@@ -240,6 +249,14 @@ function inspectThirdPartyProvenance(provenance, lockfile) {
       repository: "https://github.com/earendil-works/pi-mono",
       commit: "845d6ff1f6643aba440341cce877ce1c43ebbc39",
       path: "packages/coding-agent/examples/extensions/subagent",
+      license: "MIT",
+      notice: "THIRD_PARTY_NOTICES.md",
+    },
+    {
+      component: "Catppuccin Mocha palette",
+      repository: "https://github.com/catppuccin/palette",
+      commit: "07d02aa110ef9eb7e7427afca5c73ba9cf7f8ebd",
+      path: "palette.json",
       license: "MIT",
       notice: "THIRD_PARTY_NOTICES.md",
     },
@@ -341,6 +358,21 @@ async function main() {
       /^MIT License\n\nCopyright \(c\) 2026 Yerson Argote\n/,
     );
     assert.match(notices, /^# Third-party notices\n/);
+    assert.match(notices, /Copyright \(c\) 2021 Catppuccin/);
+    const themePath = join(
+      packageRoot,
+      "themes",
+      "matty-catppuccin-mocha.json",
+    );
+    const themeJson = await readJson(themePath);
+    assert.equal(themeJson.name, "matty-catppuccin-mocha");
+    assert.deepEqual(Object.keys(themeJson.export).sort(), [
+      "cardBg",
+      "infoBg",
+      "pageBg",
+    ]);
+    assert.doesNotThrow(() => loadThemeFromPath(themePath, "truecolor"));
+    assert.doesNotThrow(() => loadThemeFromPath(themePath, "256color"));
     assert.equal(metadata.name, manifest.name);
     assert.equal(metadata.version, manifest.version);
     assert.deepEqual(

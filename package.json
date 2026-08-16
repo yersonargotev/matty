@@ -21,6 +21,7 @@
   ],
   "files": [
     "dist",
+    "themes",
     "PRODUCTION_DEPENDENCY_LIFECYCLES.json",
     "THIRD_PARTY_NOTICES.md",
     "THIRD_PARTY_PROVENANCE.json"
@@ -28,6 +29,9 @@
   "pi": {
     "extensions": [
       "./dist/adapters/pi-extension.js"
+    ],
+    "themes": [
+      "./themes/matty-catppuccin-mocha.json"
     ]
   },
   "peerDependencies": {
