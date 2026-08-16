@@ -25,6 +25,9 @@ const safeToolCategories = new Set<string>(CHILD_EXECUTION_TOOL_CATEGORIES_V1);
 const knownToolNames = new Set<string>(
   CHILD_EXECUTION_TOOL_CATEGORIES_V1.filter((tool) => tool !== "other"),
 );
+const assistantStopReasons = new Set([
+  "pending", "stop", "length", "toolUse", "error", "aborted", "deferred",
+]);
 
 export type ChildExecutionToolCategory =
   (typeof CHILD_EXECUTION_TOOL_CATEGORIES_V1)[number];
@@ -131,6 +134,10 @@ export function classifyChildExecutionActivity(
   if (event.type === "message_end") {
     const message = record(event.message);
     if (message?.role !== "assistant") return { recognized: false };
+    if (
+      typeof message.stopReason !== "string" ||
+      !assistantStopReasons.has(message.stopReason)
+    ) return { recognized: true, valid: false };
     const outcome = message.stopReason === "error" || message.stopReason === "aborted"
       ? "failed" as const
       : "succeeded" as const;

@@ -102,6 +102,14 @@ if (task === "malformed-message") {
       })}\n`,
     );
   }
+  if (task === "delta-only-message-update") {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "partial" },
+      })}\n`,
+    );
+  }
   process.stdout.write(
     `${JSON.stringify({
       type: "message_end",
@@ -123,7 +131,15 @@ if (task === "malformed-message") {
         ],
         provider,
         model,
-        stopReason: failed ? "error" : "stop",
+        ...(task === "absent-assistant-stop-reason"
+          ? {}
+          : {
+            stopReason: task === "malformed-assistant-activity"
+              ? "unknown"
+              : task === "deferred-assistant"
+                ? "deferred"
+                : failed ? "error" : "stop",
+          }),
         errorMessage: failed ? "controlled failure" : undefined,
         usage: {
           input: 1,

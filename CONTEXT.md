@@ -106,7 +106,8 @@ _Avoid_: Matty web engine, general Matty MCP surface
 
 **Certified Pi Version**:
 The exact Pi version that has passed Matty's complete packed-artifact acceptance
-suite. Matty `0.1` initially certifies Pi `0.83.0`.
+suite. Matty currently certifies Pi `0.84.2`; the initial certification was Pi
+`0.83.0`.
 _Avoid_: Compatible Pi range, presumed-compatible version
 
 **Certified Target**:

@@ -255,9 +255,41 @@ test("reports error assistant completion as failed activity", async () => {
   );
 });
 
-test("rejects malformed recognized child activity as a protocol failure", async () => {
-  const outcome = await createRunner().run("malformed-tool-activity");
+test("ignores delta-only message_update and keeps message_end authoritative", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("delta-only-message-update", {
+    onProgress(event) { progress.push(event); },
+  });
 
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.failure.kind, "protocol-failed");
+  assert.equal(outcome.status, "succeeded");
+  assert.deepEqual(
+    progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
+    [{ schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" }],
+  );
+});
+
+test("accepts Pi deferred assistant completion", async () => {
+  const progress: DelegatedTaskProgress[] = [];
+  const outcome = await createRunner().run("deferred-assistant", {
+    onProgress(event) { progress.push(event); },
+  });
+
+  assert.equal(outcome.status, "succeeded");
+  assert.deepEqual(
+    progress.flatMap((event) => event.type === "activity" ? [event.observation.summary] : []),
+    [{ schemaVersion: 1, kind: "assistant-completed", outcome: "succeeded" }],
+  );
+});
+
+test("rejects absent or unknown assistant stop reasons as a protocol failure", async () => {
+  for (const task of [
+    "malformed-tool-activity",
+    "malformed-assistant-activity",
+    "absent-assistant-stop-reason",
+  ]) {
+    const outcome = await createRunner().run(task);
+
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.failure.kind, "protocol-failed");
+  }
 });

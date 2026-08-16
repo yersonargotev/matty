@@ -23,7 +23,7 @@ const UNCERTIFIED = {
 test("status activates on a certified host", () => {
   const snapshot = createStatusSnapshot({
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activation: ACTIVE,
@@ -52,8 +52,8 @@ test("status activates on a certified host", () => {
       version: "0.2.0",
     },
     pi: {
-      version: "0.83.0",
-      certifiedVersions: ["0.83.0"],
+      version: "0.84.2",
+      certifiedVersions: ["0.84.2"],
       state: "certified",
     },
     target: {
@@ -136,7 +136,7 @@ test("status activates on a certified host", () => {
     renderStatusHuman(snapshot),
     [
       "Matty 0.2.0",
-      "Host Pi 0.83.0 · certified",
+      "Host Pi 0.84.2 · certified",
       "Target darwin/arm64 · certified",
       "Reference Model Path openai-codex/gpt-5.6-sol · verified",
       "Activation active · compatible",
@@ -182,7 +182,7 @@ test("status degrades on an unsupported host", () => {
 test("status reports a locally derived degraded Web Capability", () => {
   const snapshot = createStatusSnapshot({
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activation: ACTIVE,
@@ -202,7 +202,7 @@ test("status reports a locally derived degraded Web Capability", () => {
 test("a non-reference model is unverified without degrading activation", () => {
   const snapshot = createStatusSnapshot({
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activation: ACTIVE,
@@ -245,7 +245,7 @@ test("diagnostics omit injected secrets, content, URLs, paths, and unknown field
   ];
   const snapshot = createStatusSnapshot({
     packageVersion: "0.2.0",
-    piVersion: "0.83.0",
+    piVersion: "0.84.2",
     platform: "darwin",
     arch: "arm64",
     activation: ACTIVE,

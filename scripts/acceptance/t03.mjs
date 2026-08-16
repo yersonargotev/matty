@@ -204,7 +204,7 @@ try {
       "--prefix",
       host,
       "--ignore-scripts",
-      "@earendil-works/pi-coding-agent@0.83.0",
+      "@earendil-works/pi-coding-agent@0.84.2",
       artifact,
     ],
     { cwd: project, env: isolatedEnv },
@@ -517,7 +517,7 @@ export default function t03Acceptance(pi) {
     [
       "T03 packed-runtime acceptance passed",
       `artifact: ${metadata.filename}`,
-      "Pi source: 0.83.0 @ 845d6ff1f6643aba440341cce877ce1c43ebbc39",
+      "Pi source: 0.84.2 @ 914cf1472e715297caa30db4b9535d534a9eb718",
       "independent PID/context: proven",
       "provider/model/auth/reasoning: inherited",
       "success/failure/cancellation/progress: structured",

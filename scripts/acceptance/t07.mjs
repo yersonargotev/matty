@@ -251,7 +251,7 @@ try {
       "--prefix",
       host,
       "--ignore-scripts",
-      "@earendil-works/pi-coding-agent@0.83.0",
+      "@earendil-works/pi-coding-agent@0.84.2",
       artifact,
     ],
     { cwd: project, env: isolatedEnv },

@@ -216,6 +216,9 @@ function inspectPackageMetadata(manifest) {
     "THIRD_PARTY_NOTICES.md",
     "THIRD_PARTY_PROVENANCE.json",
   ]);
+  assert.deepEqual(manifest.peerDependencies, {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+  });
   for (const name of INSTALL_LIFECYCLE_SCRIPTS) {
     assert.equal(
       Object.hasOwn(manifest.scripts ?? {}, name),

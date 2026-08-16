@@ -279,6 +279,12 @@ try {
     certification: {
       platform: `${process.platform}/${process.arch}`,
       node: process.version,
+      pi: {
+        package: "@earendil-works/pi-coding-agent",
+        version: "0.84.2",
+        releaseCommit: "914cf1472e715297caa30db4b9535d534a9eb718",
+        npmIntegrity: "sha512-l4E+B7hgXKWddRo8bC/eSue2aWZjEgJ9xIpf5p0Og+lq8a2TArCwJ0HCoCPCgaBP/tN4zbYH/wOwvx9pJpeLCA==",
+      },
       reference: "openai-codex/gpt-5.6-sol via ChatGPT/Codex OAuth",
     },
   };
@@ -292,7 +298,7 @@ try {
       `Matty Core ${manifest.version} release candidate certified`,
       `artifact: ${metadata.filename}`,
       `sha256: ${artifactDigest}`,
-      "host: Pi 0.83.0 on darwin/arm64",
+      "host: Pi 0.84.2 on darwin/arm64",
       "reference: openai-codex/gpt-5.6-sol via ChatGPT/Codex OAuth",
       "release workflow policy: OIDC stage-only",
       "certification action: candidate artifact only (no staging or publication)",

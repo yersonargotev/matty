@@ -16,7 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.83.0";
+const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.84.2";
 const PARENT_PROVIDER = "openai-codex";
 const PARENT_MODEL = "gpt-5.6-sol";
 const SEARCH_MODEL = "gpt-5.4";
@@ -296,7 +296,7 @@ globalThis.fetch = async function observedFetch(input, init) {
       "utf8",
     ),
   );
-  assert.equal(piPackage.version, "0.83.0");
+  assert.equal(piPackage.version, "0.84.2");
   assert.equal(webPackage.version, "0.15.0");
   assert.equal(mattyPackage.version, "0.2.0");
 

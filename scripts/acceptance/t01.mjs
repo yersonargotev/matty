@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.83.0";
+const PI_PACKAGE = "@earendil-works/pi-coding-agent@0.84.2";
 const ACTIVE_HINT = "Matty active · /matty status";
 const REPOSITORY_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -517,8 +517,8 @@ async function main() {
     });
     assert.equal(
       versionResult.stdout.trim(),
-      "0.83.0",
-      `[T01:install] expected Pi 0.83.0, received ${versionResult.stdout.trim()}`,
+      "0.84.2",
+      `[T01:install] expected Pi 0.84.2, received ${versionResult.stdout.trim()}`,
     );
 
     const mattySource =
@@ -565,6 +565,13 @@ async function main() {
 
     await writeFile(
       join(homeRoot, ".pi", "agent", "auth.json"),
+      "{}",
+      "utf8",
+    );
+    // Pi 0.84.2 initializes this Pi-owned store at startup. Seed the empty
+    // canonical state so the zero-write assertion remains scoped to Matty.
+    await writeFile(
+      join(homeRoot, ".pi", "agent", "models-store.json"),
       "{}",
       "utf8",
     );
@@ -625,7 +632,7 @@ async function main() {
       );
       assert.match(
         humanNotification.message,
-        /Host Pi 0\.83\.0 · certified/,
+        /Host Pi 0\.84\.2 · certified/,
       );
       assert.match(
         humanNotification.message,
@@ -671,8 +678,8 @@ async function main() {
         version: "0.2.0",
       });
       assert.deepEqual(jsonStatus.pi, {
-        version: "0.83.0",
-        certifiedVersions: ["0.83.0"],
+        version: "0.84.2",
+        certifiedVersions: ["0.84.2"],
         state: "certified",
       });
       assert.equal(jsonStatus.target.platform, "darwin");
@@ -839,7 +846,7 @@ export default function unsupportedHostAcceptance(pi) {
     },
   }, {
     packageVersion: "0.2.0",
-    piVersion: nonReferenceModel ? "0.83.0" : "0.84.0",
+    piVersion: nonReferenceModel ? "0.84.2" : "0.84.0",
     platform: nonReferenceModel ? "darwin" : "linux",
     arch: nonReferenceModel ? "arm64" : "x64",
     activeModel: nonReferenceModel
@@ -1064,7 +1071,7 @@ export default function unsupportedHostAcceptance(pi) {
       [
         "T01 packed-package acceptance passed",
         `artifact: ${packMetadata.filename}`,
-        "Pi: 0.83.0",
+        "Pi: 0.84.2",
         "target: darwin/arm64",
         "activation: active",
         "Web Capability: available (pi-web-access 0.15.0)",
