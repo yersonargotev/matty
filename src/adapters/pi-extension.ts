@@ -54,6 +54,7 @@ import {
 } from "../application/register-matty.ts";
 import {
   DelegationRegistry,
+  type DelegationCancellationResult,
   type DelegationRegistryOptions,
   type DelegationSnapshotEntry,
 } from "../application/delegation-registry.ts";
@@ -139,11 +140,21 @@ type WriterRelease = () => void | Promise<void>;
 async function openDelegationConsole(
   context: ExtensionContext,
   registry: DelegationRegistry,
+  activeClosers: Set<() => void>,
 ): Promise<void> {
   await context.ui.custom<void>((tui, _theme, _keybindings, done) => {
     let snapshot = registry.snapshot();
     let selectedId = snapshot.delegations[0]?.id;
+    let confirmation: { id: string; displayId: string; active: number; queued: number } | undefined;
+    let cancellationStatus: string | undefined;
+    const cancellationMessages = {
+      "cancelling": (displayId: string) => `Cancellation requested for ${displayId}.`,
+      "already-cancelling": (displayId: string) =>
+        `Cancellation is already in progress for ${displayId}.`,
+      "already-finished": (displayId: string) => `${displayId} is already finished.`,
+    } satisfies Record<DelegationCancellationResult, (displayId: string) => string>;
     const expandedIds = new Set<string>();
+    let closed = false;
     const unsubscribe = registry.subscribe(() => {
       snapshot = registry.snapshot();
       if (selectedId && !snapshot.delegations.some((entry) => entry.id === selectedId)) {
@@ -151,17 +162,49 @@ async function openDelegationConsole(
       }
       tui.requestRender();
     });
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      unsubscribe();
+      activeClosers.delete(close);
+      done();
+    };
+    activeClosers.add(close);
     return {
       render(width: number) {
-        return renderDelegationConsole(snapshot, {
+        const lines = renderDelegationConsole(snapshot, {
           ...(selectedId ? { selectedId } : {}),
           expandedIds,
-        }).map((line) => piTui.truncateToWidth(line, Math.max(1, width)));
+        });
+        if (confirmation) {
+          lines.push(
+            `Confirm cancellation of ${confirmation.displayId}: ${confirmation.active} active, ${confirmation.queued} queued?`,
+            "y confirm · n/Esc keep running",
+          );
+        } else if (cancellationStatus) {
+          lines.push(cancellationStatus);
+        }
+        return lines.map((line) => piTui.truncateToWidth(line, Math.max(1, width)));
       },
       handleInput(data: string) {
+        if (confirmation) {
+          if (piTui.matchesKey(data, "y")) {
+            const target = confirmation;
+            confirmation = undefined;
+            const result = registry.cancel(target.id);
+            cancellationStatus = cancellationMessages[result](target.displayId);
+            tui.requestRender();
+          } else if (
+            piTui.matchesKey(data, "n") ||
+            piTui.matchesKey(data, piTui.Key.escape)
+          ) {
+            confirmation = undefined;
+            tui.requestRender();
+          }
+          return;
+        }
         if (piTui.matchesKey(data, "q") || piTui.matchesKey(data, piTui.Key.escape)) {
-          unsubscribe();
-          done();
+          close();
           return;
         }
         const entries = snapshot.delegations;
@@ -176,11 +219,25 @@ async function openDelegationConsole(
           if (expandedIds.has(selectedId)) expandedIds.delete(selectedId);
           else expandedIds.add(selectedId);
           tui.requestRender();
+        } else if (piTui.matchesKey(data, "c") && selectedId) {
+          const target = entries.find((entry) => entry.id === selectedId);
+          if (target && (target.state === "queued" || target.state === "running")) {
+            cancellationStatus = undefined;
+            confirmation = {
+              id: target.id,
+              displayId: target.displayId,
+              active: target.tasks.filter((task) => task.state === "running").length,
+              queued: target.tasks.filter((task) => task.state === "queued").length,
+            };
+            tui.requestRender();
+          }
         }
       },
       invalidate() {},
       dispose() {
+        closed = true;
         unsubscribe();
+        activeClosers.delete(close);
       },
     };
   }, { overlay: false });
@@ -215,6 +272,7 @@ function createPiHost(
   > = () => ({}),
   management?: {
     registry: DelegationRegistry;
+    activeConsoleClosers: Set<() => void>;
     output(text: string): void;
   },
 ): MattyHost {
@@ -244,7 +302,11 @@ function createPiHost(
           },
           emitOutput: management.output,
           openDelegations: async () => {
-            await openDelegationConsole(context, management.registry);
+            await openDelegationConsole(
+              context,
+              management.registry,
+              management.activeConsoleClosers,
+            );
           },
         }
         : {}),
@@ -714,6 +776,7 @@ export function registerPiMatty(
   options: PiMattyRegistrationOptions = {},
 ): void {
   const delegationRegistry = new DelegationRegistry(options.delegationRegistryOptions);
+  const activeConsoleClosers = new Set<() => void>();
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
@@ -936,6 +999,7 @@ export function registerPiMatty(
       }
     });
     pi.on("session_shutdown", async () => {
+      for (const close of [...activeConsoleClosers]) close();
       delegationRegistry.shutdown();
       for (const scope of sessionResearchWorkspaces.values()) {
         try {
@@ -1483,7 +1547,7 @@ export function registerPiMatty(
             return finishResult(await singleTaskTool.execute(
               toolCallId,
               params,
-              observer.controller.signal,
+              observer.signal,
               (update) => observer.observeProgress(update.details),
               ctx,
             ));
@@ -1719,7 +1783,7 @@ export function registerPiMatty(
                 return executionOutcome;
               },
             }, {
-              signal: observer.controller.signal,
+              signal: observer.signal,
               onDiagnostic(diagnostic) {
                 observer.recordDiagnostic(diagnostic);
               },
@@ -1770,6 +1834,7 @@ export function registerPiMatty(
     },
   }), {
     registry: delegationRegistry,
+    activeConsoleClosers,
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {
     packageVersion: MATTY_PACKAGE_VERSION,

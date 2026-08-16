@@ -23,7 +23,7 @@ export interface DelegationObserverUpdate {
 
 export interface DelegationObserver {
   readonly id: string;
-  readonly controller: AbortController;
+  readonly signal: AbortSignal;
   observeProgress(details: unknown): void;
   completeTask(taskIndex: number, status: DelegatedTaskCompletionState): void;
   recordDiagnostic(diagnostic: DelegationDiagnostic): void;
@@ -184,7 +184,7 @@ export function createDelegationObserver(
 
   return {
     id: accepted.id,
-    controller,
+    signal: controller.signal,
     observeProgress(value) {
       const details = record(value) ?? {};
       const taskIndex = typeof details.taskIndex === "number" ? details.taskIndex : 0;
