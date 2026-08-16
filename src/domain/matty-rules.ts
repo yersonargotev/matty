@@ -1,3 +1,4 @@
+import { withoutMattyGuidance } from "./matty-guidance.ts";
 import {
   DELEGATION_INPUT_GUIDANCE,
   MATTY_ROLES,
@@ -60,7 +61,9 @@ function withoutMarkedRules(systemPrompt: string): string {
 export function detectMattyRulesConflict(
   systemPrompt: string,
 ): string | undefined {
-  const projectInstructions = withoutMarkedRules(systemPrompt);
+  const projectInstructions = withoutMattyGuidance(
+    withoutMarkedRules(systemPrompt),
+  );
   if (
     /\b(?:ignore|override|relax|disable)\s+(?:the\s+)?Matty Rules\b/i.test(
       projectInstructions,

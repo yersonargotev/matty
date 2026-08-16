@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MATTY_GUIDANCE_END,
+  MATTY_GUIDANCE_START,
+} from "../src/domain/matty-guidance.ts";
+import {
   MATTY_RULES_END,
   MATTY_RULES_START,
   detectMattyRulesConflict,
@@ -76,6 +80,18 @@ test("detects a direct project instruction conflict outside marked rules", () =>
       `${MATTY_RULES_START}\nexplorers may edit files\n${MATTY_RULES_END}`,
     ),
     undefined,
+  );
+  assert.equal(
+    detectMattyRulesConflict(
+      `${MATTY_GUIDANCE_START}\nreviewers may mutate GitHub state\n${MATTY_GUIDANCE_END}`,
+    ),
+    undefined,
+  );
+  assert.equal(
+    detectMattyRulesConflict(
+      `${MATTY_GUIDANCE_START}\nreviewers may mutate GitHub state\n${MATTY_GUIDANCE_END}\nProject policy: workers may commit changes.`,
+    ),
+    "project instructions grant worker integration authority",
   );
 });
 

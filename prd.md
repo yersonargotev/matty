@@ -4,9 +4,9 @@
 
 Matty Core is a globally installed Pi package that makes delegated engineering
 work dependable. Version `0.1` owns a process-based Subagent Runtime, five
-least-privilege roles and their guards, Matty Rules, a bounded Web Capability,
-local status and doctor diagnostics, and the release controls needed to ship a
-safe public artifact.
+least-privilege roles and their guards, Matty Guidance and Rules, a bounded Web
+Capability, local status and doctor diagnostics, and the release controls needed
+to ship a safe public artifact.
 
 The MVP deliberately does not distribute or orchestrate a shared skill
 library. It supplies the runtime primitives on which workflows can operate
@@ -43,8 +43,8 @@ users cannot distinguish tested behavior from host-version assumptions.
 3. Validate delegated and web-enabled Core operations through Capability
    Contracts.
 4. Enforce Single Writer and Bounded Concurrency invariants.
-5. Inject versioned Matty Rules into parent and child prompts without writing
-   global or project instruction files.
+5. Inject versioned Matty Guidance and Matty Rules into parent and child prompts
+   without writing global or project instruction files.
 6. Bundle and certify a focused Web Capability for the parent and researcher.
 7. Keep core activation observable through `/matty status` and
    `/matty doctor`, including versioned JSON output.
@@ -88,8 +88,9 @@ capability requirements remain outside this MVP.
    agents do not race over the same working tree.
 5. As a researcher, I want cited web tools through my existing Pi
    authentication path so that I do not need a second Matty credential.
-6. As a developer, I want Matty Rules applied consistently to parent and child
-   contexts without Matty editing my instruction files.
+6. As a developer, I want overridable Matty Guidance and invariant Matty Rules
+   applied consistently to parent and child contexts without Matty editing my
+   instruction files.
 7. As a developer, I want status to explain the active runtime, host
    certification, roles, web availability, and degraded capabilities.
 8. As a developer, I want doctor to give ordered remediation without exposing
@@ -178,16 +179,25 @@ capability requirements remain outside this MVP.
 10. The main agent retains ownership of commits, pushes, pull requests, review
     submission, merges, releases, and other external-state mutation.
 
-### Matty Rules
+### Matty Guidance and Rules
 
-1. Matty Rules must define the Core runtime invariants and role semantics.
-2. Rules must be injected into parent and child system prompts through Pi's
+1. Matty Guidance must package the versioned Argote engineering and Neutral
+   Spanish defaults, preserving their explicit user/project/authority
+   precedence.
+2. Guidance must use stable `matty:guidance` markers, be deduplicated, and be
+   injected independently into parent and every child prompt.
+3. Prompt composition must be deterministic: host/project instructions, then
+   Matty Guidance, then Matty Rules.
+4. Rules conflict detection must ignore content inside Matty Guidance while
+   continuing to reject conflicting external project instructions.
+5. Matty Rules must define the Core runtime invariants and role semantics.
+6. Rules must be injected into parent and child system prompts through Pi's
    supported extension seam.
-3. The injected block must use stable `matty:rules` markers and be deduplicated.
-4. Matty must not write or modify external `AGENTS.md` files.
-5. Project instructions may add repository policy but must not silently relax a
+7. The injected block must use stable `matty:rules` markers and be deduplicated.
+8. Matty must not write or modify external `AGENTS.md` files.
+9. Project instructions may add repository policy but must not silently relax a
    Core safety invariant.
-6. Tool guidance must document the exact delegation schema, role names,
+10. Tool guidance must document the exact delegation schema, role names,
    concurrency limits, guard limitations, and failure behavior.
 
 ### Web Capability
@@ -312,7 +322,7 @@ and leaves Pi usable when a Core capability is degraded.
 - Implement Capability Contracts and Capability Preflight for delegated
   operations.
 - Implement the five roles, guards, and Single Writer enforcement.
-- Inject and verify Matty Rules in parent and child contexts.
+- Inject and verify Matty Guidance and Rules in parent and child contexts.
 
 Exit gate: real-process tests demonstrate every role, allow/deny policy,
 concurrency bound, cancellation path, and no orphaned child.
@@ -359,8 +369,8 @@ Matty Core `0.1` succeeds when:
    inline or model-knowledge substitution.
 5. Guards block their documented mutation classes in acceptance tests without
    being described as a sandbox.
-6. Matty Rules appear exactly once in parent and child contexts and no external
-   instruction file is written.
+6. Matty Guidance and Matty Rules each appear exactly once, in precedence order,
+   in parent and child contexts and no external instruction file is written.
 7. The parent and researcher can produce a current cited web result through the
    pinned integration; other roles cannot access those tools.
 8. Status and doctor accurately report active, degraded, unverified-model, and

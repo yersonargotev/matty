@@ -89,6 +89,7 @@ import type {
 } from "../domain/delegation-group.ts";
 import type { ReviewScopeContract } from "../domain/review-scope.ts";
 import { inspectInspectionCommand } from "../domain/inspection-guard.ts";
+import { injectMattyGuidance } from "../domain/matty-guidance.ts";
 import {
   detectMattyRulesConflict,
   injectMattyRules,
@@ -910,7 +911,7 @@ export function registerPiMatty(
     rulesConflict = detectMattyRulesConflict(event.systemPrompt);
     return {
       systemPrompt: injectMattyRules(
-        event.systemPrompt,
+        injectMattyGuidance(event.systemPrompt),
         childRole ?? "parent",
       ),
     };

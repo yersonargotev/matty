@@ -28,6 +28,10 @@ import {
 } from "../src/adapters/pi-extension.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
+  MATTY_GUIDANCE_END,
+  MATTY_GUIDANCE_START,
+} from "../src/domain/matty-guidance.ts";
+import {
   MATTY_RULES_END,
   MATTY_RULES_START,
 } from "../src/domain/matty-rules.ts";
@@ -126,11 +130,16 @@ test("parent registration exposes explicit delegated roles", async () => {
   const inject = harness.handlers.get("before_agent_start")?.[0];
   assert.ok(inject);
   const result = await inject({
-    systemPrompt: `base\n${MATTY_RULES_START}\nstale\n${MATTY_RULES_END}`,
+    systemPrompt: `base\n${MATTY_GUIDANCE_START}\nstale guidance\n${MATTY_GUIDANCE_END}\n${MATTY_RULES_START}\nstale rules\n${MATTY_RULES_END}`,
   } as never, {} as never) as { systemPrompt: string };
 
+  assert.equal(result.systemPrompt.split(MATTY_GUIDANCE_START).length - 1, 1);
+  assert.equal(result.systemPrompt.split(MATTY_GUIDANCE_END).length - 1, 1);
   assert.equal(result.systemPrompt.split(MATTY_RULES_START).length - 1, 1);
   assert.equal(result.systemPrompt.split(MATTY_RULES_END).length - 1, 1);
+  assert.doesNotMatch(result.systemPrompt, /stale guidance|stale rules/);
+  assert.ok(result.systemPrompt.indexOf("base") < result.systemPrompt.indexOf(MATTY_GUIDANCE_START));
+  assert.ok(result.systemPrompt.indexOf(MATTY_GUIDANCE_END) < result.systemPrompt.indexOf(MATTY_RULES_START));
   assert.deepEqual(harness.tools.map((tool) => tool.name), [
     "web_search",
     "source_check",
@@ -203,6 +212,23 @@ test("parent registration exposes explicit delegated roles", async () => {
     JSON.stringify(failedSearch),
     /provider secret must not escape/,
   );
+});
+
+test("child registration independently injects Guidance before role-specific Rules", async () => {
+  const harness = createExtensionHarness();
+  registerPiMatty(harness.pi, { MATTY_CHILD_ROLE: "designer" });
+
+  const inject = harness.handlers.get("before_agent_start")?.[0];
+  assert.ok(inject);
+  const result = await inject({ systemPrompt: "child host instructions" } as never, {} as never) as {
+    systemPrompt: string;
+  };
+
+  assert.equal(result.systemPrompt.split(MATTY_GUIDANCE_START).length - 1, 1);
+  assert.equal(result.systemPrompt.split(MATTY_RULES_START).length - 1, 1);
+  assert.ok(result.systemPrompt.indexOf("child host instructions") < result.systemPrompt.indexOf(MATTY_GUIDANCE_START));
+  assert.ok(result.systemPrompt.indexOf(MATTY_GUIDANCE_END) < result.systemPrompt.indexOf(MATTY_RULES_START));
+  assert.match(result.systemPrompt, /Active child role: designer/);
 });
 
 test("launcher Pi metadata wins over a locally resolved Matty peer", async () => {

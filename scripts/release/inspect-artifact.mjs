@@ -63,6 +63,8 @@ const EXPECTED_DIST_FILES = [
   "dist/domain/delegation-group.js",
   "dist/domain/inspection-guard.d.ts",
   "dist/domain/inspection-guard.js",
+  "dist/domain/matty-guidance.d.ts",
+  "dist/domain/matty-guidance.js",
   "dist/domain/matty-rules.d.ts",
   "dist/domain/matty-rules.js",
   "dist/domain/package-contract.d.ts",
