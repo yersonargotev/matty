@@ -13,7 +13,7 @@ _Avoid_: General developer, beginner developer
 
 **Matty Core**:
 The versioned runtime capabilities shipped by Matty: the Subagent Runtime,
-Matty Roles and guards, Matty Rules, Web Capability, and diagnostics.
+Matty Roles and guards, Matty Guidance, Matty Rules, Web Capability, and diagnostics.
 _Avoid_: Process catalog, skill distribution
 
 **Supported Installation**:
@@ -94,9 +94,15 @@ The evaluation of a Capability Contract before its operation produces effects.
 An unmet required capability blocks only that operation.
 _Avoid_: Startup capability gate, global Core disablement
 
+**Matty Guidance**:
+Versioned, package-owned overridable defaults applied consistently to parent and
+child agents after host/project instructions and before Matty Rules.
+_Avoid_: Core invariant, project-owned policy
+
 **Matty Rules**:
 Versioned Core runtime invariants applied consistently to parent and child
-agents without becoming project-owned policy.
+agents without becoming project-owned policy. Rules follow Guidance in the
+composed prompt because invariants take precedence over defaults.
 _Avoid_: Matty configuration file, project rules patch
 
 **Web Capability**:

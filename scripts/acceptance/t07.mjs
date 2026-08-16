@@ -294,9 +294,14 @@ const workerTemporaryPaths = JSON.parse(process.env.MATTY_WORKER_TEMPORARY_PATHS
 const workerProtectedPaths = JSON.parse(process.env.MATTY_WORKER_PROTECTED_PATHS ?? "[]");
 const childMode = ["explorer", "designer", "reviewer", "researcher", "worker"].includes(childRole);
 const requestedRole = process.env.MATTY_T07_ROLE ?? "explorer";
-const startMarker = "<!-- matty:rules -->";
-const endMarker = "<!-- /matty:rules -->";
-let parentRules = { start: 0, end: 0 };
+const rulesStartMarker = "<!-- matty:rules -->";
+const rulesEndMarker = "<!-- /matty:rules -->";
+const guidanceStartMarker = "<!-- matty:guidance -->";
+const guidanceEndMarker = "<!-- /matty:guidance -->";
+let parentBlocks = {
+  rules: { start: 0, end: 0 },
+  guidance: { start: 0, end: 0 },
+};
 
 function count(value, marker) {
   return value.split(marker).length - 1;
@@ -387,10 +392,16 @@ export default function t07Acceptance(pi) {
 
   pi.on("before_agent_start", (event) => {
     const observed = {
-      start: count(event.systemPrompt, startMarker),
-      end: count(event.systemPrompt, endMarker),
+      rules: {
+        start: count(event.systemPrompt, rulesStartMarker),
+        end: count(event.systemPrompt, rulesEndMarker),
+      },
+      guidance: {
+        start: count(event.systemPrompt, guidanceStartMarker),
+        end: count(event.systemPrompt, guidanceEndMarker),
+      },
     };
-    if (!childMode) parentRules = observed;
+    if (!childMode) parentBlocks = observed;
   });
 
   pi.on("tool_execution_update", (event, ctx) => {
@@ -404,7 +415,7 @@ export default function t07Acceptance(pi) {
   pi.on("tool_result", (event, ctx) => {
     if (event.toolName === "subagent") {
       ctx.ui.notify("T07_RESULT:" + JSON.stringify(event.details), "info");
-      ctx.ui.notify("T07_PARENT_RULES:" + JSON.stringify(parentRules), "info");
+      ctx.ui.notify("T07_PARENT_BLOCKS:" + JSON.stringify(parentBlocks), "info");
     }
   });
 
@@ -569,8 +580,12 @@ export default function t07Acceptance(pi) {
         ];
         const payload = {
           rules: {
-            start: count(context.systemPrompt, startMarker),
-            end: count(context.systemPrompt, endMarker),
+            start: count(context.systemPrompt, rulesStartMarker),
+            end: count(context.systemPrompt, rulesEndMarker),
+          },
+          guidance: {
+            start: count(context.systemPrompt, guidanceStartMarker),
+            end: count(context.systemPrompt, guidanceEndMarker),
           },
           allowed: Object.fromEntries(
             allowedIds.map((id) => [id, byId.get(id)?.isError === false]),
@@ -617,6 +632,14 @@ export default function t07Acceptance(pi) {
             evidence: [{
               web: results[0]?.isError === false,
               report: results[1]?.isError === false,
+              rules: {
+                start: count(context.systemPrompt, rulesStartMarker),
+                end: count(context.systemPrompt, rulesEndMarker),
+              },
+              guidance: {
+                start: count(context.systemPrompt, guidanceStartMarker),
+                end: count(context.systemPrompt, guidanceEndMarker),
+              },
             }],
           }),
         }])));
@@ -655,8 +678,12 @@ export default function t07Acceptance(pi) {
       ];
       const payload = {
         rules: {
-          start: count(context.systemPrompt, startMarker),
-          end: count(context.systemPrompt, endMarker),
+          start: count(context.systemPrompt, rulesStartMarker),
+          end: count(context.systemPrompt, rulesEndMarker),
+        },
+        guidance: {
+          start: count(context.systemPrompt, guidanceStartMarker),
+          end: count(context.systemPrompt, guidanceEndMarker),
         },
         allowed: Object.fromEntries(
           allowedIds.map((id) => [id, byId.get(id)?.isError === false]),
@@ -741,7 +768,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     const rulesEvent = await activeRpc.waitFor(
       (event) =>
         event.type === "extension_ui_request" &&
-        event.message?.startsWith("T07_PARENT_RULES:"),
+        event.message?.startsWith("T07_PARENT_BLOCKS:"),
     );
     const progress = activeRpc.events
       .filter(
@@ -756,15 +783,18 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     rpc = undefined;
     return {
       terminal: JSON.parse(resultEvent.message.slice("T07_RESULT:".length)),
-      parentRules: JSON.parse(
-        rulesEvent.message.slice("T07_PARENT_RULES:".length),
+      parentBlocks: JSON.parse(
+        rulesEvent.message.slice("T07_PARENT_BLOCKS:".length),
       ),
       progress,
     };
   }
 
   const success = await execute("explorer", false);
-  assert.deepEqual(success.parentRules, { start: 1, end: 1 });
+  assert.deepEqual(success.parentBlocks, {
+    rules: { start: 1, end: 1 },
+    guidance: { start: 1, end: 1 },
+  });
   assert.equal(success.terminal.status, "succeeded");
   const successLeaf = success.terminal.tasks[0].value;
   assert.equal(successLeaf.contract.role, "explorer");
@@ -808,6 +838,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   const observed = successLeaf.outcome.output.evidence[0];
   assert.deepEqual(observed.rules, { start: 1, end: 1 });
+  assert.deepEqual(observed.guidance, { start: 1, end: 1 });
   assert.ok(Object.values(observed.allowed).every(Boolean), JSON.stringify(observed.allowed));
   assert.ok(Object.values(observed.blocked).every(Boolean));
   await assert.rejects(access(forbidden));
@@ -825,7 +856,12 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     const roleObserved = role === "reviewer"
       ? JSON.parse(roleLeaf.outcome.output.findings[0].evidence)
       : roleLeaf.outcome.output.evidence[0];
+    assert.deepEqual(roleResult.parentBlocks, {
+      rules: { start: 1, end: 1 },
+      guidance: { start: 1, end: 1 },
+    });
     assert.deepEqual(roleObserved.rules, { start: 1, end: 1 });
+    assert.deepEqual(roleObserved.guidance, { start: 1, end: 1 });
     assert.ok(Object.values(roleObserved.allowed).every(Boolean));
     assert.ok(Object.values(roleObserved.blocked).every(Boolean));
     await assert.rejects(access(forbidden));
@@ -842,7 +878,12 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
   );
   const workerOutput = workerLeaf.outcome.output;
   const workerObserved = JSON.parse(workerOutput.summary);
+  assert.deepEqual(worker.parentBlocks, {
+    rules: { start: 1, end: 1 },
+    guidance: { start: 1, end: 1 },
+  });
   assert.deepEqual(workerObserved.rules, { start: 1, end: 1 });
+  assert.deepEqual(workerObserved.guidance, { start: 1, end: 1 });
   assert.ok(Object.values(workerObserved.allowed).every(Boolean));
   assert.ok(Object.values(workerObserved.blocked).every(Boolean));
   assert.equal(await readFile(join(project, "worker-output.txt"), "utf8"), "after\n");
@@ -870,9 +911,15 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     JSON.stringify(researcher.terminal),
   );
   const researcherOutput = JSON.parse(researcherLeaf.outcome.output);
+  assert.deepEqual(researcher.parentBlocks, {
+    rules: { start: 1, end: 1 },
+    guidance: { start: 1, end: 1 },
+  });
   assert.deepEqual(researcherOutput.evidence, [{
     web: true,
     report: true,
+    rules: { start: 1, end: 1 },
+    guidance: { start: 1, end: 1 },
   }]);
   assert.match(
     await readFile(
@@ -911,7 +958,7 @@ printf 'installed\\n' > node_modules/matty-worker-fixture/installed.txt
     [
       "T07/T08/T09/T12 production role delegation acceptance passed",
       `artifact: ${metadata.filename}`,
-      "parent/child Matty Rules: exactly one",
+      "parent/child Matty Guidance and Rules: exactly one each",
       "Capability Contract/preflight: validated and diagnosable",
       "real Subagent Runtime: structured progress and terminal output",
       "delegation groups: validated, atomic, bounded, and redacted",
