@@ -80,6 +80,10 @@ test("runs designer and reviewer as independent roles with structured output", a
   assert.match(observedTasks[0] ?? "", /Propose an interface/);
   assert.match(observedTasks[1] ?? "", /Reviewer assignment/);
   assert.match(observedTasks[1] ?? "", /read-only GitHub inspection/);
+  assert.match(observedTasks[1] ?? "", /requirement verbatim/);
+  assert.match(observedTasks[1] ?? "", /only supplied axes/);
+  assert.match(observedTasks[1] ?? "", /Return only JSON/);
+  assert.match(observedTasks[1] ?? "", /Do not mention or quote excluded references/);
   assert.equal(designer.contract.role, "designer");
   assert.equal(reviewer.contract.role, "reviewer");
   assert.equal(designer.outcome.status, "succeeded");
@@ -104,9 +108,9 @@ test("reviewer rejects findings outside exact requirements or targeting excluded
     candidateSha: commitSha("1111111111111111111111111111111111111111"),
     axes: ["spec" as const],
   };
-  for (const [name, requirement, evidence] of [
-    ["unmatched requirement", "Prompt compliance", "local evidence"],
-    ["excluded dependency", "Implement the bounded contract", "This instead requires #42 publication"],
+  for (const [name, requirement, evidence, reason] of [
+    ["unmatched requirement", "Prompt compliance", "local evidence", "requirement-not-in-scope"],
+    ["excluded dependency", "Implement the bounded contract", "This instead requires #42 publication", "excluded-reference"],
   ] as const) {
     await context.test(name, async () => {
       const terminal = await runInspectionDelegation(
@@ -132,6 +136,10 @@ test("reviewer rejects findings outside exact requirements or targeting excluded
       assert.equal(terminal.outcome.status, "failed");
       if (terminal.outcome.status === "failed") {
         assert.equal(terminal.outcome.failure.kind, "invalid-role-output");
+        assert.deepEqual(terminal.outcome.failure.validation, {
+          schemaVersion: 1,
+          reason,
+        });
       }
     });
   }
@@ -172,6 +180,45 @@ test("preserves the private transcript when invalid inspection output becomes a 
     );
     assert.doesNotMatch(JSON.stringify(terminal.outcome), /transcript/);
   }
+});
+
+test("reviewer reports invalid JSON without exposing the response", async () => {
+  const secret = "private invalid reviewer response";
+  const terminal = await runInspectionDelegation(
+    "reviewer",
+    "Review",
+    availableExecution({
+      async run() {
+        return {
+          status: "succeeded",
+          child: { pid: 42, runId: "run-42" },
+          output: secret,
+          exit: { code: 0, signal: null },
+        };
+      },
+    }),
+    { reviewScope: {
+      schemaVersion: 1,
+      issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+      requirements: ["Issue 9"],
+      outOfScope: [],
+      baseSha: commitSha("0000000000000000000000000000000000000000"),
+      candidateSha: commitSha("1111111111111111111111111111111111111111"),
+      axes: ["spec"],
+    } },
+  );
+
+  assert.equal(terminal.outcome.status, "failed");
+  if (terminal.outcome.status === "failed") {
+    assert.equal(terminal.outcome.failure.kind, "invalid-role-output");
+    if (terminal.outcome.failure.kind === "invalid-role-output") {
+      assert.deepEqual(terminal.outcome.failure.validation, {
+        schemaVersion: 1,
+        reason: "invalid-json",
+      });
+    }
+  }
+  assert.doesNotMatch(JSON.stringify(terminal), new RegExp(secret));
 });
 
 test("reviewer rejects an unresolved review commit before runner construction", async () => {

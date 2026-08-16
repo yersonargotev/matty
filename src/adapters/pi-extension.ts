@@ -60,6 +60,10 @@ import {
 } from "../application/delegation-registry.ts";
 import { createDelegationObserver } from "../application/delegation-observer.ts";
 import {
+  safeReviewerValidationDiagnostic,
+  type ReviewerValidationDiagnostic,
+} from "../domain/review-scope.ts";
+import {
   DelegationControl,
   type MattyApplicationControl,
 } from "../application/delegation-control.ts";
@@ -589,6 +593,7 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
 function leafOutcome(details: unknown): {
   status?: unknown;
   failureCode?: DelegationLeafFailureCode;
+  validation?: ReviewerValidationDiagnostic;
 } {
   if (!isUnknownRecord(details) || !isUnknownRecord(details.outcome)) {
     return {};
@@ -597,11 +602,18 @@ function leafOutcome(details: unknown): {
   if (!isUnknownRecord(failure)) {
     return { status };
   }
+  const rawValidation = isUnknownRecord(failure.validation)
+    ? failure.validation
+    : undefined;
+  const validation = failure.kind === "invalid-role-output" && rawValidation
+    ? safeReviewerValidationDiagnostic(rawValidation)
+    : undefined;
   return {
     status,
     ...(isDelegationLeafFailureCode(failure.kind)
       ? { failureCode: failure.kind }
       : {}),
+    ...(validation ? { validation } : {}),
   };
 }
 
@@ -1825,6 +1837,9 @@ export function registerPiMatty(
                         status: "failed",
                         ...(outcome.failureCode
                           ? { code: outcome.failureCode }
+                          : {}),
+                        ...(outcome.validation
+                          ? { validation: outcome.validation }
                           : {}),
                       }
                       : {
