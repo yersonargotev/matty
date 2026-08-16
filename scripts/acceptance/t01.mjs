@@ -491,6 +491,7 @@ async function main() {
       "THIRD_PARTY_PROVENANCE.json",
       ...expectedDistFiles,
       "package.json",
+      "themes/matty-catppuccin-mocha.json",
     ].sort();
     assert.deepEqual(
       packMetadata.files.map((file) => file.path).sort(),
@@ -545,6 +546,19 @@ async function main() {
         "pi-extension.js",
       ),
     );
+    await access(
+      join(
+        homeRoot,
+        ".pi",
+        "agent",
+        "npm",
+        "node_modules",
+        "@yargote",
+        "matty",
+        "themes",
+        "matty-catppuccin-mocha.json",
+      ),
+    );
     const installedMattyRoot = join(
       homeRoot,
       ".pi",
@@ -565,6 +579,9 @@ async function main() {
       ),
     );
     assert.equal(installedMattyPackage.dependencies["pi-web-access"], "0.15.0");
+    assert.deepEqual(installedMattyPackage.pi.themes, [
+      "./themes/matty-catppuccin-mocha.json",
+    ]);
     assert.equal(installedWebPackage.version, "0.15.0");
 
     await writeFile(
@@ -592,6 +609,7 @@ async function main() {
       isolatedEnv,
       sandboxRoot,
       operatorHome,
+      ["--use-theme", "matty-catppuccin-mocha"],
     );
 
     let rpcFailure;
