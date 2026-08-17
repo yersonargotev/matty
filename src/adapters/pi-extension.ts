@@ -26,6 +26,7 @@ import {
   ChildSessionStore,
   ChildSessionStoreError,
   loadChildSessionPresentation,
+  type ChildSessionContinuationDeclaration,
   type DelegationPersistence,
 } from "../application/child-session-store.ts";
 import {
@@ -182,6 +183,9 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
   delegatedTaskIndex?: number;
   requirement?: "required" | "optional";
   persistence?: DelegationPersistence;
+  continuationSourceTaskId?: string;
+  persistedDeclaration?: ChildSessionContinuationDeclaration;
+  gitState?: { head: string; workingTree: string };
   preparedWorker?: PreparedWorkerExecution;
   preparedResearcher?: PreparedResearcherExecution;
   onChildSettled?: () => void;
@@ -189,6 +193,19 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
 };
 
 const execFileAsync = promisify(execFile);
+
+async function childSessionGitState(cwd: string): Promise<{ head: string; workingTree: string }> {
+  try {
+    const [{ stdout: head }, { stdout: workingTree }] = await Promise.all([
+      execFileAsync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }),
+      execFileAsync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, encoding: "utf8" }),
+    ]);
+    return { head: head.trim(), workingTree: workingTree.trimEnd() };
+  } catch {
+    return { head: "unavailable", workingTree: "unavailable" };
+  }
+}
+
 const WEB_ACCESS_MODULE = "pi-web-access/index.ts";
 
 function createPiHost(
@@ -779,6 +796,7 @@ export function registerPiMatty(
     root: join(childSessionAgentRoot, "matty", "child-sessions"),
     ephemeralRoot: join(resolve(environment.TMPDIR ?? tmpdir()), "matty", "ephemeral-child-sessions"),
   });
+  const persistentChildSessionIds = new Set<string>();
   const delegationControl = new DelegationControl({
     ...(options.delegationRegistryOptions?.terminalLimit !== undefined
       ? { terminalLimit: options.delegationRegistryOptions.terminalLimit }
@@ -787,7 +805,39 @@ export function registerPiMatty(
       delegationRegistry.recordTaskSessionState(taskId, state);
     },
   });
-  const delegationManagement = createPiDelegationManagement(delegationRegistry, delegationControl);
+  let startContinuation: ((taskId: string, message: string, context: ExtensionContext) => Promise<
+    | { status: "accepted"; delegationDisplayId: string; taskDisplayId: string; preflight: "passed" | "blocked" }
+    | { status: "unavailable"; reason: string }
+  >) | undefined;
+  const delegationManagement = createPiDelegationManagement(delegationRegistry, delegationControl, {
+    isOffered(taskId) {
+      return persistentChildSessionIds.has(taskId);
+    },
+    async preview(taskId, cwd) {
+      const sourceTask = delegationRegistry.snapshot().delegations.flatMap((entry) => entry.tasks)
+        .find((task) => task.id === taskId);
+      if (!sourceTask || !["blocked", "succeeded", "failed", "cancelled"].includes(sourceTask.state)) {
+        return { status: "unavailable", reason: "task-not-closed" };
+      }
+      try {
+        const source = await childSessionStore.continuationSource(taskId, cwd);
+        const current = await childSessionGitState(cwd);
+        return {
+          status: "available",
+          head: { source: source.manifest.git.head, current: current.head },
+          workingTree: { source: source.manifest.git.workingTree, current: current.workingTree },
+          drifted: source.manifest.git.head !== current.head || source.manifest.git.workingTree !== current.workingTree,
+        };
+      } catch {
+        return { status: "unavailable", reason: "missing-or-ephemeral-transcript" };
+      }
+    },
+    async continue(taskId, message, context) {
+      return startContinuation
+        ? await startContinuation(taskId, message, context)
+        : { status: "unavailable", reason: "continuation-runtime-unavailable" };
+    },
+  });
   const resultCards = new WeakMap<object, DelegationSnapshotEntry>();
   const diagnosticFailures: Array<
     NonNullable<RuntimeFacts["failures"]>[number]
@@ -1007,6 +1057,7 @@ export function registerPiMatty(
     };
     pi.on("session_start", async (event, context) => {
       delegationControl.reset();
+      persistentChildSessionIds.clear();
       childSessionStoreFailure = undefined;
       delegationManagement.startSession(event.reason, context);
       try {
@@ -1018,6 +1069,7 @@ export function registerPiMatty(
           interruptActive: false,
           protectedRoot: context.cwd,
         });
+        for (const { manifest } of discovered) persistentChildSessionIds.add(manifest.taskId);
         delegationRegistry.restore(discovered.map(({ manifest }) => manifest));
         const restored = await Promise.all(discovered.map(async ({ manifest, sessionFile }) => ({
           taskId: manifest.taskId,
@@ -1165,13 +1217,35 @@ export function registerPiMatty(
       projectRoot: string,
     ) => {
       if (!params.delegatedTaskId || !params.delegationId || params.delegatedTaskIndex === undefined) return undefined;
-      return childSessionStore.session({
+      const sourceDelegationId = params.continuationSourceTaskId
+        ? delegationRegistry.snapshot().delegations.find((entry) =>
+          entry.tasks.some((task) => task.id === params.continuationSourceTaskId)
+        )?.id
+        : undefined;
+      const metadata = {
         taskId: params.delegatedTaskId,
         delegationId: params.delegationId,
         taskIndex: params.delegatedTaskIndex,
         role,
         requirement: params.requirement ?? "required",
-      }, params.persistence ?? "persistent", projectRoot);
+        declaration: params.persistedDeclaration ?? {
+          role,
+          ...(params.web ? { web: params.web } : {}),
+          ...(params.report ? { report: params.report } : {}),
+          ...(params.reviewScope ? { reviewScope: params.reviewScope } : {}),
+        },
+        git: params.gitState ?? { head: "unavailable", workingTree: "unavailable" },
+        ...(params.continuationSourceTaskId && sourceDelegationId ? {
+          sourceTaskId: params.continuationSourceTaskId,
+          sourceDelegationId,
+        } : {}),
+      };
+      if ((params.persistence ?? "persistent") === "persistent") {
+        persistentChildSessionIds.add(params.delegatedTaskId);
+      }
+      return params.continuationSourceTaskId
+        ? childSessionStore.continuation(params.continuationSourceTaskId, metadata, projectRoot)
+        : childSessionStore.session(metadata, params.persistence ?? "persistent", projectRoot);
     };
 
     const trackRunner = <T extends ReturnType<typeof createChildPiRunner>>(
@@ -1230,6 +1304,7 @@ export function registerPiMatty(
           ]);
         }
         const role = params.role;
+        params.gitState ??= await childSessionGitState(ctx.cwd ?? process.cwd());
         if (isInspectionRole(role) && rulesConflict) {
           const terminal = blockedInspectionDelegation(role, [
             `Matty Rules conflict: ${rulesConflict}`,
@@ -1324,10 +1399,13 @@ export function registerPiMatty(
               async acquireWriter() {
                 const preparedLease = params.preparedWorker?.takeWriterLease();
                 if (preparedLease) return preparedLease;
-                return await acquireRepositoryWriter(
-                  contract.workingTree,
-                  writerStateRoot,
-                );
+                let lease = await acquireRepositoryWriter(contract.workingTree, writerStateRoot);
+                while (!lease && params.continuationSourceTaskId && !signal?.aborted) {
+                  if (params.delegatedTaskId) delegationRegistry.recordTaskSessionState(params.delegatedTaskId, "waiting-for-capability");
+                  await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+                  lease = await acquireRepositoryWriter(contract.workingTree, writerStateRoot);
+                }
+                return lease;
               },
               createRunner(lifecycle) {
                 return trackRunner(params.delegatedTaskId, createChildPiRunner({
@@ -1565,6 +1643,81 @@ export function registerPiMatty(
           activeInvocations[role] -= 1;
         }
       },
+    };
+
+    startContinuation = async (sourceTaskId, message, context) => {
+      let source;
+      try {
+        source = await childSessionStore.continuationSource(sourceTaskId, context.cwd);
+      } catch {
+        return { status: "unavailable", reason: "missing-or-ephemeral-transcript" };
+      }
+      const declaration: DelegationTaskDeclaration = { ...source.manifest.declaration, task: message };
+      const sourceSnapshot = delegationRegistry.snapshot().delegations.find((entry) =>
+        entry.tasks.some((task) => task.id === sourceTaskId)
+      );
+      const sourceTask = sourceSnapshot?.tasks.find((task) => task.id === sourceTaskId);
+      if (!sourceSnapshot || !sourceTask || !["blocked", "succeeded", "failed", "cancelled"].includes(sourceTask.state)) {
+        return { status: "unavailable", reason: "task-not-closed" };
+      }
+      const observer = createDelegationObserver({
+        registry: delegationRegistry,
+        declaration: { requirement: "required", tasks: [declaration] },
+        continuationOf: sourceTask.id,
+      });
+      const taskId = observer.taskId(0);
+      delegationControl.open(observer.id, "required", [taskId], observer.abort);
+      const beginFreeze = () => { void delegationControl.freeze(observer.id).catch(() => {}); };
+      let resolvePreflight!: (result: "passed" | "blocked") => void;
+      const preflight = new Promise<"passed" | "blocked">((resolveResult) => { resolvePreflight = resolveResult; });
+      let preflightSettled = false;
+      const settlePreflight = (result: "passed" | "blocked") => {
+        if (preflightSettled) return;
+        preflightSettled = true;
+        resolvePreflight(result);
+      };
+      void singleTaskTool.execute(
+        `continuation-${observer.id}`,
+        {
+          ...declaration,
+          delegatedTaskId: taskId,
+          delegationId: observer.id,
+          delegatedTaskIndex: 0,
+          requirement: "required",
+          persistence: "persistent",
+          continuationSourceTaskId: sourceTaskId,
+          persistedDeclaration: source.manifest.declaration,
+          gitState: await childSessionGitState(context.cwd),
+          onChildSettled: beginFreeze,
+        },
+        observer.signal,
+        (update) => {
+          observer.observeProgress(update.details);
+          if (isUnknownRecord(update.details) &&
+              (update.details.type === "started" || update.details.type === "identified")) {
+            settlePreflight("passed");
+          }
+        },
+        context,
+      ).then((result) => {
+        settlePreflight(leafOutcome(result.details).status === "blocked" ? "blocked" : "passed");
+        beginFreeze();
+        const finished = observer.finish(result.details);
+        delegationControl.complete(observer.id, { ...result, details: finished.safeDetails });
+      }).catch(() => {
+        settlePreflight("blocked");
+        beginFreeze();
+        observer.fail();
+        delegationControl.complete(observer.id, Object.freeze({ status: "failed" }));
+      });
+      const preflightResult = await preflight;
+      const accepted = delegationRegistry.get(observer.id)!;
+      return {
+        status: "accepted",
+        delegationDisplayId: accepted.displayId,
+        taskDisplayId: accepted.tasks[0]!.displayId,
+        preflight: preflightResult,
+      };
     };
 
     pi.registerTool({

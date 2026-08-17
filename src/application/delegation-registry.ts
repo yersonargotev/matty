@@ -63,6 +63,9 @@ export interface DelegatedTaskSnapshot {
   id: DelegatedTaskId;
   displayId: string;
   index: number;
+  /** Immutable lineage for a Continuation; absent on original tasks. */
+  sourceTaskId?: DelegatedTaskId;
+  sourceDelegationId?: DelegationId;
   role?: MattyRole;
   state: DelegatedTaskState;
   queuePosition?: number;
@@ -189,6 +192,7 @@ export class DelegationRegistry {
   accept(
     declaration: DelegationDeclaration,
     controller?: AbortController,
+    lineage?: { sourceTaskId: DelegatedTaskId; sourceDelegationId: DelegationId },
   ): DelegationSnapshotEntry {
     let id = this.#nextId();
     while (this.#entries.has(id)) id = this.#nextId();
@@ -220,6 +224,7 @@ export class DelegationRegistry {
       tasks: declarations.map((declaration, index) => ({
         ...taskIdentities[index]!,
         index,
+        ...(index === 0 && lineage ? lineage : {}),
         ...(declaration.role ? { role: declaration.role } : {}),
         state: "queued" as const,
         ...(index >= maxActive ? { queuePosition: index - maxActive + 1 } : {}),
@@ -231,6 +236,23 @@ export class DelegationRegistry {
     this.#entries.set(id, entry);
     this.#changed();
     return this.get(id)!;
+  }
+
+  acceptContinuation(
+    sourceTaskId: DelegatedTaskId,
+    declaration: DelegationDeclaration,
+    controller?: AbortController,
+  ): DelegationSnapshotEntry | undefined {
+    const source = [...this.#entries.values()].find((entry) =>
+      entry.tasks.some((task) => task.id === sourceTaskId)
+    );
+    const sourceTask = source?.tasks.find((task) => task.id === sourceTaskId);
+    if (!source || !sourceTask || !isTerminalDelegationState(source.state) ||
+        !isTerminalDelegationState(sourceTask.state)) return undefined;
+    return this.accept(declaration, controller, {
+      sourceTaskId,
+      sourceDelegationId: source.id,
+    });
   }
 
   get(id: DelegationId): DelegationSnapshotEntry | undefined {
@@ -437,6 +459,8 @@ export class DelegationRegistry {
   restore(sessions: ReadonlyArray<{
     taskId: string;
     delegationId: string;
+    sourceTaskId?: string;
+    sourceDelegationId?: string;
     taskIndex: number;
     role: MattyRole;
     requirement: "required" | "optional";
@@ -473,6 +497,10 @@ export class DelegationRegistry {
           id: item.taskId as DelegatedTaskId,
           displayId: shortCandidate("T", item.taskId),
           index,
+          ...(item.sourceTaskId && item.sourceDelegationId ? {
+            sourceTaskId: item.sourceTaskId as DelegatedTaskId,
+            sourceDelegationId: item.sourceDelegationId as DelegationId,
+          } : {}),
           role: item.role,
           state: taskStates[index]!,
           queuedAt: item.createdAt,

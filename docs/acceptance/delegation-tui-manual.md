@@ -17,3 +17,14 @@ Operator/result notes:
 
 - Result: passed.
 - The operator reported clean live rendering, clear cancellation controls, correct focus restoration, and immediate `/matty status` input after closing the console.
+
+## Continuation validation for the next packed candidate
+
+- [ ] A closed persistent Child Session shows HEAD and working-tree drift before confirmation.
+- [ ] Confirming Continue creates fresh linked Delegation and Delegated Task IDs without changing the source result.
+- [ ] A missing or ephemeral transcript reports that Continuation is unavailable.
+- [ ] A Reviewer with unavailable required commits is blocked by fresh preflight.
+- [ ] A continuation Worker visibly waits for Single Writer and proceeds only after authority is acquired.
+- [ ] Headless commands do not expose Continue.
+
+Operator/result notes: pending the next packed candidate.

@@ -472,12 +472,14 @@ test("registered persistence keeps or deletes Pi sessions and hydrates a fresh e
     await mkdir(oldDirectory, { recursive: true, mode: 0o700 });
     const oldTimestamp = Date.now() - 8 * 24 * 60 * 60 * 1_000;
     await writeFile(join(oldDirectory, "manifest.json"), `${JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       taskId: oldTaskId,
       delegationId: "20000000-0000-4000-8000-000000000078",
       taskIndex: 0,
       role: "explorer",
       requirement: "required",
+      declaration: { role: "explorer" },
+      git: { head: "fixture-head", workingTree: "" },
       state: "succeeded",
       createdAt: oldTimestamp,
       updatedAt: oldTimestamp,
@@ -978,6 +980,91 @@ test("Child Session browsing filters, searches, collapses details, labels metada
   component.handleInput("\u001b");
   component.handleInput("q");
   await opening;
+});
+
+test("closed persistent Child Session continues only through explicit TUI confirmation with Git drift shown", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-continuation-"));
+  try {
+    const harness = createExtensionHarness();
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "ephemeral") });
+    registerPiMatty(harness.pi, {}, {
+      childSessionStore: store,
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+    });
+    const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
+    assert.ok(execute);
+    const executionContext = {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      thinkingLevel: "off",
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+    };
+    await execute("continuation-source" as never, { role: "designer", task: "valid" } as never, undefined as never, undefined as never, executionContext as never);
+
+    const notifications: string[] = [];
+    await harness.commandHandlers.get("matty")?.("delegations --json", {
+      mode: "rpc", ui: { notify(message: string) { notifications.push(message); } },
+    });
+    const source = JSON.parse(notifications.at(-1) ?? "{}").delegations[0].tasks[0];
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+    let close: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => { close = resolve; });
+    const opening = harness.commandHandlers.get("matty")?.(`task ${source.displayId}`, {
+      ...executionContext,
+      mode: "tui",
+      ui: {
+        notify() {},
+        async custom(factory: (...args: unknown[]) => unknown) {
+          component = factory({ requestRender() {} }, {}, {}, () => close?.()) as typeof component;
+          await closed;
+        },
+      },
+    } as never);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(component);
+    assert.match(component.render(180).join("\n"), /c Continue/);
+    component.handleInput("c");
+    assert.match(component.render(180).join("\n"), /Continue: █/);
+    component.handleInput("cancelled message");
+    component.handleInput("\u001b");
+    assert.doesNotMatch(component.render(180).join("\n"), /Continue: cancelled message/);
+    component.handleInput("c");
+    const exactMessage = "Perform the exact continuation request";
+    for (const character of exactMessage) component.handleInput(character);
+    component.handleInput("\r");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const confirmation = component.render(180).join("\n");
+    assert.match(confirmation, /new linked Delegation and Delegated Task/);
+    assert.match(confirmation, /HEAD: .* → .*/);
+    assert.match(confirmation, /Working tree:/);
+    component.handleInput("y");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.match(component.render(180).join("\n"), /Continuation (started after|with) fresh capability preflight/);
+
+    notifications.length = 0;
+    await harness.commandHandlers.get("matty")?.("delegations --json", {
+      mode: "rpc", ui: { notify(message: string) { notifications.push(message); } },
+    });
+    const snapshot = JSON.parse(notifications.at(-1) ?? "{}");
+    const continuation = snapshot.delegations.find((entry: { tasks: Array<{ sourceTaskId?: string }> }) => entry.tasks[0]?.sourceTaskId === source.id);
+    assert.ok(continuation);
+    assert.notEqual(continuation.tasks[0].id, source.id);
+    const continuationManifestPath = join(store.root, continuation.tasks[0].id, "manifest.json");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try { await access(continuationManifestPath); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+    }
+    const continuationManifest = JSON.parse(await readFile(continuationManifestPath, "utf8"));
+    assert.equal(continuationManifest.declaration.task, undefined);
+    assert.equal(continuationManifest.declaration.role, "designer");
+    assert.equal(continuationManifest.sourceTaskId, source.id);
+    component.handleInput("q");
+    await opening;
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("delegation TUI exposes default-timeout extension for every dialog method but not declared timeouts", async () => {

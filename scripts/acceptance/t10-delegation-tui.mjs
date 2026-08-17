@@ -79,6 +79,11 @@ for (const directory of [agentDir, project, host, artifacts, npmCache]) {
   await mkdir(directory, { recursive: true });
 }
 await writeFile(join(project, "README.md"), "# T10 isolated project\n");
+await run("git", ["init", "-q"], { cwd: project, env: process.env });
+await run("git", ["config", "user.name", "Matty T10"], { cwd: project, env: process.env });
+await run("git", ["config", "user.email", "matty-t10@example.invalid"], { cwd: project, env: process.env });
+await run("git", ["add", "README.md"], { cwd: project, env: process.env });
+await run("git", ["commit", "-q", "-m", "Initialize T10 fixture"], { cwd: project, env: process.env });
 
 const isolatedEnv = {
   PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -185,7 +190,7 @@ export default function t10(pi) {
   });
   let requestedFixtureInput = false;
   pi.on("before_agent_start", async (event, ctx) => {
-    if (!childMode || requestedFixtureInput || /redirect deterministically|observe capability wait/.test(event.prompt)) return;
+    if (!childMode || requestedFixtureInput || /redirect deterministically|observe capability wait|T10 continuation/.test(event.prompt)) return;
     requestedFixtureInput = true;
     await ctx.ui.input("T10 child input", "deterministic response required");
   });
@@ -199,8 +204,14 @@ export default function t10(pi) {
       const stream = createAssistantMessageEventStream();
       if (childMode) {
         const partial = assistant(model, [{ type: "text", text: "" }]);
-        const interacted = JSON.stringify(context.messages).includes("redirect deterministically");
-        const report = JSON.stringify({
+        const childMessages = JSON.stringify(context.messages);
+        const interacted = childMessages.includes("redirect deterministically");
+        const continuation = childMessages.includes("T10 continuation exact message");
+        const continuationScenario = continuation || childMessages.includes("T10 continuation source");
+        const report = continuationScenario ? JSON.stringify({
+          summary: continuation ? "T10 continuation terminal result" : "T10 continuation source result",
+          evidence: [continuation ? "exact-composed-message" : "persistent-source"],
+        }) : JSON.stringify({
           schemaVersion: 1,
           summary: interacted ? "T10 interaction Candidate Result" : "T10 initial Candidate Result",
           changedPaths: [], checks: [],
@@ -232,19 +243,22 @@ export default function t10(pi) {
         return stream;
       }
       const messages = JSON.stringify(context.messages);
-      const results = context.messages.filter((message) => message.role === "toolResult");
-      const cancellationRun = messages.includes("start cancellation delegation");
+      const latestUserIndex = context.messages.findLastIndex((message) => message.role === "user");
+      const latestUser = JSON.stringify(context.messages[latestUserIndex] ?? {});
+      const results = context.messages.slice(latestUserIndex + 1).filter((message) => message.role === "toolResult");
+      const cancellationRun = latestUser.includes("start cancellation delegation");
+      const continuationSource = latestUser.includes("start continuation source");
       const shouldDelegate = results.length < (cancellationRun ? 2 : 1);
       queueMicrotask(() => stream.end(assistant(model,
         shouldDelegate
-          ? [{ type: "toolCall", id: cancellationRun ? "cancellation-delegation" : "five-task-delegation", name: "subagent", arguments: {
+          ? [{ type: "toolCall", id: continuationSource ? "continuation-source" : cancellationRun ? "cancellation-delegation" : "five-task-delegation", name: "subagent", arguments: {
               requirement: "required",
-              tasks: Array.from({ length: 5 }, (_, index) => ({
-                role: cancellationRun || index > 0 ? "explorer" : "worker",
-                task: "deterministic hold " + (index + 1),
+              tasks: Array.from({ length: continuationSource ? 1 : 5 }, (_, index) => ({
+                role: continuationSource ? "designer" : cancellationRun || index > 0 ? "explorer" : "worker",
+                task: continuationSource ? "T10 continuation source" : "deterministic hold " + (index + 1),
               })),
             } }]
-          : [{ type: "text", text: "T10 delegation cancellation complete" }],
+          : [{ type: "text", text: continuationSource ? "T10 continuation source closed" : "T10 delegation cancellation complete" }],
         shouldDelegate ? "toolUse" : "stop",
       )));
       return stream;
@@ -338,8 +352,6 @@ phase navigation-hint {Enter Delegated Tasks.*Esc/q close}
 send -- "\\r"
 phase task-list {Delegations.*Delegated Tasks}
 phase task-state {T-[0-9a-f]{8}.*State: (running|waiting-for-input).*Role: worker}
-set taskLine $expect_out(0,string)
-regexp {(T-[0-9a-f]{8})} $taskLine _ taskId
 send -- "\\r"
 phase child-session {Delegations.*Delegated Tasks.*Child Session}
 phase session-key-hints {/ search.*f filter.*s Steer.*u Follow}
@@ -349,9 +361,9 @@ phase usage-labels {Usage:.*Cost:.*Context consumption:}
 phase waiting-input-state {Task state: waiting-for-input}
 send -- "rfixture response\\r"
 phase live-transcript {live transcript needle}
-phase input-update {Input response accepted\.}
+phase input-update {Input response accepted\\.}
 send -- "sredirect deterministically\\r"
-phase steer-update {Steer accepted\.}
+phase steer-update {Steer accepted\\.}
 phase initial-candidate {T10 initial Candidate Result}
 phase interaction-candidate {T10 interaction Candidate Result}
 send -- "f"
@@ -370,12 +382,12 @@ phase filter-reset {Filter: all.*Search: none}
 after 300
 send -- "uobserve capability wait\\r"
 phase waiting-capability {Child Session: waiting-for-capability}
-phase follow-up-update {Follow up accepted\.}
+phase follow-up-update {Follow up accepted\\.}
 phase follow-up-candidate {T10 interaction Candidate Result}
 send -- "a"
-phase task-abort-atomicity {Abort this required task.*Required sibling atomicity cancels every open sibling\.}
+phase task-abort-atomicity {Abort this required task.*Required sibling atomicity cancels every open sibling\\.}
 send -- "y"
-phase task-abort-requested {Task abort requested\.}
+phase task-abort-requested {Task abort requested\\.}
 after 200
 send -- "q"
 phase first-group-complete {T10 delegation cancellation complete}
@@ -404,6 +416,60 @@ send -- "q"
 after 200
 send -- "/matty status\\r"
 phase focus-restored {Matty 0\\.2\\.0}
+send -- "\\004"
+expect eof
+spawn -noecho ${tclLiteral(pi)} --no-session --no-extensions -e ${tclLiteral(extension)} --provider t10-acceptance --model observable --api-key isolated-fixture-key --offline
+stty rows 55 columns 160
+phase continuation-startup {Matty active}
+send -- "start continuation source\\r"
+phase continuation-source-result {T10 continuation source closed}
+exec /usr/bin/touch ${tclLiteral(join(project, "drift.txt"))}
+send -- "/matty delegations\\r"
+phase continuation-source-console {Delegation Console.*Delegations}
+phase continuation-source-delegation {D-[0-9a-f]{8} succeeded}
+set sourceDelegationLine $expect_out(0,string)
+regexp {(D-[0-9a-f]{8})} $sourceDelegationLine _ sourceDelegationId
+send -- "\\r"
+phase continuation-source-task {T-[0-9a-f]{8}.*State: succeeded.*Role: designer}
+set sourceTaskLine $expect_out(0,string)
+regexp {(T-[0-9a-f]{8})} $sourceTaskLine _ sourceTaskId
+send -- "\\r"
+phase continuation-source-session {Delegations.*Delegated Tasks.*Child Session}
+set sourceTaskPrefix [string range $sourceTaskId 2 end]
+set sourceSessionRoot ${tclLiteral(join(agentDir, "matty", "child-sessions"))}
+set sourceSessionFile [lindex [glob [file join $sourceSessionRoot "$sourceTaskPrefix*" "session.jsonl"]] 0]
+set sourceSessionHashBefore [exec /usr/bin/shasum -a 256 $sourceSessionFile]
+send -- "c"
+phase continuation-composition {Continue:.*█}
+send -- "T10 continuation exact message\\r"
+phase continuation-drift-preview {HEAD:.*Working tree:.*Git drift detected}
+send -- "y"
+phase continuation-linked-ids {Continuation started after fresh capability preflight: D-[0-9a-f]{8}.*T-[0-9a-f]{8}}
+set continuationLine $expect_out(0,string)
+regexp {(D-[0-9a-f]{8}).*(T-[0-9a-f]{8})} $continuationLine _ continuationDelegationId continuationTaskId
+if {$continuationDelegationId eq $sourceDelegationId} { puts stderr "T10_SAME_CONTINUATION_DELEGATION_ID"; exit 72 }
+if {$continuationTaskId eq $sourceTaskId} { puts stderr "T10_SAME_CONTINUATION_TASK_ID"; exit 73 }
+after 2500
+send -- "q"
+after 150
+send -- "/matty delegations\\r"
+phase continuation-fleet {Delegation Console.*Delegations}
+send -- "\\r"
+phase continuation-task-list {Delegations.*Delegated Tasks}
+phase continuation-terminal-task {T-[0-9a-f]{8}.*State: succeeded.*Role: designer}
+send -- "\\r"
+phase continuation-lineage "Continuation of: $sourceDelegationId.*$sourceTaskId"
+phase continuation-terminal-result {T10 continuation terminal result}
+send -- "q"
+after 150
+send -- "/matty task $sourceTaskId\\r"
+phase continuation-source-immutable {T10 continuation source result}
+set sourceSessionHashAfter [exec /usr/bin/shasum -a 256 $sourceSessionFile]
+if {$sourceSessionHashAfter ne $sourceSessionHashBefore} { puts stderr "T10_SOURCE_TRANSCRIPT_MUTATED"; exit 74 }
+send -- "q"
+after 150
+send -- "/matty status\\r"
+phase continuation-focus-restored {Matty 0\\.2\\.0}
 send -- "\\004"
 expect eof
 `);
@@ -435,10 +501,15 @@ expect eof
       "Delegations → Delegated Tasks → Child Session navigation: observed",
       "search/filter/composition/key hints/accessibility labels: observed",
       "distinct Steer and Follow up composition with post-interaction Candidate Results: observed",
-      "waiting-for-capability: observed",
-      "required task abort and atomic sibling consequence: observed",
-      "q focus restoration after task abort: observed",
+      "waiting-for-capability and required task abort atomicity: observed",
       "separate cancellation reject/confirm/live rerender: observed",
+      "closed persistent source task: observed",
+      "explicit continuation composition and Git drift preview: observed",
+      "fresh linked Delegation and Delegated Task IDs: observed",
+      "fresh capability preflight and terminal result: observed",
+      "source Child Transcript byte-for-byte immutability: observed",
+      "exact composed message in copied Child Session: observed",
+      "parent focus restoration after continuation: observed",
     ].join("\n") + "\n");
   }
 } catch (error) {

@@ -24,6 +24,19 @@ type SessionReason = "new" | "resume" | "reload" | string;
 type ConsoleView = "delegations" | "tasks" | "session";
 type TranscriptFilter = "all" | DelegatedTranscriptPresentationEntry["category"];
 
+export type ContinuationPreview =
+  | { status: "available"; head: { source: string; current: string }; workingTree: { source: string; current: string }; drifted: boolean }
+  | { status: "unavailable"; reason: "missing-or-ephemeral-transcript" | "task-not-closed" };
+
+export interface PiContinuationActions {
+  isOffered(taskId: DelegatedTaskId): boolean;
+  preview(taskId: DelegatedTaskId, cwd: string): Promise<ContinuationPreview>;
+  continue(taskId: DelegatedTaskId, message: string, context: ExtensionContext): Promise<
+    | { status: "accepted"; delegationDisplayId: string; taskDisplayId: string; preflight: "passed" | "blocked" }
+    | { status: "unavailable"; reason: string }
+  >;
+}
+
 export interface PiDelegationManagement {
   openConsole(context: ExtensionContext): Promise<void>;
   openTask(context: ExtensionContext, displayId: string): Promise<boolean>;
@@ -42,11 +55,18 @@ function compositionText(data: string): string | undefined {
     : undefined;
 }
 
+function lineageDisplayId(prefix: "D" | "T", id: string): string {
+  return `${prefix}-${id.replaceAll("-", "").slice(0, 8).toLowerCase()}`;
+}
+
 function taskMetadata(task: DelegatedTaskSnapshot, presentation: DelegatedTaskPresentation | undefined, now: number): string[] {
   const started = task.startedAt ?? task.queuedAt;
   const ended = task.endedAt ?? now;
   return [
     `Task state: ${task.state} · Role: ${task.role ?? "unknown"}`,
+    ...(task.sourceTaskId && task.sourceDelegationId
+      ? [`Continuation of: ${lineageDisplayId("D", task.sourceDelegationId)} · ${lineageDisplayId("T", task.sourceTaskId)}`]
+      : []),
     `PID: ${task.pid ?? "unavailable"} · Run ID: ${task.runId ?? "unavailable"}`,
     `Usage: input ${presentation?.usage.inputTokens ?? 0} · output ${presentation?.usage.outputTokens ?? 0} tokens · Cost: $${(presentation?.usage.cost ?? 0).toFixed(4)} · Context consumption: ${presentation?.usage.totalTokens ?? 0} tokens`,
     `Timing: ${Math.max(0, Math.floor((ended - started) / 1_000))}s · Queued at: ${new Date(task.queuedAt).toISOString()}`,
@@ -56,6 +76,7 @@ function taskMetadata(task: DelegatedTaskSnapshot, presentation: DelegatedTaskPr
 export function createPiDelegationManagement(
   registry: DelegationRegistry,
   control: MattyApplicationControl,
+  continuations?: PiContinuationActions,
 ): PiDelegationManagement {
   const activeConsoleClosers = new Set<() => void>();
   let widgetContext: ExtensionContext | undefined;
@@ -98,7 +119,8 @@ export function createPiDelegationManagement(
       let releaseSession: (() => void) | undefined;
       let confirmation: { id: DelegationId; displayId: string; active: number; queued: number } | undefined;
       let taskAbortConfirmation: { id: DelegatedTaskId; requirement: "required" | "optional" } | undefined;
-      let composition: { type: "steer" | "follow_up" | "input"; text: string } | undefined;
+      let continuationConfirmation: { id: DelegatedTaskId; message: string; preview: Extract<ContinuationPreview, { status: "available" }> } | undefined;
+      let composition: { type: "steer" | "follow_up" | "input" | "continuation"; text: string } | undefined;
       let interactionStatus: string | undefined;
       let cancellationStatus: string | undefined;
       let filter: TranscriptFilter = "all";
@@ -112,6 +134,9 @@ export function createPiDelegationManagement(
       let closed = false;
 
       const currentDelegation = () => snapshot.delegations.find((entry) => entry.id === selectedDelegationId);
+      const continuationIsOffered = (task: DelegatedTaskSnapshot | undefined) =>
+        task !== undefined && ["blocked", "succeeded", "failed", "cancelled"].includes(task.state) &&
+        continuations?.isOffered(task.id) === true;
       const bindPresentation = () => {
         detachPresentation?.();
         detachPresentation = undefined;
@@ -188,7 +213,7 @@ export function createPiDelegationManagement(
           } else {
             const task = taskById(delegation, selectedTaskId);
             lines.push("Delegation Console · Delegations → Delegated Tasks → Child Session");
-            lines.push("↑/↓ scroll/select · Enter collapse · / search · f filter · s Steer · u Follow up · a abort · Esc/q close");
+            lines.push(`↑/↓ scroll/select · Enter collapse${continuationIsOffered(task) ? " · c Continue" : ""} · / search · f filter · s Steer · u Follow up · a abort · Esc/q close`);
             if (task) {
               lines.push(`Delegated Task ID: ${task.id}`, ...taskMetadata(task, presentation, registry.now()));
               lines.push(`Child Session: ${presentation?.sessionState ?? (task.state === "succeeded" ? "settled" : "working")}`);
@@ -226,7 +251,7 @@ export function createPiDelegationManagement(
             } else lines.push("Delegated Task is unavailable.");
           }
           if (composition) lines.push(
-            `${composition.type === "steer" ? "Steer" : composition.type === "follow_up" ? "Follow up" : "Input response"}: ${composition.text}█`,
+            `${composition.type === "steer" ? "Steer" : composition.type === "follow_up" ? "Follow up" : composition.type === "continuation" ? "Continue" : "Input response"}: ${composition.text}█`,
             "Enter send · Esc cancel composition",
           );
           else if (taskAbortConfirmation) lines.push(
@@ -234,6 +259,13 @@ export function createPiDelegationManagement(
               ? "Abort this required task? Required sibling atomicity cancels every open sibling."
               : "Abort this optional task? Only this task is cancelled; siblings continue.",
             "y confirm · n/Esc keep running",
+          );
+          else if (continuationConfirmation) lines.push(
+            "Continue as a new linked Delegation and Delegated Task?",
+            `HEAD: ${continuationConfirmation.preview.head.source} → ${continuationConfirmation.preview.head.current}`,
+            `Working tree: ${continuationConfirmation.preview.workingTree.source || "clean"} → ${continuationConfirmation.preview.workingTree.current || "clean"}`,
+            continuationConfirmation.preview.drifted ? "Git drift detected. Review it before proceeding." : "No Git drift detected.",
+            "y continue · n/Esc cancel",
           );
           else if (confirmation) lines.push(
             `Confirm cancellation of ${confirmation.displayId}: ${confirmation.active} active, ${confirmation.queued} queued?`,
@@ -256,7 +288,20 @@ export function createPiDelegationManagement(
                     interactionStatus = result.status === "accepted" ? "Input response accepted." : `Input response rejected: ${result.code}.`;
                     tui.requestRender();
                   });
-                } else if (submitted.type !== "input") {
+                } else if (submitted.type === "continuation") {
+                  if (submitted.text.trim().length === 0) {
+                    interactionStatus = "Continuation message is required.";
+                  } else {
+                    const continuationTaskId = selectedTaskId;
+                    interactionStatus = "Checking transcript and Git drift…";
+                    void continuations?.preview(continuationTaskId, context.cwd).then((preview) => {
+                      interactionStatus = undefined;
+                      if (preview?.status === "available") continuationConfirmation = { id: continuationTaskId, message: submitted.text, preview };
+                      else interactionStatus = `Continuation unavailable: ${preview?.reason ?? "missing-or-ephemeral-transcript"}.`;
+                      tui.requestRender();
+                    });
+                  }
+                } else if (submitted.type === "steer" || submitted.type === "follow_up") {
                   void control.interact(selectedTaskId, { type: submitted.type, message: submitted.text }).then((result) => {
                     interactionStatus = result.status === "accepted"
                       ? `${submitted.type === "steer" ? "Steer" : "Follow up"} accepted.`
@@ -292,6 +337,26 @@ export function createPiDelegationManagement(
               tui.requestRender();
             } else if (piTui.matchesKey(data, "n") || piTui.matchesKey(data, piTui.Key.escape)) {
               taskAbortConfirmation = undefined;
+              tui.requestRender();
+            }
+            return;
+          }
+          if (continuationConfirmation) {
+            if (piTui.matchesKey(data, "y")) {
+              const target = continuationConfirmation;
+              continuationConfirmation = undefined;
+              interactionStatus = "Starting Continuation with fresh capability preflight…";
+              tui.requestRender();
+              void continuations?.continue(target.id, target.message, context).then((result) => {
+                interactionStatus = result?.status === "accepted"
+                  ? result.preflight === "passed"
+                    ? `Continuation started after fresh capability preflight: ${result.delegationDisplayId} · ${result.taskDisplayId}.`
+                    : `Continuation blocked by fresh capability preflight: ${result.delegationDisplayId} · ${result.taskDisplayId}.`
+                  : `Continuation unavailable: ${result?.reason ?? "missing-or-ephemeral-transcript"}.`;
+                tui.requestRender();
+              });
+            } else if (piTui.matchesKey(data, "n") || piTui.matchesKey(data, piTui.Key.escape)) {
+              continuationConfirmation = undefined;
               tui.requestRender();
             }
             return;
@@ -394,6 +459,15 @@ export function createPiDelegationManagement(
               composition = { type: "steer", text: "" };
             } else if (piTui.matchesKey(data, "u")) {
               composition = { type: "follow_up", text: "" };
+            } else if (piTui.matchesKey(data, "c") && selectedTaskId) {
+              const task = taskById(currentDelegation(), selectedTaskId);
+              if (!task || !["blocked", "succeeded", "failed", "cancelled"].includes(task.state)) {
+                interactionStatus = "Continuation unavailable: task-not-closed.";
+              } else if (!continuations?.isOffered(task.id)) {
+                interactionStatus = "Continuation unavailable: missing-or-ephemeral-transcript.";
+              } else {
+                composition = { type: "continuation", text: "" };
+              }
             } else if (piTui.matchesKey(data, "a") && selectedTaskId) {
               taskAbortConfirmation = {
                 id: selectedTaskId,

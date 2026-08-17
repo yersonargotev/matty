@@ -10,6 +10,7 @@ import {
   type DelegatedTaskTerminalState,
   type DelegationDeclaration,
   type DelegationId,
+  type DelegatedTaskId,
   type DelegationSnapshotEntry,
   type TerminalDelegationState,
 } from "./delegation-registry.ts";
@@ -52,6 +53,7 @@ interface DelegationObserverOptions {
   declaration: unknown;
   signal?: AbortSignal;
   onUpdate?: (update: DelegationObserverUpdate) => void;
+  continuationOf?: DelegatedTaskId;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -176,7 +178,10 @@ export function createDelegationObserver(
   if (options.signal?.aborted) controller.abort();
   else options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
   const declaration = safeDeclaration(options.declaration);
-  const accepted = options.registry.accept(declaration, controller);
+  const accepted = options.continuationOf
+    ? options.registry.acceptContinuation(options.continuationOf, declaration, controller)
+    : options.registry.accept(declaration, controller);
+  if (!accepted) throw new Error("Continuation source is unavailable");
   const declaredRole = declaration.tasks[0]?.role;
 
   const emit = (
