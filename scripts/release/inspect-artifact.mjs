@@ -84,6 +84,8 @@ const EXPECTED_DIST_FILES = [
   "dist/domain/review-scope.js",
   "dist/domain/status.d.ts",
   "dist/domain/status.js",
+  "dist/domain/terminal-neutralizer.d.ts",
+  "dist/domain/terminal-neutralizer.js",
   "dist/domain/web-capability.d.ts",
   "dist/domain/web-capability.js",
   "dist/domain/worker-completion.d.ts",

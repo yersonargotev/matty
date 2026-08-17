@@ -28,6 +28,7 @@ export interface DiagnosticContext {
     interaction: { type: "steer" | "follow_up"; message: string },
   ) => Promise<{ status: string; code?: string; commandId?: string }>;
   delegationSnapshot?: () => { human: string; json: string; jsonEvent: string };
+  delegatedTaskRead?: (taskId: string, transcript: boolean) => { human: string; json: string; jsonEvent: string } | undefined;
   emitOutput?: (text: string) => void;
   activeModel?: {
     provider: string;
@@ -143,7 +144,7 @@ export function registerMatty(
   }
 
   host.registerCommand("matty", {
-    description: "Show Matty status or doctor diagnostics",
+    description: "Show status/doctor; browse delegations and tasks; read tasks/transcripts by exact ID; explicitly steer or follow up",
     handle: async (rawArgs, notify, context) => {
       const args = rawArgs.trim().replace(/\s+/g, " ");
       const diagnostic = currentSnapshot(context);
@@ -190,6 +191,20 @@ export function registerMatty(
         return;
       }
 
+      const exactTaskMatch = /^task ([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})( transcript)?$/i.exec(args);
+      if (exactTaskMatch) {
+        const taskId = exactTaskMatch[1]!.toLowerCase();
+        const read = context?.delegatedTaskRead?.(taskId, exactTaskMatch[2] !== undefined);
+        if (!read) {
+          notify(`Delegated Task ${taskId} was not found in this session.`, "warning");
+          return;
+        }
+        if (context?.mode === "json" || context?.mode === "rpc") context.emitOutput?.(`${read.jsonEvent}\n`);
+        else if (context?.mode === "print") context.emitOutput?.(`${read.human}\n`);
+        else notify(read.json, "info");
+        return;
+      }
+
       const taskMatch = /^task (T-[0-9a-f]{8})$/i.exec(args);
       if (taskMatch) {
         if (context?.mode !== "tui" || !context.openDelegatedTask) {
@@ -223,7 +238,7 @@ export function registerMatty(
         return;
       }
 
-      notify("Usage: /matty <status|doctor|delegations> [--json] | /matty task T-<id> | /matty <steer|follow-up> <exact-task-id> <message>", "warning");
+      notify("Usage: /matty <status|doctor|delegations> [--json] | /matty task T-<id> | /matty task <exact-task-id> [transcript] | /matty <steer|follow-up> <exact-task-id> <message>", "warning");
     },
   });
 

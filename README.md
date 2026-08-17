@@ -99,6 +99,21 @@ For cited research, declare web access and an approved report path:
 }
 ```
 
+## Manage delegations
+
+Use `/matty delegations` to inspect current and recent delegations; add `--json` for structured output. In the TUI, browse a task by its short display ID with `/matty task T-<8-hex-digits>`.
+
+Headless commands require the task's exact UUID:
+
+```text
+/matty task <exact-task-UUID>
+/matty task <exact-task-UUID> transcript
+/matty steer <exact-task-UUID> <message>
+/matty follow-up <exact-task-UUID> <message>
+```
+
+The first task command reads registry metadata. The explicit `transcript` suffix reads the private Child Session presentation, which can contain prompts, reasoning, tool arguments, and results; unlike delegation summaries and task metadata, it is not a safe summary surface.
+
 ## Safety and privacy
 
 Matty roles use least-privilege tool surfaces and capability preflight. The Inspection Guard and Worker Guard are best-effort command policies, **not security sandboxes**. Treat Matty and delegated children as trusted code.

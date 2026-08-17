@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
 import {
   access,
   mkdir,
@@ -28,7 +29,7 @@ import {
   registerPiMatty,
 } from "../src/adapters/pi-extension.ts";
 import { boundedChildExecutionScheduler } from "../src/application/delegation-scheduler.ts";
-import { childTranscript } from "../src/application/child-pi-runtime.ts";
+import { childTranscript, type DelegatedTaskPresentation } from "../src/application/child-pi-runtime.ts";
 import { ChildSessionStore } from "../src/application/child-session-store.ts";
 import { createResearchWorkspace } from "../src/domain/research-workspace.ts";
 import {
@@ -179,7 +180,7 @@ test("parent registration exposes explicit delegated roles", async () => {
       type: "string",
       enum: ["persistent", "ephemeral"],
       default: "persistent",
-      description: "Persist Child Sessions across Pi lifecycles or delete them at close.",
+      description: "Persist Child Sessions across Pi lifecycles or keep ephemeral Child Sessions memory-only.",
     },
   );
   assert.deepEqual(
@@ -413,7 +414,7 @@ test("subagent rejects an invalid group before any child preflight", async () =>
   assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
 });
 
-test("registered persistence keeps or deletes Pi sessions and hydrates a fresh extension privately", async () => {
+test("registered persistence stores persistent sessions, keeps ephemeral sessions memory-only, and hydrates a fresh extension privately", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-persistence-"));
   const agentRoot = join(sandbox, "agent");
   const transcriptSecret = "restart-tool-secret-78";
@@ -447,20 +448,21 @@ test("registered persistence keeps or deletes Pi sessions and hydrates a fresh e
         assert.match(await readFile(sessionFile, "utf8"), /fixture-provider/);
         await writeFile(sessionFile, [
           JSON.stringify({ type: "message", message: { role: "assistant", content: [
-            { type: "thinking", thinking: "restart reasoning" },
+            { type: "text", text: "split osc before\u001b]" },
+            { type: "text", text: "52;c;split-osc-payload\u0007split osc after" },
+            { type: "text", text: "split dcs before\u001bP" },
+            { type: "text", text: "split-dcs-payload\u001b\\split dcs after" },
+            { type: "text", text: "split csi before\u001b[" },
+            { type: "text", text: "31msplit csi after" },
+            { type: "thinking", thinking: "restart reasoning\u001bPterminal-dcs\u001b\\" },
             { type: "toolCall", id: "call-78", name: "read", arguments: { path: transcriptSecret } },
-            { type: "text", text: "restart answer" },
+            { type: "text", text: "\u001b]52;c;terminal-clipboard\u0007restart answer" },
           ] } }),
           JSON.stringify({ type: "message", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "restart result" }], details: { private: transcriptSecret }, isError: false } }),
           "",
         ].join("\n"), { flag: "a", mode: 0o600 });
       } else {
-        const ephemeral = join(sandbox, "matty", "ephemeral-child-sessions", id);
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          try { await access(ephemeral); await new Promise((resolve) => setTimeout(resolve, 5)); }
-          catch { break; }
-        }
-        await assert.rejects(access(ephemeral));
+        await assert.rejects(access(directory));
       }
       for (const shutdown of harness.handlers.get("session_shutdown") ?? []) {
         await shutdown({ type: "session_shutdown" } as never, {} as never);
@@ -506,7 +508,104 @@ test("registered persistence keeps or deletes Pi sessions and hydrates a fresh e
     assert.deepEqual(presentation?.entries.slice(-4).map((entry) => entry.category), ["reasoning", "tool", "message", "tool"]);
     assert.match(presentation?.entries.at(-3)?.content ?? "", new RegExp(transcriptSecret));
     assert.match(presentation?.entries.at(-1)?.content ?? "", /restart result/);
+    const restoredPresentation = JSON.stringify(presentation);
+    assert.match(restoredPresentation, /split osc after/);
+    assert.match(restoredPresentation, /split dcs after/);
+    assert.match(restoredPresentation, /split csi after/);
+    assert.doesNotMatch(restoredPresentation, /split-osc-payload|split-dcs-payload|31m|terminal-dcs|terminal-clipboard|\u001b|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u);
     assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(`session\\.jsonl|child-sessions|fixture-provider|${transcriptSecret}`));
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
+test("ephemeral Child Sessions remain memory-only and browsable within bounded recent-terminal retention", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-ephemeral-memory-"));
+  const outputs: string[] = [];
+  try {
+    const harness = createExtensionHarness();
+    const control = registerPiMatty(harness.pi, {
+      TMPDIR: sandbox,
+      PI_CODING_AGENT_DIR: join(sandbox, "agent"),
+    }, {
+      invocation: {
+        command: process.execPath,
+        arguments: [join(process.cwd(), "test/fixtures/child-pi-rpc-fixture.mjs"), "--tools", INSPECTION_TOOLS.join(",")],
+      },
+      independentRuntimeAvailable: true,
+      hostOutput(text) { outputs.push(text); },
+    });
+    assert.deepEqual(await readdir(sandbox), []);
+    let taskId = "";
+    let duringFiles: string[] | undefined;
+    let releaseSession: (() => void) | undefined;
+    let detachPresentation: (() => void) | undefined;
+    const presentations: DelegatedTaskPresentation[] = [];
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
+    const running = harness.tools.find((tool) => tool.name === "subagent")!.execute!(
+      "ephemeral-memory" as never,
+      { requirement: "required", persistence: "ephemeral", tasks: [{ role: "explorer", task: "split-terminal-controls" }] } as never,
+      undefined as never,
+      ((update: { details?: { type?: string; delegatedTaskId?: string } }) => {
+        taskId ||= update.details?.delegatedTaskId ?? "";
+        if (update.details?.type === "started") {
+          duringFiles = readdirSync(sandbox);
+          releaseSession ??= control.retainTaskSession(taskId);
+          detachPresentation ??= control.subscribeTaskPresentation(taskId, (presentation) => {
+            presentations.push(presentation);
+            if (presentation.sessionState === "settled") resolveSettled();
+          });
+        }
+      }) as never,
+      {
+        cwd: process.cwd(),
+        model: { provider: "fixture-provider", id: "fixture-model" },
+        thinkingLevel: "off",
+        modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
+      } as never,
+    );
+    await settled;
+    assert.ok(taskId);
+    assert.deepEqual(duringFiles, []);
+    assert.deepEqual(await readdir(sandbox), []);
+    assert.ok(control.taskPresentation(taskId)?.entries.length);
+    assert.doesNotMatch(JSON.stringify(presentations), /split-osc|split-dcs|secret|\u001b/);
+    assert.deepEqual(
+      await control.interact(taskId, { type: "follow_up", message: "continue" }),
+      { status: "rejected", code: "child-session-settled" },
+    );
+    assert.notEqual(await Promise.race([
+      running.then(() => "settled" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 250)),
+    ]), "timeout", "an open task view must not retain an idle ephemeral child");
+    detachPresentation?.();
+    releaseSession?.();
+
+    const notifications: string[] = [];
+    outputs.length = 0;
+    for (const mode of ["rpc", "json", "print"] as const) {
+      await harness.commandHandlers.get("matty")?.(`task ${taskId}`, {
+        mode,
+        ui: { notify(message: string) { notifications.push(message); } },
+      });
+    }
+    assert.equal(new Set(outputs.map((output) => output.trim())).size, 1);
+    const commandContext = { mode: "rpc", ui: { notify(message: string) { notifications.push(message); } } };
+    await harness.commandHandlers.get("matty")?.(`task ${taskId} transcript`, commandContext);
+    const metadata = JSON.parse(outputs[0] ?? "{}");
+    const transcript = JSON.parse(outputs.at(-1) ?? "{}");
+    assert.equal(metadata.type, "matty.task");
+    assert.equal(metadata.task.id, taskId);
+    assert.equal("transcript" in metadata, false);
+    assert.equal(transcript.type, "matty.task.transcript");
+    assert.ok(transcript.transcript.entries.length > 0);
+
+    for (const shutdown of harness.handlers.get("session_shutdown") ?? []) {
+      await shutdown({ type: "session_shutdown" } as never, {} as never);
+    }
+    assert.equal(control.taskPresentation(taskId), undefined);
+    await harness.commandHandlers.get("matty")?.(`task ${taskId}`, commandContext);
+    assert.match(notifications.at(-1) ?? "", new RegExp(`${taskId} was not found`));
+    assert.deepEqual(await readdir(sandbox), []);
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
@@ -514,7 +613,6 @@ test("registered completion enforces Child Session retention without evicting ac
   const sandbox = await mkdtemp(join(tmpdir(), "matty-registered-retention-"));
   const store = new ChildSessionStore({
     root: join(sandbox, "child-sessions"),
-    ephemeralRoot: join(sandbox, "ephemeral"),
     maxSessions: 1,
   });
   try {
@@ -604,6 +702,47 @@ test("registered startup fails closed on incompatible Child Session metadata whi
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
+test("registered startup rejects restored display-ID collisions without partial mutation", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-restore-collision-"));
+  const agentRoot = join(sandbox, "agent");
+  try {
+    const store = new ChildSessionStore({ root: join(agentRoot, "matty", "child-sessions") });
+    for (const [index, delegationId] of [
+      "aaaaaaaa-0000-4000-8000-000000000001",
+      "aaaaaaaa-ffff-4000-8000-000000000002",
+    ].entries()) {
+      const session = store.session({
+        taskId: `bbbbbbb${index}-0000-4000-8000-00000000000${index}`,
+        delegationId,
+        taskIndex: 0,
+        role: "explorer",
+        requirement: "required",
+        declaration: { role: "explorer" },
+        git: { head: "fixture", workingTree: "" },
+      });
+      await session.prepare(process.cwd());
+      await session.finish("succeeded");
+    }
+    const harness = createExtensionHarness();
+    registerPiMatty(harness.pi, { PI_CODING_AGENT_DIR: agentRoot });
+    const warnings: string[] = [];
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler({ reason: "startup" } as never, {
+        mode: "rpc",
+        model: undefined,
+        ui: { notify(message: string) { warnings.push(message); } },
+      } as never);
+    }
+    assert.match(warnings.join("\n"), /Child Session Store unavailable/);
+    const notifications: string[] = [];
+    await harness.commandHandlers.get("matty")?.("delegations --json", {
+      mode: "rpc",
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    assert.deepEqual(JSON.parse(notifications.at(-1) ?? "{}").delegations, []);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
 test("registered delegation seam exposes safe cards, deterministic modes, and lifecycle reset", async () => {
   const harness = createExtensionHarness();
   const hostOutput: string[] = [];
@@ -647,7 +786,7 @@ test("registered delegation seam exposes safe cards, deterministic modes, and li
   now = 2_000;
   await tool.execute(
     "another-host-id" as never,
-    { role: "explorer", task: secret } as never,
+    { requirement: "required", tasks: [{ role: "explorer", task: secret }] } as never,
     undefined as never,
     undefined as never,
     { cwd: process.cwd(), model: undefined, modelRegistry: {} } as never,
@@ -919,7 +1058,7 @@ test("Child Session browsing filters, searches, collapses details, labels metada
   assert.ok(execute);
   await execute(
     "browse-task" as never,
-    { role: "designer", task: "interleaved-live-updates" } as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "interleaved-live-updates" }] } as never,
     undefined as never,
     undefined as never,
     {
@@ -986,7 +1125,7 @@ test("closed persistent Child Session continues only through explicit TUI confir
   const sandbox = await mkdtemp(join(tmpdir(), "matty-continuation-"));
   try {
     const harness = createExtensionHarness();
-    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "ephemeral") });
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), });
     registerPiMatty(harness.pi, {}, {
       childSessionStore: store,
       invocation: {
@@ -1002,7 +1141,7 @@ test("closed persistent Child Session continues only through explicit TUI confir
       thinkingLevel: "off",
       modelRegistry: { async getApiKeyAndHeaders() { return { ok: true, env: {} }; } },
     };
-    await execute("continuation-source" as never, { role: "designer", task: "valid" } as never, undefined as never, undefined as never, executionContext as never);
+    await execute("continuation-source" as never, { requirement: "required", tasks: [{ role: "designer", task: "valid" }] } as never, undefined as never, undefined as never, executionContext as never);
 
     const notifications: string[] = [];
     await harness.commandHandlers.get("matty")?.("delegations --json", {
@@ -1363,7 +1502,7 @@ test("delegation TUI reports a Delegation that finishes while cancellation confi
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   const running = execute(
     "finishes-before-confirmation" as never,
-    { role: "explorer", task: "hold" } as never,
+    { requirement: "required", tasks: [{ role: "explorer", task: "hold" }] } as never,
     controller.signal as never,
     ((update: { details?: { type?: string } }) => {
       if (update.details?.type === "started") startedResolve?.();
@@ -1402,7 +1541,7 @@ test("delegation TUI reports a Delegation that finishes while cancellation confi
   controller.abort();
   const terminal = await running;
   assert.equal(
-    (terminal.details as { outcome: { status: string } }).outcome.status,
+    (terminal.details as { status: string }).status,
     "cancelled",
   );
   component.handleInput("y");
@@ -1436,7 +1575,7 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
   const secret = "private delegated task text";
   const running = execute(
     "shutdown-call" as never,
-    { role: "explorer", task: secret } as never,
+    { requirement: "required", tasks: [{ role: "explorer", task: secret }] } as never,
     undefined as never,
     ((update: { content: Array<{ text: string }>; details: { type?: string; delegatedTaskId: string } }) => {
       updates.push(update);
@@ -1482,7 +1621,7 @@ test("session shutdown aborts active delegation and safe onUpdate cards disclose
     code: "delegated-task-unavailable",
   });
   const result = await running;
-  assert.equal((result.details as { outcome: { status: string } }).outcome.status, "cancelled");
+  assert.equal((result.details as { status: string }).status, "cancelled");
   const notifications: string[] = [];
   await harness.commandHandlers.get("matty")?.("delegations --json", {
     mode: "rpc",
@@ -1634,7 +1773,7 @@ test("registered control correlates accepted interaction, freezes once, and repl
   assert.equal(Object.isFrozen(result), true);
 });
 
-test("standalone thrown paths close and complete their control", async () => {
+test("group preflight exceptions close and complete their control", async () => {
   const harness = createExtensionHarness();
   const control = registerPiMatty(harness.pi, {}, {
     invocation: {
@@ -1645,9 +1784,9 @@ test("standalone thrown paths close and complete their control", async () => {
   const execute = harness.tools.find((tool) => tool.name === "subagent")?.execute;
   assert.ok(execute);
 
-  await assert.rejects(execute(
-    "standalone-throw" as never,
-    { role: "explorer", task: "never starts" } as never,
+  const blocked = await execute(
+    "group-throw" as never,
+    { requirement: "required", tasks: [{ role: "explorer", task: "never starts" }] } as never,
     undefined as never,
     undefined as never,
     {
@@ -1655,7 +1794,8 @@ test("standalone thrown paths close and complete their control", async () => {
       model: { provider: "fixture-provider", id: "fixture-model" },
       modelRegistry: { async getApiKeyAndHeaders() { throw new Error("controlled preflight throw"); } },
     } as never,
-  ), /controlled preflight throw/);
+  );
+  assert.equal((blocked.details as { status: string }).status, "blocked");
 
   const notifications: string[] = [];
   await harness.commandHandlers.get("matty")?.("delegations --json", {
@@ -1663,7 +1803,7 @@ test("standalone thrown paths close and complete their control", async () => {
     ui: { notify(message: string) { notifications.push(message); } },
   });
   const delegationId = JSON.parse(notifications.at(-1) ?? "{}").delegations[0].id;
-  assert.deepEqual(await control.freeze(delegationId), { status: "failed" });
+  assert.equal(((await control.freeze(delegationId)) as { details: { status: string } }).details.status, "blocked");
 });
 
 test("group cleanup throws still complete an already-closing control", async () => {
@@ -2130,7 +2270,7 @@ test("required group authentication preflight blocks before spawning", async () 
   );
 });
 
-test("standalone preflight failures expose only closed reasons through the registered seam", async () => {
+test("group preflight failures expose only closed reasons through the registered seam", async () => {
   const cases = [
     {
       name: "runtime",
@@ -2196,7 +2336,21 @@ test("standalone preflight failures expose only closed reasons through the regis
     const privateTask = `private-${scenario.name}-task`;
     const result = await execute(
       `call-${scenario.name}` as never,
-      { role: scenario.role, task: privateTask } as never,
+      { requirement: "required", tasks: [{
+        role: scenario.role,
+        task: privateTask,
+        ...(scenario.role === "reviewer" ? {
+          reviewScope: {
+            schemaVersion: 1,
+            issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+            requirements: ["Issue 9"],
+            outOfScope: [],
+            baseSha: "0000000000000000000000000000000000000000",
+            candidateSha: "0000000000000000000000000000000000000000",
+            axes: ["spec"],
+          },
+        } : {}),
+      }] } as never,
       undefined as never,
       undefined as never,
       scenario.context as never,
@@ -2210,8 +2364,8 @@ test("standalone preflight failures expose only closed reasons through the regis
     assert.equal(snapshot.delegations[0].resultSummary, `Blocked (${scenario.reason})`);
     assert.equal(snapshot.delegations[0].diagnostics[0].reason, scenario.reason);
     assert.equal(
-      (result.details as { outcome: { diagnostic: { reason: string } } })
-        .outcome.diagnostic.reason,
+      (result.details as { diagnostics: Array<{ reason: string }> })
+        .diagnostics[0]?.reason,
       scenario.reason,
     );
     assert.doesNotMatch(
@@ -2467,9 +2621,12 @@ test("researcher delegation returns normalized artifacts and cleans only workspa
     const result = await execute(
       "researcher-1" as never,
       {
-        role: "researcher",
-        task: "Research primary sources",
-        web: "required",
+        requirement: "required",
+        tasks: [{
+          role: "researcher",
+          task: "Research primary sources",
+          web: "required",
+        }],
       } as never,
       undefined as never,
       undefined as never,
@@ -2484,10 +2641,10 @@ test("researcher delegation returns normalized artifacts and cleans only workspa
         },
       } as never,
     );
-    const terminal = result.details as {
+    const terminal = (result.details as { tasks: Array<{ value: {
       artifacts: { workspace: string; report: string };
       outcome: { status: string };
-    };
+    } }> }).tasks[0]!.value;
     assert.equal(
       terminal.outcome.status,
       "succeeded",
@@ -2729,36 +2886,18 @@ test("a direct Matty Rules conflict blocks only delegation with a diagnostic", a
   assert.ok(execute);
   const result = await execute(
     "call-1" as never,
-    { role: "designer", task: "Inspect" } as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "Inspect" }] } as never,
     undefined as never,
     undefined as never,
-    {} as never,
+    {
+      cwd: process.cwd(),
+      model: { provider: "fixture-provider", id: "fixture-model" },
+      modelRegistry: { async getApiKeyAndHeaders() { return { ok: true }; } },
+    } as never,
   );
-  assert.deepEqual(result.details, {
-    contract: {
-      schemaVersion: 1,
-      id: "delegate-designer",
-      requirement: "required",
-      role: "designer",
-      tools: ["read", "grep", "find", "ls", "bash"],
-      writeAuthority: "none",
-      mutationPolicy: "inspection-guard",
-      web: "absent",
-      github: "absent",
-      cardinality: { min: 1, max: 1 },
-      concurrency: { maxActive: 1 },
-      independence: "required",
-      failureBehavior: "fail-invocation",
-    },
-    outcome: {
-      status: "blocked",
-      diagnostic: {
-        kind: "capability-preflight",
-        contractId: "delegate-designer",
-        reason: "rules-conflict",
-      },
-    },
-  });
+  const details = result.details as { status: string; diagnostics: Array<{ reason: string }> };
+  assert.equal(details.status, "blocked");
+  assert.equal(details.diagnostics[0]?.reason, "rules-conflict");
 
   await harness.commandHandlers.get("matty")?.("delegations --json", {
     mode: "rpc",
@@ -3085,82 +3224,18 @@ test("group task completion releases its registry slot before queue promotion", 
   assert.equal(status.concurrency.queuedChildren, 0);
 });
 
-test("each inspection Capability Contract permits only one active invocation", async () => {
+test("registered subagent rejects the removed bare task shape", async () => {
   const harness = createExtensionHarness();
-  registerPiMatty(harness.pi, {}, {
-    invocation: {
-      command: process.execPath,
-      arguments: [
-        "test/fixtures/child-pi-rpc-fixture.mjs",
-        "--tools",
-        INSPECTION_TOOLS.join(","),
-      ],
-    },
-  });
-
+  registerPiMatty(harness.pi, {}, {});
   const execute = harness.tools[0]?.execute;
   assert.ok(execute);
-  const controller = new AbortController();
-  let resolveStarted: (() => void) | undefined;
-  const started = new Promise<void>((resolve) => {
-    resolveStarted = resolve;
-  });
-  const context = {
-    cwd: process.cwd(),
-    model: { provider: "fixture-provider", id: "fixture-model" },
-    thinkingLevel: "off",
-    modelRegistry: {
-      async getApiKeyAndHeaders() {
-        return { ok: true, env: { MATTY_TEST_AUTH: "fixture-secret" } };
-      },
-    },
-  };
-
-  const first = execute(
-    "call-1" as never,
-    { role: "explorer", task: "hold" } as never,
-    controller.signal as never,
-    ((update: { details?: { type?: string } }) => {
-      if (update.details?.type === "started") {
-        resolveStarted?.();
-      }
-    }) as never,
-    context as never,
-  );
-  await started;
-
-  let firstResult: { details?: unknown } | undefined;
-  try {
-    const blocked = await execute(
-      "call-2" as never,
-      {
-        role: "explorer",
-        task: "Inspect while the first explorer is active",
-      } as never,
-      undefined as never,
-      undefined as never,
-      context as never,
-    );
-    assert.deepEqual(
-      (blocked.details as { outcome: unknown }).outcome,
-      {
-        status: "blocked",
-        diagnostic: {
-          kind: "capability-preflight",
-          contractId: "delegate-explorer",
-          reason: "capability-unavailable",
-        },
-      },
-    );
-
-  } finally {
-    controller.abort();
-    firstResult = await first;
-  }
-  assert.equal(
-    (firstResult.details as { outcome: { status: string } }).outcome.status,
-    "cancelled",
-  );
+  await assert.rejects(execute(
+    "bare-task" as never,
+    { role: "explorer", task: "removed shape" } as never,
+    undefined as never,
+    undefined as never,
+    {} as never,
+  ));
 });
 
 test("Single Writer permits at most one active worker for a repository", async () => {
@@ -3197,7 +3272,7 @@ test("Single Writer permits at most one active worker for a repository", async (
 
   const first = execute(
     "worker-1" as never,
-    { role: "worker", task: "hold" } as never,
+    { requirement: "required", tasks: [{ role: "worker", task: "hold" }] } as never,
     controller.signal as never,
     ((update: { details?: { type?: string } }) => {
       if (update.details?.type === "started") {
@@ -3215,22 +3290,14 @@ test("Single Writer permits at most one active worker for a repository", async (
   try {
     const blocked = await execute(
       "worker-2" as never,
-      { role: "worker", task: "Implement concurrently" } as never,
+      { requirement: "required", tasks: [{ role: "worker", task: "Implement concurrently" }] } as never,
       undefined as never,
       undefined as never,
       context as never,
     );
-    assert.deepEqual(
-      (blocked.details as { outcome: unknown }).outcome,
-      {
-        status: "blocked",
-        diagnostic: {
-          kind: "capability-preflight",
-          contractId: "delegate-worker",
-          reason: "writer-unavailable",
-        },
-      },
-    );
+    const blockedDetails = blocked.details as { status: string; diagnostics: Array<{ reason?: string }> };
+    assert.equal(blockedDetails.status, "blocked");
+    assert.ok(blockedDetails.diagnostics.some((diagnostic) => diagnostic.reason === "writer-unavailable"));
 
     let groupStarted = false;
     const blockedGroup = await execute(
@@ -3267,7 +3334,7 @@ test("Single Writer permits at most one active worker for a repository", async (
     const result = await first;
     await rm(isolated, { recursive: true, force: true });
     assert.equal(
-      (result.details as { outcome: { status: string } }).outcome.status,
+      (result.details as { status: string }).status,
       "cancelled",
     );
   }
@@ -3455,7 +3522,19 @@ test("reviewer gh preflight blocks before spawning and returns a diagnostic", as
   assert.ok(execute);
   const result = await execute(
     "call-reviewer" as never,
-    { role: "reviewer", task: "Review issue 9" } as never,
+    { requirement: "required", tasks: [{
+      role: "reviewer",
+      task: "Review issue 9",
+      reviewScope: {
+        schemaVersion: 1,
+        issue: { repository: "github.com/acme/repo", number: 9, reference: "#9" },
+        requirements: ["Issue 9"],
+        outOfScope: [],
+        baseSha: "0000000000000000000000000000000000000000",
+        candidateSha: "0000000000000000000000000000000000000000",
+        axes: ["spec"],
+      },
+    }] } as never,
     undefined as never,
     undefined as never,
     {
@@ -3470,17 +3549,9 @@ test("reviewer gh preflight blocks before spawning and returns a diagnostic", as
     } as never,
   );
 
-  assert.deepEqual(
-    (result.details as { outcome: unknown }).outcome,
-    {
-      status: "blocked",
-      diagnostic: {
-        kind: "capability-preflight",
-        contractId: "delegate-reviewer",
-        reason: "github-unavailable",
-      },
-    },
-  );
+  const details = result.details as { status: string; diagnostics: Array<{ reason?: string }> };
+  assert.equal(details.status, "blocked");
+  assert.ok(details.diagnostics.some((diagnostic) => diagnostic.reason === "github-unavailable"));
 });
 
 test("spawn preflight rejects tools outside the selected contract", async () => {
@@ -3500,7 +3571,7 @@ test("spawn preflight rejects tools outside the selected contract", async () => 
   assert.ok(execute);
   const result = await execute(
     "call-designer" as never,
-    { role: "designer", task: "Design" } as never,
+    { requirement: "required", tasks: [{ role: "designer", task: "Design" }] } as never,
     undefined as never,
     undefined as never,
     {
@@ -3515,15 +3586,7 @@ test("spawn preflight rejects tools outside the selected contract", async () => 
     } as never,
   );
 
-  assert.deepEqual(
-    (result.details as { outcome: unknown }).outcome,
-    {
-      status: "blocked",
-      diagnostic: {
-        kind: "capability-preflight",
-        contractId: "delegate-designer",
-        reason: "tool-surface-incompatible",
-      },
-    },
-  );
+  const details = result.details as { status: string; diagnostics: Array<{ reason?: string }> };
+  assert.equal(details.status, "blocked");
+  assert.ok(details.diagnostics.some((diagnostic) => diagnostic.reason === "tool-surface-incompatible"));
 });

@@ -817,6 +817,45 @@ test("retains tool bytes in the presentation limit across assistant messages", a
   assert.match(outcome.failure.message, /live (?:assistant|presentation) buffer limit/);
 });
 
+test("neutralizes split OSC, CSI, and DCS deltas until authoritative completion", async () => {
+  const presentations: DelegatedTaskPresentation[] = [];
+  const runner = createRunner();
+  runner.subscribePresentation?.((presentation) => presentations.push(presentation));
+
+  const outcome = await runner.run("split-terminal-controls");
+
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.output, "authoritative-restored");
+  assert.ok(presentations.length > 1);
+  assert.doesNotMatch(JSON.stringify(presentations), /split-osc|split-dcs|secret|\u001b/);
+  assert.equal(runner.presentation?.()?.assistant[0]?.content, "authoritative-restored");
+});
+
+test("neutralizes controls split across authoritative assistant content blocks", async () => {
+  const runner = createRunner();
+  const outcome = await runner.run("authoritative-split-terminal-controls");
+
+  assert.equal(outcome.status, "succeeded");
+  assert.equal(outcome.output, "safe-text\nred-final");
+  assert.deepEqual(runner.presentation?.()?.assistant.map((part) => part.content), [
+    "", "safe-text", "safe-thinking", "red-final",
+  ]);
+  const retained = JSON.stringify({
+    presentation: runner.presentation?.(),
+    transcript: childTranscript(outcome),
+    terminalResponses: childTerminalResponses(outcome),
+  });
+  assert.doesNotMatch(retained, /osc-payload|dcs-|secret|payload|\\u001b|\\u0007/);
+});
+
+test("bounds hidden raw bytes in an unterminated terminal control", async () => {
+  const outcome = await createRunner(25).run("unterminated-control-overflow");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.failure.kind, "protocol-failed");
+  assert.match(outcome.failure.message, /live assistant buffer limit/);
+});
+
 test("neutralizes ANSI and terminal controls in the settled assistant output", async () => {
   const outcome = await createRunner().run("ansi-output");
 

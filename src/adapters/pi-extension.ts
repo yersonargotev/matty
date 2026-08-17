@@ -19,6 +19,7 @@ import { createJiti } from "jiti";
 
 import {
   createChildPiRunner,
+  type DelegatedTaskPresentation,
   type PiInvocation,
   type PiThinkingLevel,
 } from "../application/child-pi-runtime.ts";
@@ -177,7 +178,7 @@ interface PreparedResearcherExecution {
 }
 
 type SingleTaskExecutionParams = DelegationTaskDeclaration & {
-  executionScope?: "standalone" | "group";
+  groupExecution?: true;
   delegatedTaskId?: string;
   delegationId?: string;
   delegatedTaskIndex?: number;
@@ -218,6 +219,7 @@ function createPiHost(
     registry: DelegationRegistry;
     openConsole(context: ExtensionContext): Promise<void>;
     openTask(context: ExtensionContext, displayId: string): Promise<boolean>;
+    taskPresentation(delegatedTaskId: string): DelegatedTaskPresentation | undefined;
     interact(delegatedTaskId: string, interaction: { type: "steer" | "follow_up"; message: string }): Promise<{ status: string; code?: string; commandId?: string }>;
     output(text: string): void;
   },
@@ -247,6 +249,32 @@ function createPiHost(
             };
           },
           emitOutput: management.output,
+          delegatedTaskRead: (taskId, includeTranscript) => {
+            const delegation = management.registry.snapshot().delegations.find((entry) =>
+              entry.tasks.some((task) => task.id === taskId)
+            );
+            const task = delegation?.tasks.find((candidate) => candidate.id === taskId);
+            if (!delegation || !task) return undefined;
+            const value = includeTranscript
+              ? {
+                schemaVersion: 1 as const,
+                type: "matty.task.transcript" as const,
+                taskId: task.id,
+                transcript: management.taskPresentation(task.id) ?? null,
+              }
+              : {
+                schemaVersion: 1 as const,
+                type: "matty.task" as const,
+                task: {
+                  delegationId: delegation.id,
+                  delegationDisplayId: delegation.displayId,
+                  requirement: delegation.requirement,
+                  ...task,
+                },
+              };
+            const json = JSON.stringify(value);
+            return { human: json, json, jsonEvent: json };
+          },
           openDelegations: async () => {
             await management.openConsole(context);
           },
@@ -794,7 +822,6 @@ export function registerPiMatty(
   );
   const childSessionStore = options.childSessionStore ?? new ChildSessionStore({
     root: join(childSessionAgentRoot, "matty", "child-sessions"),
-    ephemeralRoot: join(resolve(environment.TMPDIR ?? tmpdir()), "matty", "ephemeral-child-sessions"),
   });
   const persistentChildSessionIds = new Set<string>();
   const delegationControl = new DelegationControl({
@@ -1121,7 +1148,7 @@ export function registerPiMatty(
           type: "string",
           enum: ["persistent", "ephemeral"],
           default: "persistent",
-          description: "Persist Child Sessions across Pi lifecycles or delete them at close.",
+          description: "Persist Child Sessions across Pi lifecycles or keep ephemeral Child Sessions memory-only.",
         },
         tasks: {
           type: "array",
@@ -1240,12 +1267,11 @@ export function registerPiMatty(
           sourceDelegationId,
         } : {}),
       };
-      if ((params.persistence ?? "persistent") === "persistent") {
-        persistentChildSessionIds.add(params.delegatedTaskId);
-      }
+      if ((params.persistence ?? "persistent") === "ephemeral") return undefined;
+      persistentChildSessionIds.add(params.delegatedTaskId);
       return params.continuationSourceTaskId
         ? childSessionStore.continuation(params.continuationSourceTaskId, metadata, projectRoot)
-        : childSessionStore.session(metadata, params.persistence ?? "persistent", projectRoot);
+        : childSessionStore.session(metadata, projectRoot);
     };
 
     const trackRunner = <T extends ReturnType<typeof createChildPiRunner>>(
@@ -1255,12 +1281,25 @@ export function registerPiMatty(
     ): T => {
       if (taskId) delegationControl.attachRunner(taskId, runner);
       if (onChildSettled) {
+        let settled = false;
+        let detachSettlement: (() => void) | undefined;
+        const settleOnce = () => {
+          if (settled) return;
+          settled = true;
+          detachSettlement?.();
+          onChildSettled();
+        };
+        if (!runner.canRespawnAfterSettlement) {
+          detachSettlement = runner.subscribePresentation?.((presentation) => {
+            if (presentation.sessionState === "settled") settleOnce();
+          });
+        }
         const run = runner.run.bind(runner);
         runner.run = async (task, options) => {
           try {
             return await run(task, options);
           } finally {
-            onChildSettled();
+            settleOnce();
           }
         };
       }
@@ -1493,7 +1532,7 @@ export function registerPiMatty(
             unmet.push(`Matty Rules conflict: ${rulesConflict}`);
           }
           if (
-            params.executionScope !== "group" &&
+            !params.groupExecution &&
             activeResearchers >= contract.concurrency.maxActive
           ) {
             unmet.push(
@@ -1573,7 +1612,7 @@ export function registerPiMatty(
           : { available: false, authenticated: false };
         const contract = inspectionCapabilityContract(role);
         if (
-          params.executionScope !== "group" &&
+          !params.groupExecution &&
           activeInvocations[role] >= contract.concurrency.maxActive
         ) {
           unmet.push(
@@ -1740,7 +1779,7 @@ export function registerPiMatty(
       renderShell: "self",
       renderCall(args: unknown) {
         const candidate = isUnknownRecord(args) ? args : {};
-        const tasks = Array.isArray(candidate.tasks) ? candidate.tasks : [candidate];
+        const tasks = Array.isArray(candidate.tasks) ? candidate.tasks : [];
         const safeRoles = tasks.flatMap((task) =>
           isUnknownRecord(task) && isMattyRole(task.role) ? [task.role] : []
         );
@@ -1758,13 +1797,11 @@ export function registerPiMatty(
       },
       async execute(
         toolCallId: string,
-        params:
-          | {
-              requirement: "required" | "optional";
-              persistence?: DelegationPersistence;
-              tasks: DelegationTaskDeclaration[];
-            }
-          | DelegationTaskDeclaration,
+        params: {
+          requirement: "required" | "optional";
+          persistence?: DelegationPersistence;
+          tasks: DelegationTaskDeclaration[];
+        },
         signal: AbortSignal | undefined,
         onUpdate:
           | ((update: {
@@ -1780,8 +1817,8 @@ export function registerPiMatty(
           ...(signal ? { signal } : {}),
           ...(onUpdate ? { onUpdate } : {}),
         });
-        const declaredTasks = "role" in params ? [params] : params.tasks;
-        const requirement = "role" in params ? "required" : params.requirement;
+        const declaredTasks = params.tasks;
+        const requirement = params.requirement;
         const scheduleChildExecution = boundedChildExecutionScheduler(4);
         delegationControl.open(
           observer.id,
@@ -1826,32 +1863,6 @@ export function registerPiMatty(
           };
           return completeControl(terminal) as T;
         };
-        if ("role" in params) {
-          try {
-            const result = await singleTaskTool.execute(
-              toolCallId,
-              {
-                ...params,
-                delegatedTaskId: observer.taskId(0),
-                delegationId: observer.id,
-                delegatedTaskIndex: 0,
-                requirement: "required",
-                persistence: "persistent",
-                onChildSettled: beginFreeze,
-                scheduleChildExecution,
-              },
-              observer.signal,
-              (update) => observer.observeProgress(update.details),
-              ctx,
-            );
-            // Preflight-only executions have no child boundary to trigger this callback.
-            beginFreeze();
-            return finishResult(result);
-          } catch (error) {
-            failAndCompleteControl();
-            throw error;
-          }
-        }
         const contract: DelegationGroupContract = {
           schemaVersion: 1,
           id: "delegate-group",
@@ -2058,7 +2069,7 @@ export function registerPiMatty(
                   toolCallId,
                   {
                     ...task,
-                    executionScope: "group",
+                    groupExecution: true,
                     delegatedTaskId: observer.taskId(taskIndex),
                     delegationId: observer.id,
                     delegatedTaskIndex: taskIndex,
@@ -2172,6 +2183,7 @@ export function registerPiMatty(
     registry: delegationRegistry,
     openConsole: (context) => delegationManagement.openConsole(context),
     openTask: (context, displayId) => delegationManagement.openTask(context, displayId),
+    taskPresentation: (delegatedTaskId) => delegationControl.taskPresentation(delegatedTaskId),
     interact: (delegatedTaskId, interaction) => delegationControl.interact(delegatedTaskId, interaction),
     output: options.hostOutput ?? ((text) => process.stdout.write(text)),
   }), {

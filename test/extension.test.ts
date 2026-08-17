@@ -75,6 +75,10 @@ test("a compatible host activates Matty Core", async () => {
   });
 
   assert.deepEqual([...harness.commands.keys()], ["matty"]);
+  assert.equal(
+    harness.commands.get("matty")?.description,
+    "Show status/doctor; browse delegations and tasks; read tasks/transcripts by exact ID; explicitly steer or follow up",
+  );
 
   await harness.handlers.get("session_start")?.({ reason: "startup" });
   await harness.handlers.get("session_start")?.({ reason: "startup" });

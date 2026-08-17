@@ -329,6 +329,7 @@ async function run(command, promptTerminatedByLf) {
     });
   }
   let observedOutput;
+  let observedAssistantContent;
   if (task === "delta-only-message-update") {
     emit({
       type: "message_update",
@@ -358,6 +359,12 @@ async function run(command, promptTerminatedByLf) {
     });
     return;
   }
+  if (task === "unterminated-control-overflow") {
+    for (const delta of ["\u001b]52;c;" + "x".repeat(3 * 1024 * 1024), "y".repeat(3 * 1024 * 1024), "z".repeat(3 * 1024 * 1024)]) {
+      emit({ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } });
+    }
+    return;
+  }
   const liveMarker = task?.includes("interleaved-live-updates-A") ? "A"
     : task?.includes("interleaved-live-updates-B") ? "B"
     : task === "interleaved-live-updates" || task?.startsWith("Designer assignment:\ninterleaved-live-updates\n") ? "base"
@@ -377,8 +384,30 @@ async function run(command, promptTerminatedByLf) {
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  if (task === "split-terminal-controls") {
+    for (const delta of [
+      "visible-\u001b]52;c;split-osc",
+      "-secret\u0007after-osc-\u001b[31",
+      "mred\u001b[0m-after-csi-\u001bPsplit-dcs",
+      "-secret\u001b\\restored",
+    ]) {
+      emit({ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    emit({ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "authoritative-restored" } });
+    observedOutput = "authoritative-restored";
+  }
   if (task === "ansi-output") {
     observedOutput = "\u001b]0;owned\u0007\u001b[31msafe\u001b[0m\u0000";
+  }
+  if (task === "authoritative-split-terminal-controls") {
+    observedOutput = "safe-text\nred-final";
+    observedAssistantContent = [
+      { type: "thinking", thinking: "\u001b]52;c;osc-payload" },
+      { type: "text", text: "-secret\u0007safe-text\u001bPdcs-" },
+      { type: "thinking", thinking: "payload\u001b\\safe-thinking\u001b[31" },
+      { type: "text", text: "mred\u001b[0m-final" },
+    ];
   }
   if (task === "malformed-known-event") {
     emit({ type: "queue_update", steering: "not-an-array", followUp: [] });
@@ -403,14 +432,14 @@ async function run(command, promptTerminatedByLf) {
     type: "message_end",
     message: {
       role: "assistant",
-      content: task === "valid-assistant-parts" ? [
+      content: observedAssistantContent ?? (task === "valid-assistant-parts" ? [
         { type: "thinking", thinking: "considering fixture output" },
         { type: "toolCall", id: "call-1", name: "read", arguments: { path: "fixture" } },
         { type: "text", text: JSON.stringify(observed) },
       ] : [{
         type: "text",
         text: observedOutput ?? JSON.stringify(observed),
-      }],
+      }]),
       provider,
       model,
       ...(task === "absent-assistant-stop-reason" ? {} : {

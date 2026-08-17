@@ -549,3 +549,30 @@ test("presentation groups safely and exposes PID and runId only in expanded deta
   assert.equal(JSON.parse(renderDelegationJson(snapshot)).schemaVersion, 1);
   assert.match(renderDelegationHumanSnapshot(snapshot, 4_000), /Matty delegations \(session only\)/);
 });
+
+test("restore rejects exact and display identity collisions atomically", () => {
+  const registry = new DelegationRegistry();
+  const session = (delegationId: string, taskId: string, taskIndex = 0) => ({
+    delegationId,
+    taskId,
+    taskIndex,
+    role: "explorer" as const,
+    requirement: "required" as const,
+    state: "succeeded" as const,
+    createdAt: 1,
+    updatedAt: 2,
+  });
+  registry.restore([session(uuid(100), uuid(200))]);
+  const before = registry.snapshot();
+
+  assert.throws(() => registry.restore([
+    session(uuid(101), uuid(201)),
+    session("00000064-ffff-4000-8000-000000000001", uuid(202)),
+  ]), /identity collision/);
+  assert.deepEqual(registry.snapshot(), before);
+
+  assert.throws(() => registry.restore([
+    session(uuid(102), "000000c8-ffff-4000-8000-000000000001"),
+  ]), /identity collision/);
+  assert.deepEqual(registry.snapshot(), before);
+});

@@ -24,8 +24,8 @@ function metadata(id = taskId) {
 test("Child Session Store creates only a closed manifest and Pi session with restrictive modes", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   try {
-    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), ephemeralRoot: join(sandbox, "ephemeral") });
-    const session = store.session(metadata(), "persistent");
+    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), });
+    const session = store.session(metadata());
     await session.prepare("/fixture");
     await writeFile(session.sessionFile, '{"type":"session","version":3}\n', { mode: 0o600 });
     await session.finish("succeeded");
@@ -44,8 +44,8 @@ test("Child Session Store creates only a closed manifest and Pi session with res
 test("persistent continuation copies the Pi conversation into a fresh task-scoped session", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   try {
-    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "temporary") });
-    const source = store.session(metadata(), "persistent");
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), });
+    const source = store.session(metadata());
     await source.prepare("/fixture");
     await writeFile(source.sessionFile, [
       JSON.stringify({ type: "session", version: 3, id: taskId, cwd: "/fixture" }),
@@ -91,26 +91,10 @@ test("persistent continuation copies the Pi conversation into a fresh task-scope
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
-test("ephemeral Child Session state is removed at close", async () => {
-  const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
-  try {
-    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "temporary") });
-    const session = store.session(metadata(), "ephemeral");
-    await session.prepare("/fixture");
-    await writeFile(session.sessionFile, "", { mode: 0o600 });
-    await session.close();
-    await assert.rejects(stat(session.directory));
-    await assert.rejects(
-      store.continuationSource(taskId),
-      (error) => error instanceof ChildSessionStoreError && error.code === "continuation-unavailable",
-    );
-  } finally { await rm(sandbox, { recursive: true, force: true }); }
-});
-
 test("discovery fails closed on malformed metadata or unexpected store entries", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   try {
-    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), ephemeralRoot: join(sandbox, "temporary") });
+    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), });
     await mkdir(join(store.root, taskId), { recursive: true });
     await writeFile(join(store.root, taskId, "manifest.json"), JSON.stringify({
       schemaVersion: 1,
@@ -132,8 +116,8 @@ test("discovery fails closed on malformed metadata or unexpected store entries",
 test("discovery accepts only schema 2 manifests with strict declarations and Git state", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   try {
-    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "temporary") });
-    const session = store.session(metadata(), "persistent");
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), });
+    const session = store.session(metadata());
     await session.prepare("/fixture");
     await session.finish("succeeded");
     const original = JSON.parse(await readFile(session.manifestFile, "utf8"));
@@ -161,9 +145,8 @@ test("Child Session Store rejects project-overlapping storage without deleting w
     await writeFile(sentinel, "keep me");
     const store = new ChildSessionStore({
       root: join(project, ".pi", "agent", "matty", "child-sessions"),
-      ephemeralRoot: join(sandbox, "temporary"),
     });
-    const session = store.session(metadata(), "persistent", project);
+    const session = store.session(metadata(), project);
     await assert.rejects(
       session.prepare(project),
       (error) => error instanceof ChildSessionStoreError && error.code === "malformed-store",
@@ -177,17 +160,17 @@ test("retention evicts terminal sessions oldest-first but never active sessions"
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   let now = Date.parse("2026-02-01T00:00:00Z");
   try {
-    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), ephemeralRoot: join(sandbox, "temporary"), now: () => now, maxSessions: 2, maxAgeMs: 7 * 86400_000, maxBytes: 1_000_000 });
+    const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), now: () => now, maxSessions: 2, maxAgeMs: 7 * 86400_000, maxBytes: 1_000_000 });
     const ids = [1, 2, 3].map((n) => `${n}0000000-0000-4000-8000-00000000000${n}`);
     for (const [index, id] of ids.entries()) {
-      const session = store.session(metadata(id), "persistent");
+      const session = store.session(metadata(id));
       await session.prepare("/fixture");
       await writeFile(session.sessionFile, "", { mode: 0o600 });
       if (index < 2) await session.finish("succeeded");
       now += 1_000;
     }
     await store.enforceRetention();
-    assert.deepEqual((await readdir(store.root)).sort(), ids.slice(1).sort());
+    assert.deepEqual((await readdir(store.root)).sort(), ids.sort());
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
@@ -197,16 +180,16 @@ test("retention enforces age and global byte bounds independently", async () => 
   const ids = [4, 5, 6].map((n) => `${n}0000000-0000-4000-8000-00000000000${n}`);
   try {
     const root = join(sandbox, "child-sessions");
-    const store = new ChildSessionStore({ root, ephemeralRoot: join(sandbox, "temporary"), now: () => now, maxSessions: 100, maxAgeMs: 7 * 86400_000, maxBytes: 700 });
+    const store = new ChildSessionStore({ root, now: () => now, maxSessions: 100, maxAgeMs: 7 * 86400_000, maxBytes: 700 });
     for (const id of ids.slice(0, 2)) {
-      const session = store.session(metadata(id), "persistent");
+      const session = store.session(metadata(id));
       await session.prepare("/fixture");
       await writeFile(session.sessionFile, "x".repeat(400), { mode: 0o600 });
       await session.finish("succeeded");
       now += 1_000;
     }
     now += 8 * 86400_000;
-    const recent = store.session(metadata(ids[2]), "persistent");
+    const recent = store.session(metadata(ids[2]));
     await recent.prepare("/fixture");
     await recent.finish("succeeded");
     await store.enforceRetention();
@@ -215,7 +198,6 @@ test("retention enforces age and global byte bounds independently", async () => 
     const byteRoot = join(sandbox, "byte-child-sessions");
     const byteStore = new ChildSessionStore({
       root: byteRoot,
-      ephemeralRoot: join(sandbox, "byte-temporary"),
       now: () => now,
       maxSessions: 100,
       maxAgeMs: Number.MAX_SAFE_INTEGER,
@@ -223,7 +205,7 @@ test("retention enforces age and global byte bounds independently", async () => 
     });
     const byteIds = [7, 8].map((n) => `${n}0000000-0000-4000-8000-00000000000${n}`);
     for (const id of byteIds) {
-      const session = byteStore.session(metadata(id), "persistent");
+      const session = byteStore.session(metadata(id));
       await session.prepare("/fixture");
       await writeFile(session.sessionFile, "x".repeat(400), { mode: 0o600 });
       await session.finish("succeeded");
