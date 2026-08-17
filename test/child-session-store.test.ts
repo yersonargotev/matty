@@ -10,7 +10,15 @@ const taskId = "10000000-0000-4000-8000-000000000001";
 const delegationId = "20000000-0000-4000-8000-000000000002";
 
 function metadata(id = taskId) {
-  return { taskId: id, delegationId, taskIndex: 0, role: "explorer" as const, requirement: "required" as const };
+  return {
+    taskId: id,
+    delegationId,
+    taskIndex: 0,
+    role: "explorer" as const,
+    requirement: "required" as const,
+    declaration: { role: "explorer" as const },
+    git: { head: "abc123", workingTree: " M fixture.ts" },
+  };
 }
 
 test("Child Session Store creates only a closed manifest and Pi session with restrictive modes", async () => {
@@ -33,6 +41,56 @@ test("Child Session Store creates only a closed manifest and Pi session with res
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
+test("persistent continuation copies the Pi conversation into a fresh task-scoped session", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
+  try {
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "temporary") });
+    const source = store.session(metadata(), "persistent");
+    await source.prepare("/fixture");
+    await writeFile(source.sessionFile, [
+      JSON.stringify({ type: "session", version: 3, id: taskId, cwd: "/fixture" }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "immutable source result" }] } }),
+      "",
+    ].join("\n"), { mode: 0o600 });
+    await source.finish("succeeded");
+
+    const nextTaskId = "30000000-0000-4000-8000-000000000003";
+    const nextDelegationId = "40000000-0000-4000-8000-000000000004";
+    const continuation = store.continuation(taskId, {
+      ...metadata(nextTaskId),
+      declaration: { role: "explorer" },
+      delegationId: nextDelegationId,
+      sourceTaskId: taskId,
+      sourceDelegationId: delegationId,
+    });
+    const sourceBefore = await readFile(source.sessionFile, "utf8");
+    await continuation.prepare("/continued");
+    const copied = (await readFile(continuation.sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(copied[0].id, nextTaskId);
+    assert.equal(copied[0].cwd, "/continued");
+    assert.equal(copied[1].message.content[0].text, "immutable source result");
+    assert.equal(await readFile(source.sessionFile, "utf8"), sourceBefore);
+    const continuedManifest = JSON.parse(await readFile(continuation.manifestFile, "utf8"));
+    assert.equal(continuedManifest.schemaVersion, 2);
+    assert.deepEqual(continuedManifest.declaration, { role: "explorer" });
+    assert.equal(continuedManifest.sourceTaskId, taskId);
+
+    await continuation.finish("succeeded");
+    const chainedTaskId = "50000000-0000-4000-8000-000000000005";
+    const chained = store.continuation(nextTaskId, {
+      ...metadata(chainedTaskId),
+      delegationId: "60000000-0000-4000-8000-000000000006",
+      declaration: { role: "explorer" },
+      sourceTaskId: nextTaskId,
+      sourceDelegationId: nextDelegationId,
+    });
+    await chained.prepare("/chained");
+    const chainedManifest = JSON.parse(await readFile(chained.manifestFile, "utf8"));
+    assert.deepEqual(chainedManifest.declaration, { role: "explorer" });
+    assert.equal(chainedManifest.sourceTaskId, nextTaskId);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
 test("ephemeral Child Session state is removed at close", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
   try {
@@ -42,6 +100,10 @@ test("ephemeral Child Session state is removed at close", async () => {
     await writeFile(session.sessionFile, "", { mode: 0o600 });
     await session.close();
     await assert.rejects(stat(session.directory));
+    await assert.rejects(
+      store.continuationSource(taskId),
+      (error) => error instanceof ChildSessionStoreError && error.code === "continuation-unavailable",
+    );
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
@@ -50,10 +112,43 @@ test("discovery fails closed on malformed metadata or unexpected store entries",
   try {
     const store = new ChildSessionStore({ root: join(sandbox, "child-sessions"), ephemeralRoot: join(sandbox, "temporary") });
     await mkdir(join(store.root, taskId), { recursive: true });
-    await writeFile(join(store.root, taskId, "manifest.json"), JSON.stringify({ schemaVersion: 99 }), { mode: 0o600 });
+    await writeFile(join(store.root, taskId, "manifest.json"), JSON.stringify({
+      schemaVersion: 1,
+      taskId,
+      delegationId,
+      taskIndex: 0,
+      role: "explorer",
+      requirement: "required",
+      state: "succeeded",
+      createdAt: 1,
+      updatedAt: 1,
+    }), { mode: 0o600 });
     await writeFile(join(store.root, taskId, "session.jsonl"), "", { mode: 0o600 });
     await assert.rejects(store.discover(), (error) => error instanceof ChildSessionStoreError && error.code === "incompatible-metadata");
     await chmod(join(store.root, taskId), 0o700);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
+test("discovery accepts only schema 2 manifests with strict declarations and Git state", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "matty-child-store-"));
+  try {
+    const store = new ChildSessionStore({ root: join(sandbox, "persistent"), ephemeralRoot: join(sandbox, "temporary") });
+    const session = store.session(metadata(), "persistent");
+    await session.prepare("/fixture");
+    await session.finish("succeeded");
+    const original = JSON.parse(await readFile(session.manifestFile, "utf8"));
+    for (const mutate of [
+      (manifest: Record<string, unknown>) => { manifest.schemaVersion = 1; },
+      (manifest: Record<string, unknown>) => { (manifest.declaration as Record<string, unknown>).unexpected = true; },
+      (manifest: Record<string, unknown>) => { (manifest.declaration as Record<string, unknown>).web = "optional"; },
+      (manifest: Record<string, unknown>) => { (manifest.git as Record<string, unknown>).unexpected = true; },
+      (manifest: Record<string, unknown>) => { manifest.sourceTaskId = taskId; },
+    ]) {
+      const malformed = structuredClone(original) as Record<string, unknown>;
+      mutate(malformed);
+      await writeFile(session.manifestFile, JSON.stringify(malformed), { mode: 0o600 });
+      await assert.rejects(store.discover(), (error) => error instanceof ChildSessionStoreError && error.code === "incompatible-metadata");
+    }
   } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
@@ -124,7 +219,7 @@ test("retention enforces age and global byte bounds independently", async () => 
       now: () => now,
       maxSessions: 100,
       maxAgeMs: Number.MAX_SAFE_INTEGER,
-      maxBytes: 700,
+      maxBytes: 1_200,
     });
     const byteIds = [7, 8].map((n) => `${n}0000000-0000-4000-8000-00000000000${n}`);
     for (const id of byteIds) {

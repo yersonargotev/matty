@@ -284,7 +284,7 @@ Esta aceptación automatiza comportamiento observable, no la apreciación humana
 
 ## Estado del diseño
 
-Diseño confirmado e Incrementos 1 y 2 implementados. El spec y sus fronteras están publicados en GitHub:
+Diseño confirmado e Incrementos 1, 2 y 3 implementados. Continue se entrega en #79 como acción TUI explícita sobre sesiones persistentes cerradas: copia la conversación Pi a una sesión nueva, crea identidad y lineage inmutables, muestra drift y repite preflight y adquisición de autoridad. El spec y sus fronteras están publicados en GitHub:
 
 - [#55 — Specify native Delegation management](https://github.com/yersonargotev/matty/issues/55)
 - [#56 — Spike the Delegation Console interaction](https://github.com/yersonargotev/matty/issues/56)
@@ -292,5 +292,6 @@ Diseño confirmado e Incrementos 1 y 2 implementados. El spec y sus fronteras es
 - [#58 — Cancel Delegations from the Delegation Console](https://github.com/yersonargotev/matty/issues/58)
 - [#59 — Show an observable Delegation fleet](https://github.com/yersonargotev/matty/issues/59)
 - [#60 — Add redacted Child Execution activity summaries](https://github.com/yersonargotev/matty/issues/60)
+- [#79 — Continue closed persistent Child Sessions](https://github.com/yersonargotev/matty/issues/79)
 
 Los issues son sub-issues de #55 y formaron la cadena de entrega nativa. #56 conserva el spike histórico; #57, #58, #59 y #60 delimitan la implementación productiva completada. El target certificado actual es Pi `0.84.2` en `darwin/arm64`; el resultado histórico del spike sobre `0.83.0` permanece documentado como antecedente, no como certificación actual.

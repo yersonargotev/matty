@@ -473,6 +473,30 @@ test("each expanded Delegated Task has an ordered lifecycle timeline from safe R
   assert.doesNotMatch(expanded, /prompt|command|response|transcript/i);
 });
 
+test("Continuation receives fresh immutable identities linked to its closed source", () => {
+  let next = 1;
+  const registry = new DelegationRegistry({
+    idFactory: () => uuid(next++),
+    taskIdFactory: () => uuid(next++),
+    now: () => 1_000,
+  });
+  const source = registry.accept({ requirement: "required", tasks: [{ role: "designer" }] });
+  registry.finish(source.id, "succeeded");
+  const continuation = registry.acceptContinuation(source.tasks[0]!.id, {
+    requirement: "required",
+    tasks: [{ role: "designer" }],
+  });
+  assert.ok(continuation);
+  assert.notEqual(continuation.id, source.id);
+  assert.notEqual(continuation.tasks[0]!.id, source.tasks[0]!.id);
+  assert.equal(continuation.tasks[0]!.sourceDelegationId, source.id);
+  assert.equal(continuation.tasks[0]!.sourceTaskId, source.tasks[0]!.id);
+  (continuation.tasks[0] as { sourceTaskId?: string }).sourceTaskId = "mutated";
+  assert.equal(registry.get(continuation.id)!.tasks[0]!.sourceTaskId, source.tasks[0]!.id);
+  assert.equal(registry.get(source.id)!.tasks[0]!.resultSummary, "Succeeded");
+  assert.equal(registry.acceptContinuation(continuation.tasks[0]!.id, { tasks: [{ role: "designer" }] }), undefined);
+});
+
 test("compact widget presentation is useful-only, bounded, and reports roles and task states", () => {
   let next = 1;
   const registry = new DelegationRegistry({ idFactory: () => uuid(next++), now: () => 1_000 });

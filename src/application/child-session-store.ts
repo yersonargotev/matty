@@ -3,18 +3,30 @@ import { chmod, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, wri
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
+import { validateDelegationGroupContract, type DelegationTaskDeclaration } from "../domain/delegation-group.ts";
 import type { DelegatedTaskPresentation, DelegatedTranscriptPresentationEntry } from "./child-pi-runtime.ts";
 
 export type DelegationPersistence = "persistent" | "ephemeral";
 export type StoredChildSessionState = "active" | "succeeded" | "failed" | "cancelled" | "interrupted";
 
+export interface ChildSessionGitState {
+  head: string;
+  workingTree: string;
+}
+
+export type ChildSessionContinuationDeclaration = Omit<DelegationTaskDeclaration, "task">;
+
 export interface ChildSessionManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   taskId: string;
   delegationId: string;
   taskIndex: number;
   role: MattyRole;
   requirement: "required" | "optional";
+  declaration: ChildSessionContinuationDeclaration;
+  git: ChildSessionGitState;
+  sourceTaskId?: string;
+  sourceDelegationId?: string;
   state: StoredChildSessionState;
   createdAt: number;
   updatedAt: number;
@@ -26,12 +38,16 @@ export interface ChildSessionMetadata {
   taskIndex: number;
   role: MattyRole;
   requirement: "required" | "optional";
+  declaration: ChildSessionContinuationDeclaration;
+  git: ChildSessionGitState;
+  sourceTaskId?: string;
+  sourceDelegationId?: string;
 }
 
 export class ChildSessionStoreError extends Error {
-  readonly code: "invalid-task-id" | "incompatible-metadata" | "malformed-store";
+  readonly code: "invalid-task-id" | "incompatible-metadata" | "malformed-store" | "continuation-unavailable";
 
-  constructor(code: "invalid-task-id" | "incompatible-metadata" | "malformed-store") {
+  constructor(code: "invalid-task-id" | "incompatible-metadata" | "malformed-store" | "continuation-unavailable") {
     super(`Child Session Store ${code}`);
     this.name = "ChildSessionStoreError";
     this.code = code;
@@ -57,11 +73,32 @@ function directDirectory(root: string, taskId: string): string {
 function validManifest(value: unknown, taskId: string): value is ChildSessionManifest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  return Object.keys(item).length === 9 &&
-    Object.keys(item).every((key) => ["schemaVersion", "taskId", "delegationId", "taskIndex", "role", "requirement", "state", "createdAt", "updatedAt"].includes(key)) &&
-    item.schemaVersion === 1 && item.taskId === taskId && UUID.test(String(item.delegationId)) &&
+  const requiredKeys = ["schemaVersion", "taskId", "delegationId", "taskIndex", "role", "requirement", "declaration", "git", "state", "createdAt", "updatedAt"];
+  const lineageKeys = ["sourceTaskId", "sourceDelegationId"];
+  const hasLineage = item.sourceTaskId !== undefined || item.sourceDelegationId !== undefined;
+  const expectedKeys = hasLineage ? [...requiredKeys, ...lineageKeys] : requiredKeys;
+  const git = item.git;
+  const declarationValidation = validateDelegationGroupContract({
+    schemaVersion: 1,
+    id: "delegate-group",
+    requirement: item.requirement,
+    fallback: item.requirement === "required" ? "none" : "skip",
+    atomic: item.requirement === "required",
+    cardinality: { min: 1, max: 8 },
+    concurrency: { maxActive: 4 },
+    independence: "required",
+    persistence: "persistent",
+    tasks: [{ ...(item.declaration as object), task: "Continuation preflight" }],
+  });
+  return Object.keys(item).length === expectedKeys.length && Object.keys(item).every((key) => expectedKeys.includes(key)) &&
+    item.schemaVersion === 2 && item.taskId === taskId && UUID.test(String(item.delegationId)) &&
     Number.isSafeInteger(item.taskIndex) && (item.taskIndex as number) >= 0 && roles.has(item.role as MattyRole) &&
     (item.requirement === "required" || item.requirement === "optional") && states.has(item.state as StoredChildSessionState) &&
+    declarationValidation.ok && declarationValidation.contract.tasks[0]?.role === item.role &&
+    typeof git === "object" && git !== null && !Array.isArray(git) &&
+    Object.keys(git).length === 2 && Object.keys(git).every((key) => key === "head" || key === "workingTree") &&
+    typeof (git as Record<string, unknown>).head === "string" && typeof (git as Record<string, unknown>).workingTree === "string" &&
+    (!hasLineage || (UUID.test(String(item.sourceTaskId)) && UUID.test(String(item.sourceDelegationId)))) &&
     typeof item.createdAt === "number" && Number.isFinite(item.createdAt) && typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt);
 }
 
@@ -236,7 +273,7 @@ export class ChildSessionStore {
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   }
 
-  session(metadata: ChildSessionMetadata, persistence: DelegationPersistence, protectedRoot?: string): ChildSessionHandle {
+  session(metadata: ChildSessionMetadata, persistence: DelegationPersistence, protectedRoot?: string, sourceSessionFile?: string): ChildSessionHandle {
     const base = persistence === "persistent" ? this.root : this.#ephemeralRoot;
     const directory = directDirectory(base, metadata.taskId);
     const manifestFile = join(directory, MANIFEST);
@@ -245,13 +282,28 @@ export class ChildSessionStore {
     return {
       directory, manifestFile, sessionFile, sessionId: metadata.taskId,
       prepare: async (cwd) => await this.#exclusive(async () => {
+        let continuedSession: string | undefined;
+        if (sourceSessionFile) {
+          let source: string;
+          try { source = await readFile(sourceSessionFile, "utf8"); }
+          catch { throw new ChildSessionStoreError("continuation-unavailable"); }
+          const lines = source.split(/\r?\n/);
+          let header: unknown;
+          try { header = JSON.parse(lines[0] ?? ""); } catch { throw new ChildSessionStoreError("continuation-unavailable"); }
+          if (typeof header !== "object" || header === null || Array.isArray(header) ||
+              (header as Record<string, unknown>).type !== "session" || (header as Record<string, unknown>).version !== 3) {
+            throw new ChildSessionStoreError("continuation-unavailable");
+          }
+          lines[0] = JSON.stringify({ ...(header as Record<string, unknown>), id: metadata.taskId, cwd, timestamp: new Date(this.#now()).toISOString() });
+          continuedSession = lines.join("\n");
+        }
         await prepareBase(base, protectedRoot);
         await mkdir(directory, { mode: 0o700 });
         await chmod(directory, 0o700);
         const timestamp = this.#now();
-        manifest = { schemaVersion: 1, ...metadata, state: "active", createdAt: timestamp, updatedAt: timestamp };
+        manifest = { schemaVersion: 2, ...metadata, state: "active", createdAt: timestamp, updatedAt: timestamp };
         await writeManifest(manifestFile, manifest);
-        await writeFile(sessionFile, `${JSON.stringify({
+        await writeFile(sessionFile, continuedSession ?? `${JSON.stringify({
           type: "session", version: 3, id: metadata.taskId,
           timestamp: new Date(this.#now()).toISOString(), cwd,
         })}\n`, { mode: 0o600, flag: "wx" });
@@ -268,6 +320,19 @@ export class ChildSessionStore {
         if (persistence === "ephemeral") await rm(directory, { recursive: true, force: true });
       }),
     };
+  }
+
+  continuation(sourceTaskId: string, metadata: ChildSessionMetadata, protectedRoot?: string): ChildSessionHandle {
+    if (!UUID.test(sourceTaskId)) throw new ChildSessionStoreError("continuation-unavailable");
+    return this.session(metadata, "persistent", protectedRoot, join(directDirectory(this.root, sourceTaskId), SESSION));
+  }
+
+  async continuationSource(taskId: string, protectedRoot?: string): Promise<{ manifest: ChildSessionManifest; sessionFile: string }> {
+    if (!UUID.test(taskId)) throw new ChildSessionStoreError("continuation-unavailable");
+    const source = (await this.discover({ interruptActive: false, ...(protectedRoot ? { protectedRoot } : {}) }))
+      .find((item) => item.manifest.taskId === taskId);
+    if (!source || source.manifest.state === "active") throw new ChildSessionStoreError("continuation-unavailable");
+    return { manifest: source.manifest, sessionFile: source.sessionFile };
   }
 
   async discover(options: { interruptActive?: boolean; protectedRoot?: string } = { interruptActive: true }): Promise<Array<{ manifest: ChildSessionManifest; directory: string; sessionFile: string; bytes: number }>> {
