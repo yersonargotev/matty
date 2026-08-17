@@ -9,6 +9,7 @@ import {
   classifyChildExecutionActivity,
   type ChildExecutionActivityObservation,
 } from "../domain/child-execution-activity.ts";
+import { createTerminalNeutralizer, neutralizeTerminalText } from "../domain/terminal-neutralizer.ts";
 import type { ChildSessionHandle } from "./child-session-store.ts";
 
 export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -212,7 +213,9 @@ export interface DelegatedTaskRunner {
   subscribePresentation?(
     listener: (presentation: DelegatedTaskPresentation) => void,
   ): () => void;
-  /** Retains an interactive session until the returned holder is released. */
+  /** Whether a settled Child Session can spawn another Child Execution. */
+  readonly canRespawnAfterSettlement?: boolean;
+  /** Retains a respawn-capable interactive session until the returned holder is released. */
   retain?(): () => void;
 }
 
@@ -295,19 +298,6 @@ function isMessageEnd(value: unknown): value is PiMessageEnd {
     (message.errorMessage === undefined || typeof message.errorMessage === "string");
 }
 
-function neutralizeTerminalText(value: string): string {
-  return value
-    // OSC sequences, including title/clipboard controls, terminate with BEL or ST.
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
-    // DCS/SOS/PM/APC strings terminate with ST.
-    .replace(/\u001b[PX^_][\s\S]*?\u001b\\/g, "")
-    // CSI and short ESC sequences must never reach a terminal renderer.
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b[@-_]/g, "")
-    // Preserve ordinary layout but remove C0/C1 terminal controls.
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-}
-
 function presentationContent(value: unknown): string {
   if (typeof value === "string") return neutralizeTerminalText(value);
   try {
@@ -317,12 +307,41 @@ function presentationContent(value: unknown): string {
   }
 }
 
-function assistantText(message: PiMessageEnd["message"]): string {
-  return neutralizeTerminalText(Array.isArray(message.content)
-    ? message.content.flatMap((part) =>
-      part.type === "text" && typeof part.text === "string" ? [part.text] : []
-    ).join("\n")
-    : "");
+function authoritativeAssistantPresentation(message: PiMessageEnd["message"]): {
+  message: PiMessageEnd["message"];
+  text: string;
+  parts: ReadonlyArray<{
+    contentIndex: number;
+    type: "text" | "thinking";
+    rawContent: string;
+    content: string;
+  }>;
+} {
+  if (!Array.isArray(message.content)) return { message, text: "", parts: [] };
+  const neutralizer = createTerminalNeutralizer();
+  const textParts: string[] = [];
+  const parts: Array<{
+    contentIndex: number;
+    type: "text" | "thinking";
+    rawContent: string;
+    content: string;
+  }> = [];
+  const content = message.content.map((part, contentIndex) => {
+    if (part.type === "text" && typeof part.text === "string") {
+      const sanitized = neutralizer.write(part.text);
+      textParts.push(sanitized);
+      parts.push({ contentIndex, type: "text", rawContent: part.text, content: sanitized });
+      return { ...part, text: sanitized };
+    }
+    if (part.type === "thinking" && typeof part.thinking === "string") {
+      const sanitized = neutralizer.write(part.thinking);
+      parts.push({ contentIndex, type: "thinking", rawContent: part.thinking, content: sanitized });
+      return { ...part, thinking: sanitized };
+    }
+    return part;
+  });
+  neutralizer.end();
+  return { message: { ...message, content }, text: textParts.join("\n"), parts };
 }
 
 async function invalidParentContext(
@@ -528,9 +547,12 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
       return result;
     },
     async interact(interaction) {
-      if (activeControl && presentation?.sessionState !== "settled") {
+      if (activeControl) {
         const result = await activeControl.interact(interaction);
         if (result.status === "accepted" || result.code !== "child-session-settled") return result;
+      }
+      if (!options.session && !options.sessionRoot && presentation?.sessionState === "settled") {
+        return { status: "rejected", code: "child-session-settled" };
       }
       if (!acceptingInteractions || !sessionId || !sessionDirectory) {
         return { status: "rejected", code: "child-session-unavailable" };
@@ -586,25 +608,28 @@ export function createChildPiRunner(options: ChildPiRunnerOptions): DelegatedTas
     async close() { interactionLifetime.abort(); await cleanup(); },
     freeze() { acceptingInteractions = false; interactionLifetime.abort(); },
     abort() { acceptingInteractions = false; interactionLifetime.abort(); activeControl?.abort(); },
+    canRespawnAfterSettlement: Boolean(options.session || options.sessionRoot),
     presentation() { return presentation; },
     subscribePresentation(listener) {
       presentationListeners.add(listener);
       if (presentation) listener(presentation);
       return () => presentationListeners.delete(listener);
     },
-    retain() {
-      holderCount += 1;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        holderCount = Math.max(0, holderCount - 1);
-        if (holderCount === 0) {
-          for (const resolve of holderWaiters) resolve();
-          holderWaiters.clear();
-        }
-      };
-    },
+    ...(options.session || options.sessionRoot ? {
+      retain() {
+        holderCount += 1;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          holderCount = Math.max(0, holderCount - 1);
+          if (holderCount === 0) {
+            for (const resolve of holderWaiters) resolve();
+            holderWaiters.clear();
+          }
+        };
+      },
+    } : {}),
   };
 }
 
@@ -772,11 +797,14 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
     let identity: ChildIdentity | null = null;
     let stdout = "";
     let finalMessage: PiMessageEnd["message"] | undefined;
+    let finalMessageText: string | undefined;
     const terminalAssistantTexts: string[] = [];
     const transcriptEntries: Readonly<Record<string, unknown>>[] = [];
     const partialTranscriptIndexes = new Map<string, number>();
     const assistantParts = new Map<number, {
       type: "text" | "thinking";
+      /** Bounded source retained so controls split across deltas are neutralized as one stream. */
+      rawContent: string;
       content: string;
     }>();
     const presentedTools = new Map<string, {
@@ -910,7 +938,11 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         liveRevision += 1;
         const assistant = [...assistantParts.entries()]
           .sort(([left], [right]) => left - right)
-          .map(([contentIndex, part]) => Object.freeze({ contentIndex, ...part }));
+          .map(([contentIndex, part]) => Object.freeze({
+            contentIndex,
+            type: part.type,
+            content: part.content,
+          }));
         const tools = [...presentedTools.values()].map((tool) => Object.freeze({ ...tool }));
         const entries = [...presentedEntries.values()].map((entry) => Object.freeze({ ...entry }));
         options.onPresentation(Object.freeze({
@@ -1058,6 +1090,12 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         terminate("Pi emitted a malformed child activity event");
         return;
       }
+      const authoritativeAssistant = isMessageEnd(event) && event.message.role === "assistant"
+        ? authoritativeAssistantPresentation(event.message)
+        : undefined;
+      const transcriptEvent = authoritativeAssistant
+        ? Object.freeze({ ...event, message: authoritativeAssistant.message })
+        : event;
       if (event.type === "turn_start") {
         turnSequence += 1;
         assistantParts.clear();
@@ -1082,19 +1120,18 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
             ? "text" as const
             : "thinking" as const;
           const previous = assistantParts.get(index);
-          const previousContent = previous?.type === type ? previous.content : "";
-          const next = neutralizeTerminalText(
-            update.type === "text_delta" || update.type === "thinking_delta"
-              ? `${previousContent}${update.delta as string}`
-              : update.content as string,
-          );
-          liveAssistantBytes += Buffer.byteLength(next) -
-            Buffer.byteLength(previous?.content ?? "");
+          const previousRaw = previous?.type === type ? previous.rawContent : "";
+          const rawContent = update.type === "text_delta" || update.type === "thinking_delta"
+            ? `${previousRaw}${update.delta as string}`
+            : update.content as string;
+          const next = neutralizeTerminalText(rawContent);
+          liveAssistantBytes += Buffer.byteLength(rawContent) + Buffer.byteLength(next) -
+            Buffer.byteLength(previous?.rawContent ?? "") - Buffer.byteLength(previous?.content ?? "");
           if (liveAssistantBytes > MAX_BUFFER_BYTES) {
             terminate("Pi exceeded the live assistant buffer limit");
             return;
           }
-          assistantParts.set(index, { type, content: next });
+          assistantParts.set(index, { type, rawContent, content: next });
           presentedEntries.set(`assistant:${turnSequence}:${index}`, Object.freeze({
             id: `assistant:${turnSequence}:${index}`,
             category: type === "thinking" ? "reasoning" : "message",
@@ -1168,7 +1205,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           terminate("Pi exceeded the in-memory transcript limit");
           return;
         }
-      } else if (TRANSCRIPT_TYPES.has(event.type) && !retainTranscript(event)) {
+      } else if (TRANSCRIPT_TYPES.has(event.type) && !retainTranscript(transcriptEvent)) {
         terminate("Pi exceeded the in-memory transcript limit");
         return;
       }
@@ -1224,27 +1261,19 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           }));
         }
       }
-      if (isMessageEnd(event) && event.message.role === "assistant") {
-        finalMessage = event.message;
-        if (terminalAssistantStopReasons.has(event.message.stopReason ?? "")) {
-          const text = assistantText(event.message);
-          terminalAssistantTexts.push(text);
-          try { options.onTerminalResponse?.(text); } catch { /* Candidate observers cannot break RPC ingestion. */ }
+      if (authoritativeAssistant) {
+        finalMessage = authoritativeAssistant.message;
+        finalMessageText = authoritativeAssistant.text;
+        if (terminalAssistantStopReasons.has(finalMessage.stopReason ?? "")) {
+          terminalAssistantTexts.push(finalMessageText);
+          try { options.onTerminalResponse?.(finalMessageText); } catch { /* Candidate observers cannot break RPC ingestion. */ }
         }
         assistantParts.clear();
-        if (Array.isArray(event.message.content)) {
-          event.message.content.forEach((part, contentIndex) => {
-            if (part.type === "text" && typeof part.text === "string") {
-              assistantParts.set(contentIndex, {
-                type: "text",
-                content: neutralizeTerminalText(part.text),
-              });
-            } else if (part.type === "thinking" && typeof part.thinking === "string") {
-              assistantParts.set(contentIndex, {
-                type: "thinking",
-                content: neutralizeTerminalText(part.thinking),
-              });
-            }
+        for (const part of authoritativeAssistant.parts) {
+          assistantParts.set(part.contentIndex, {
+            type: part.type,
+            rawContent: part.rawContent,
+            content: part.content,
           });
         }
         for (const [contentIndex, part] of assistantParts) {
@@ -1256,17 +1285,18 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
             expandedByDefault: part.type === "text",
           }));
         }
-        if (event.message.errorMessage) {
+        if (finalMessage.errorMessage) {
           presentedEntries.set(`error:${turnSequence}`, Object.freeze({
             id: `error:${turnSequence}`,
             category: "error",
             label: "Error",
-            content: neutralizeTerminalText(event.message.errorMessage),
+            content: neutralizeTerminalText(finalMessage.errorMessage),
             expandedByDefault: false,
           }));
         }
-        liveAssistantBytes = [...assistantParts.values(), ...presentedTools.values()]
-          .reduce((bytes, part) => bytes + Buffer.byteLength(part.content ?? ""), 0);
+        liveAssistantBytes = [...assistantParts.values()]
+          .reduce((bytes, part) => bytes + Buffer.byteLength(part.rawContent) + Buffer.byteLength(part.content), 0) +
+          [...presentedTools.values()].reduce((bytes, tool) => bytes + Buffer.byteLength(tool.content ?? ""), 0);
         if (liveAssistantBytes > MAX_BUFFER_BYTES) {
           terminate("Pi exceeded the live presentation buffer limit");
           return;
@@ -1517,7 +1547,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
           failure: { kind: "protocol-failed", message: protocolFailure },
           exit,
         });
-      } else if (!identity || !promptAccepted || !agentSettled || !finalMessage) {
+      } else if (!identity || !promptAccepted || !agentSettled || !finalMessage || finalMessageText === undefined) {
         settle({
           status: "failed",
           child: identity,
@@ -1544,7 +1574,7 @@ async function superviseChild(options: SupervisionOptions): Promise<DelegatedTas
         settle({
           status: "succeeded",
           child: identity,
-          output: assistantText(finalMessage),
+          output: finalMessageText,
           exit: { code: 0, signal: null },
         });
       }

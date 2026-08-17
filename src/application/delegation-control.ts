@@ -19,13 +19,13 @@ export interface MattyApplicationControl {
   };
   respondToInput(delegatedTaskId: string, requestId: string, response: ChildInputResponse): Promise<ChildInputResult | { status: "rejected"; code: "delegated-task-unavailable" | "delegation-closing" }>;
   extendInputTimeout(delegatedTaskId: string, requestId: string, extensionMs?: number): ChildInputResult | { status: "rejected"; code: "delegated-task-unavailable" | "delegation-closing" };
-  /** Private, task-scoped presentation state. Raw Child Session content is never returned elsewhere. */
+  /** Private task presentation retained only with its active/recent terminal control (50 terminal Delegations by default). */
   taskPresentation(delegatedTaskId: string): DelegatedTaskPresentation | undefined;
   subscribeTaskPresentation(
     delegatedTaskId: string,
     listener: (presentation: DelegatedTaskPresentation) => void,
   ): () => void;
-  /** Holds an active Child Session while its task view remains open. */
+  /** Retains only a respawn-capable Child Session while its task view remains open. */
   retainTaskSession(delegatedTaskId: string): () => void;
   freeze(delegationId: string): Promise<unknown>;
 }
@@ -287,7 +287,7 @@ export class DelegationControl implements MattyApplicationControl {
       for (const release of task.holders.values()) release?.();
       task.holders.clear();
       void task.runner?.close?.().catch(() => {
-        // Ephemeral Child Session cleanup is best effort during host shutdown.
+        // Child Session runner cleanup is best effort for both persistence modes during host shutdown.
       });
       task.listeners.clear();
     }
@@ -319,7 +319,7 @@ export class DelegationControl implements MattyApplicationControl {
   #closeTaskRunner(task: TaskRecord): void {
     task.detachRunner?.();
     void task.runner?.close?.().catch(() => {
-      // Ephemeral Child Session cleanup is best effort after lifecycle completion.
+      // Child Session runner cleanup is best effort for both persistence modes after lifecycle completion.
     });
     delete task.detachRunner;
     delete task.runner;

@@ -229,14 +229,18 @@ try {
     extension,
     `
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { registerPiMatty } from ${JSON.stringify(adapter)};
 import { createAssistantMessageEventStream } from ${JSON.stringify(piAi)};
 
 const childMode = process.env.MATTY_T03_CHILD === "1";
 let registeredSubagent;
+let registeredMattyCommand;
 let thinking = "unknown";
 let parentCredentialDigest = "unobserved";
+const headlessOutput = [];
+const ephemeralTranscriptSecret = "T03_EPHEMERAL_TRANSCRIPT_PRIVATE";
 
 function digestAuth() {
   return createHash("sha256")
@@ -294,6 +298,7 @@ export default function t03Acceptance(pi) {
       if (serialized.includes("T03_CANCEL")) {
         return stream;
       }
+      const ephemeral = serialized.includes("T03_EPHEMERAL");
       const payload = JSON.stringify({
         pid: process.pid,
         ppid: process.ppid,
@@ -304,12 +309,27 @@ export default function t03Acceptance(pi) {
         authDigest: digestAuth(),
         credentialDigest: digestCredential(options?.apiKey),
         containsParentContext: serialized.includes("PARENT_ONLY_CONTEXT"),
+        ...(ephemeral ? { transcriptSecret: ephemeralTranscriptSecret } : {}),
       });
-      queueMicrotask(() => stream.end(
-        serialized.includes("T03_FAILURE")
-          ? assistant(model, payload, "error", "controlled delegated failure")
-          : assistant(model, payload),
-      ));
+      if (ephemeral) {
+        const partial = assistant(model, "");
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial });
+          stream.push({ type: "text_start", contentIndex: 0, partial });
+          let text = "visible-";
+          for (const delta of ["\\u001b]52;c;split-osc", "-private\\u0007after-osc-\\u001b[31", "mred\\u001b[0m-\\u001bPsplit-dcs", "-private\\u001b\\\\restored"]) {
+            text += delta;
+            stream.push({ type: "text_delta", contentIndex: 0, delta, partial: assistant(model, text) });
+          }
+          stream.end(assistant(model, payload));
+        });
+      } else {
+        queueMicrotask(() => stream.end(
+          serialized.includes("T03_FAILURE")
+            ? assistant(model, payload, "error", "controlled delegated failure")
+            : assistant(model, payload),
+        ));
+      }
       return stream;
     },
   });
@@ -322,6 +342,12 @@ export default function t03Acceptance(pi) {
           return target.registerTool(tool);
         };
       }
+      if (property === "registerCommand") {
+        return (name, command) => {
+          if (name === "matty") registeredMattyCommand = command;
+          return target.registerCommand(name, command);
+        };
+      }
       const value = target[property];
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -332,6 +358,7 @@ export default function t03Acceptance(pi) {
       command: process.env.MATTY_T03_PI,
       arguments: ["--no-extensions", "-e", process.env.MATTY_T03_EXTENSION],
     },
+    hostOutput(text) { headlessOutput.push(text); },
     childEnvironment: {
       MATTY_T03_CHILD: "1",
       MATTY_T03_PI: process.env.MATTY_T03_PI,
@@ -353,14 +380,17 @@ export default function t03Acceptance(pi) {
       const timer = scenario === "cancel"
         ? setTimeout(() => controller.abort(), 5_000)
         : undefined;
+      let delegatedTaskId;
       const result = await registeredSubagent.execute(
         "t03-" + scenario,
         {
           requirement: "required",
+          ...(scenario === "ephemeral" ? { persistence: "ephemeral" } : {}),
           tasks: [{ role: "explorer", task: "T03_" + scenario.toUpperCase() }],
         },
         controller.signal,
         (update) => {
+          delegatedTaskId ??= update.details?.delegatedTaskId;
           const progress = update.details?.progress ?? update.details;
           if (!progress?.type) return;
           ctx.ui.notify("T03_PROGRESS:" + JSON.stringify(progress), "info");
@@ -371,6 +401,21 @@ export default function t03Acceptance(pi) {
         ctx,
       );
       if (timer) clearTimeout(timer);
+      if (scenario === "ephemeral") {
+        if (!registeredMattyCommand?.handler || !delegatedTaskId) throw new Error("headless task read unavailable");
+        headlessOutput.length = 0;
+        const headlessContext = { ...ctx, mode: "print" };
+        await registeredMattyCommand.handler("task " + delegatedTaskId, headlessContext);
+        await registeredMattyCommand.handler("task " + delegatedTaskId + " transcript", headlessContext);
+        const reads = headlessOutput.map((line) => JSON.parse(line));
+        const storageRoot = join(process.env.PI_CODING_AGENT_DIR, "matty", "child-sessions");
+        ctx.ui.notify("T03_HEADLESS_READS:" + JSON.stringify({
+          taskId: delegatedTaskId,
+          head: reads[0],
+          transcript: reads[1],
+          ephemeralSessionStored: existsSync(join(storageRoot, delegatedTaskId)),
+        }), "info");
+      }
       ctx.ui.notify(
         "T03_RESULT:" + scenario + ":" + JSON.stringify(result.details),
         "info",
@@ -458,6 +503,13 @@ export default function t03Acceptance(pi) {
             event.message?.startsWith("T03_PARENT_AUTH:"),
         )
         ?.message.slice("T03_PARENT_AUTH:".length),
+      headlessReads: rpc.events
+        .slice(start)
+        .find(
+          (event) =>
+            event.type === "extension_ui_request" &&
+            event.message?.startsWith("T03_HEADLESS_READS:"),
+        )?.message,
     };
   }
 
@@ -495,6 +547,19 @@ export default function t03Acceptance(pi) {
   assert.equal(observed.credentialDigest, success.parentCredentialDigest);
   assert.equal(observed.containsParentContext, false);
 
+  const ephemeral = await scenario("ephemeral");
+  assert.equal(ephemeral.outcome.status, "succeeded");
+  const packedReads = JSON.parse(ephemeral.headlessReads.slice("T03_HEADLESS_READS:".length));
+  assert.equal(packedReads.head.type, "matty.task");
+  assert.equal(packedReads.head.task.id, packedReads.taskId);
+  assert.equal("transcript" in packedReads.head, false);
+  assert.doesNotMatch(JSON.stringify(packedReads.head), /T03_EPHEMERAL_TRANSCRIPT_PRIVATE/);
+  assert.equal(packedReads.transcript.type, "matty.task.transcript");
+  assert.equal(packedReads.transcript.taskId, packedReads.taskId);
+  assert.match(JSON.stringify(packedReads.transcript), /T03_EPHEMERAL_TRANSCRIPT_PRIVATE/);
+  assert.doesNotMatch(JSON.stringify(packedReads.transcript), /split-osc|split-dcs|\\u001b/);
+  assert.equal(packedReads.ephemeralSessionStored, false);
+
   const failure = await scenario("failure");
   assert.equal(failure.outcome.status, "failed");
   assert.equal(failure.outcome.tasks[0].diagnostic.code, "child-failed");
@@ -531,6 +596,8 @@ export default function t03Acceptance(pi) {
       "independent PID/context: proven",
       "provider/model/auth/reasoning: inherited",
       "success/failure/cancellation/progress: structured",
+      "exact-ID task/transcript reads: privacy-separated",
+      "ephemeral transcript: memory-only and packed split-control safe",
       "parent after delegated failure: usable",
     ].join("\n") + "\n",
   );

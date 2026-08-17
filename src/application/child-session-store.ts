@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, wri
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
+import { createTerminalNeutralizer, neutralizeTerminalText } from "../domain/terminal-neutralizer.ts";
 import { validateDelegationGroupContract, type DelegationTaskDeclaration } from "../domain/delegation-group.ts";
 import type { DelegatedTaskPresentation, DelegatedTranscriptPresentationEntry } from "./child-pi-runtime.ts";
 
@@ -158,13 +159,9 @@ export interface ChildSessionHandle {
 
 const MAX_PRESENTATION_BYTES = 8 * 1024 * 1024;
 
-function neutralize(value: string): string {
-  return value
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "␛")
-    .replace(/[\u0000-\u0008\u000b-\u001a\u001c-\u001f\u007f]/gu, "�");
-}
+type Neutralize = (value: string) => string;
 
-function textContent(value: unknown): string {
+function textContent(value: unknown, neutralize: Neutralize = neutralizeTerminalText): string {
   if (typeof value === "string") return neutralize(value);
   if (!Array.isArray(value)) return "";
   return value.flatMap((part) => {
@@ -176,7 +173,7 @@ function textContent(value: unknown): string {
   }).join("\n");
 }
 
-function printable(value: unknown): string {
+function printable(value: unknown, neutralize: Neutralize = neutralizeTerminalText): string {
   try { return neutralize(JSON.stringify(value)); } catch { return "[unavailable]"; }
 }
 
@@ -187,6 +184,8 @@ export async function loadChildSessionPresentation(sessionFile: string): Promise
   }
   const source = await readFile(sessionFile, "utf8");
   const lines = source.trim().split(/\r?\n/).filter(Boolean);
+  const terminalNeutralizer = createTerminalNeutralizer();
+  const neutralize = (value: string) => terminalNeutralizer.write(value);
   let header = false;
   const entries: DelegatedTranscriptPresentationEntry[] = [];
   const add = (
@@ -219,7 +218,7 @@ export async function loadChildSessionPresentation(sessionFile: string): Promise
         } else if (part.type === "thinking" && typeof part.thinking === "string") {
           add(`persisted:${index}:${partIndex}`, "reasoning", "Reasoning", neutralize(part.thinking), false);
         } else if (part.type === "toolCall" && typeof part.name === "string") {
-          add(`persisted:${index}:${partIndex}`, "tool", `Tool · ${neutralize(part.name)}`, `Arguments: ${printable(part.arguments)}`, false);
+          add(`persisted:${index}:${partIndex}`, "tool", `Tool · ${neutralize(part.name)}`, `Arguments: ${printable(part.arguments, neutralize)}`, false);
         }
       }
       if (typeof message.errorMessage === "string" && message.errorMessage.length > 0) {
@@ -227,8 +226,8 @@ export async function loadChildSessionPresentation(sessionFile: string): Promise
       }
     } else if (role === "toolResult") {
       const toolName = typeof message.toolName === "string" ? ` · ${neutralize(message.toolName)}` : "";
-      const result = textContent(message.content);
-      const details = message.details === undefined ? "" : `\nDetails: ${printable(message.details)}`;
+      const result = textContent(message.content, neutralize);
+      const details = message.details === undefined ? "" : `\nDetails: ${printable(message.details, neutralize)}`;
       add(`persisted:${index}`, message.isError ? "error" : "tool", `Tool result${toolName}`, `${result}${details}`.trim() || "No textual result", false);
     } else if (role === "bashExecution") {
       add(`persisted:${index}`, message.exitCode === 0 ? "tool" : "error", "Bash execution", [
@@ -236,7 +235,7 @@ export async function loadChildSessionPresentation(sessionFile: string): Promise
         typeof message.output === "string" ? `Output: ${neutralize(message.output)}` : undefined,
       ].filter(Boolean).join("\n") || "No textual result", false);
     } else {
-      const content = textContent(message.content) ||
+      const content = textContent(message.content, neutralize) ||
         (typeof message.summary === "string" ? neutralize(message.summary) : "");
       if (content) add(`persisted:${index}`, "message", role === "user" ? "User" : neutralize(role), content, role === "user");
     }
@@ -252,30 +251,28 @@ export async function loadChildSessionPresentation(sessionFile: string): Promise
     }
   }
   if (!header) throw new ChildSessionStoreError("malformed-store");
+  terminalNeutralizer.end();
   return Object.freeze({ revision: 1, sessionState: "settled", assistant: Object.freeze([]), tools: Object.freeze([]), entries: Object.freeze(entries), usage: Object.freeze({ inputTokens, outputTokens, totalTokens, cost }) });
 }
 
 export class ChildSessionStore {
   readonly root: string;
-  readonly #ephemeralRoot: string;
   readonly #now: () => number;
   readonly #maxAgeMs: number;
   readonly #maxSessions: number;
   readonly #maxBytes: number;
   #operation: Promise<void> = Promise.resolve();
 
-  constructor(options: { root: string; ephemeralRoot: string; now?: () => number; maxAgeMs?: number; maxSessions?: number; maxBytes?: number }) {
+  constructor(options: { root: string; now?: () => number; maxAgeMs?: number; maxSessions?: number; maxBytes?: number }) {
     this.root = resolve(options.root);
-    this.#ephemeralRoot = resolve(options.ephemeralRoot);
     this.#now = options.now ?? Date.now;
     this.#maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE;
     this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   }
 
-  session(metadata: ChildSessionMetadata, persistence: DelegationPersistence, protectedRoot?: string, sourceSessionFile?: string): ChildSessionHandle {
-    const base = persistence === "persistent" ? this.root : this.#ephemeralRoot;
-    const directory = directDirectory(base, metadata.taskId);
+  session(metadata: ChildSessionMetadata, protectedRoot?: string, sourceSessionFile?: string): ChildSessionHandle {
+    const directory = directDirectory(this.root, metadata.taskId);
     const manifestFile = join(directory, MANIFEST);
     const sessionFile = join(directory, SESSION);
     let manifest: ChildSessionManifest | undefined;
@@ -297,7 +294,7 @@ export class ChildSessionStore {
           lines[0] = JSON.stringify({ ...(header as Record<string, unknown>), id: metadata.taskId, cwd, timestamp: new Date(this.#now()).toISOString() });
           continuedSession = lines.join("\n");
         }
-        await prepareBase(base, protectedRoot);
+        await prepareBase(this.root, protectedRoot);
         await mkdir(directory, { mode: 0o700 });
         await chmod(directory, 0o700);
         const timestamp = this.#now();
@@ -314,17 +311,15 @@ export class ChildSessionStore {
         await chmod(sessionFile, 0o600);
         manifest = { ...manifest, state, updatedAt: this.#now() };
         await writeManifest(manifestFile, manifest);
-        if (persistence === "persistent") await this.#enforceRetention(protectedRoot);
+        await this.#enforceRetention(protectedRoot);
       }),
-      close: async () => await this.#exclusive(async () => {
-        if (persistence === "ephemeral") await rm(directory, { recursive: true, force: true });
-      }),
+      close: async () => {},
     };
   }
 
   continuation(sourceTaskId: string, metadata: ChildSessionMetadata, protectedRoot?: string): ChildSessionHandle {
     if (!UUID.test(sourceTaskId)) throw new ChildSessionStoreError("continuation-unavailable");
-    return this.session(metadata, "persistent", protectedRoot, join(directDirectory(this.root, sourceTaskId), SESSION));
+    return this.session(metadata, protectedRoot, join(directDirectory(this.root, sourceTaskId), SESSION));
   }
 
   async continuationSource(taskId: string, protectedRoot?: string): Promise<{ manifest: ChildSessionManifest; sessionFile: string }> {
@@ -380,7 +375,7 @@ export class ChildSessionStore {
       .sort((left, right) => left.manifest.updatedAt - right.manifest.updatedAt || left.manifest.taskId.localeCompare(right.manifest.taskId));
     const remove = new Set<string>();
     for (const item of terminal) if (this.#now() - item.manifest.updatedAt > this.#maxAgeMs) remove.add(item.manifest.taskId);
-    let count = sessions.length - remove.size;
+    let count = terminal.length - remove.size;
     let bytes = sessions.filter((item) => !remove.has(item.manifest.taskId)).reduce((sum, item) => sum + item.bytes, 0);
     for (const item of terminal) {
       if (remove.has(item.manifest.taskId)) continue;

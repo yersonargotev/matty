@@ -470,9 +470,38 @@ export class DelegationRegistry {
   }>): void {
     const groups = new Map<string, typeof sessions>();
     for (const session of sessions) groups.set(session.delegationId, [...(groups.get(session.delegationId) ?? []), session]);
+
+    const delegationIds = new Set<string>();
+    const delegationDisplayIds = new Set<string>();
+    const taskIds = new Set<string>();
+    const taskDisplayIds = new Set<string>();
+    for (const entry of this.#entries.values()) {
+      delegationIds.add(entry.id);
+      delegationDisplayIds.add(entry.displayId);
+      for (const task of entry.tasks) {
+        taskIds.add(task.id);
+        taskDisplayIds.add(task.displayId);
+      }
+    }
+    for (const [delegationId, group] of groups) {
+      const displayId = shortCandidate("D", delegationId);
+      if (delegationIds.has(delegationId) || delegationDisplayIds.has(displayId) || taskIds.has(delegationId)) {
+        throw new Error("Delegation Registry restore identity collision");
+      }
+      delegationIds.add(delegationId);
+      delegationDisplayIds.add(displayId);
+      for (const session of group) {
+        const taskDisplayId = shortCandidate("T", session.taskId);
+        if (taskIds.has(session.taskId) || taskDisplayIds.has(taskDisplayId) || delegationIds.has(session.taskId)) {
+          throw new Error("Delegation Registry restore identity collision");
+        }
+        taskIds.add(session.taskId);
+        taskDisplayIds.add(taskDisplayId);
+      }
+    }
+
     for (const [rawDelegationId, group] of groups) {
       const id = rawDelegationId as DelegationId;
-      if (this.#entries.has(id)) continue;
       const ordered = [...group].sort((left, right) => left.taskIndex - right.taskIndex);
       const taskStates = ordered.map((item) => item.state === "succeeded" ? "succeeded" as const : item.state === "cancelled" ? "cancelled" as const : "failed" as const);
       const state: TerminalDelegationState = taskStates.every((item) => item === "succeeded") ? "succeeded"
