@@ -2,16 +2,32 @@ import { reviewScope, type ReviewScopeContract } from "./review-scope.ts";
 import {
   isInspectionRole,
   isMattyRole,
-  type MattyRole,
 } from "./capability-contract.ts";
 
-export interface DelegationTaskDeclaration {
-  role: MattyRole;
-  task: string;
-  web?: "required" | "optional";
-  report?: string;
-  reviewScope?: ReviewScopeContract;
-}
+export type DelegationTaskDeclaration =
+  | { role: "explorer"; task: string }
+  | { role: "designer"; task: string }
+  | { role: "worker"; task: string }
+  | {
+    role: "reviewer";
+    task: string;
+    reviewScope: ReviewScopeContract;
+  }
+  | {
+    role: "researcher";
+    task: string;
+    web: "required" | "optional";
+    report?: string;
+  };
+
+export type DelegationTaskContinuationDeclaration =
+  | { role: "explorer" | "designer" | "worker" }
+  | { role: "reviewer"; reviewScope: ReviewScopeContract }
+  | {
+    role: "researcher";
+    web: "required" | "optional";
+    report?: string;
+  };
 
 export interface DelegationGroupContract {
   schemaVersion: 1;
@@ -128,7 +144,7 @@ export function validateDelegationGroupContract(
         errors.push({ code: "invalid-task", taskIndex });
         continue;
       }
-      const declaration = task as Partial<DelegationTaskDeclaration>;
+      const declaration = task as Record<string, unknown>;
       if (!hasOnlyKeys(declaration, ["role", "task", "web", "report", "reviewScope"])) {
         errors.push({ code: "invalid-task", taskIndex });
       }

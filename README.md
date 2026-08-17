@@ -67,7 +67,7 @@ Matty exposes one `subagent` tool with this contract:
 }
 ```
 
-A call accepts one to eight tasks and runs at most four child processes concurrently. Required groups are atomic: one failure cancels pending work. Optional fallback is available only for inspection groups and explicitly reports skipped work.
+A call accepts one to eight tasks and runs at most four child processes concurrently. Required groups are atomic: one failure cancels pending work. Optional fallback is available only for inspection groups and explicitly reports skipped work. Task declarations are role-specific: `explorer`, `designer`, and `worker` accept only `role` and `task`; `reviewer` requires a closed `reviewScope`; `researcher` requires `web` and may receive `report`. `web` and `report` are rejected for every other role.
 
 ### Roles
 
