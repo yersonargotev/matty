@@ -24,7 +24,7 @@ test("injects exactly one marked Matty Rules block", () => {
   assert.match(prompt, /Base host instructions/);
   assert.match(
     prompt,
-    /"requirement": "required"\|"optional".*"tasks".*"researcher".*"web"\?: "required"\|"optional".*"report"\?: string/,
+    /"requirement": "required"\|"optional".*"tasks".*"researcher".*"web": "required"\|"optional".*"report"\?: string/,
   );
   assert.match(
     prompt,

@@ -193,6 +193,30 @@ type SingleTaskExecutionParams = DelegationTaskDeclaration & {
   scheduleChildExecution?: <T>(execution: () => Promise<T>, signal?: AbortSignal) => Promise<T | undefined>;
 };
 
+function continuationDeclaration(
+  params: SingleTaskExecutionParams,
+): ChildSessionContinuationDeclaration {
+  switch (params.role) {
+    case "researcher":
+      return {
+        role: "researcher",
+        web: params.web,
+        ...(params.report ? { report: params.report } : {}),
+      };
+    case "reviewer":
+      return { role: "reviewer", reviewScope: params.reviewScope };
+    default:
+      return { role: params.role };
+  }
+}
+
+function declarationWithTask<T extends ChildSessionContinuationDeclaration>(
+  declaration: T,
+  task: string,
+): T & { task: string } {
+  return { ...declaration, task };
+}
+
 const execFileAsync = promisify(execFile);
 
 async function childSessionGitState(cwd: string): Promise<{ head: string; workingTree: string }> {
@@ -1229,6 +1253,12 @@ export function registerPiMatty(
               if: { properties: { role: { const: "reviewer" } }, required: ["role"] },
               then: { required: ["reviewScope"] },
               else: { not: { required: ["reviewScope"] } },
+            }, {
+              if: { properties: { role: { const: "researcher" } }, required: ["role"] },
+              then: { required: ["web"] },
+              else: {
+                not: { anyOf: [{ required: ["web"] }, { required: ["report"] }] },
+              },
             }],
             additionalProperties: false,
           },
@@ -1255,12 +1285,7 @@ export function registerPiMatty(
         taskIndex: params.delegatedTaskIndex,
         role,
         requirement: params.requirement ?? "required",
-        declaration: params.persistedDeclaration ?? {
-          role,
-          ...(params.web ? { web: params.web } : {}),
-          ...(params.report ? { report: params.report } : {}),
-          ...(params.reviewScope ? { reviewScope: params.reviewScope } : {}),
-        },
+        declaration: params.persistedDeclaration ?? continuationDeclaration(params),
         git: params.gitState ?? { head: "unavailable", workingTree: "unavailable" },
         ...(params.continuationSourceTaskId && sourceDelegationId ? {
           sourceTaskId: params.continuationSourceTaskId,
@@ -1315,7 +1340,7 @@ export function registerPiMatty(
         "Delegate one bounded task to a named Matty Role.",
       promptGuidelines: [
         `Call subagent with exactly ${DELEGATION_INPUT_GUIDANCE}.`,
-        "Researcher also requires web (required or optional) and one approved Markdown report path.",
+        "Only researcher may include web or report; researcher requires web (required or optional) and may include one approved Markdown report path.",
         "Reviewer requires one closed reviewScope matching the documented exact shape; other roles reject it.",
         "Inspection roles receive read, grep, find, ls, and guarded bash; worker also receives edit and write.",
         "Only reviewer may perform read-only gh inspection after availability and authentication preflight.",
@@ -1490,7 +1515,7 @@ export function registerPiMatty(
           return delegationResult(terminal);
         }
 
-        if (role === "researcher") {
+        if (params.role === "researcher") {
           const web = params.web;
           const report = params.report?.trim() ||
             defaultResearchReport(params.task);
@@ -1604,23 +1629,29 @@ export function registerPiMatty(
           }
         }
 
-        const github = role === "reviewer"
+        if (!isInspectionRole(params.role)) {
+          return blockedCapabilityResult("delegate-invalid", [
+            "unsupported Matty Role",
+          ]);
+        }
+        const inspectionRole = params.role;
+        const github = inspectionRole === "reviewer"
           ? await (
             options.reviewerGithubPreflight ??
               (() => reviewerGithubPreflight(environment))
           )()
           : { available: false, authenticated: false };
-        const contract = inspectionCapabilityContract(role);
+        const contract = inspectionCapabilityContract(inspectionRole);
         if (
           !params.groupExecution &&
-          activeInvocations[role] >= contract.concurrency.maxActive
+          activeInvocations[inspectionRole] >= contract.concurrency.maxActive
         ) {
           unmet.push(
-            `${role} concurrency limit reached: ${activeInvocations[role]} active`,
+            `${inspectionRole} concurrency limit reached: ${activeInvocations[inspectionRole]} active`,
           );
         }
         if (unmet.length > 0 || !ctx.model || !invocation) {
-          const terminal = blockedInspectionDelegation(role, unmet);
+          const terminal = blockedInspectionDelegation(inspectionRole, unmet);
           return {
             content: [{ type: "text" as const, text: JSON.stringify(terminal) }],
             details: terminal,
@@ -1631,10 +1662,10 @@ export function registerPiMatty(
         const inspectionInvocation = !declaresInvocationTools(invocation)
           ? invocationWithTools(invocation, INSPECTION_TOOLS)
           : invocation;
-        activeInvocations[role] += 1;
+        activeInvocations[inspectionRole] += 1;
         try {
           const terminal = await runInspectionDelegation(
-            role,
+            inspectionRole,
             params.task,
             {
               availability: {
@@ -1663,10 +1694,10 @@ export function registerPiMatty(
                         ? authentication.env
                         : undefined,
                       options.childEnvironment,
-                      role,
+                      inspectionRole,
                     ),
                   },
-                  session: childSession(params, role, ctx.cwd),
+                  session: childSession(params, inspectionRole, ctx.cwd),
                   retainSessionUntilClose: true,
                   ...(params.scheduleChildExecution ? { scheduleExecution: params.scheduleChildExecution } : {}),
                 }), params.onChildSettled);
@@ -1674,12 +1705,12 @@ export function registerPiMatty(
             },
             {
               ...progressOptions,
-              ...(role === "reviewer" ? { reviewScope: params.reviewScope } : {}),
+              ...(inspectionRole === "reviewer" ? { reviewScope: params.reviewScope } : {}),
             } as never,
           );
           return delegationResult(terminal);
         } finally {
-          activeInvocations[role] -= 1;
+          activeInvocations[inspectionRole] -= 1;
         }
       },
     };
@@ -1691,7 +1722,7 @@ export function registerPiMatty(
       } catch {
         return { status: "unavailable", reason: "missing-or-ephemeral-transcript" };
       }
-      const declaration: DelegationTaskDeclaration = { ...source.manifest.declaration, task: message };
+      const declaration = declarationWithTask(source.manifest.declaration, message);
       const sourceSnapshot = delegationRegistry.snapshot().delegations.find((entry) =>
         entry.tasks.some((task) => task.id === sourceTaskId)
       );
@@ -1770,7 +1801,7 @@ export function registerPiMatty(
         "A required group is atomic: one failure cancels remaining work and never falls back inline.",
         "An optional group may contain inspection roles only and reports unavailable work as skipped.",
         "At most eight tasks are accepted and at most four children run concurrently; overflow is queued.",
-        "Researcher requires web and may receive one approved Markdown report path.",
+        "Only researcher may include web or report; researcher requires web and may receive one approved Markdown report path.",
         "Reviewer requires one closed reviewScope matching the documented exact shape; other roles reject it.",
         "Single Writer permits at most one worker per group and per repository.",
         "Inspection Guard and Worker Guard are best-effort policies, not security sandboxes.",
@@ -2013,6 +2044,9 @@ export function registerPiMatty(
                   return { ok: true };
                 }
 
+                if (task.role !== "researcher") {
+                  return { ok: false, reason: "tool-surface-incompatible" };
+                }
                 if (task.web === "required" && webState !== "available") {
                   return { ok: false, reason: "web-unavailable" };
                 }

@@ -201,7 +201,20 @@ test("parent registration exposes explicit delegated roles", async () => {
     };
   });
   assert.equal(taskSchema?.maxItems, 8);
-  assert.equal(taskSchema?.items?.allOf?.length, 1);
+  assert.equal(taskSchema?.items?.allOf?.length, 2);
+  const researcherRule = taskSchema?.items?.allOf?.[1] as {
+    if?: unknown;
+    then?: unknown;
+    else?: unknown;
+  };
+  assert.deepEqual(researcherRule.if, {
+    properties: { role: { const: "researcher" } },
+    required: ["role"],
+  });
+  assert.deepEqual(researcherRule.then, { required: ["web"] });
+  assert.deepEqual(researcherRule.else, {
+    not: { anyOf: [{ required: ["web"] }, { required: ["report"] }] },
+  });
   const scopeSchema = taskSchema?.items?.properties?.reviewScope as {
     additionalProperties?: boolean;
     required?: string[];

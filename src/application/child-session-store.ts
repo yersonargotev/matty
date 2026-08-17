@@ -4,7 +4,10 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { MattyRole } from "../domain/capability-contract.ts";
 import { createTerminalNeutralizer, neutralizeTerminalText } from "../domain/terminal-neutralizer.ts";
-import { validateDelegationGroupContract, type DelegationTaskDeclaration } from "../domain/delegation-group.ts";
+import {
+  validateDelegationGroupContract,
+  type DelegationTaskContinuationDeclaration,
+} from "../domain/delegation-group.ts";
 import type { DelegatedTaskPresentation, DelegatedTranscriptPresentationEntry } from "./child-pi-runtime.ts";
 
 export type DelegationPersistence = "persistent" | "ephemeral";
@@ -15,7 +18,7 @@ export interface ChildSessionGitState {
   workingTree: string;
 }
 
-export type ChildSessionContinuationDeclaration = Omit<DelegationTaskDeclaration, "task">;
+export type ChildSessionContinuationDeclaration = DelegationTaskContinuationDeclaration;
 
 export interface ChildSessionManifest {
   schemaVersion: 2;
